@@ -1,5 +1,5 @@
 logging: "aim"
-log_repo: "logs/aim/.aim"
+log_repo: ".aim"
 env_params:
   env_name: "brax-hopper"
   init_kwargs:

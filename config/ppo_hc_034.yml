@@ -1,5 +1,5 @@
 logging: "aim"
-log_repo: "logs/aim/.aim"
+log_repo: ".aim"
 run_name: "PPO-HC-034 031 rerun"
 seed: 3
 env_params:

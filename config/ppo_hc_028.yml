@@ -1,5 +1,5 @@
 logging: "aim"
-log_repo: "logs/aim/.aim"
+log_repo: ".aim"
 run_name: "PPO-HC-028 027+ learning_rate 0.0003->0.001"
 seed: 3
 env_params:

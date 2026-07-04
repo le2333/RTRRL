@@ -1,5 +1,5 @@
 logging: "aim"
-log_repo: "logs/aim/.aim"
+log_repo: ".aim"
 run_name: "PPO-HC-026 019+ clipping_epsilon 0.3->0.2"
 seed: 3
 env_params:

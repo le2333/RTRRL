@@ -1,5 +1,5 @@
 logging: "aim"
-log_repo: "logs/aim/.aim"
+log_repo: ".aim"
 run_name: "PPO-HC-033 029+ num_updates_per_batch 12->16"
 seed: 3
 env_params:

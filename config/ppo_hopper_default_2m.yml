@@ -1,7 +1,7 @@
 # Brax PPO Hopper run using Brax PPO defaults.
 # Only the environment, logging destination, and requested training steps are set.
 logging: "aim"
-log_repo: "logs/aim/.aim"
+log_repo: ".aim"
 env_params:
   env_name: "brax-hopper"
 num_timesteps: 2000000

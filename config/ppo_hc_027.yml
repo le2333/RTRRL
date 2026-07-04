@@ -1,5 +1,5 @@
 logging: "aim"
-log_repo: "logs/aim/.aim"
+log_repo: ".aim"
 run_name: "PPO-HC-027 019+ minibatch_split 512x32->64x256"
 seed: 3
 env_params:
