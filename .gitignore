@@ -164,7 +164,10 @@ cython_debug/
 # Visual Studio Code
 .vscode/
 
-# Logs (experiment logs under logs/ are tracked for migration)
+# Logs
+# Aim run data (aim repo at repo root and under logs/aim/)
+.aim/
+logs/aim/
 .wandb/
 # W&B run data (created when wandb.init dir="logs/")
 wandb/

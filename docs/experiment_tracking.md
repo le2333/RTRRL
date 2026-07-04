@@ -101,5 +101,6 @@ change only affects how Aim stores the axis, not RTRRL learning behavior.
 `ppo_baseline.py` does not write a default hand-made JSONL runtime log. Aim is
 the intended runtime tracker for PPO runs in this Issue.
 
-Historical `logs/ppo_runs` directories are not deleted or migrated by this
-Issue. They remain historical local artifacts from earlier work.
+The historical `logs/ppo_runs` directories (early JSONL-phase PPO baseline
+artifacts, not Aim runs) have been removed; Aim is now the single source of
+truth for PPO baselines.

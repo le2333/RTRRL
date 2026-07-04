@@ -1,7 +1,0 @@
-{
-  "best_eval_reward": 413.73675537109375,
-  "final_step": 2027520,
-  "metrics_path": "logs/ppo_runs/20260614-010008_brax-hopper_nomask/metrics.jsonl",
-  "run_dir": "logs/ppo_runs/20260614-010008_brax-hopper_nomask",
-  "summary_path": "logs/ppo_runs/20260614-010008_brax-hopper_nomask/summary.json"
-}
