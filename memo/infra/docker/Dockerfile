@@ -23,7 +23,8 @@ WORKDIR /app
 # Only the dependency manifests first, so this layer caches across code changes.
 COPY pyproject.toml uv.lock ./
 # pyproject has [tool.uv] package = false, so this installs deps only (no project).
-RUN uv sync --frozen --no-dev
+# --extra brax: Brax envs (Hopper etc.) are imported at runtime by experiments.
+RUN uv sync --frozen --no-dev --extra brax
 
 # ---- runtime -----------------------------------------------------------------
 FROM python:3.12-slim AS runtime

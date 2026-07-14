@@ -33,8 +33,10 @@ ENV UV_PYTHON_DOWNLOADS=never \
 WORKDIR /app
 
 # Dependency manifests first so this layer caches across code changes.
+# --extra brax: Brax envs (Hopper etc.) are imported at runtime by the
+# experiments; without it `import brax` fails inside the container.
 COPY pyproject.toml uv.lock ./
-RUN uv sync --frozen --no-dev
+RUN uv sync --frozen --no-dev --extra brax
 
 # Add the CUDA 12 JAX plugin (jax-cuda12-plugin / -pjrt + bundled nvidia wheels),
 # pinned to the lockfile's JAX version (0.10.2). Strip static archives (*.a, GBs;
