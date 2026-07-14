@@ -66,7 +66,12 @@ export GPU_PER_JOB="1"                              # GPUs per job
 
 # ---- Aim remote tracking server (on the jump host; shared by all projects) --
 # Batch containers send live metrics here. Jump host private IP (default VPC).
+# MAIN repo (.aim): real experiments; backed up to S3 (infra/backup-aim.sh).
+# TEST repo (.aim-scratch): validation/smoke runs; NOT backed up, safe to wipe.
+# Route a submission to the test repo with `infra/submit.sh --test`.
+# UIs: main http://<jump-host>:43800 , test http://<jump-host>:43801
 export AIM_SERVER="aim://172.31.62.192:53800"
+export AIM_SERVER_TEST="aim://172.31.62.192:53801"
 
 # ---- Logging + Weights & Biases ---------------------------------------------
 # Default logging backend(s) for submitted jobs: "aim", "wandb", or "aim+wandb".

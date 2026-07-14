@@ -17,6 +17,8 @@
 #   --entry FILE      entry script (default: DEFAULT_ENTRY from project.env)
 #   --name NAME       job/run name (default: derived from the config filename)
 #   --logging MODE    aim | wandb | aim+wandb (default: $LOGGING from env.sh)
+#   --test            log to the TEST Aim repo (.aim-scratch, UI :43801) instead
+#                     of the backed-up main repo; use for smoke/validation runs
 #   --sweep ID        run `wandb agent ID` instead of a single training command
 #   --count N         trials per agent job in sweep mode (default 1)
 #   -- ...            extra args appended verbatim to the training command
@@ -46,6 +48,10 @@ SWEEP=""
 COUNT="1"
 QUEUE="${JOB_QUEUE}"
 JOBDEF="${JOB_DEF}"
+# Which Aim repo to log to (when MODE includes aim): main by default, or the
+# test repo (.aim-scratch, UI :43801) with --test so smoke runs stay out of the
+# backed-up main repo.
+AIM_TARGET="${AIM_SERVER}"
 EXTRA=()
 
 while [ $# -gt 0 ]; do
@@ -55,6 +61,7 @@ while [ $# -gt 0 ]; do
     --entry)    ENTRY="$2"; shift 2 ;;
     --name)     NAME="$2"; shift 2 ;;
     --logging)  MODE="$2"; shift 2 ;;
+    --test)     AIM_TARGET="${AIM_SERVER_TEST}"; shift ;;
     --sweep)    SWEEP="$2"; shift 2 ;;
     --count)    COUNT="$2"; shift 2 ;;
     --queue)    QUEUE="$2"; shift 2 ;;
@@ -84,7 +91,7 @@ else
   # Normal mode: run the training command directly.
   CMD=(python "${ENTRY}" --config_path /tmp/run-config.yml --logging "${MODE}")
   case "${MODE}" in
-    *aim*) CMD+=(--log_repo "${AIM_SERVER}") ;;
+    *aim*) CMD+=(--log_repo "${AIM_TARGET}") ;;
   esac
   CMD+=("${EXTRA[@]}")
 fi
@@ -95,7 +102,7 @@ CMD_JSON=$(printf '"%s",' "${CMD[@]}"); CMD_JSON="[${CMD_JSON%,}]"
 echo "Run name : ${NAME}"
 echo "Config   : ${CONFIG}"
 echo "Queue    : ${QUEUE}  (job def ${JOBDEF})"
-[ -n "${SWEEP}" ] && echo "Sweep    : ${SWEEP} (count ${COUNT})" || echo "Logging  : ${MODE}"
+[ -n "${SWEEP}" ] && echo "Sweep    : ${SWEEP} (count ${COUNT})" || echo "Logging  : ${MODE}$(case "${MODE}" in *aim*) echo " -> ${AIM_TARGET}";; esac)"
 echo "Command  : ${CMD[*]}"
 
 aws batch submit-job \

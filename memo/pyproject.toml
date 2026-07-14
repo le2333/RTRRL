@@ -26,7 +26,11 @@ dependencies = [
     "wandb>=0.20.0",
     "tensorboardx>=2.6.1",
     "hydra-core",
-    "aim>=3.28",
+    # Pin to 3.28.x: the shared jump-host Aim tracking servers (main + test) run
+    # aim 3.28.0, and the remote client/server RPC is version-sensitive (3.29
+    # clients hit `KeyError: 'from_union'` against a 3.28 server). streaming-rtrrl
+    # is also on 3.28.0, so keeping every client at 3.28 lets one server serve all.
+    "aim>=3.28,<3.29",
     "simple_parsing>=0.1.8",
     "tqdm>=4.66",
     # Required by logging_util.py (Aim/W&B bridge reused from streaming-rtrrl).
