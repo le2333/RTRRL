@@ -1,0 +1,90 @@
+from typing import Any
+
+from flax import struct
+from gymnax.environments import spaces
+
+from memorax.environments.wrappers import GymnaxWrapper
+from memorax.utils.typing import Array, Key
+
+max_steps_in_episode = {
+    "AutoencodeEasy": 105,
+    "AutoencodeMedium": 209,
+    "AutoencodeHard": 313,
+    "BattleshipEasy": 64,
+    "BattleshipMedium": 100,
+    "BattleshipHard": 144,
+    "StatelessCartPoleEasy": 200,
+    "StatelessCartPoleMedium": 400,
+    "StatelessCartPoleHard": 600,
+    "NoisyStatelessCartPoleEasy": 200,
+    "NoisyStatelessCartPoleMedium": 200,
+    "NoisyStatelessCartPoleHard": 200,
+    "ConcentrationEasy": 104,
+    "ConcentrationMedium": 208,
+    "ConcentrationHard": 104,
+    "CountRecallEasy": 52,
+    "CountRecallMedium": 104,
+    "CountRecallHard": 208,
+    "HigherLowerEasy": 52,
+    "HigherLowerMedium": 104,
+    "HigherLowerHard": 156,
+    "RepeatFirstEasy": 52,
+    "RepeatFirstMedium": 416,
+    "RepeatFirstHard": 832,
+    "RepeatPreviousEasy": 52,
+    "RepeatPreviousMedium": 104,
+    "RepeatPreviousHard": 156,
+    "MinesweeperEasy": 14,
+    "MinesweeperMedium": 30,
+    "MinesweeperHard": 54,
+    "MultiArmedBanditEasy": 200,
+    "MultiArmedBanditMedium": 400,
+    "MultiArmedBanditHard": 600,
+    "StatelessPendulumEasy": 200,
+    "StatelessPendulumMedium": 150,
+    "StatelessPendulumHard": 100,
+    "NoisyStatelessPendulumEasy": 200,
+    "NoisyStatelessPendulumMedium": 200,
+    "NoisyStatelessPendulumHard": 200,
+    "NoisyStatelessMetaCartPole": 3200,
+}
+
+
+@struct.dataclass(frozen=True)
+class EnvParams:
+    env_params: Any
+    max_steps_in_episode: int
+
+
+class PopJymWrapper(GymnaxWrapper):
+    def reset(self, key: Key, params) -> tuple[Array, Any]:
+        return self._env.reset(key, params.env_params)
+
+    def step(self, key: Key, state, action: Array, params) -> tuple[Array, Any, Array, Array, dict]:
+        obs, new_state, reward, done, info = self._env.step(
+            key, state, action, params.env_params
+        )
+        return obs, new_state, reward, done, info
+
+    def observation_space(self, params) -> spaces.Space:
+        return self._env.observation_space(params.env_params)
+
+    def action_space(self, params) -> spaces.Space:
+        return self._env.action_space(params.env_params)
+
+    def state_space(self, params) -> spaces.Space:
+        return self._env.state_space(params.env_params)
+
+
+def make(
+    env_id: str, difficulty: str, **kwargs
+) -> tuple[PopJymWrapper, EnvParams]:
+    import popjym
+
+    env_id = f"{env_id}{difficulty}"
+    env, env_params = popjym.make(env_id, **kwargs)
+    env = PopJymWrapper(env)
+    env_params = EnvParams(
+        env_params=env_params, max_steps_in_episode=max_steps_in_episode[env_id]
+    )
+    return env, env_params

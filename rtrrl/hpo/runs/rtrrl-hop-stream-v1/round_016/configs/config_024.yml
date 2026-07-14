@@ -1,0 +1,28 @@
+logging: aim
+log_repo: aim://172.31.62.192:53800
+seed: 3
+episodes: 16
+patience: 16
+env_params:
+  env_name: brax-hopper
+  batch_size: 64
+  init_kwargs:
+    backend: spring
+trace_mode: dutch
+gamma: 0.99
+lambda_v: 0.93
+lambda_pi: 0.97
+lambda_rnn: 0.99
+entropy_rate: 1.0e-05
+steps: 1000
+eval_every: 1
+pass_obs: true
+optimizer_params_td:
+  learning_rate: 0.0001
+optimizer_params_rnn:
+  learning_rate: 0.0003
+update_period: 1.0
+eta_pi: 3.0
+eta_f: 0.0
+normalize_obs: false
+normalize_reward: true

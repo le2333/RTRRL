@@ -1,0 +1,35 @@
+# Experiment: Stream AC(λ) + RTU-RTRL on Brax Hopper, masked position (§4.3).
+experiment: stream_ac_mujoco_masked
+agent_type: rtu_rtrl
+
+seed: 0
+total_timesteps: 2000000
+num_epochs: 50
+num_envs: 16
+
+eval_every: 10
+eval_steps: 1000
+patience: 100
+
+logging: null
+run_name: stream_ac_rtrl_hopper_maskP
+
+# Stream AC(λ)
+gamma: 0.99
+trace_lambda: 0.9
+actor_lr: 1.0
+critic_lr: 1.0
+actor_kappa: 3.0
+critic_kappa: 2.0
+entropy_coefficient: 1e-5
+adaptive: false
+
+# Network (continuous control: [o, a, r] input)
+hidden_dim: 32
+encoder_dim: 32
+meta_rl: true
+
+# Brax Hopper + mask (P = proprio / masked position)
+env_name: hopper
+mode: P
+backend: generalized

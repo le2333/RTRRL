@@ -1,0 +1,37 @@
+# Experiment: Stream AC(λ) + RTU-RTRL on Masked MuJoCo (arXiv 2605.24709 §4.3).
+# One algorithm-environment binding: stream_ac x mujoco_masked, agent_type=rtu_rtrl.
+# mode=P masks position/external state (paper's masked-position POMDP).
+experiment: stream_ac_mujoco_masked
+agent_type: rtu_rtrl
+
+seed: 0
+total_timesteps: 5000000
+num_epochs: 50
+num_envs: 16
+
+eval_every: 10
+eval_steps: 1000
+patience: 100
+
+logging: aim
+run_name: stream_ac_rtrl_hc_maskP
+
+# Stream AC(λ)
+gamma: 0.99
+trace_lambda: 0.9
+actor_lr: 1.0
+critic_lr: 1.0
+actor_kappa: 3.0
+critic_kappa: 2.0
+entropy_coefficient: 1e-5
+adaptive: false
+
+# Network (continuous control: [o, a, r] input)
+hidden_dim: 32
+encoder_dim: 32
+meta_rl: true
+
+# Brax MuJoCo + mask
+env_name: halfcheetah
+mode: P
+backend: generalized

@@ -1,4 +1,5 @@
-# W&B Sweep for the Brax PPO baseline (ppo_baseline.py).
+# Backup W&B Sweep for the Brax PPO HalfCheetah baseline (ppo_baseline.py).
+# Main HPO now uses control/hpo (Optuna scheduler + Aim history).
 #
 # How it works:
 # - Hyperparameters are injected by the sweep controller into wandb.config.
@@ -7,41 +8,47 @@
 # - `command` has NO ${args}: params flow only via wandb.config (simple_parsing
 #   must not see --ppo_overrides.* flags). The base config (env, num_timesteps,
 #   etc.) comes from /tmp/run-config.yml, injected at submit time.
-# - Sweep runs log to W&B only (the sweep lives in W&B). Manual runs can still
-#   use aim+wandb; add "aim" here if you also want sweep runs in the Aim repo.
+# - Sweep runs log to both Aim and W&B. W&B controls the sweep; Aim remains the
+#   local source of truth for the advisor/scheduler and historical analysis.
 #
 # Create the sweep (on the jump host, after `wandb login`):
 #   infra/sweep.sh create
 # Launch N parallel agents on Batch (each pulls trials from the controller):
-#   infra/sweep.sh launch <entity/project/sweep_id> 4 --config config/ppo_hopper_default_2m.yml
+#   infra/sweep.sh launch <entity/project/sweep_id> 4 --config config/ppo_hc_036.yml
 
 program: ppo_baseline.py
 method: bayes
 metric:
-  name: eval/best_eval_reward
+  # Rewards runs that are high near 20M steps, peak near 2500, and do not keep
+  # improving far past 25M. See _halfcheetah_target_metrics in ppo_baseline.py.
+  name: hc_target_score
   goal: maximize
 
 parameters:
+  ppo_overrides.batch_size:
+    values: [64]
+  ppo_overrides.num_envs:
+    values: [2048]
+  ppo_overrides.num_evals:
+    values: [50]
+  ppo_overrides.reward_scaling:
+    values: [1]
+  ppo_overrides.discounting:
+    values: [0.95]
   ppo_overrides.learning_rate:
     distribution: log_uniform_values
-    min: 0.0001
-    max: 0.003
+    min: 0.0002
+    max: 0.0007
   ppo_overrides.entropy_cost:
     distribution: log_uniform_values
-    min: 0.0001
-    max: 0.03
-  ppo_overrides.discounting:
-    values: [0.97, 0.98, 0.99, 0.997]
-  ppo_overrides.gae_lambda:
-    values: [0.9, 0.95, 0.97]
+    min: 0.006
+    max: 0.014
   ppo_overrides.unroll_length:
-    values: [5, 10, 20]
+    values: [5, 10, 15]
   ppo_overrides.num_minibatches:
-    values: [8, 16, 32]
+    values: [64, 96, 128]
   ppo_overrides.num_updates_per_batch:
-    values: [2, 4, 8]
-  ppo_overrides.reward_scaling:
-    values: [1, 5, 10]
+    values: [8, 10, 12]
 
 command:
   - python
@@ -49,7 +56,9 @@ command:
   - --config_path
   - /tmp/run-config.yml
   - --logging
-  - wandb
+  - aim+wandb
+  - --log_repo
+  - aim://172.31.62.192:53800
 
 # Optional early stopping (uncomment to prune weak trials):
 # early_terminate:

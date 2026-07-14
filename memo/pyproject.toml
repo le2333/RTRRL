@@ -1,0 +1,111 @@
+[build-system]
+requires = ["setuptools>=64", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["memorax*"]
+
+[project]
+name = "memorax"
+version = "1.0.1"
+description = "A unified JAX/Flax framework for memory-augmented reinforcement learning with support for RNNs, SSMs, and Transformers"
+readme = "README.md"
+license = "Apache-2.0"
+requires-python = ">=3.12,<3.13"
+authors = [{ name = "Noah Farr" }]
+keywords = ["jax", "flax", "reinforcement-learning", "memory", "rnn", "ssm", "transformer", "pomdp"]
+
+dependencies = [
+    "jax>=0.7.0",
+    "flax>=0.10.2",
+    "lox @ git+https://github.com/huterguier/lox@dev",
+    "distrax>=0.1.5",
+    "flashbax>=0.1.0",
+    "gymnax>=0.0.9",
+    "wandb>=0.20.0",
+    "tensorboardx>=2.6.1",
+    "hydra-core",
+    "aim>=3.28",
+    "simple_parsing>=0.1.8",
+    "tqdm>=4.66",
+    # Required by logging_util.py (Aim/W&B bridge reused from streaming-rtrrl).
+    "dacite>=1.8",
+    "plotly>=5.24",
+]
+
+[project.urls]
+Homepage = "https://github.com/noahfarr/memorax"
+Repository = "https://github.com/noahfarr/memorax"
+Documentation = "https://memorax.readthedocs.io"
+
+[project.optional-dependencies]
+brax      = ["brax>=0.12.4"]
+jumanji   = ["jumanji>=1.1.1"]
+navix     = ["navix>=0.7.0"]
+craftax   = ["craftax>=1.5.0"]
+popgym    = ["popgym", "gymnasium"]
+foragax   = ["continual-foragax"]
+popgym-arcade    = ["popgym-arcade>=0.0.4"]
+mujoco-playground = ["playground>=0.0.5", "warp-lang>=1.9.1"]
+grimax    = ["grimax"]
+cogames   = ["cogames"]
+gymnasium = ["gymnasium"]
+ale       = ["ale-py[gymnasium]"]
+mujoco    = ["gymnasium[mujoco]"]
+pufferlib = ["pufferlib-core"]
+gxm       = ["gxm"]
+pobax     = ["pobax"]
+popjym    = ["popjym"]
+xminigrid = ["xminigrid"]
+jaxmarl   = ["jaxmarl", "brax"]
+memory-gym = ["memory-gym", "gymnasium"]
+
+environments = [
+    "brax>=0.12.4",
+    "gymnax>=0.0.9",
+    "jumanji>=1.1.1",
+    "navix>=0.7.0",
+    "craftax>=1.5.0",
+    "popgym",
+    "popgym-arcade>=0.0.4",
+    "memory-gym",
+    "continual-foragax",
+    "warp-lang>=1.9.1",
+    "playground>=0.0.5",
+    "jaxmarl==0.1.0",
+    "gxm",
+    "popjym",
+    "pobax",
+    "xminigrid",
+]
+
+[dependency-groups]
+development = ["pre-commit>=4.2.0", "pytest", "pyright"]
+docs = [
+    "sphinx>=7.2.0",
+    "sphinx-book-theme>=1.1.0",
+    "myst-parser>=2.0.0",
+    "sphinx-autodoc-typehints>=1.25.0",
+    "sphinx-copybutton>=0.5.2",
+    "sphinx-design>=0.5.0",
+    "sphinx-autobuild>=2025.8.25",
+]
+
+[tool.uv]
+package = true
+
+[[tool.uv.dependency-metadata]]
+name = "jaxmarl"
+requires-dist = []
+
+
+[tool.uv.sources]
+continual-foragax = { git = "https://github.com/steventango/continual-foragax" }
+grimax  = { git = "ssh://git@github.com/noahfarr/grimax" }
+cogames = { git = "https://github.com/Metta-AI/cogames" }
+gxm     = { git = "https://github.com/huterguier/gxm", rev = "dev", extra = "gxm" }
+pobax   = { git = "https://github.com/taodav/pobax" }
+popjym  = { git = "https://github.com/EdanToledo/popjym.git", extra = "popjym" }
+performax = { git = "https://github.com/noahfarr/performax.git" }
+lox       = { git = "https://github.com/huterguier/lox", rev = "dev" }

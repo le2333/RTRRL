@@ -1,14 +1,45 @@
 #!/usr/bin/env bash
-# Build the CPU training image and push it to ECR.
+# Build a project's training image and push it to ECR.
 # Run from the jump host (its `controller` role can push to ECR) or anywhere
-# with Docker + credentials. Build context is the repo root.
+# with Docker + credentials.
+#
+#   ../infra/build-and-push.sh [--project PATH] [--gpu]
+#
+# The Dockerfile and build context come from the PROJECT (project.env selects
+# the image tag): <project>/infra/docker/Dockerfile[.gpu], context = <project>.
 set -euo pipefail
 
 HERE="$(cd "$(dirname "$0")" && pwd)"
-source "${HERE}/env.sh"
-REPO_ROOT="$(cd "${HERE}/.." && pwd)"
 
-echo "Image: ${IMAGE}"
+PROJECT_DIR="${PROJECT_DIR:-$PWD}"
+GPU=0
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --project) PROJECT_DIR="$(cd "$2" && pwd)"; shift 2 ;;
+    --gpu)     GPU=1; shift ;;
+    *) echo "unknown option: $1" >&2; exit 1 ;;
+  esac
+done
+export PROJECT_DIR
+source "${HERE}/env.sh"
+
+if [ "${GPU}" -eq 1 ]; then
+  DOCKERFILE="${PROJECT_DIR}/infra/docker/Dockerfile.gpu"
+  TARGET_IMAGE="${GPU_IMAGE}"
+else
+  DOCKERFILE="${PROJECT_DIR}/infra/docker/Dockerfile"
+  TARGET_IMAGE="${IMAGE}"
+fi
+[ -f "${DOCKERFILE}" ] || { echo "ERROR: Dockerfile not found: ${DOCKERFILE}" >&2; exit 1; }
+
+echo "Project    : ${PROJECT_NAME} (${PROJECT_DIR})"
+echo "Dockerfile : ${DOCKERFILE}"
+echo "Image      : ${TARGET_IMAGE}"
+
+# Stage the shared in-container helper into the project build context so it bakes
+# into /app (the shared infra dir itself is NOT part of the build context). This
+# keeps run_many.py single-sourced here; the staged copy is gitignored.
+cp "${HERE}/run_many.py" "${PROJECT_DIR}/run_many.py"
 
 # Create the ECR repo if it does not exist (needs ecr:CreateRepository; if the
 # jump host role lacks it, create the repo once with admin creds instead).
@@ -22,10 +53,10 @@ aws ecr get-login-password --region "${REGION}" \
 # Build (linux/amd64 to match Batch EC2 instances) and push.
 docker build \
   --platform linux/amd64 \
-  -f "${HERE}/docker/Dockerfile" \
-  -t "${IMAGE}" \
-  "${REPO_ROOT}"
+  -f "${DOCKERFILE}" \
+  -t "${TARGET_IMAGE}" \
+  "${PROJECT_DIR}"
 
-docker push "${IMAGE}"
+docker push "${TARGET_IMAGE}"
 
-echo "Pushed ${IMAGE}"
+echo "Pushed ${TARGET_IMAGE}"

@@ -1,0 +1,34 @@
+# Experiment: Stream AC(λ) + RTU-RTRL on POPGym (arXiv 2605.24709 §4.2).
+# One algorithm-environment binding: stream_ac x popgym, agent_type=rtu_rtrl.
+experiment: stream_ac_popgym
+agent_type: rtu_rtrl
+
+seed: 0
+total_timesteps: 1000000
+num_epochs: 100
+num_envs: 16
+
+eval_every: 10
+eval_steps: 1000
+patience: 100
+
+logging: aim
+run_name: stream_ac_rtrl_popgym_countrecall
+
+# Stream AC(λ)
+gamma: 0.99
+trace_lambda: 0.9
+actor_lr: 1.0
+critic_lr: 1.0
+actor_kappa: 3.0
+critic_kappa: 2.0
+entropy_coefficient: 0.01
+adaptive: false
+
+# Network (paper Appendix A)
+hidden_dim: 192
+encoder_dim: 64
+meta_rl: false
+
+# POPGym task
+env_id: "popjym::CountRecall"

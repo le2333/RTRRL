@@ -1,0 +1,33 @@
+# Experiment: QRC(λ) + RTU-RTRL on POPGym (arXiv 2605.24709 §4.2).
+experiment: qrc_popgym
+agent_type: rtu_rtrl
+
+seed: 0
+total_timesteps: 5000000
+num_epochs: 50
+num_envs: 1
+
+eval_every: 10
+eval_steps: 10000
+patience: 100
+
+logging: aim
+run_name: qrc_rtrl_popgym_countrecall
+
+# QRC(λ)
+gamma: 0.99
+trace_lambda: 0.8
+gradient_correction: true
+reg_coeff: 1.0
+q_lr: 1e-4
+h_lr: 1e-5
+epsilon_end: 0.01
+epsilon_fraction: 0.2
+
+# Network
+hidden_dim: 192
+encoder_dim: 64
+meta_rl: false
+
+# POPGym task
+env_id: "popjym::CountRecall"

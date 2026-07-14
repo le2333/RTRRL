@@ -1,0 +1,102 @@
+study: ppo-hc-v2
+
+aim:
+  repo: ../../logs/aim
+  include_name_regex: "^(PPO-HC-|ppo-hc-)"
+  skip_archived: true
+  # Objective = reward@20M only (recomputed from the eval curve as hc_r20).
+  # Goal: reach 2500 @ 20M (Optuna maximizes the metric; `goal` is documentary).
+  target: hc_r20
+  goal: 2500
+  direction: maximize
+
+filters:
+  shared.algorithm: ppo
+  shared.env_name: brax-halfcheetah
+  ppo.env_params.obs_mask: [0, 2, 4, 6, 8, 10, 12, 14, 16]
+  ppo.env_params.init_kwargs.backend: spring
+
+base:
+  config: ../../config/ppo_hc_001_20m.yml
+  entry: ppo_baseline.py
+  logging: aim
+  log_repo: aim://172.31.62.192:53800
+
+# Everything tunable except obs_mask / max_ep_length / normalize_observations
+# (task-defining or already ruled out). All categorical + coarse for discovery;
+# lr/entropy span ~2.5 / 2 decades per "need 2 orders of magnitude to see diffs".
+# `default` = Brax train() default, used to seed history runs that didn't log the
+# key (e.g. 001/019/036/041 never set clipping_epsilon or gae_lambda).
+search_space:
+  ppo_overrides.learning_rate:
+    type: categorical
+    choices: [3.0e-5, 1.0e-4, 3.0e-4, 1.0e-3, 3.0e-3, 1.0e-2]
+  ppo_overrides.entropy_cost:
+    type: categorical
+    choices: [3.0e-4, 1.0e-3, 2.0e-3, 3.0e-3, 5.0e-3, 1.0e-2, 2.0e-2, 3.0e-2]
+  ppo_overrides.discounting:
+    type: categorical
+    choices: [0.90, 0.93, 0.95, 0.97, 0.99]
+  ppo_overrides.gae_lambda:
+    type: categorical
+    choices: [0.90, 0.95, 0.99]
+    default: 0.95
+  ppo_overrides.clipping_epsilon:
+    type: categorical
+    choices: [0.1, 0.2, 0.3]
+    default: 0.3
+  ppo_overrides.reward_scaling:
+    type: categorical
+    choices: [0.5, 1.0, 2.0, 5.0]
+    default: 1.0
+  ppo_overrides.action_repeat:
+    type: categorical
+    choices: [1, 2, 4]
+    default: 1
+  ppo_overrides.num_envs:
+    type: categorical
+    choices: [128, 256, 512, 1024, 2048]
+  ppo_overrides.batch_size:
+    type: categorical
+    choices: [32, 64, 128, 256, 512]
+  ppo_overrides.num_minibatches:
+    type: categorical
+    choices: [16, 32, 64, 128, 256]
+  ppo_overrides.unroll_length:
+    type: categorical
+    choices: [1, 5, 10, 15, 20]
+  ppo_overrides.num_updates_per_batch:
+    type: categorical
+    choices: [1, 2, 4, 8, 12, 16]
+
+constraints:
+  min_distance_to_history: 0.06
+  min_distance_in_batch: 0.10
+  candidate_pool_multiplier: 8
+  max_duplicate_retries: 240
+
+resource_policy:
+  default_profile: c7a-medium
+  rules:
+    - when:
+        path: ppo_overrides.num_envs
+        op: ">"
+        value: 64
+      profile: g6-xlarge
+
+profiles:
+  c7a-medium:
+    queue: rtrrl-cpu-c7am-queue
+    job_def: rtrrl-cpu-c7am-job
+    instance_type: c7a.medium
+    estimated_cost_per_hour: 0.011
+  g6-xlarge:
+    queue: rtrrl-gpu-g6x-queue
+    job_def: rtrrl-gpu-g6x-job
+    instance_type: g6.xlarge
+    estimated_cost_per_hour: 0.804
+
+budget:
+  max_jobs_per_round: 16
+  max_total_jobs: 40
+  max_estimated_cost: 10.0

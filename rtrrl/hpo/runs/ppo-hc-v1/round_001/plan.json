@@ -1,0 +1,36 @@
+{
+  "history": {
+    "best_value": 2384.65283203125,
+    "imported_runs": 54
+  },
+  "items": [
+    {
+      "config": "control/hpo/runs/ppo-hc-v1/round_001/configs/config_001.yml",
+      "distance_to_batch": null,
+      "distance_to_history": 0.18489971553789233,
+      "entry": "ppo_baseline.py",
+      "index": 1,
+      "job_def": "rtrrl-gpu-job",
+      "job_name": "ppo-hc-v1-r001-001",
+      "logging": "aim",
+      "params": {
+        "ppo_overrides.discounting": 0.9391009829143528,
+        "ppo_overrides.entropy_cost": 0.023746028416382608,
+        "ppo_overrides.learning_rate": 0.00028232635651449794,
+        "ppo_overrides.num_minibatches": 128,
+        "ppo_overrides.num_updates_per_batch": 1
+      },
+      "profile": "g6-xlarge",
+      "queue": "rtrrl-gpu-queue",
+      "run_name": "PPO-HC-038-10M"
+    }
+  ],
+  "rejected": {
+    "near_batch": 0,
+    "near_history": 0
+  },
+  "round": "001",
+  "spec": "control/hpo/specs/ppo_hc038.yaml",
+  "storage": "sqlite:////home/ubuntu/trainer/streaming-rtrrl/control/hpo/studies/ppo-hc-v1/optuna.db",
+  "study": "ppo-hc-v1"
+}

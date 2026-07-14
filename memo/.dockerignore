@@ -1,0 +1,20 @@
+# Keep the training image lean: exclude the local venv, VCS, docs, HPO
+# orchestration, logs and caches. The image only needs the package + experiments
+# + configs + models + logging bridge + dependency manifests.
+.venv
+.git
+.gitignore
+docs
+hpo
+images
+logs
+examples
+*.egg-info
+__pycache__
+**/__pycache__
+*.pyc
+*.pyo
+.pytest_cache
+.mypy_cache
+.ruff_cache
+_runlogs

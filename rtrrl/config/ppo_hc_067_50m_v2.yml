@@ -1,0 +1,41 @@
+debug: 0
+env_params:
+  batch_size: null
+  env_kwargs: {}
+  env_name: brax-halfcheetah
+  init_kwargs:
+    backend: spring
+  max_ep_length: 1000
+  obs_mask:
+  - 0
+  - 2
+  - 4
+  - 6
+  - 8
+  - 10
+  - 12
+  - 14
+  - 16
+  render: false
+  reward_scaling: 1
+log_code: false
+log_repo: aim://172.31.62.192:53800
+logging: aim
+num_timesteps: 50000000
+ppo_overrides:
+  action_repeat: 4
+  batch_size: 64
+  clipping_epsilon: 0.3
+  discounting: 0.93
+  entropy_cost: 0.0003
+  gae_lambda: 0.95
+  learning_rate: 0.0003
+  normalize_observations: true
+  num_envs: 256
+  num_evals: 50
+  num_minibatches: 32
+  num_updates_per_batch: 4
+  reward_scaling: 2.0
+  unroll_length: 10
+run_name: PPO-HC-067-50M-V2
+seed: 3

@@ -1,0 +1,59 @@
+# GPU (CUDA 12) training image for memorax-rtrl (Stream AC(λ)+RTU-RTRL and RTRRL;
+# arXiv 2605.24709 / RTRRL AAAI'25). RTRL's jacobian-in-scan is very slow to
+# XLA-compile on CPU, so GPU is the practical way to run these experiments.
+#
+# SINGLE-STAGE by design: a multi-stage build would materialise the ~5 GB CUDA
+# venv twice on disk (builder layer + `COPY --from` into runtime), which does not
+# fit on a small root disk. Building in one stage keeps a single venv copy. The
+# CUDA userspace libs ship as pip wheels (nvidia-*), so no CUDA base image is
+# needed; the host NVIDIA driver comes from the AWS Batch GPU-optimized AMI.
+
+FROM python:3.12-slim
+
+COPY --from=ghcr.io/astral-sh/uv:latest /uv /usr/local/bin/uv
+
+# git: required by the `lox @ git+...` dependency during `uv sync`.
+# build-essential: fallback for any sdist deps. awscli v2: S3 sync from the job.
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends git ca-certificates build-essential curl unzip \
+    && curl -s "https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip" -o /tmp/awscliv2.zip \
+    && unzip -q /tmp/awscliv2.zip -d /tmp \
+    && /tmp/aws/install \
+    && rm -rf /tmp/awscliv2.zip /tmp/aws \
+    && apt-get purge -y unzip \
+    && apt-get autoremove -y \
+    && rm -rf /var/lib/apt/lists/*
+
+# hardlink (not copy): uv cache and /opt/venv share the layer fs, so hardlinking
+# avoids duplicating the multi-GB CUDA wheels into the venv during install.
+ENV UV_PYTHON_DOWNLOADS=never \
+    UV_PROJECT_ENVIRONMENT=/opt/venv \
+    UV_LINK_MODE=hardlink
+
+WORKDIR /app
+
+# Dependency manifests first so this layer caches across code changes.
+COPY pyproject.toml uv.lock ./
+RUN uv sync --frozen --no-dev
+
+# Add the CUDA 12 JAX plugin (jax-cuda12-plugin / -pjrt + bundled nvidia wheels),
+# pinned to the lockfile's JAX version (0.10.2). Strip static archives (*.a, GBs;
+# JAX only loads the shared libs at runtime) and clear the uv cache in the same
+# layer to keep the build footprint and image small.
+RUN uv pip install --python /opt/venv "jax[cuda12]==0.10.2" \
+    && find /opt/venv -name '*.a' -delete \
+    && uv cache clean
+
+# NOTE: JAX_PLATFORM_NAME / XLA_FLAGS are intentionally NOT set so JAX
+# auto-detects and uses the GPU.
+ENV PATH="/opt/venv/bin:${PATH}" \
+    PYTHONUNBUFFERED=1
+
+COPY . /app
+
+COPY infra/docker/entrypoint.sh /usr/local/bin/entrypoint.sh
+RUN chmod +x /usr/local/bin/entrypoint.sh
+
+ENTRYPOINT ["/usr/local/bin/entrypoint.sh"]
+# Default is a no-op help; the real command comes from submit.sh --entry.
+CMD ["python", "experiments/rtrrl_hopper/run.py", "--help"]

@@ -3,9 +3,15 @@
 set -euo pipefail
 
 HERE="$(cd "$(dirname "$0")" && pwd)"
+
+# Pre-scan for --project so env.sh sources the right project.env (default $PWD).
+for ((i=1; i<=$#; i++)); do
+  if [ "${!i}" = "--project" ]; then j=$((i+1)); export PROJECT_DIR="$(cd "${!j}" && pwd)"; fi
+done
+export PROJECT_DIR="${PROJECT_DIR:-$PWD}"
 source "${HERE}/env.sh"
 
-ENTRY="rtrrl.py"
+ENTRY="${DEFAULT_ENTRY:-rtrrl.py}"
 NAME=""
 MODE="${LOGGING}"
 QUEUE="${JOB_QUEUE}"
@@ -16,6 +22,7 @@ EXTRA=()
 
 while [ $# -gt 0 ]; do
   case "$1" in
+    --project)  shift 2 ;;
     --config)   CONFIGS+=("$2"); shift 2 ;;
     --entry)    ENTRY="$2"; shift 2 ;;
     --name)     NAME="$2"; shift 2 ;;
@@ -61,7 +68,8 @@ print(base64.b64encode(payload).decode("ascii"))
 PY
 )
 
-CMD=(python infra/run_many.py --entry "${ENTRY}" --logging "${MODE}")
+# run_many.py is staged into the image at /app/run_many.py by build-and-push.sh.
+CMD=(python run_many.py --entry "${ENTRY}" --logging "${MODE}")
 case "${MODE}" in
   *aim*) CMD+=(--log_repo "${AIM_SERVER}") ;;
 esac

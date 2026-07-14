@@ -1,0 +1,11 @@
+# Shared infra repo: jax-free orchestration + HPO engine.
+# Per-project HPO data (studies/, runs/, snapshots/) lives under <project>/hpo/,
+# NOT here. Keep this repo to scripts + the HPO engine only.
+__pycache__/
+*.pyc
+.venv/
+hpo/.venv/
+# Dedicated slim venv (aim only) for the shared Aim tracking server, launched
+# from the repo root serving the root .aim repo. See infra/README / env.sh.
+.aim-venv/
+*.log

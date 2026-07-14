@@ -1,0 +1,43 @@
+# Experiment: RTRRL (AAAI'25) on Brax Hopper.
+# Reproduces streaming-rtrrl's best HPO run RTRRL-HOP-533
+# (streaming-rtrrl/config/rtrrl_hop_533.yml, 1M-step Hopper return ~808.67),
+# re-hosted on memorax with the LRU-RTRL backbone.
+experiment: rtrrl_hopper
+
+seed: 3
+total_timesteps: 1000000
+num_epochs: 20        # eval_points
+num_envs: 1           # streaming (streaming-rtrrl batch_size=1)
+
+eval_every: 1
+eval_steps: 1000
+patience: 1000000     # disabled
+
+logging: null
+run_name: RTRRL-HOP-533-memorax
+
+# Brax Hopper (spring backend, full observation).
+env_name: hopper
+mode: F
+backend: spring
+
+# Network (meta-RL input [o, a, r]).
+hidden_dim: 32
+encoder_dim: 32
+meta_rl: true
+
+# RTRRL hyperparameters (RTRRL-HOP-533).
+gamma: 0.95
+lambda_pi: 0.97
+lambda_v: 0.9
+lambda_rnn: 0.945
+td_lr: 3.0e-05
+rnn_lr: 2.0e-06
+eta_pi: 0.38
+eta_f: 0.5
+entropy_rate: 3.0e-05
+update_period: 0.1
+b1: 0.9
+b2: 0.999
+eps: 1.0e-08
+rnn_grad_clip: 1.0

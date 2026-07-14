@@ -1,10 +1,34 @@
-# RTRRL AWS infra
+# Shared AWS infra (multi-project)
 
-Pipeline to run RTRRL / PPO training on **AWS Batch** (EC2-backed, CPU, e.g.
-`c7a.xlarge`), with metrics streamed live to **Aim** (on the jump host) and/or
-**Weights & Biases**. This path is validated end-to-end (image build -> Batch
-job -> training -> metrics). W&B also drives **hyperparameter sweeps** (see
-"Hyperparameter sweeps" below).
+Standalone, **jax-free** orchestration + HPO shared by multiple training
+projects (e.g. `streaming-rtrrl`, `memorax-rtrl`). Because none of this layer
+imports jax, the projects' incompatible JAX versions never meet here — each
+project ships its own training **image** (its `infra/docker/Dockerfile[.gpu]`),
+distinguished only by the ECR **tag**. AWS resources (ECR repo, Batch queues,
+IAM roles, S3, the Aim server, the W&B secret) are shared across projects.
+
+## Per-project layering (`project.env`)
+
+`env.sh` sets the common AWS resources, then sources the calling project's
+`project.env` (found via `PROJECT_DIR`, default `$PWD`), which sets the
+per-project bits: `PROJECT_NAME`, `IMAGE_TAG`, `GPU_IMAGE_TAG`, `DEFAULT_ENTRY`,
+`WANDB_PROJECT`. Run the scripts from a project dir (or pass `--project PATH`):
+
+```
+cd ../streaming-rtrrl && ../infra/build-and-push.sh --gpu
+cd ../streaming-rtrrl && ../infra/submit.sh --config config/rtrrl_hop.yml
+cd ../memorax-rtrl    && ../infra/submit.sh --config config/stream_ac_rtrl_hopper_maskP.yml \
+                          --entry experiments/stream_ac_mujoco_masked/run.py --queue rtrrl-gpu-queue --job-def rtrrl-gpu-job
+```
+
+`build-and-push.sh` stages the shared in-container helper `run_many.py` into the
+project build context so it bakes into the image (`/app/run_many.py`); the staged
+copy is gitignored in each project.
+
+Pipeline: run training on **AWS Batch** (EC2-backed; CPU `c7a.xlarge` or GPU
+`g5.2xlarge`), with metrics streamed live to **Aim** (on the jump host) and/or
+**Weights & Biases**. W&B also drives **hyperparameter sweeps** (see below); the
+main HPO lives in `hpo/` (Optuna + Aim, also project-agnostic — see `hpo/`).
 
 **Not wired up yet (by choice):** S3 checkpoint sync and Aim run-resume across
 Spot interruptions. Jobs run on on-demand EC2, so a run is not interrupted and
@@ -13,21 +37,23 @@ resume is unnecessary for now.
 ## Layout
 
 ```
-infra/
-├── env.sh                 # shared config (region, names, subnets, SG, Aim, W&B)
-├── build-and-push.sh      # MANUAL local image build -> ECR (fallback only)
-├── submit.sh              # submit one training run (or a W&B sweep agent)
-├── sweep.yaml             # W&B sweep definition for the PPO baseline
-├── sweep.sh               # create a sweep + launch parallel agents on Batch
-├── docker/
-│   ├── Dockerfile         # CPU image: uv-installed deps (+ AWS CLI, build-essential)
-│   └── entrypoint.sh      # decodes CONFIG_B64 -> /tmp/run-config.yml, runs cmd
-├── batch/
-│   └── create-batch.sh    # compute environment + queue + job definition
+infra/                     # <- this shared repo (jax-free)
+├── env.sh                 # common AWS config; sources <project>/project.env
+├── build-and-push.sh      # build a project's image -> ECR (--project, --gpu)
+├── submit.sh              # submit one training run (--project, --entry, --config)
+├── submit_many.sh         # submit N configs run sequentially in one container
+├── run_many.py            # in-container helper (staged into the image at build)
+├── sweep.yaml / sweep.sh  # W&B sweep definition + launcher (backup HPO path)
+├── benchmark.sh           # instance-type benchmark helper
+├── batch/create-batch.sh  # compute environment + queue + job definition
 ├── iam/                   # IAM roles/policies (see iam/README.md)
-└── monitoring/            # CloudWatch agent config for the jump host
+├── monitoring/            # CloudWatch agent config for the jump host
+└── hpo/                   # Optuna+Aim HPO ENGINE (project-agnostic; see hpo/)
 
-.github/workflows/build-image.yml   # builds + pushes the image on push to main
+<project>/                 # e.g. streaming-rtrrl, memorax-rtrl
+├── project.env            # IMAGE_TAG / GPU_IMAGE_TAG / DEFAULT_ENTRY / WANDB_PROJECT
+├── infra/docker/          # THIS project's image (Dockerfile[.gpu] + entrypoint.sh)
+└── hpo/                   # THIS project's HPO data: specs/ runs/ studies/ snapshots/
 ```
 
 ## How the image is built
@@ -74,7 +100,7 @@ via OIDC, creates the ECR repo if needed, builds the CPU image, and pushes
    up *before* submitting, or metric logging from the job will fail:
 
    ```bash
-   nohup uv run aim server --repo logs/aim/.aim --host 0.0.0.0 --port 53800 \
+   nohup uv run aim server --repo .aim --host 0.0.0.0 --port 53800 \
      > logs/aim-server.log 2>&1 &
    ```
 
@@ -117,16 +143,50 @@ via OIDC, creates the ECR repo if needed, builds the CPU image, and pushes
    (see the repo root README "Logging" section):
 
    ```bash
-   uv run aim up --repo logs/aim/.aim --host 0.0.0.0 --port 43800
+   uv run aim up --repo .aim --host 0.0.0.0 --port 43800
    ```
 
    W&B runs appear at `https://wandb.ai/<entity>/RTRRL-PPO` (PPO) /
    `RTRRL` (rtrrl.py).
 
+## Logging cadence (number of points)
+
+Aim and W&B receive **exactly the same points** — one per *evaluation*, not per
+training step. `brax` PPO calls `progress_fn` once per eval (plus an initial eval
+at step 0), and `ppo_baseline.py` logs one point per call; there is also a single
+`final/*` summary at the end. Per-gradient-step metrics are not logged.
+
+The number of evals (= number of curve points) is:
+
+- **`num_evals` in the config's `ppo_overrides`** if set (it overrides the
+  default, because `ppo_overrides` is spread last into `ppo.train`), otherwise
+- the **default** from `_default_num_evals`: `brax-hopper` → 1 eval per **1M**
+  steps; other envs → 2 evals per **5M** steps.
+
+So examples:
+
+| config | steps | evals | points you see |
+|---|---|---|---|
+| `ppo_smoke.yml` (`num_evals: 1`) | 64 | 1 | **1** (single point — expected, not a bug) |
+| `ppo_hopper_default_2m.yml` (default) | 2M | ~2 | ~2–3 |
+| hopper 20M (default) | 20M | ~20 | ~20 |
+| hopper 20M + `num_evals: 40` | 20M | 40 | ~40 (smoother curve) |
+
+If a run shows only one point in W&B, check Aim too — if both show one point,
+it's the eval cadence (e.g. a smoke config), not a logging problem. For a smooth
+curve, raise `num_evals`:
+
+```yaml
+ppo_overrides:
+  num_evals: 40   # 20M steps -> ~40 points
+```
+
 ## Hyperparameter sweeps (W&B)
 
 W&B Sweeps drive HPO; agents run as Batch jobs and pull trials from the W&B
-controller. The sweep maximizes `eval/best_eval_reward` for the PPO baseline.
+controller. The default sweep is tuned for PPO HalfCheetah and maximizes
+`hc_target_score`: high reward near 20M steps, peak reward close to 2500, and a
+penalty for peaks that keep moving far past 25M.
 
 Sweep parameters use **dotted keys** (e.g. `ppo_overrides.learning_rate`) so they
 land in nested `PPOParams` fields. `logging_util.with_logger` reads
@@ -142,10 +202,11 @@ uv run wandb login
 infra/sweep.sh create
 #    -> prints a sweep id like <entity>/RTRRL-PPO/abc123
 
-# 2) Launch N parallel agents on Batch, each with a base config (env +
-#    num_timesteps come from this config; the sweep overrides ppo_overrides.*).
+# 2) Launch N parallel agents on Batch, each with a base HalfCheetah config
+#    (env + num_timesteps come from this config; the sweep overrides
+#    ppo_overrides.*).
 infra/sweep.sh launch <entity>/RTRRL-PPO/abc123 4 \
-  --config config/ppo_hopper_default_2m.yml --count 1
+  --config config/ppo_hc_036.yml --count 1
 ```
 
 Each agent injects the base config (`CONFIG_B64` -> `/tmp/run-config.yml`) and
@@ -154,6 +215,49 @@ Increase `--count` to have one agent run several trials sequentially, or raise
 the number of agents (and Batch `maxvCpus`) for more parallelism. Sweep runs log
 to **W&B only** by default (the sweep lives there); add `aim` to the `command` in
 `infra/sweep.yaml` if you also want them in the Aim repo.
+
+## HPO control plane
+
+Optuna-style HPO is intentionally kept out of the training containers. The jump
+host can run a local control-plane tool in `control/hpo`: it reads Aim history,
+uses Optuna with a local SQLite file to propose the next batch of configs, and
+then optionally submits those configs to Batch. Workers only train and log to
+Aim; they do not need Optuna or database credentials.
+
+For short RTRRL sweeps, avoid repeatedly scanning the live Aim repo. Refresh the
+local result cache only when needed:
+
+```bash
+uv run --project control/hpo python control/hpo/src/hpo_control/scheduler.py \
+  sync-aim --spec control/hpo/specs/rtrrl_hop_stream.yaml
+```
+
+`suggest` reads `control/hpo/studies/<study>/results.jsonl` first, then falls
+back to the Optuna SQLite history. It no longer scans live Aim by default.
+
+If Aim UI/API queries slow down, snapshot the repo and clean bad RTRRL runs from
+the active repo:
+
+```bash
+# Refuses to copy a live Aim repo unless --allow-live is passed.
+uv run --project control/hpo python control/hpo/src/hpo_control/scheduler.py \
+  snapshot-aim
+
+uv run --project control/hpo python control/hpo/src/hpo_control/scheduler.py \
+  aim-manifest --spec control/hpo/specs/rtrrl_hop_stream.yaml
+
+uv run --project control/hpo python control/hpo/src/hpo_control/scheduler.py \
+  cleanup-aim --spec control/hpo/specs/rtrrl_hop_stream.yaml --dry-run
+```
+
+Stop Aim before destructive cleanup, or pass `--allow-live` only when you have
+confirmed no Batch jobs are writing to it.
+
+RTRRL jobs keep Aim enabled for local UI, but `AimLogger.finalize()` no longer
+blocks by default. Set `AIM_FINALIZE_BLOCK=1` only for debugging a single run
+where you prefer a hard flush over avoiding stuck short sweep containers. If Aim
+handshake timeouts continue after cleanup and the non-blocking image is deployed,
+switch RTRRL sweeps to W&B-only or add an S3/JSONL summary path for HPO scoring.
 
 ## Caveats / gotchas
 

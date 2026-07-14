@@ -1,16 +1,20 @@
 #!/usr/bin/env bash
 # Submit one training run (or a W&B sweep agent) to AWS Batch.
 #
-# Normal run:
-#   infra/submit.sh --config config/rtrrl_brax_hopper_paral1.yml [options] [-- extra]
+# Run from a project dir (PROJECT_DIR=$PWD) or pass --project PATH. The project's
+# project.env selects the image tag / default entry / W&B project.
+#
+# Normal run (from the project dir):
+#   ../infra/submit.sh --config config/rtrrl_brax_hopper_paral1.yml [options] [-- extra]
 #
 # W&B sweep agent (the sweep selects hyperparameters; see infra/sweep.yaml):
-#   infra/submit.sh --sweep <entity/project/sweep_id> --config config/ppo_X.yml \
+#   ../infra/submit.sh --sweep <entity/project/sweep_id> --config config/ppo_X.yml \
 #     --count 1 --name sweep_w1
 #
 # Options:
+#   --project PATH    project root (default: $PWD); selects project.env
 #   --config PATH     YAML config to run (required; base config for sweeps too)
-#   --entry FILE      entry script: rtrrl.py (default) or ppo_baseline.py
+#   --entry FILE      entry script (default: DEFAULT_ENTRY from project.env)
 #   --name NAME       job/run name (default: derived from the config filename)
 #   --logging MODE    aim | wandb | aim+wandb (default: $LOGGING from env.sh)
 #   --sweep ID        run `wandb agent ID` instead of a single training command
@@ -25,9 +29,16 @@
 set -euo pipefail
 
 HERE="$(cd "$(dirname "$0")" && pwd)"
+
+# Pre-scan for --project so env.sh sources the right project.env. Default
+# PROJECT_DIR to $PWD (run from a project dir). This must happen BEFORE env.sh.
+for ((i=1; i<=$#; i++)); do
+  if [ "${!i}" = "--project" ]; then j=$((i+1)); export PROJECT_DIR="$(cd "${!j}" && pwd)"; fi
+done
+export PROJECT_DIR="${PROJECT_DIR:-$PWD}"
 source "${HERE}/env.sh"
 
-ENTRY="rtrrl.py"
+ENTRY="${DEFAULT_ENTRY:-rtrrl.py}"
 CONFIG=""
 NAME=""
 MODE="${LOGGING}"
@@ -39,6 +50,7 @@ EXTRA=()
 
 while [ $# -gt 0 ]; do
   case "$1" in
+    --project)  shift 2 ;;
     --config)   CONFIG="$2"; shift 2 ;;
     --entry)    ENTRY="$2"; shift 2 ;;
     --name)     NAME="$2"; shift 2 ;;
