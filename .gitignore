@@ -12,6 +12,10 @@
 /logs/
 /__pycache__/
 
+# Ephemeral Aim "test" repo for debug runs (AIM_SCRATCH_REPO, see logging_util).
+# Validation-only, never backed up to S3; safe to delete anytime.
+.aim-scratch/
+
 # Global safety net (subprojects also ignore these within their own trees).
 **/__pycache__/
 **/.venv/

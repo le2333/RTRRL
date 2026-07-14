@@ -326,6 +326,27 @@ def _parse_backends(logger_name) -> set:
     return {b.strip() for b in logger_name.replace("+", ",").split(",") if b.strip()}
 
 
+def _resolve_aim_repo(aim_repo, hparams):
+    """Pick the effective Aim repo, keeping test (debug) runs out of the main repo.
+
+    Two orthogonal knobs, both env-driven so no config/CLI edits are needed:
+
+    * ``debug`` runs are validation-only and must never pollute or get backed up
+      to the shared "main" repo, so they are redirected to an ephemeral local
+      scratch repo (``AIM_SCRATCH_REPO``, default ``.aim-scratch``). That
+      directory is git-ignored and never synced to S3.
+    * For real runs ``AIM_REPO`` (when set) overrides whatever the config/CLI
+      passed. This lets local runs anchor to the absolute main repo (or the
+      shared ``aim://`` server) without touching the hundreds of configs that
+      still carry the historical relative ``log_repo: ".aim"``.
+    """
+    if getattr(hparams, "debug", 0):
+        scratch = os.environ.get("AIM_SCRATCH_REPO") or ".aim-scratch"
+        print(f"[aim] debug run -> ephemeral scratch repo {scratch!r} (not backed up)")
+        return scratch
+    return os.environ.get("AIM_REPO") or aim_repo
+
+
 def with_logger(
     func: Callable,
     hparams: dict,
@@ -349,6 +370,8 @@ def with_logger(
 
     use_wandb = "wandb" in backends
     use_aim = "aim" in backends
+    if use_aim:
+        aim_repo = _resolve_aim_repo(aim_repo, hparams)
     base = hparams if isinstance(hparams, dict) else asdict(hparams)
 
     if use_wandb:
