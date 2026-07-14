@@ -33,6 +33,9 @@ dependencies = [
     "aim>=3.28,<3.29",
     "simple_parsing>=0.1.8",
     "tqdm>=4.66",
+    # Aim's log_system_params (Run(log_system_params=True)) imports pkg_resources
+    # at runtime; uv-created venvs don't ship setuptools, so add it explicitly.
+    "setuptools>=68",
     # Required by logging_util.py (Aim/W&B bridge reused from streaming-rtrrl).
     "dacite>=1.8",
     "plotly>=5.24",
