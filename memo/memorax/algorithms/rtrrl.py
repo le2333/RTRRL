@@ -26,6 +26,27 @@ goes through Memoroid.local_jacobian, which injects the RFLO phantom
 (phantom = sum(S * (psi - sg(psi)))) so that jax.jacobian(loss)(params) picks up
 d phantom/d psi = S_t. Head / feature-extractor params use standard 1-step
 autodiff. Observation / reward normalisation is handled by env wrappers.
+
+中文说明:
+    RTRRL(实时循环强化学习,AAAI'25)是本项目最核心的算法。它把 streaming-rtrrl
+    的 RNNActorCritic 移植到 memorax,用 memorax 的 LRU 作为 RTRL 骨干。相较
+    StreamACRtrl 的关键区别:
+
+    * 共享循环 torso:单个 LRU 同时喂给线性 actor 头与线性 critic 头,RTRL 敏感度
+      S_t = dh_t/dψ 只维护一份并共享(而非两个独立网络)。
+    * AC(λ) + 三条资格迹:actor / critic / 循环参数各有独立衰减(lambda_pi /
+      lambda_v / lambda_rnn),并配一个 episodic emphasis 因子 I(episode 内 I<-γ·I,
+      边界重置),对应 Sutton & Barto 的在线 AC(λ)。
+    * 优化器用 adam(optax.multi_transform)而非 ObGD:两个头共享 td_lr,循环参数用
+      rnn_lr 且带全局范数裁剪;更新为梯度"上升"。
+    * 循环参数用 Polyak 平均的目标(update_period):求梯度的前向用"慢"LRU 参数,
+      adam 更新"快"LRU 参数,再 slow <- incremental_update(fast, slow, update_period)。
+    * eta_pi 缩放 actor 目标(并入损失),eta_f 缩放整个循环更新;熵项作为独立的
+      (非资格迹)梯度直接加到 actor 与循环更新上。
+
+    循环梯度的获取方式与 StreamACRtrl 完全相同:torso 前向走 Memoroid.local_jacobian,
+    注入 RFLO 幻影使 jax.jacobian(loss)(params) 取到 d phantom/dψ = S_t;头与
+    特征提取器参数走普通 1 步自动微分。观测/奖励归一化由环境 wrapper 处理。
 """
 from dataclasses import dataclass, field
 from functools import partial
@@ -63,11 +84,37 @@ _ACTOR_KEY = "actor"
 _CRITIC_KEY = "critic"
 
 
+def _tree_norm(tree) -> Array:
+    """L2 norm over all leaves of a (possibly complex) pytree; 0 if empty."""
+    leaves = jax.tree_util.tree_leaves(tree)
+    if not leaves:
+        return jnp.asarray(0.0)
+    return jnp.sqrt(sum(jnp.sum(jnp.abs(l) ** 2) for l in leaves))
+
+
+def _find_leaf(tree, name):
+    """Return the first leaf whose flatten-path contains a dict key == name."""
+    for path, leaf in jax.tree_util.tree_leaves_with_path(tree):
+        if any(getattr(k, "key", None) == name for k in path):
+            return leaf
+    return None
+
+
 @struct.dataclass(frozen=True)
 class RTRRLConfig:
+    """RTRRL 超参数配置。
+
+    关键字段:num_envs 并行环境数;gamma 折扣;lambda_pi/lambda_v/lambda_rnn 为
+    actor/critic/循环三条资格迹各自的 λ;td_lr/rnn_lr 分别为头与循环参数的 adam 学习率;
+    eta_pi 缩放 actor 目标、eta_f 缩放循环更新;entropy_rate 熵系数;update_period 为
+    循环参数 Polyak 平均系数(1.0 表示无滞后);b1/b2/eps 为 adam 超参;rnn_grad_clip 为
+    循环梯度的全局范数裁剪阈值。
+    """
+
     num_envs: int
     gamma: float = 0.95
     # Per-component eligibility-trace decay.
+    # 每个组件独立的资格迹衰减:actor / critic / 循环参数。
     lambda_pi: float = 0.97
     lambda_v: float = 0.9
     lambda_rnn: float = 0.945
@@ -90,6 +137,14 @@ class RTRRLConfig:
 
 @struct.dataclass(frozen=True)
 class RTRRLState:
+    """RTRRL 训练状态。
+
+    关键字段:params 为"快"参数(feature_extractor/torso/actor/critic);slow_torso 为
+    Polyak 平均后的"慢"LRU 参数(供求梯度的前向使用);traces 为与 params 同构、逐环境的
+    资格迹;carry 为共享 LRU 隐状态;sensitivity 为共享 RTRL 敏感度 S_t;I 为逐环境的
+    episodic emphasis 因子 [num_envs]。
+    """
+
     step: int
     update_step: int
     timestep: Timestep
@@ -105,6 +160,11 @@ class RTRRLState:
 
 @dataclass
 class RTRRL:
+    """RTRRL 算法主体:共享 LRU torso + 线性 actor/critic 头 + 三条资格迹。
+
+    optimizer 在 init() 中根据参数结构构建(adam multi_transform)。
+    """
+
     cfg: RTRRLConfig
     env: Environment
     env_params: EnvParams
@@ -160,6 +220,7 @@ class RTRRL:
         return (next_carry, next_sensitivity), (dist, value)
 
     def _trace_decay(self, key: str) -> float:
+        """按参数组返回对应资格迹的衰减系数 γλ(actor/critic/循环各不同)。"""
         if key == _ACTOR_KEY:
             return self.cfg.gamma * self.cfg.lambda_pi
         if key == _CRITIC_KEY:
@@ -187,6 +248,7 @@ class RTRRL:
         rnn_tx = optax.chain(*rnn_chain)
 
         def label(top_key):
+            # feature_extractor/torso 归为 'rnn' 组,actor/critic 头归为 'td' 组。
             return "rnn" if top_key in _RNN_KEYS else "td"
 
         param_labels = {
@@ -198,6 +260,7 @@ class RTRRL:
     def _deterministic_action(
         self, key: Key, state: RTRRLState
     ) -> tuple[RTRRLState, Array, Array, Array]:
+        """确定性动作(评估):离散取 argmax,连续取众数;推进共享 carry 与敏感度。"""
         obs, done, ts_action, reward = state.timestep.to_sequence()
         gp = self._grad_params(state.params, state.slow_torso)
         (carry, sensitivity), (dist, value) = self._forward(
@@ -219,6 +282,7 @@ class RTRRL:
     def _step(
         self, state: RTRRLState, key: Key, *, policy: Callable
     ) -> tuple[RTRRLState, Transition]:
+        """采集一步(仅用于评估):选动作、与环境交互,不做参数更新。"""
         action_key, step_key = jax.random.split(key)
         state, action, log_prob, value = policy(action_key, state)
 
@@ -262,12 +326,16 @@ class RTRRL:
 
     # ------------------------------------------------------------------ update
     def _update_step(self, state: RTRRLState, key: Key) -> tuple[RTRRLState, None]:
+        """在线单步(RTRRL 核心):前向取动作/价值 -> env.step -> 自举 TD -> RTRL 梯度
+        -> 更新三条资格迹 -> 组装上升更新 -> adam -> Polyak 平均 torso -> 更新 I。"""
         action_key, step_key = jax.random.split(key)
         obs, done, ts_action, reward = state.timestep.to_sequence()
 
+        # 用"快"头 + "慢"LRU torso 组成求梯度的前向参数。
         gp = self._grad_params(state.params, state.slow_torso)
 
         # Acting + value forward (advances the shared carry + RTRL sensitivity).
+        # 采样动作与价值的前向,同时推进共享 carry 与 RTRL 敏感度 S_t。
         (carry, sensitivity), (dist, value) = self._forward(
             gp, obs, ts_action, reward, done, state.carry, state.sensitivity
         )
@@ -299,14 +367,17 @@ class RTRRL:
         )
         next_value = remove_feature_axis(remove_time_axis(next_value))
 
+        # 单步 TD 误差 δ = r + γ(1-done)V(s') - V(s)。
         gamma = self.cfg.gamma
         td_error = next_reward + gamma * (1 - next_done) * next_value - value
 
         # ---- gradients (RTRL through the shared torso via the RFLO phantom) ----
+        # 求梯度的前向从动作前的 carry/敏感度起步,并做 stop_gradient。
         initial_carry = jax.lax.stop_gradient(state.carry)
         initial_sens = jax.lax.stop_gradient(state.sensitivity)
 
         def td_loss_fn(params: PyTree):
+            """AC 目标:eta_pi·logπ(a|s) + V(s);其雅可比给出 actor+critic+循环梯度。"""
             _, (d, v) = self._forward(
                 params, obs, ts_action, reward, done, initial_carry, initial_sens
             )
@@ -316,15 +387,18 @@ class RTRRL:
             return self.cfg.eta_pi * log_p + v
 
         def entropy_loss_fn(params: PyTree):
+            """熵目标:entropy_rate·H(π);作为独立梯度直接加入更新(不进资格迹)。"""
             _, (d, _) = self._forward(
                 params, obs, ts_action, reward, done, initial_carry, initial_sens
             )
             return self.cfg.entropy_rate * remove_time_axis(d.entropy())
 
+        # jacobian 借 RFLO 幻影带入共享 torso 的循环梯度(d phantom/dψ = S_t)。
         td_grads = jax.jacobian(td_loss_fn)(gp)
         entropy_grads = jax.jacobian(entropy_loss_fn)(gp)
 
         # ---- eligibility traces (per component decay, I-weighted increment) ----
+        # 资格迹递推:z <- decay·(1-done)·z + I·g;增量由 emphasis 因子 I 加权。
         not_done = 1 - next_done  # episode continues past this transition
         I = state.I
 
@@ -334,6 +408,7 @@ class RTRRL:
             I_b = I[(slice(None),) + (None,) * n_trailing]
             return decay * nd * z + I_b * g
 
+        # 三条迹用各自的衰减系数(actor/critic/循环)独立更新。
         traces = {
             k: jax.tree.map(
                 partial(lambda zz, gg, d: update_trace(zz, gg, d), d=self._trace_decay(k)),
@@ -345,6 +420,7 @@ class RTRRL:
 
         # ---- assemble ascent updates: delta*z (+eta_f for recurrent) + entropy ----
         def apply_delta(z, extra_scale):
+            # 上升方向 = extra_scale·δ·z(循环组额外乘 eta_f)。
             n_trailing = z.ndim - 1
             delta = td_error[(slice(None),) + (None,) * n_trailing]
             return extra_scale * delta * z
@@ -354,16 +430,20 @@ class RTRRL:
             scale = self.cfg.eta_f if k in _RNN_KEYS else 1.0
             traced = jax.tree.map(lambda z: apply_delta(z, scale), traces[k])
             # entropy gradient added directly (not through the trace, not delta-scaled).
+            # 熵梯度直接叠加(不经资格迹、也不乘 δ)。
             combined = jax.tree.map(lambda t, e: t + e, traced, entropy_grads[k])
             # mean over the env (batch) axis -> parameter-shaped update.
+            # 对 env(batch)维取均值,得到与参数同形的更新。
             updates[k] = jax.tree.map(lambda u: jnp.mean(u, axis=0), combined)
 
+        # adam 处理这些"上升"更新;注意 _make_optimizer 用 +lr,故 apply_updates 即上升。
         adam_updates, opt_state = self.optimizer.update(
             updates, state.opt_state, state.params
         )
         params = optax.apply_updates(state.params, adam_updates)
 
         # ---- Polyak-average the recurrent (LRU) params for the next grad forward.
+        # 对循环参数做 Polyak 平均得到"慢"torso,供下一步求梯度的前向使用。
         if self.cfg.update_period != 1.0:
             slow_torso = optax.incremental_update(
                 params["torso"], state.slow_torso, self.cfg.update_period
@@ -372,7 +452,33 @@ class RTRRL:
             slow_torso = params["torso"]
 
         # ---- episodic emphasis factor I <- gamma*I (reset at episode boundary) ----
+        # episode 内 I<-γI;终止步用 next_done 将 I 重置为 1。
         I_next = gamma * I * not_done + next_done
+
+        # ---- per-step numerical-health probes (which component blows up first) --
+        # 逐组件数值健康探针:定位发散时"谁先不正常"。train_loop 把每 epoch 的
+        # 逐步值归约为 mean 与 max。|λ|=exp(-exp(nu_log))∈(0,1) 恒稳,但 nu_log→-∞
+        # 时 |λ|→1、敏感度 S 无界累积;gamma 为输入增益。
+        nu_log = _find_leaf(params["torso"], "nu_log")
+        gamma_log = _find_leaf(params["torso"], "gamma_log")
+        diag = {
+            "diag/lambda_max": jnp.max(jnp.exp(-jnp.exp(nu_log))),
+            "diag/gamma_max": jnp.max(jnp.exp(gamma_log)),
+            "diag/sens_norm": _tree_norm(sensitivity),
+            "diag/carry_norm": _tree_norm(carry),
+            "diag/z_rnn": _tree_norm({k: traces[k] for k in _RNN_KEYS}),
+            "diag/z_actor": _tree_norm(traces[_ACTOR_KEY]),
+            "diag/z_critic": _tree_norm(traces[_CRITIC_KEY]),
+            "diag/grad_rnn": _tree_norm({k: td_grads[k] for k in _RNN_KEYS}),
+            "diag/grad_actor": _tree_norm(td_grads[_ACTOR_KEY]),
+            "diag/grad_critic": _tree_norm(td_grads[_CRITIC_KEY]),
+            "diag/upd_rnn": _tree_norm({k: adam_updates[k] for k in _RNN_KEYS}),
+            "diag/p_torso": _tree_norm(params["torso"]),
+            "diag/p_actor": _tree_norm(params[_ACTOR_KEY]),
+            "diag/p_critic": _tree_norm(params[_CRITIC_KEY]),
+            "diag/value_abs": jnp.abs(value).mean(),
+            "diag/td_abs": jnp.abs(td_error).mean(),
+        }
 
         lox.log(
             {
@@ -381,6 +487,7 @@ class RTRRL:
                 "actor/entropy": entropy,
                 "critic/value": value.mean(),
                 "emphasis/I": I.mean(),
+                **diag,
             }
         )
 
@@ -416,6 +523,7 @@ class RTRRL:
 
     # ------------------------------------------------------------------ lifecycle
     def init(self, key: Key) -> RTRRLState:
+        """初始化环境、共享 torso 与 actor/critic 头参数、优化器、资格迹与敏感度。"""
         env_key, feat_key, torso_key, actor_key, critic_key, sens_key = jax.random.split(
             key, 6
         )
@@ -433,9 +541,11 @@ class RTRRL:
 
         carry_shape = (self.cfg.num_envs, None)
         carry = self.torso.initialize_carry(jax.random.key(0), carry_shape)
+        # 初始化 RTRL 敏感度 S_0。
         sensitivity = self.torso.initialize_sensitivity(sens_key, carry_shape)
 
         # Sequential init: feature_extractor -> torso -> heads.
+        # 依次初始化:特征提取器 -> 循环 torso -> 两个头(需前一级输出的形状)。
         feat_vars = self.feature_extractor.init(
             {"params": feat_key},
             observation=ts_obs,
@@ -467,10 +577,12 @@ class RTRRL:
             "critic": critic_vars["params"],
         }
 
+        # 资格迹与参数同构、前面多一个 env 维,初始全零。
         traces = jax.tree.map(
             lambda p: jnp.zeros((self.cfg.num_envs, *p.shape)), params
         )
 
+        # 参数结构确定后再构建 adam multi_transform 优化器。
         self.optimizer = self._make_optimizer(params)
         opt_state = self.optimizer.init(params)
 
@@ -489,14 +601,17 @@ class RTRRL:
         )
 
     def warmup(self, key: Key, state: RTRRLState, num_steps: int) -> RTRRLState:
+        """在线算法,无需预热,直接返回原状态。"""
         return state
 
     def train(self, key: Key, state: RTRRLState, num_steps: int) -> RTRRLState:
+        """训练:逐步在线 RTRL 更新,共 num_steps 环境步。"""
         keys = jax.random.split(key, num_steps // self.cfg.num_envs)
         state, _ = jax.lax.scan(self._update_step, state, keys)
         return state
 
     def evaluate(self, key: Key, state: RTRRLState, num_steps: int) -> RTRRLState:
+        """评估:重置环境、carry 与敏感度后以确定性策略运行 num_steps 步。"""
         reset_key, eval_key = jax.random.split(key)
         reset_keys = jax.random.split(reset_key, self.cfg.num_envs)
         obs, env_state = jax.vmap(self.env.reset, in_axes=(0, None))(

@@ -360,10 +360,19 @@ def train_loop(agent, cfg: ExperimentConfig, logger=DummyLogger()):
                 "train/episode_returns": avg_r,
                 "train/episode_lengths": avg_len,
             }
-            # Forward remaining scalar logs (critic/td_error, actor/entropy, ...).
+            # Forward remaining logs (critic/td_error, actor/entropy, diag/*, ...).
+            # lox stacks per-step scalars over the scan -> shape (num_steps,); we
+            # summarize each epoch by its mean AND its max|.| (the max is the key
+            # leading indicator for exponential blow-up: it catches the first
+            # component whose per-step magnitude spikes).
             for k, v in logs.items():
-                if isinstance(v, jnp.ndarray) and v.ndim == 0:
+                if not isinstance(v, jnp.ndarray):
+                    continue
+                if v.ndim == 0:
                     metrics[f"train/{k}"] = float(v)
+                else:
+                    metrics[f"train/{k}"] = float(jnp.mean(v))
+                    metrics[f"train/{k}_max"] = float(jnp.max(jnp.abs(v)))
 
             # Aim step: use the loop-derived env-step count, NOT state.step.
             # state.step has been observed to read back as int64 garbage
