@@ -270,6 +270,26 @@ class C51QNetwork(nn.Module):
         return loss
 
 
+class Regressor(nn.Module):
+    """通用线性回归头:把状态特征线性映射到 ``out_dim`` 维(用于自预测辅助任务)。
+
+    Args:
+        out_dim: 输出维度(如 obs_dim+1,预测下一步观测与奖励)。
+    """
+
+    out_dim: int
+    kernel_init: nn.initializers.Initializer = nn.initializers.lecun_normal()
+    bias_init: nn.initializers.Initializer = nn.initializers.zeros_init()
+
+    @nn.compact
+    def __call__(self, x: Array, **kwargs) -> tuple[Array, dict]:
+        """线性映射到 out_dim 维预测输出。"""
+        pred = nn.Dense(
+            self.out_dim, kernel_init=self.kernel_init, bias_init=self.bias_init
+        )(x)
+        return pred, {}
+
+
 class Categorical(nn.Module):
     """离散策略头：输出 ``distrax.Categorical`` 分布。
 

@@ -89,6 +89,11 @@ class RTRRLHopperConfig(ExperimentConfig):
     bound_actor: bool = False
     act_clip: float = 0.0
     freeze_gamma: bool = False
+    #   pred_obs: auxiliary linear head predicts (next_obs, next_reward) off the
+    #            shared torso; its MSE gradient (scaled by pred_coeff) anchors the
+    #            representation scale, opposing the target-less gamma/h inflation.
+    pred_obs: bool = False
+    pred_coeff: float = 1.0
 
 
 def make_env(cfg: RTRRLHopperConfig):

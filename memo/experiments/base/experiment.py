@@ -222,6 +222,13 @@ def build_rtrrl_agent(cfg: ExperimentConfig, env, env_params):
     )
     critic_head = heads.VNetwork()
 
+    # Optional auxiliary self-prediction head (predict next obs + reward): an
+    # external fixed-scale target that anchors the representation scale.
+    pred_head = None
+    if getattr(cfg, "pred_obs", False):
+        obs_dim = env.observation_space(env_params).shape[0]
+        pred_head = heads.Regressor(out_dim=obs_dim + 1)
+
     rtrrl_cfg = RTRRLConfig(
         num_envs=cfg.num_envs,
         gamma=cfg.gamma,
@@ -240,9 +247,18 @@ def build_rtrrl_agent(cfg: ExperimentConfig, env, env_params):
         rnn_grad_clip=cfg.rnn_grad_clip,
         act_clip=getattr(cfg, "act_clip", 0.0),
         freeze_gamma=getattr(cfg, "freeze_gamma", False),
+        pred_obs=getattr(cfg, "pred_obs", False),
+        pred_coeff=getattr(cfg, "pred_coeff", 1.0),
     )
     return RTRRL(
-        rtrrl_cfg, env, env_params, feature_extractor, torso, actor_head, critic_head
+        rtrrl_cfg,
+        env,
+        env_params,
+        feature_extractor,
+        torso,
+        actor_head,
+        critic_head,
+        pred_head=pred_head,
     )
 
 

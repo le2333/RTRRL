@@ -82,6 +82,7 @@ from memorax.utils.typing import (
 _RNN_KEYS = ("feature_extractor", "torso")
 _ACTOR_KEY = "actor"
 _CRITIC_KEY = "critic"
+_PRED_KEY = "pred"
 
 
 def _tree_norm(tree) -> Array:
@@ -141,6 +142,14 @@ class RTRRLConfig:
     # gain gamma_log (routes it to optax.set_to_zero), pinning it at init.
     act_clip: float = 0.0
     freeze_gamma: bool = False
+    # Auxiliary self-prediction head (streaming-rtrrl's optional pred_obs): a
+    # linear head off the shared torso predicts (next_obs, next_reward). Its
+    # supervised MSE gradient is added DIRECTLY (like entropy, not through the
+    # eligibility trace) to the torso + pred-head updates, scaled by pred_coeff.
+    # An external fixed-scale target anchors the representation scale, opposing
+    # the target-less gamma/h inflation. pred_coeff=0 or no head => disabled.
+    pred_obs: bool = False
+    pred_coeff: float = 1.0
 
 
 @struct.dataclass(frozen=True)
@@ -180,6 +189,10 @@ class RTRRL:
     torso: Memoroid
     actor_head: nn.Module
     critic_head: nn.Module
+    # Optional auxiliary self-prediction head (predicts next_obs + next_reward
+    # from the shared torso). None => disabled. Built by build_rtrrl_agent when
+    # cfg.pred_obs is set.
+    pred_head: nn.Module = None
     activation: Callable = jax.nn.silu
     # Built in init() once the param structure is known.
     optimizer: optax.GradientTransformation = field(default=None, init=False)
@@ -198,10 +211,11 @@ class RTRRL:
         done: Array,
         carry: Carry,
         sensitivity: Any,
-    ) -> tuple[tuple[Carry, Any], tuple[Any, Array]]:
+    ) -> tuple[tuple[Carry, Any], tuple[Any, Array, Any]]:
         """feature_extractor -> LRU (Memoroid.local_jacobian, RTRL) -> silu -> heads.
 
-        Returns ((next_carry, next_sensitivity), (dist, value)).
+        Returns ((next_carry, next_sensitivity), (dist, value, pred)); pred is
+        None unless the auxiliary self-prediction head is enabled.
         """
         x, _ = self.feature_extractor.apply(
             {"params": params["feature_extractor"]},
@@ -225,7 +239,12 @@ class RTRRL:
         value, _ = self.critic_head.apply(
             {"params": params["critic"]}, h, action=action, reward=reward, done=done
         )
-        return (next_carry, next_sensitivity), (dist, value)
+        pred = None
+        if self.pred_head is not None:
+            pred, _ = self.pred_head.apply(
+                {"params": params[_PRED_KEY]}, h, action=action, reward=reward, done=done
+            )
+        return (next_carry, next_sensitivity), (dist, value, pred)
 
     def _trace_decay(self, key: str) -> float:
         """按参数组返回对应资格迹的衰减系数 γλ(actor/critic/循环各不同)。"""
@@ -278,7 +297,7 @@ class RTRRL:
         """确定性动作(评估):离散取 argmax,连续取众数;推进共享 carry 与敏感度。"""
         obs, done, ts_action, reward = state.timestep.to_sequence()
         gp = self._grad_params(state.params, state.slow_torso)
-        (carry, sensitivity), (dist, value) = self._forward(
+        (carry, sensitivity), (dist, value, _) = self._forward(
             gp, obs, ts_action, reward, done, state.carry, state.sensitivity
         )
         action = (
@@ -355,7 +374,7 @@ class RTRRL:
 
         # Acting + value forward (advances the shared carry + RTRL sensitivity).
         # 采样动作与价值的前向,同时推进共享 carry 与 RTRL 敏感度 S_t。
-        (carry, sensitivity), (dist, value) = self._forward(
+        (carry, sensitivity), (dist, value, _) = self._forward(
             gp, obs, ts_action, reward, done, state.carry, state.sensitivity
         )
         action, log_prob = dist.sample_and_log_prob(seed=action_key)
@@ -383,7 +402,7 @@ class RTRRL:
         next_obs_s, next_done_s, next_action_s, next_reward_s = Timestep(
             obs=next_obs, action=env_action, reward=next_reward, done=next_done
         ).to_sequence()
-        _, (_, next_value) = self._forward(
+        _, (_, next_value, _) = self._forward(
             jax.lax.stop_gradient(gp),
             next_obs_s,
             next_action_s,
@@ -405,7 +424,7 @@ class RTRRL:
 
         def td_loss_fn(params: PyTree):
             """AC 目标:eta_pi·logπ(a|s) + V(s);其雅可比给出 actor+critic+循环梯度。"""
-            _, (d, v) = self._forward(
+            _, (d, v, _) = self._forward(
                 params, obs, ts_action, reward, done, initial_carry, initial_sens
             )
             log_p = remove_time_axis(d.log_prob(add_time_axis(action)))
@@ -415,14 +434,30 @@ class RTRRL:
 
         def entropy_loss_fn(params: PyTree):
             """熵目标:entropy_rate·H(π);作为独立梯度直接加入更新(不进资格迹)。"""
-            _, (d, _) = self._forward(
+            _, (d, _, _) = self._forward(
                 params, obs, ts_action, reward, done, initial_carry, initial_sens
             )
             return self.cfg.entropy_rate * remove_time_axis(d.entropy())
 
+        # 自预测目标(可选):从当前状态预测 (next_obs, next_reward),外部固定尺度靶,
+        # 作为上升目标 -coeff·½‖pred-target‖²(下降 MSE),直接加入更新(不进资格迹)。
+        pred_target = jnp.concatenate(
+            [next_obs, jnp.asarray(next_reward, jnp.float32)[..., None]], axis=-1
+        )
+
+        def pred_loss_fn(params: PyTree):
+            """自预测辅助目标:对下一步观测+奖励做回归,给共享表示一个外部尺度锚。"""
+            _, (_, _, pred) = self._forward(
+                params, obs, ts_action, reward, done, initial_carry, initial_sens
+            )
+            pred = remove_time_axis(pred)
+            err = pred - jax.lax.stop_gradient(pred_target)
+            return -self.cfg.pred_coeff * 0.5 * jnp.sum(err ** 2, axis=-1)
+
         # jacobian 借 RFLO 幻影带入共享 torso 的循环梯度(d phantom/dψ = S_t)。
         td_grads = jax.jacobian(td_loss_fn)(gp)
         entropy_grads = jax.jacobian(entropy_loss_fn)(gp)
+        pred_grads = jax.jacobian(pred_loss_fn)(gp) if self.pred_head is not None else None
 
         # ---- eligibility traces (per component decay, I-weighted increment) ----
         # 资格迹递推:z <- decay·(1-done)·z + I·g;增量由 emphasis 因子 I 加权。
@@ -459,6 +494,9 @@ class RTRRL:
             # entropy gradient added directly (not through the trace, not delta-scaled).
             # 熵梯度直接叠加(不经资格迹、也不乘 δ)。
             combined = jax.tree.map(lambda t, e: t + e, traced, entropy_grads[k])
+            # 自预测梯度(若启用)同样直接叠加,给 torso + pred 头一个外部尺度锚。
+            if pred_grads is not None:
+                combined = jax.tree.map(lambda c, p: c + p, combined, pred_grads[k])
             # mean over the env (batch) axis -> parameter-shaped update.
             # 对 env(batch)维取均值,得到与参数同形的更新。
             updates[k] = jax.tree.map(lambda u: jnp.mean(u, axis=0), combined)
@@ -551,9 +589,15 @@ class RTRRL:
     # ------------------------------------------------------------------ lifecycle
     def init(self, key: Key) -> RTRRLState:
         """初始化环境、共享 torso 与 actor/critic 头参数、优化器、资格迹与敏感度。"""
-        env_key, feat_key, torso_key, actor_key, critic_key, sens_key = jax.random.split(
-            key, 6
-        )
+        (
+            env_key,
+            feat_key,
+            torso_key,
+            actor_key,
+            critic_key,
+            pred_key,
+            sens_key,
+        ) = jax.random.split(key, 7)
 
         env_keys = jax.random.split(env_key, self.cfg.num_envs)
         obs, env_state = jax.vmap(self.env.reset, in_axes=(0, None))(
@@ -603,6 +647,11 @@ class RTRRL:
             "actor": actor_vars["params"],
             "critic": critic_vars["params"],
         }
+        if self.pred_head is not None:
+            pred_vars = self.pred_head.init(
+                {"params": pred_key}, h, action=ts_action, reward=ts_reward, done=ts_done
+            )
+            params[_PRED_KEY] = pred_vars["params"]
 
         # 资格迹与参数同构、前面多一个 env 维,初始全零。
         traces = jax.tree.map(
