@@ -370,9 +370,19 @@ def train_loop(agent, cfg: ExperimentConfig, logger=DummyLogger()):
 
     # lox.spool wraps train/evaluate so their internal lox.log calls are
     # returned as a `logs` dict instead of being emitted to a lox sink.
+    #
+    # IMPORTANT: jit the spooled fns. lox.spool runs make_jaxpr + eval_jaxpr on
+    # EVERY call (spooling.py), so an un-jitted spooled fn re-lowers/re-compiles
+    # its (large) lax.scan every epoch. On GPU that's merely wasteful; on the CPU
+    # backend the LLVM ORC-JIT reserves a FIXED contiguous executable-code arena,
+    # so the per-epoch executables accumulate and overflow it ("Unable to
+    # allocate section memory", exit 139) after ~18 epochs for the big brax+RTRL
+    # program. jitting compiles train/eval ONCE (num_steps is static) and reuses
+    # it, which also removes the per-epoch re-trace cost on GPU. lox's own docs
+    # prescribe jit(spool(fn)).
     init = jax.jit(agent.init)
-    train = lox.spool(agent.train)
-    eval_fn = lox.spool(agent.evaluate)
+    train = jax.jit(lox.spool(agent.train), static_argnums=(2,))
+    eval_fn = jax.jit(lox.spool(agent.evaluate), static_argnums=(2,))
 
     key, init_key = jax.random.split(key)
     state = init(init_key)
