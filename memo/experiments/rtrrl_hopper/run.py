@@ -113,6 +113,13 @@ class RTRRLHopperConfig(ExperimentConfig):
     #            representation scale, opposing the target-less gamma/h inflation.
     pred_obs: bool = False
     pred_coeff: float = 1.0
+    #   update_trace_before_td: True (port) folds the current gradient into the
+    #     eligibility trace before applying the TD error; False (RTRRL-HOP-533)
+    #     uses the incoming trace and defers the current gradient one step.
+    #   logprob_reduction: "sum" (port, MultivariateNormalDiag) or "mean" (original,
+    #     per-dim mean of log_prob/entropy). "mean" scales both by 1/action_dim.
+    update_trace_before_td: bool = True
+    logprob_reduction: str = "sum"
 
 
 def make_env(cfg: RTRRLHopperConfig):

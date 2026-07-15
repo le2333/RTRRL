@@ -142,6 +142,17 @@ class RTRRLConfig:
     # gain gamma_log (routes it to optax.set_to_zero), pinning it at init.
     act_clip: float = 0.0
     freeze_gamma: bool = False
+    # Ablation knobs (default = the wave-1 port behaviour).
+    #   update_trace_before_td: True (port) folds the CURRENT step's gradient into
+    #     the eligibility trace BEFORE multiplying by delta; False (streaming-rtrrl
+    #     RTRRL-HOP-533) uses the INCOMING trace for the update and defers the
+    #     current gradient to the next step (Sutton&Barto online AC(lambda) order).
+    #   logprob_scale: multiplies the actor log_prob AND entropy. The port sums
+    #     log_prob/entropy over action dims (MultivariateNormalDiag); the original
+    #     averages (distrax.Normal, mean over dims). Set to 1/action_dim to match
+    #     the original's per-dim mean (build_rtrrl_agent sets it from action_dim).
+    update_trace_before_td: bool = True
+    logprob_scale: float = 1.0
     # Auxiliary self-prediction head (streaming-rtrrl's optional pred_obs): a
     # linear head off the shared torso predicts (next_obs, next_reward). Its
     # supervised MSE gradient is added DIRECTLY (like entropy, not through the
@@ -381,7 +392,9 @@ class RTRRL:
             gp, obs, ts_action, reward, done, state.carry, state.sensitivity
         )
         action, log_prob = dist.sample_and_log_prob(seed=action_key)
-        entropy = remove_time_axis(dist.entropy()).mean()
+        # logprob_scale=1/action_dim switches the summed MVN log_prob/entropy to a
+        # per-dim mean (original distrax.Normal + mean); 1.0 keeps the port's sum.
+        entropy = (self.cfg.logprob_scale * remove_time_axis(dist.entropy())).mean()
         action = remove_time_axis(action)
         log_prob = remove_time_axis(log_prob)
         value = remove_feature_axis(remove_time_axis(value))
@@ -432,15 +445,20 @@ class RTRRL:
             )
             log_p = remove_time_axis(d.log_prob(add_time_axis(action)))
             v = remove_feature_axis(remove_time_axis(v))
-            # actor objective scaled by eta_pi, plus the value objective.
-            return self.cfg.eta_pi * log_p + v
+            # actor objective scaled by eta_pi (and logprob_scale for the sum->mean
+            # ablation), plus the value objective.
+            return self.cfg.eta_pi * self.cfg.logprob_scale * log_p + v
 
         def entropy_loss_fn(params: PyTree):
             """熵目标:entropy_rate·H(π);作为独立梯度直接加入更新(不进资格迹)。"""
             _, (d, _, _) = self._forward(
                 params, obs, ts_action, reward, done, initial_carry, initial_sens
             )
-            return self.cfg.entropy_rate * remove_time_axis(d.entropy())
+            return (
+                self.cfg.entropy_rate
+                * self.cfg.logprob_scale
+                * remove_time_axis(d.entropy())
+            )
 
         # 自预测目标(可选):从当前状态预测 (next_obs, next_reward),外部固定尺度靶,
         # 作为上升目标 -coeff·½‖pred-target‖²(下降 MSE),直接加入更新(不进资格迹)。
@@ -474,7 +492,7 @@ class RTRRL:
             return decay * nd * z + I_b * g
 
         # 三条迹用各自的衰减系数(actor/critic/循环)独立更新。
-        traces = {
+        traces_new = {
             k: jax.tree.map(
                 partial(lambda zz, gg, d: update_trace(zz, gg, d), d=self._trace_decay(k)),
                 state.traces[k],
@@ -482,6 +500,11 @@ class RTRRL:
             )
             for k in state.traces
         }
+        # Trace timing ablation: True (port) uses the freshly-accumulated trace for
+        # this step's update; False (RTRRL-HOP-533) uses the INCOMING trace and
+        # defers the current gradient to the next step. Either way the accumulated
+        # trace (traces_new) is what gets carried forward.
+        traces = traces_new if self.cfg.update_trace_before_td else state.traces
 
         # ---- assemble ascent updates: delta*z (+eta_f for recurrent) + entropy ----
         def apply_delta(z, extra_scale):
@@ -539,9 +562,9 @@ class RTRRL:
             "diag/gamma_max": gamma_max,
             "diag/sens_norm": _tree_norm(sensitivity),
             "diag/carry_norm": _tree_norm(carry),
-            "diag/z_rnn": _tree_norm({k: traces[k] for k in _RNN_KEYS}),
-            "diag/z_actor": _tree_norm(traces[_ACTOR_KEY]),
-            "diag/z_critic": _tree_norm(traces[_CRITIC_KEY]),
+            "diag/z_rnn": _tree_norm({k: traces_new[k] for k in _RNN_KEYS}),
+            "diag/z_actor": _tree_norm(traces_new[_ACTOR_KEY]),
+            "diag/z_critic": _tree_norm(traces_new[_CRITIC_KEY]),
             "diag/grad_rnn": _tree_norm({k: td_grads[k] for k in _RNN_KEYS}),
             "diag/grad_actor": _tree_norm(td_grads[_ACTOR_KEY]),
             "diag/grad_critic": _tree_norm(td_grads[_CRITIC_KEY]),
@@ -593,7 +616,7 @@ class RTRRL:
             env_state=env_state,
             params=params,
             slow_torso=slow_torso,
-            traces=traces,
+            traces=traces_new,
             opt_state=opt_state,
             carry=carry,
             sensitivity=sensitivity,

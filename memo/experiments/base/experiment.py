@@ -301,6 +301,13 @@ def build_rtrrl_agent(cfg: ExperimentConfig, env, env_params):
         freeze_gamma=getattr(cfg, "freeze_gamma", False),
         pred_obs=getattr(cfg, "pred_obs", False),
         pred_coeff=getattr(cfg, "pred_coeff", 1.0),
+        update_trace_before_td=getattr(cfg, "update_trace_before_td", True),
+        # sum->mean ablation: original averages log_prob/entropy over action dims.
+        logprob_scale=(
+            1.0 / action_space.shape[0]
+            if getattr(cfg, "logprob_reduction", "sum") == "mean"
+            else 1.0
+        ),
     )
     return RTRRL(
         rtrrl_cfg,
