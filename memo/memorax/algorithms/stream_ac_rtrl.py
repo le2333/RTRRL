@@ -12,6 +12,18 @@ computed from S"), while encoder/head parameters use standard 1-step autodiff.
 Trace recursions and ObGD update rules are unchanged from parent stream AC(lambda).
 Each network (actor / critic) maintains its own RTU carry and RTRL sensitivity,
 reset together on episode termination (handled inside RNN.local_jacobian).
+
+中文说明:
+    StreamACRtrl 复现 arXiv 2605.24709 的算法 2,是 stream_ac.py 的 RTRL 版本,
+    也是本项目的重点实时循环学习算法之一。与父类唯一区别在于网络前向走
+    ``RNN.local_jacobian``:前向时同步维护前向模式 RTRL 敏感度 S_t = dh_t/dψ,
+    并向 RTU carry 注入 RFLO 幻影 phantom = Σ S·(ψ - sg(ψ))。由于 d(phantom)/dψ = S,
+    ``jax.jacobian(loss)(params)`` 无需时间反向传播即可从 S_t 精确得到循环参数梯度
+    (正如论文所述"任何依赖 h 的标量,其梯度都可由 S 算出"),而编码器/输出头参数
+    仍走普通 1 步自动微分。
+
+    资格迹递推与 ObGD 更新规则与父类完全一致。actor/critic 各自维护自己的 RTU carry
+    与 RTRL 敏感度,二者在 episode 终止时一并重置(由 ``RNN.local_jacobian`` 内部处理)。
 """
 from dataclasses import dataclass
 from functools import partial
@@ -23,7 +35,7 @@ import jax.numpy as jnp
 import lox
 from flax import core, struct
 
-from memorax.networks import Network, RNN
+from memorax.networks import Network
 from memorax.utils.axes import (
     add_time_axis,
     remove_feature_axis,
@@ -46,6 +58,12 @@ from .stream_ac import StreamACConfig
 
 @struct.dataclass(frozen=True)
 class StreamACRtrlState:
+    """StreamACRtrl 状态:在 StreamACState 基础上多出 actor/critic 的 RTRL 敏感度。
+
+    actor_sensitivity / critic_sensitivity 为各网络 torso 的前向敏感度 S_t = dh_t/dψ,
+    随每步前向递推;其余字段含义同 stream_ac.py 的 StreamACState。
+    """
+
     step: int
     update_step: int
     timestep: Timestep
@@ -64,6 +82,8 @@ class StreamACRtrlState:
 
 @dataclass
 class StreamACRtrl:
+    """StreamAC(λ) 的 RTRL 版本:网络前向走 local_jacobian 维护 RTRL 敏感度。"""
+
     cfg: StreamACConfig
     env: Environment
     env_params: EnvParams
@@ -82,12 +102,16 @@ class StreamACRtrl:
         carry: Carry,
         sensitivity: Any,
     ) -> tuple[tuple[Carry, Any], Any]:
-        """encoder -> torso.local_jacobian (RTRL S_t + phantom) -> head.
+        """编码器 -> torso.local_jacobian(维护 RTRL S_t 并注入 phantom)-> 输出头。
 
-        Returns ((next_carry, next_sensitivity), head_output).
-        head_output is (dist, aux) as produced by the head module.
+        循环 torso 在前向递推隐状态 h 的同时更新敏感度 S_t 并注入 RFLO 幻影,
+        使后续 jax.jacobian 能取到跨时间的循环梯度。
+
+        Returns:
+            ((下一步 carry, 下一步 sensitivity), 输出头结果 (dist, aux))。
         """
         p = params["params"] if "params" in params else params
+        # 编码器:融合 obs/action/reward/done 得到特征 x。
         x, _ = network.feature_extractor.apply(
             {"params": p["feature_extractor"]},
             observation=obs,
@@ -95,13 +119,16 @@ class StreamACRtrl:
             reward=reward,
             done=done,
         )
+        # method by NAME so the torso may be an RNN(RTU) or a Memoroid(LRU); both
+        # expose local_jacobian with the same (inputs, done, carry, sensitivity=...)
+        # signature. This makes StreamACRtrl backbone-agnostic (RTU vs LRU).
         next_carry, h, next_sensitivity = network.torso.apply(
             {"params": p["torso"]},
             x,
             done,
             carry,
             sensitivity=sensitivity,
-            method=RNN.local_jacobian,
+            method="local_jacobian",
         )
         out = network.head.apply(
             {"params": p["head"]}, h, action=action, reward=reward, done=done
@@ -112,6 +139,7 @@ class StreamACRtrl:
     def _deterministic_action(
         self, key: Key, state: StreamACRtrlState
     ) -> tuple[StreamACRtrlState, Array, Array, None]:
+        """确定性动作(评估):RTRL 前向 actor,离散取 argmax,连续取众数。"""
         obs, done, ts_action, reward = state.timestep.to_sequence()
         (actor_carry, actor_sensitivity), (probs, _) = self._rtrl_forward(
             self.actor_network,
@@ -139,6 +167,7 @@ class StreamACRtrl:
     def _stochastic_action(
         self, key: Key, state: StreamACRtrlState
     ) -> tuple[StreamACRtrlState, Array, Array, Array]:
+        """随机动作(采集):RTRL 前向 actor/critic,采样动作并算 log_prob 与价值。"""
         action_key = jax.random.split(key, 1)[0]
         obs, done, ts_action, reward = state.timestep.to_sequence()
 
@@ -181,6 +210,7 @@ class StreamACRtrl:
     def _step(
         self, state: StreamACRtrlState, key: Key, *, policy: Callable
     ) -> tuple[StreamACRtrlState, Transition]:
+        """采集一步(仅用于评估):选动作、与环境交互,不做参数更新。"""
         action_key, step_key = jax.random.split(key)
         state, action, log_prob, value = policy(action_key, state)
 
@@ -226,6 +256,10 @@ class StreamACRtrl:
     def _obgd_update(
         self, traces: PyTree, v: PyTree, td_error: Array, lr: float, kappa: float, step: int
     ):
+        """ObGD 更新(与 stream_ac.py 一致):由 (δ × 迹) 计算自适应步长的增量。
+
+        步长 = lr / max(1, |δ|·Σ|z|·lr·κ) 约束单步过冲;adaptive 时用二阶矩 v 归一化。
+        """
         beta2 = self.cfg.beta2
         eps = self.cfg.eps
 
@@ -233,6 +267,7 @@ class StreamACRtrl:
             n_trailing = z.ndim - 1
             return td_error[(slice(None),) + (None,) * n_trailing]
 
+        # 二阶矩滑动平均 v <- beta2*v + (1-beta2)*(delta*z)^2。
         new_v = jax.tree.map(
             lambda vi, z: beta2 * vi + (1 - beta2) * jnp.square(_broadcast_delta(td_error, z) * z),
             v, traces,
@@ -249,6 +284,7 @@ class StreamACRtrl:
             z_leaves = jax.tree.leaves(traces)
             z_sum = sum(jnp.sum(jnp.abs(z), axis=tuple(range(1, z.ndim))) for z in z_leaves)
 
+        # ObGD 有效步长:分母限制过冲。
         delta_bar = jnp.maximum(jnp.abs(td_error), 1.0)
         step_size = lr / jnp.maximum(1.0, delta_bar * z_sum * lr * kappa)
 
@@ -273,11 +309,12 @@ class StreamACRtrl:
     def _update_step(
         self, state: StreamACRtrlState, key: Key
     ) -> tuple[StreamACRtrlState, None]:
+        """在线单步(RTRL):前向 actor/critic -> env.step -> 计算 TD 误差 -> 更新迹与参数。"""
         action_key, step_key = jax.random.split(key)
 
         obs, done, ts_action, reward = state.timestep.to_sequence()
 
-        # Forward both networks one RTRL step (advances carry + sensitivity).
+        # 各网络前向一步 RTRL(推进 carry 与敏感度 S_t)。
         (actor_carry, actor_sensitivity), (probs, _) = self._rtrl_forward(
             self.actor_network,
             state.actor_params,
@@ -330,17 +367,19 @@ class StreamACRtrl:
         next_value = remove_time_axis(next_value)
         next_value = remove_feature_axis(next_value)
 
+        # 单步 TD 误差 δ = r + γ(1-done)V(s') - V(s)。
         gamma = self.cfg.gamma
         td_error = next_reward + gamma * (1 - next_done) * next_value - value
 
-        # Loss functions: forward through local_jacobian so jax.jacobian picks up
-        # recurrent gradients via the RFLO phantom (d phantom/d psi = S_t).
+        # 损失函数走 local_jacobian:jax.jacobian 借 RFLO 幻影获得循环梯度(d phantom/dψ = S_t)。
+        # 前向起点 carry/敏感度做 stop_gradient(跨时间信息已由 S_t 承载)。
         initial_actor_carry = jax.lax.stop_gradient(state.actor_carry)
         initial_actor_sens = jax.lax.stop_gradient(state.actor_sensitivity)
         initial_critic_carry = jax.lax.stop_gradient(state.critic_carry)
         initial_critic_sens = jax.lax.stop_gradient(state.critic_sensitivity)
 
         def critic_loss_fn(params: PyTree):
+            """critic RTRL 前向,返回逐环境标量价值 V(s)。"""
             _, (v, _) = self._rtrl_forward(
                 self.critic_network,
                 params,
@@ -354,6 +393,7 @@ class StreamACRtrl:
             return remove_feature_axis(remove_time_axis(v))
 
         def actor_loss_fn(params: PyTree):
+            """actor RTRL 前向,返回 logπ(a|s) 加上按 δ 符号加权的熵项。"""
             _, (dist, _) = self._rtrl_forward(
                 self.actor_network,
                 params,
@@ -368,12 +408,14 @@ class StreamACRtrl:
             ent = remove_time_axis(dist.entropy())
             return log_p + self.cfg.entropy_coefficient * jnp.sign(td_error) * ent
 
+        # jacobian 通过 RFLO 幻影自动带入循环梯度。
         critic_grads = jax.jacobian(critic_loss_fn)(state.critic_params)
         actor_grads = jax.jacobian(actor_loss_fn)(state.actor_params)
 
         trace_decay = gamma * self.cfg.trace_lambda
 
         def update_trace(z: Array, g: Array):
+            # 资格迹递推 z <- γλ·(1-done)·z + g。
             n_trailing = z.ndim - 1
             not_done = (1 - state.timestep.done)[(slice(None),) + (None,) * n_trailing]
             return trace_decay * not_done * z + g
@@ -436,6 +478,7 @@ class StreamACRtrl:
 
     # ------------------------------------------------------------------ lifecycle
     def init(self, key: Key) -> StreamACRtrlState:
+        """初始化环境、actor/critic 参数、资格迹、二阶矩以及 RTRL 敏感度。"""
         env_key, actor_key, critic_key = jax.random.split(key, 3)
 
         env_keys = jax.random.split(env_key, self.cfg.num_envs)
@@ -505,14 +548,17 @@ class StreamACRtrl:
         )
 
     def warmup(self, key: Key, state: StreamACRtrlState, num_steps: int) -> StreamACRtrlState:
+        """在线算法,无需预热,直接返回原状态。"""
         return state
 
     def train(self, key: Key, state: StreamACRtrlState, num_steps: int) -> StreamACRtrlState:
+        """训练:逐步在线 RTRL 更新,共 num_steps 环境步。"""
         keys = jax.random.split(key, num_steps // self.cfg.num_envs)
         state, _ = jax.lax.scan(self._update_step, state, keys)
         return state
 
     def evaluate(self, key: Key, state: StreamACRtrlState, num_steps: int) -> StreamACRtrlState:
+        """评估:重置环境、carry 与敏感度后以确定性策略运行 num_steps 步。"""
         reset_key, eval_key = jax.random.split(key)
         reset_keys = jax.random.split(reset_key, self.cfg.num_envs)
         obs, env_state = jax.vmap(self.env.reset, in_axes=(0, None))(

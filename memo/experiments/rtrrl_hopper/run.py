@@ -61,6 +61,12 @@ class RTRRLHopperConfig(ExperimentConfig):
     hidden_dim: int = 32
     encoder_dim: int = 32
     meta_rl: bool = True
+    # Recurrent backbone: "lru" (baseline, linear SSM + free gamma gain) or "rtu"
+    # (complex rotation-decay + tanh => bounded state, gain tied to nu_log, no free
+    # gamma). RTU is the backbone-stability probe: it structurally removes both
+    # divergence drivers we identified. On Hopper (mode F, ~Markov) it mainly tests
+    # stability, not memory capacity.
+    backbone: str = "lru"
 
     # RTRRL hyperparameters (RTRRL-HOP-533).
     gamma: float = 0.95

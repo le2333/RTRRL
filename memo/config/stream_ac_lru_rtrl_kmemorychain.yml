@@ -1,0 +1,39 @@
+# Experiment: Stream AC(λ) + LRU-RTRL on KMemoryChain (RTU-vs-LRU memory probe).
+# Identical to stream_ac_rtrl_kmemorychain.yml except the recurrent backbone is a
+# linear LRU (Memoroid) instead of the tanh-saturating RTU (RNN). Same recurrent
+# state capacity (hidden_dim=192 complex dims); the comparison isolates whether
+# RTU's per-step tanh (bounded, but contractive) costs long-range memory vs the
+# purely linear LRU on a memory-hard POMDP (chain_length 16, num_bits 4).
+experiment: stream_ac_kmemorychain
+agent_type: lru_rtrl
+
+seed: 0
+total_timesteps: 500000
+num_epochs: 50
+num_envs: 16
+
+eval_every: 10
+eval_steps: 1000
+patience: 100
+
+logging: aim
+run_name: stream_ac_lru_rtrl_kmemorychain_L16_K4
+
+# Stream AC(λ)
+gamma: 0.99
+trace_lambda: 0.9
+actor_lr: 1.0
+critic_lr: 1.0
+actor_kappa: 3.0
+critic_kappa: 2.0
+entropy_coefficient: 0.01
+adaptive: false
+
+# Network
+hidden_dim: 192
+encoder_dim: 64
+meta_rl: false
+
+# KMemoryChain
+chain_length: 16
+num_bits: 4

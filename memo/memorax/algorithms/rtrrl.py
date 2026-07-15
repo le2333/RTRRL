@@ -224,13 +224,16 @@ class RTRRL:
             reward=reward,
             done=done,
         )
+        # method by NAME (not Memoroid.local_jacobian) so the torso can be either
+        # a Memoroid(LRU) or an RNN(RTU); both expose local_jacobian with the same
+        # (inputs, done, carry, sensitivity=...) signature.
         next_carry, h, next_sensitivity = self.torso.apply(
             {"params": params["torso"]},
             x,
             done,
             carry,
             sensitivity=sensitivity,
-            method=Memoroid.local_jacobian,
+            method="local_jacobian",
         )
         h = self.activation(h)
         dist, _ = self.actor_head.apply(
@@ -524,11 +527,16 @@ class RTRRL:
         # 逐组件数值健康探针:定位发散时"谁先不正常"。train_loop 把每 epoch 的
         # 逐步值归约为 mean 与 max。|λ|=exp(-exp(nu_log))∈(0,1) 恒稳,但 nu_log→-∞
         # 时 |λ|→1、敏感度 S 无界累积;gamma 为输入增益。
+        # LRU exposes nu_log (=> |λ|) and a free gamma_log (input gain); RTU shares
+        # nu_log but has NO free gamma (its input gain is norm=sqrt(1-r²), tied to
+        # nu_log), so gamma_max is reported as NaN for the RTU backbone.
         nu_log = _find_leaf(params["torso"], "nu_log")
         gamma_log = _find_leaf(params["torso"], "gamma_log")
+        lambda_max = jnp.max(jnp.exp(-jnp.exp(nu_log))) if nu_log is not None else jnp.nan
+        gamma_max = jnp.max(jnp.exp(gamma_log)) if gamma_log is not None else jnp.nan
         diag = {
-            "diag/lambda_max": jnp.max(jnp.exp(-jnp.exp(nu_log))),
-            "diag/gamma_max": jnp.max(jnp.exp(gamma_log)),
+            "diag/lambda_max": lambda_max,
+            "diag/gamma_max": gamma_max,
             "diag/sens_norm": _tree_norm(sensitivity),
             "diag/carry_norm": _tree_norm(carry),
             "diag/z_rnn": _tree_norm({k: traces[k] for k in _RNN_KEYS}),

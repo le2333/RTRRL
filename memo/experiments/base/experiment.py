@@ -140,10 +140,16 @@ def build_networks(cfg: ExperimentConfig, action_space) -> tuple[Network, Networ
     if cfg.agent_type in ("rtu_rtrl", "rtu_tbptt"):
         cell = RTUCell(config=RTUConfig(features=in_dim, hidden_dim=cfg.hidden_dim))
         torso = RNN(cell=cell)
+    elif cfg.agent_type == "lru_rtrl":
+        # LRU backbone for the RTU-vs-LRU memory comparison. Memoroid(LRU) exposes
+        # the same local_jacobian RTRL interface as RNN(RTU); StreamACRtrl calls it
+        # by method name so it is backbone-agnostic.
+        cell = LRUCell(config=LRUConfig(features=in_dim, hidden_dim=cfg.hidden_dim))
+        torso = Memoroid(cell=cell)
     else:
         raise ValueError(
             f"agent_type '{cfg.agent_type}' not implemented; "
-            "use 'rtu_rtrl' or 'rtu_tbptt' (gru_tbptt/ffn TBD)."
+            "use 'rtu_rtrl', 'lru_rtrl' or 'rtu_tbptt' (gru_tbptt/ffn TBD)."
         )
 
     if isinstance(action_space, Discrete):
@@ -179,7 +185,7 @@ def build_stream_ac_agent(cfg: ExperimentConfig, env, env_params):
         eps=cfg.eps,
     )
 
-    if cfg.agent_type == "rtu_rtrl":
+    if cfg.agent_type in ("rtu_rtrl", "lru_rtrl"):
         return StreamACRtrl(ac_cfg, env, env_params, actor_network, critic_network)
     return StreamAC(ac_cfg, env, env_params, actor_network, critic_network)
 
@@ -211,9 +217,20 @@ def build_rtrrl_agent(cfg: ExperimentConfig, env, env_params):
 
     streams = 3 if cfg.meta_rl else 1
     in_dim = feat * streams
-    torso = Memoroid(
-        cell=LRUCell(config=LRUConfig(features=in_dim, hidden_dim=cfg.hidden_dim))
-    )
+    # Recurrent backbone: "lru" (Memoroid, linear SSM, the RTRL-HOP-533 baseline)
+    # or "rtu" (RNN, complex rotation-decay + tanh => bounded state, gain tied to
+    # nu_log with NO free gamma). RTU structurally lacks both divergence drivers
+    # (unbounded state + self-aligned free gain), so it's the backbone-stability
+    # probe. Both expose the same local_jacobian RTRL interface.
+    backbone = getattr(cfg, "backbone", "lru")
+    if backbone == "rtu":
+        torso = RNN(cell=RTUCell(config=RTUConfig(features=in_dim, hidden_dim=cfg.hidden_dim)))
+    elif backbone == "lru":
+        torso = Memoroid(
+            cell=LRUCell(config=LRUConfig(features=in_dim, hidden_dim=cfg.hidden_dim))
+        )
+    else:
+        raise ValueError(f"backbone '{backbone}' not supported; use 'lru' or 'rtu'.")
 
     # Diagnostic/faithfulness switches default off (identical to the repro
     # baseline); rtrrl_hopper's config may toggle them for ablations.
