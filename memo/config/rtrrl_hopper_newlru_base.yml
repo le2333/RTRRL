@@ -1,0 +1,57 @@
+# RTRRL x Brax Hopper — NEW-LRU baseline (encoder removed).
+# Torso = raw [obs, action, reward] (15-dim) -> LRU(features=15, hidden=32,
+# output_dim=32 through C, + D skip) -> silu -> heads, matching streaming-rtrrl's
+# OnlineLRULayer(d_output=32, d_hidden=32). This is the shared baseline for the
+# wave-1 matrix; variants only toggle normalisation and actor bounding/clipping.
+#
+# Cell = pure baseline: NO obs/reward normalisation, unbounded actor, no act clip.
+experiment: rtrrl_hopper
+
+seed: 3
+total_timesteps: 1000000
+num_epochs: 20        # eval_points
+num_envs: 1           # streaming (batch_size=1)
+
+eval_every: 1
+eval_steps: 1000
+patience: 1000000     # disabled
+
+logging: null
+run_name: RTRRL-HOP-newlru-base
+
+# Brax Hopper (spring backend, full observation).
+env_name: hopper
+mode: F
+backend: spring
+
+# NEW-LRU front-end.
+hidden_dim: 32
+encoder_dim: 32
+meta_rl: true
+use_encoder: false
+lru_output_dim: 32
+backbone: lru
+
+# Normalisation OFF (baseline).
+normalize_obs: false
+normalize_reward: false
+
+# Actor: plain (unbounded loc + global log_std), no action clipping.
+bound_actor: false
+act_clip: 0.0
+
+# RTRRL hyperparameters (RTRRL-HOP-533).
+gamma: 0.95
+lambda_pi: 0.97
+lambda_v: 0.9
+lambda_rnn: 0.945
+td_lr: 3.0e-05
+rnn_lr: 2.0e-06
+eta_pi: 0.38
+eta_f: 0.5
+entropy_rate: 3.0e-05
+update_period: 0.1
+b1: 0.9
+b2: 0.999
+eps: 1.0e-08
+rnn_grad_clip: 1.0

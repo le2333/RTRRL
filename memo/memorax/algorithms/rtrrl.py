@@ -551,6 +551,13 @@ class RTRRL:
             "diag/p_critic": _tree_norm(params[_CRITIC_KEY]),
             "diag/value_abs": jnp.abs(value).mean(),
             "diag/td_abs": jnp.abs(td_error).mean(),
+            # Actor distribution scale probes: |loc| and std of the policy. With an
+            # unbounded actor these inflate alongside gamma/h during divergence; the
+            # bounded variant caps them (sigmoid_between), so this pins whether the
+            # actor head is the amplifier arm on a given run.
+            "diag/actor_loc_abs": jnp.abs(dist.loc).mean(),
+            "diag/actor_scale": dist.scale_diag.mean(),
+            "diag/act_abs": jnp.abs(action).mean(),
         }
 
         lox.log(

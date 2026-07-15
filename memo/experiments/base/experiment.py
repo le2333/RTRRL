@@ -114,6 +114,16 @@ class ExperimentConfig:
     epsilon_fraction: float = 0.2
 
 
+def _identity(x):
+    """Pass-through feature extractor (no params): returns x unchanged."""
+    return x
+
+
+def _reward_feature(r):
+    """Reward pass-through: add a trailing feature axis so it concatenates."""
+    return r[..., None]
+
+
 def build_networks(cfg: ExperimentConfig, action_space) -> tuple[Network, Network]:
     """Build actor/critic networks from cfg.agent_type and the action space.
 
@@ -196,27 +206,46 @@ def build_rtrrl_agent(cfg: ExperimentConfig, env, env_params):
     Layout: FeatureExtractor([o,(a),(r)]) -> Memoroid(LRUCell) -> silu -> heads.
     Continuous control only (Gaussian actor); reproduces streaming-rtrrl's
     RNNActorCritic with a shared recurrent core feeding a linear actor + critic.
+
+    use_encoder=False removes the parallel Dense encoders and feeds the RAW
+    [obs, action, reward] into the LRU, whose read-out decouples the output width
+    via lru_output_dim (through C, + D skip, then silu in RTRRL._forward) — the
+    faithful streaming-rtrrl OnlineLRULayer(d_output, d_hidden) topology.
     """
     action_space = env.action_space(env_params)
     if isinstance(action_space, Discrete):
         raise ValueError("RTRRL currently targets continuous-action envs (Gaussian actor).")
 
-    feat = cfg.encoder_dim
-    observation_extractor = nn.Sequential((nn.Dense(feat), nn.relu))
-    action_extractor = (
-        nn.Sequential((nn.Dense(feat), nn.relu)) if cfg.meta_rl else None
-    )
-    reward_extractor = (
-        nn.Sequential((nn.Dense(feat), nn.relu)) if cfg.meta_rl else None
-    )
+    use_encoder = getattr(cfg, "use_encoder", True)
+    if use_encoder:
+        feat = cfg.encoder_dim
+        observation_extractor = nn.Sequential((nn.Dense(feat), nn.relu))
+        action_extractor = (
+            nn.Sequential((nn.Dense(feat), nn.relu)) if cfg.meta_rl else None
+        )
+        reward_extractor = (
+            nn.Sequential((nn.Dense(feat), nn.relu)) if cfg.meta_rl else None
+        )
+        in_dim = feat * (3 if cfg.meta_rl else 1)
+        lru_output_dim = None  # coupled to features (legacy behaviour)
+    else:
+        # Identity front-end: raw [obs, (action), (reward)] fed straight to the LRU.
+        observation_extractor = _identity
+        action_extractor = _identity if cfg.meta_rl else None
+        reward_extractor = _reward_feature if cfg.meta_rl else None
+        obs_dim = env.observation_space(env_params).shape[0]
+        act_dim = action_space.shape[0]
+        in_dim = obs_dim + (act_dim + 1 if cfg.meta_rl else 0)
+        # Decoupled read-out width (through C); default to hidden_dim like the
+        # original d_output=d_hidden=32.
+        lru_output_dim = getattr(cfg, "lru_output_dim", None) or cfg.hidden_dim
+
     feature_extractor = FeatureExtractor(
         observation_extractor=observation_extractor,
         action_extractor=action_extractor,
         reward_extractor=reward_extractor,
     )
 
-    streams = 3 if cfg.meta_rl else 1
-    in_dim = feat * streams
     # Recurrent backbone: "lru" (Memoroid, linear SSM, the RTRL-HOP-533 baseline)
     # or "rtu" (RNN, complex rotation-decay + tanh => bounded state, gain tied to
     # nu_log with NO free gamma). RTU structurally lacks both divergence drivers
@@ -227,7 +256,13 @@ def build_rtrrl_agent(cfg: ExperimentConfig, env, env_params):
         torso = RNN(cell=RTUCell(config=RTUConfig(features=in_dim, hidden_dim=cfg.hidden_dim)))
     elif backbone == "lru":
         torso = Memoroid(
-            cell=LRUCell(config=LRUConfig(features=in_dim, hidden_dim=cfg.hidden_dim))
+            cell=LRUCell(
+                config=LRUConfig(
+                    features=in_dim,
+                    hidden_dim=cfg.hidden_dim,
+                    output_dim=lru_output_dim,
+                )
+            )
         )
     else:
         raise ValueError(f"backbone '{backbone}' not supported; use 'lru' or 'rtu'.")

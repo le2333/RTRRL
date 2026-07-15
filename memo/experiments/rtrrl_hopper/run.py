@@ -61,6 +61,19 @@ class RTRRLHopperConfig(ExperimentConfig):
     hidden_dim: int = 32
     encoder_dim: int = 32
     meta_rl: bool = True
+    # Torso front-end. use_encoder=True (legacy) prepends 3 parallel Dense(feat)+relu
+    # encoders (obs/action/reward) -> concat 3*feat before the LRU. use_encoder=False
+    # feeds the RAW [obs, action, reward] straight into the LRU (matches
+    # streaming-rtrrl's RNNActorCritic, no encoder), and lets the LRU read-out
+    # decouple its output width via lru_output_dim (through C, + D skip, + silu),
+    # exactly like the original OnlineLRULayer(d_output, d_hidden). None => hidden_dim.
+    use_encoder: bool = True
+    lru_output_dim: int | None = None
+    # Environment normalisation wrappers (applied by make_env). The original
+    # rtrrl.py updates running stats but never applies them during the training
+    # loop, so these are the port's env-level equivalents, toggled per experiment.
+    normalize_obs: bool = True
+    normalize_reward: bool = True
     # Recurrent backbone: "lru" (baseline, linear SSM + free gamma gain) or "rtu"
     # (complex rotation-decay + tanh => bounded state, gain tied to nu_log, no free
     # gamma). RTU is the backbone-stability probe: it structurally removes both
@@ -107,8 +120,10 @@ def make_env(cfg: RTRRLHopperConfig):
         f"brax::{cfg.env_name}", mode=cfg.mode, backend=cfg.backend
     )
     env = RecordEpisodeStatistics(env)
-    env = NormalizeObservationWrapper(env)
-    env = NormalizeRewardWrapper(env)
+    if cfg.normalize_obs:
+        env = NormalizeObservationWrapper(env)
+    if cfg.normalize_reward:
+        env = NormalizeRewardWrapper(env)
     return env, env_params
 
 
