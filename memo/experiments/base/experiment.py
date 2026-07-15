@@ -115,13 +115,13 @@ class ExperimentConfig:
 
 
 def _identity(x):
-    """Pass-through feature extractor (no params): returns x unchanged."""
+    """Pass-through feature extractor (no params): returns x unchanged.
+
+    obs/action/reward all already carry a trailing feature axis in the RTRRL
+    pipeline (reward is [B, T, 1]), so identity concatenation yields the raw
+    [obs | action | reward] vector without any learned encoding.
+    """
     return x
-
-
-def _reward_feature(r):
-    """Reward pass-through: add a trailing feature axis so it concatenates."""
-    return r[..., None]
 
 
 def build_networks(cfg: ExperimentConfig, action_space) -> tuple[Network, Network]:
@@ -232,7 +232,7 @@ def build_rtrrl_agent(cfg: ExperimentConfig, env, env_params):
         # Identity front-end: raw [obs, (action), (reward)] fed straight to the LRU.
         observation_extractor = _identity
         action_extractor = _identity if cfg.meta_rl else None
-        reward_extractor = _reward_feature if cfg.meta_rl else None
+        reward_extractor = _identity if cfg.meta_rl else None
         obs_dim = env.observation_space(env_params).shape[0]
         act_dim = action_space.shape[0]
         in_dim = obs_dim + (act_dim + 1 if cfg.meta_rl else 0)

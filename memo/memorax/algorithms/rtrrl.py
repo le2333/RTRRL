@@ -657,7 +657,10 @@ class RTRRL:
         )
 
         params = {
-            "feature_extractor": feat_vars["params"],
+            # Identity feature extractors (use_encoder=false) create NO params, so
+            # Flax init returns a var dict without a "params" collection; default to
+            # an empty dict so the tree ops / optimizer handle the empty subtree.
+            "feature_extractor": feat_vars.get("params", core.FrozenDict()),
             "torso": torso_vars["params"],
             "actor": actor_vars["params"],
             "critic": critic_vars["params"],
