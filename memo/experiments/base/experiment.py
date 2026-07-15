@@ -365,6 +365,15 @@ def train_loop(agent, cfg: ExperimentConfig, logger=DummyLogger()):
                 if isinstance(v, jnp.ndarray) and v.ndim == 0:
                     metrics[f"train/{k}"] = float(v)
 
+            # Aim step: use the loop-derived env-step count, NOT state.step.
+            # state.step has been observed to read back as int64 garbage
+            # (~±2^63) once training diverges, which scrambles metric ordering
+            # in Aim. The loop counter is always a clean multiple of num_steps.
+            global_step = (i + 1) * num_steps
+            # Keep the raw counter as a metric so we can still see WHEN it goes
+            # bad (a canary for state corruption during divergence).
+            metrics["debug/state_step"] = float(state.step)
+
             pbar.set_description(f"ep{i} R={avg_r:.2f}", refresh=False)
 
             # EVAL ------------------------------------------------------------
@@ -385,7 +394,7 @@ def train_loop(agent, cfg: ExperimentConfig, logger=DummyLogger()):
                     else:
                         steps_since_best += 1
 
-            logger.log(metrics, step=int(state.step.item()))
+            logger.log(metrics, step=global_step)
 
             if cfg.patience and steps_since_best >= cfg.patience:
                 print(f"Early stopping patience {cfg.patience}")
