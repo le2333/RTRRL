@@ -133,6 +133,14 @@ class RTRRLConfig:
     b2: float = 0.999
     eps: float = 1e-8
     rnn_grad_clip: float = 1.0
+    # Diagnostic / faithfulness switches (default off => identical to the
+    # reproduction baseline). act_clip>0 clips the environment-facing action to
+    # [-act_clip, act_clip] (streaming-rtrrl clips brax actions to [-1,1]); the
+    # eligibility trace's log_prob still uses the UNCLIPPED sample
+    # (align_action_logprob=False). freeze_gamma stops gradient on the LRU input
+    # gain gamma_log (routes it to optax.set_to_zero), pinning it at init.
+    act_clip: float = 0.0
+    freeze_gamma: bool = False
 
 
 @struct.dataclass(frozen=True)
@@ -247,14 +255,21 @@ class RTRRL:
         ]
         rnn_tx = optax.chain(*rnn_chain)
 
-        def label(top_key):
-            # feature_extractor/torso 归为 'rnn' 组,actor/critic 头归为 'td' 组。
-            return "rnn" if top_key in _RNN_KEYS else "td"
+        def leaf_label(path, _leaf):
+            # feature_extractor/torso 归为 'rnn' 组,actor/critic 头归为 'td' 组;
+            # freeze_gamma 时把 torso 内的 gamma_log 叶子单独路由到 'frozen'(置零更新)。
+            top = path[0].key
+            if top not in _RNN_KEYS:
+                return "td"
+            if self.cfg.freeze_gamma and any(
+                getattr(p, "key", None) == "gamma_log" for p in path
+            ):
+                return "frozen"
+            return "rnn"
 
-        param_labels = {
-            k: jax.tree.map(lambda _: label(k), v) for k, v in params.items()
-        }
-        return optax.multi_transform({"td": td_tx, "rnn": rnn_tx}, param_labels)
+        param_labels = jax.tree_util.tree_map_with_path(leaf_label, params)
+        transforms = {"td": td_tx, "rnn": rnn_tx, "frozen": optax.set_to_zero()}
+        return optax.multi_transform(transforms, param_labels)
 
     # ------------------------------------------------------------------ policies
     def _deterministic_action(
@@ -285,6 +300,10 @@ class RTRRL:
         """采集一步(仅用于评估):选动作、与环境交互,不做参数更新。"""
         action_key, step_key = jax.random.split(key)
         state, action, log_prob, value = policy(action_key, state)
+
+        # Match training: clip the env-facing action when act_clip is enabled.
+        c = self.cfg.act_clip
+        action = jnp.clip(action, -c, c) if c else action
 
         num_envs, *_ = state.timestep.obs.shape
         step_keys = jax.random.split(step_key, num_envs)
@@ -345,16 +364,24 @@ class RTRRL:
         log_prob = remove_time_axis(log_prob)
         value = remove_feature_axis(remove_time_axis(value))
 
+        # Environment-facing action: optionally clipped to [-act_clip, act_clip]
+        # (streaming-rtrrl clips brax actions to [-1,1] before env.step and the
+        # meta-RL feedback input). The eligibility trace / log_prob below keep the
+        # UNCLIPPED `action` (align_action_logprob=False in RTRRL-HOP-533).
+        c = self.cfg.act_clip
+        env_action = jnp.clip(action, -c, c) if c else action
+
         # Env step.
         num_envs, *_ = state.timestep.obs.shape
         step_keys = jax.random.split(step_key, num_envs)
         next_obs, env_state, next_reward, next_done, info = jax.vmap(
             self.env.step, in_axes=(0, 0, 0, None)
-        )(step_keys, state.env_state, action, self.env_params)
+        )(step_keys, state.env_state, env_action, self.env_params)
 
-        # Bootstrap value at s' (stop-grad carry + sensitivity + params).
+        # Bootstrap value at s' (stop-grad carry + sensitivity + params). The
+        # meta-RL input for s' uses the clipped env_action (matches what the env saw).
         next_obs_s, next_done_s, next_action_s, next_reward_s = Timestep(
-            obs=next_obs, action=action, reward=next_reward, done=next_done
+            obs=next_obs, action=env_action, reward=next_reward, done=next_done
         ).to_sequence()
         _, (_, next_value) = self._forward(
             jax.lax.stop_gradient(gp),
@@ -502,8 +529,8 @@ class RTRRL:
                 obs=next_obs,
                 action=jnp.where(
                     jnp.expand_dims(next_done, axis=broadcast_dims),
-                    jnp.zeros_like(action),
-                    action,
+                    jnp.zeros_like(env_action),
+                    env_action,
                 ),
                 reward=jnp.where(
                     next_done, jnp.zeros_like(next_reward_f), next_reward_f

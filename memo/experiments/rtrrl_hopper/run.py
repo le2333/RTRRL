@@ -78,6 +78,18 @@ class RTRRLHopperConfig(ExperimentConfig):
     eps: float = 1e-8
     rnn_grad_clip: float = 1.0
 
+    # Diagnostic / faithfulness ablation switches (default off => reproduces the
+    # RTRRL-HOP-533 baseline). See streaming-rtrrl faithfulness notes:
+    #   bound_actor: state-dependent loc+log_scale bounded via sigmoid_between
+    #                (loc->[-1,1], log_scale->[-2,2], std=softplus) instead of an
+    #                unbounded mean + global learnable log_std.
+    #   act_clip:    clip the env-facing action to [-act_clip, act_clip] (brax
+    #                actions live in [-1,1]); 0 disables.
+    #   freeze_gamma: pin the LRU input gain gamma_log at init (no gradient).
+    bound_actor: bool = False
+    act_clip: float = 0.0
+    freeze_gamma: bool = False
+
 
 def make_env(cfg: RTRRLHopperConfig):
     env, env_params = environment.make(

@@ -215,7 +215,11 @@ def build_rtrrl_agent(cfg: ExperimentConfig, env, env_params):
         cell=LRUCell(config=LRUConfig(features=in_dim, hidden_dim=cfg.hidden_dim))
     )
 
-    actor_head = heads.Gaussian(action_dim=action_space.shape[0])
+    # Diagnostic/faithfulness switches default off (identical to the repro
+    # baseline); rtrrl_hopper's config may toggle them for ablations.
+    actor_head = heads.Gaussian(
+        action_dim=action_space.shape[0], bound=getattr(cfg, "bound_actor", False)
+    )
     critic_head = heads.VNetwork()
 
     rtrrl_cfg = RTRRLConfig(
@@ -234,6 +238,8 @@ def build_rtrrl_agent(cfg: ExperimentConfig, env, env_params):
         b2=cfg.b2,
         eps=cfg.eps,
         rnn_grad_clip=cfg.rnn_grad_clip,
+        act_clip=getattr(cfg, "act_clip", 0.0),
+        freeze_gamma=getattr(cfg, "freeze_gamma", False),
     )
     return RTRRL(
         rtrrl_cfg, env, env_params, feature_extractor, torso, actor_head, critic_head
