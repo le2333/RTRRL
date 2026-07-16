@@ -1,0 +1,16 @@
+experiment: random_policy_hopper
+
+seed: 3
+logging: null
+run_name: RTRRL-HOP-maskP-random
+
+env_name: hopper
+mode: P
+backend: spring
+
+num_evals: 20
+eval_steps: 1000
+comparison_step_interval: 50000
+
+normalize_obs: false
+normalize_reward: false
