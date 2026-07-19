@@ -22,9 +22,9 @@ for _p in (_EXP, _ROOT):
         sys.path.insert(0, _p)
 
 import simple_parsing
-
 from base.experiment import (
     ExperimentConfig,
+    build_independent_rtrrl_agent,
     build_rtrrl_agent,
     run_experiment,
     train_loop,
@@ -43,6 +43,7 @@ ENVIRONMENT = "hopper"
 @dataclass
 class RTRRLHopperConfig(ExperimentConfig):
     experiment: str = "rtrrl_hopper"
+    rtrrl_topology: str = "shared"
 
     # Brax env.
     env_name: str = "hopper"
@@ -136,7 +137,15 @@ def make_env(cfg: RTRRLHopperConfig):
 
 def train(cfg: RTRRLHopperConfig, logger):
     env, env_params = make_env(cfg)
-    agent = build_rtrrl_agent(cfg, env, env_params)
+    if cfg.rtrrl_topology == "shared":
+        agent = build_rtrrl_agent(cfg, env, env_params)
+    elif cfg.rtrrl_topology == "independent":
+        agent = build_independent_rtrrl_agent(cfg, env, env_params)
+    else:
+        raise ValueError(
+            f"rtrrl_topology '{cfg.rtrrl_topology}' not supported; "
+            "use 'shared' or 'independent'."
+        )
     train_loop(agent, cfg, logger)
 
 

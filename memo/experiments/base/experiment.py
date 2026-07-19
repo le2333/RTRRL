@@ -11,9 +11,9 @@ binding (see its run.py); only the backbone variant (agent_type) and
 hyperparameters are configurable. Algorithm and environment are never mixed
 across experiments.
 """
+import time
 from dataclasses import asdict, dataclass
 from pprint import pprint
-import time
 
 import flax.linen as nn
 import jax
@@ -21,32 +21,41 @@ import jax.numpy as jnp
 import lox
 import numpy as np
 import optax
-from tqdm import trange
-
+from logging_util import DummyLogger, with_logger
 from memorax.algorithms import (
     QRC,
+    RTRRL,
+    IndependentRTRRL,
+    IndependentRTRRLConfig,
     QRCConfig,
     QRCRtrl,
-    RTRRL,
     RTRRLConfig,
     StreamAC,
     StreamACConfig,
     StreamACRtrl,
 )
 from memorax.networks import (
+    RNN,
     FeatureExtractor,
     LRUCell,
     LRUConfig,
     Memoroid,
     Network,
-    RNN,
     RTUCell,
     RTUConfig,
     heads,
 )
+from memorax.online_ac import (
+    LegacyProgram,
+    MetaProgramConfig,
+    StandardProgramConfig,
+    build_meta_program,
+    build_standard_program,
+    legacy_env_adapter,
+    legacy_normalization_config,
+)
 from memorax.utils.typing import Discrete
-
-from logging_util import DummyLogger, with_logger
+from tqdm import trange
 
 # Persistent JAX compilation cache (matches streaming-rtrrl/rtrrl_lru.py).
 jax.config.update("jax_compilation_cache_dir", "/tmp/jax_cache")
@@ -124,6 +133,21 @@ def _identity(x):
     return x
 
 
+def _reject_legacy_new_conflict(cfg):
+    """Prevent silently mixing legacy scalar fields with a new program recipe."""
+
+    for field in (
+        "online_ac_config",
+        "program_config",
+        "meta_program_config",
+        "standard_program_config",
+    ):
+        if getattr(cfg, field, None) is not None:
+            raise ValueError(
+                f"legacy/new config conflict: legacy builder received '{field}'"
+            )
+
+
 def build_networks(cfg: ExperimentConfig, action_space) -> tuple[Network, Network]:
     """Build actor/critic networks from cfg.agent_type and the action space.
 
@@ -132,12 +156,8 @@ def build_networks(cfg: ExperimentConfig, action_space) -> tuple[Network, Networ
     """
     feat = cfg.encoder_dim
     observation_extractor = nn.Sequential((nn.Dense(feat), nn.relu))
-    action_extractor = (
-        nn.Sequential((nn.Dense(feat), nn.relu)) if cfg.meta_rl else None
-    )
-    reward_extractor = (
-        nn.Sequential((nn.Dense(feat), nn.relu)) if cfg.meta_rl else None
-    )
+    action_extractor = nn.Sequential((nn.Dense(feat), nn.relu)) if cfg.meta_rl else None
+    reward_extractor = nn.Sequential((nn.Dense(feat), nn.relu)) if cfg.meta_rl else None
     feature_extractor = FeatureExtractor(
         observation_extractor=observation_extractor,
         action_extractor=action_extractor,
@@ -177,7 +197,8 @@ def build_networks(cfg: ExperimentConfig, action_space) -> tuple[Network, Networ
 
 
 def build_stream_ac_agent(cfg: ExperimentConfig, env, env_params):
-    """Build a StreamAC or StreamACRtrl agent from cfg.agent_type."""
+    """Build StreamAC-RTRL through the composable program lifecycle."""
+    _reject_legacy_new_conflict(cfg)
     action_space = env.action_space(env_params)
     actor_network, critic_network = build_networks(cfg, action_space)
 
@@ -195,9 +216,23 @@ def build_stream_ac_agent(cfg: ExperimentConfig, env, env_params):
         eps=cfg.eps,
     )
 
-    if cfg.agent_type in ("rtu_rtrl", "lru_rtrl"):
-        return StreamACRtrl(ac_cfg, env, env_params, actor_network, critic_network)
-    return StreamAC(ac_cfg, env, env_params, actor_network, critic_network)
+    if cfg.agent_type == "rtu_tbptt":
+        return StreamAC(ac_cfg, env, env_params, actor_network, critic_network)
+    if cfg.agent_type not in ("rtu_rtrl", "lru_rtrl"):
+        raise ValueError(
+            "build_stream_ac_agent requires exact-RTRL agent_type "
+            "'rtu_rtrl' or 'lru_rtrl'."
+        )
+    parts = StreamACRtrl(ac_cfg, env, env_params, actor_network, critic_network)
+    adapter = legacy_env_adapter(env, env_params)
+    program_config = StandardProgramConfig.from_legacy_parts(
+        parts,
+        normalization=legacy_normalization_config(env, cfg),
+    )
+    return LegacyProgram(
+        build_standard_program(program_config, adapter),
+        program_config,
+    )
 
 
 def build_rtrrl_agent(cfg: ExperimentConfig, env, env_params):
@@ -212,9 +247,12 @@ def build_rtrrl_agent(cfg: ExperimentConfig, env, env_params):
     via lru_output_dim (through C, + D skip, then silu in RTRRL._forward) — the
     faithful streaming-rtrrl OnlineLRULayer(d_output, d_hidden) topology.
     """
+    _reject_legacy_new_conflict(cfg)
     action_space = env.action_space(env_params)
     if isinstance(action_space, Discrete):
-        raise ValueError("RTRRL currently targets continuous-action envs (Gaussian actor).")
+        raise ValueError(
+            "RTRRL currently targets continuous-action envs (Gaussian actor)."
+        )
 
     use_encoder = getattr(cfg, "use_encoder", True)
     if use_encoder:
@@ -253,7 +291,9 @@ def build_rtrrl_agent(cfg: ExperimentConfig, env, env_params):
     # probe. Both expose the same local_jacobian RTRL interface.
     backbone = getattr(cfg, "backbone", "lru")
     if backbone == "rtu":
-        torso = RNN(cell=RTUCell(config=RTUConfig(features=in_dim, hidden_dim=cfg.hidden_dim)))
+        torso = RNN(
+            cell=RTUCell(config=RTUConfig(features=in_dim, hidden_dim=cfg.hidden_dim))
+        )
     elif backbone == "lru":
         torso = Memoroid(
             cell=LRUCell(
@@ -309,7 +349,7 @@ def build_rtrrl_agent(cfg: ExperimentConfig, env, env_params):
             else 1.0
         ),
     )
-    return RTRRL(
+    parts = RTRRL(
         rtrrl_cfg,
         env,
         env_params,
@@ -319,18 +359,129 @@ def build_rtrrl_agent(cfg: ExperimentConfig, env, env_params):
         critic_head,
         pred_head=pred_head,
     )
+    adapter = legacy_env_adapter(env, env_params)
+    program_config = MetaProgramConfig.from_legacy_parts(
+        parts,
+        normalization=legacy_normalization_config(env, cfg),
+    )
+    return LegacyProgram(
+        build_meta_program(program_config, adapter),
+        program_config,
+    )
 
 
-def build_qrc_networks(cfg: ExperimentConfig, num_actions: int) -> tuple[Network, Network]:
+def build_independent_rtrrl_agent(cfg: ExperimentConfig, env, env_params):
+    """Build strict two-path legacy RTRRL with no actor/critic state sharing."""
+    if getattr(cfg, "pred_obs", False):
+        raise ValueError("Independent RTRRL does not support pred_obs.")
+    action_space = env.action_space(env_params)
+    if isinstance(action_space, Discrete):
+        raise ValueError("Independent RTRRL currently targets continuous-action envs.")
+
+    use_encoder = getattr(cfg, "use_encoder", True)
+    if use_encoder:
+        feat = cfg.encoder_dim
+
+        def make_feature_extractor():
+            return FeatureExtractor(
+                observation_extractor=nn.Sequential((nn.Dense(feat), nn.relu)),
+                action_extractor=(
+                    nn.Sequential((nn.Dense(feat), nn.relu)) if cfg.meta_rl else None
+                ),
+                reward_extractor=(
+                    nn.Sequential((nn.Dense(feat), nn.relu)) if cfg.meta_rl else None
+                ),
+            )
+
+        in_dim = feat * (3 if cfg.meta_rl else 1)
+        lru_output_dim = None
+    else:
+        # Construct two distinct module objects even though these front-ends have
+        # no trainable leaves.
+        def make_feature_extractor():
+            return FeatureExtractor(
+                observation_extractor=_identity,
+                action_extractor=_identity if cfg.meta_rl else None,
+                reward_extractor=_identity if cfg.meta_rl else None,
+            )
+
+        obs_dim = env.observation_space(env_params).shape[0]
+        act_dim = action_space.shape[0]
+        in_dim = obs_dim + (act_dim + 1 if cfg.meta_rl else 0)
+        lru_output_dim = getattr(cfg, "lru_output_dim", None) or cfg.hidden_dim
+
+    backbone = getattr(cfg, "backbone", "lru")
+
+    def make_torso():
+        if backbone == "rtu":
+            return RNN(
+                cell=RTUCell(
+                    config=RTUConfig(features=in_dim, hidden_dim=cfg.hidden_dim)
+                )
+            )
+        if backbone == "lru":
+            return Memoroid(
+                cell=LRUCell(
+                    config=LRUConfig(
+                        features=in_dim,
+                        hidden_dim=cfg.hidden_dim,
+                        output_dim=lru_output_dim,
+                    )
+                )
+            )
+        raise ValueError(f"backbone '{backbone}' not supported; use 'lru' or 'rtu'.")
+
+    independent_cfg = IndependentRTRRLConfig(
+        num_envs=cfg.num_envs,
+        gamma=cfg.gamma,
+        lambda_pi=cfg.lambda_pi,
+        lambda_v=cfg.lambda_v,
+        lambda_rnn=cfg.lambda_rnn,
+        td_lr=cfg.td_lr,
+        rnn_lr=cfg.rnn_lr,
+        eta_pi=cfg.eta_pi,
+        eta_f=cfg.eta_f,
+        entropy_rate=cfg.entropy_rate,
+        update_period=cfg.update_period,
+        b1=cfg.b1,
+        b2=cfg.b2,
+        eps=cfg.eps,
+        rnn_grad_clip=cfg.rnn_grad_clip,
+        act_clip=getattr(cfg, "act_clip", 0.0),
+        freeze_gamma=getattr(cfg, "freeze_gamma", False),
+        pred_obs=False,
+        pred_coeff=getattr(cfg, "pred_coeff", 1.0),
+        update_trace_before_td=getattr(cfg, "update_trace_before_td", True),
+        logprob_scale=(
+            1.0 / action_space.shape[0]
+            if getattr(cfg, "logprob_reduction", "sum") == "mean"
+            else 1.0
+        ),
+    )
+    return IndependentRTRRL(
+        independent_cfg,
+        env,
+        env_params,
+        make_feature_extractor(),
+        make_torso(),
+        heads.Gaussian(
+            action_dim=action_space.shape[0],
+            bound=getattr(cfg, "bound_actor", False),
+        ),
+        make_feature_extractor(),
+        make_torso(),
+        heads.VNetwork(),
+    )
+
+
+def build_qrc_networks(
+    cfg: ExperimentConfig, num_actions: int
+) -> tuple[Network, Network]:
     """Build Q/H networks for QRC: FeatureExtractor -> RNN(RTUCell) -> DiscreteQNetwork."""
     feat = cfg.encoder_dim
     observation_extractor = nn.Sequential((nn.Dense(feat), nn.relu))
-    action_extractor = (
-        nn.Sequential((nn.Dense(feat), nn.relu)) if cfg.meta_rl else None
-    )
-    reward_extractor = (
-        nn.Sequential((nn.Dense(feat), nn.relu)) if cfg.meta_rl else None
-    )
+    action_extractor = nn.Sequential((nn.Dense(feat), nn.relu)) if cfg.meta_rl else None
+    reward_extractor = nn.Sequential((nn.Dense(feat), nn.relu)) if cfg.meta_rl else None
     feature_extractor = FeatureExtractor(
         observation_extractor=observation_extractor,
         action_extractor=action_extractor,
@@ -343,12 +494,8 @@ def build_qrc_networks(cfg: ExperimentConfig, num_actions: int) -> tuple[Network
     torso = RNN(cell=cell)
 
     head = heads.DiscreteQNetwork(action_dim=num_actions)
-    q_network = Network(
-        feature_extractor=feature_extractor, torso=torso, head=head
-    )
-    h_network = Network(
-        feature_extractor=feature_extractor, torso=torso, head=head
-    )
+    q_network = Network(feature_extractor=feature_extractor, torso=torso, head=head)
+    h_network = Network(feature_extractor=feature_extractor, torso=torso, head=head)
     return q_network, h_network
 
 
@@ -374,12 +521,24 @@ def build_qrc_agent(cfg: ExperimentConfig, env, env_params):
 
     if cfg.agent_type == "rtu_rtrl":
         return QRCRtrl(
-            qrc_cfg, env, env_params, q_network, h_network,
-            q_optimizer, h_optimizer, epsilon_schedule,
+            qrc_cfg,
+            env,
+            env_params,
+            q_network,
+            h_network,
+            q_optimizer,
+            h_optimizer,
+            epsilon_schedule,
         )
     return QRC(
-        qrc_cfg, env, env_params, q_network, h_network,
-        q_optimizer, h_optimizer, epsilon_schedule,
+        qrc_cfg,
+        env,
+        env_params,
+        q_network,
+        h_network,
+        q_optimizer,
+        h_optimizer,
+        epsilon_schedule,
     )
 
 
@@ -388,12 +547,8 @@ def _episode_stats(info: dict) -> tuple[float, float]:
     mask = info.get("returned_episode")
     if mask is None or not jnp.any(mask):
         return float("nan"), float("nan")
-    returns = float(
-        jnp.mean(info["returned_episode_returns"], where=mask)
-    )
-    lengths = float(
-        jnp.mean(info["returned_episode_lengths"], where=mask)
-    )
+    returns = float(jnp.mean(info["returned_episode_returns"], where=mask))
+    lengths = float(jnp.mean(info["returned_episode_lengths"], where=mask))
     return returns, lengths
 
 
@@ -477,9 +632,7 @@ def train_loop(agent, cfg: ExperimentConfig, logger=DummyLogger()):
             pbar.set_description(f"ep{i} R={avg_r:.2f}", refresh=False)
 
             # EVAL ------------------------------------------------------------
-            if cfg.eval_every and (
-                i % cfg.eval_every == 0 or i == cfg.num_epochs - 1
-            ):
+            if cfg.eval_every and (i % cfg.eval_every == 0 or i == cfg.num_epochs - 1):
                 _, eval_logs = eval_fn(eval_key, state, cfg.eval_steps)
                 eval_info = eval_logs.get("info", {})
                 eval_avg, _ = _episode_stats(eval_info)
@@ -516,6 +669,7 @@ def run_experiment(train_fn, cfg: ExperimentConfig, project_name: str = "memorax
     whose `logger` defaults to DummyLogger — matching that contract without
     forcing every experiment's train() to carry a default itself.
     """
+
     def wrapped(hparams, logger=DummyLogger()):
         return train_fn(hparams, logger)
 

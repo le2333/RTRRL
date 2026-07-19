@@ -89,7 +89,14 @@ environments = [
 ]
 
 [dependency-groups]
-development = ["pre-commit>=4.2.0", "pytest", "pyright"]
+development = [
+    "pre-commit>=4.2.0",
+    "pytest",
+    "pyright",
+    "black>=26.3.1",
+    "isort>=8.0.1",
+    "ruff>=0.15.22",
+]
 docs = [
     "sphinx>=7.2.0",
     "sphinx-book-theme>=1.1.0",

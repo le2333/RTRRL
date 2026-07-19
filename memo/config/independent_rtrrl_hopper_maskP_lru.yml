@@ -1,0 +1,41 @@
+# Strict two-path legacy RTRRL on partially observed Brax Hopper.
+experiment: rtrrl_hopper
+rtrrl_topology: independent
+
+seed: 3
+total_timesteps: 2000000
+num_epochs: 20
+num_envs: 1
+
+eval_every: 1
+eval_steps: 1000
+patience: 1000000
+
+logging: null
+run_name: INDEPENDENT-RTRRL-LRU-hopP
+
+env_name: hopper
+mode: P
+backend: spring
+
+hidden_dim: 32
+encoder_dim: 32
+meta_rl: true
+use_encoder: false
+backbone: lru
+pred_obs: false
+
+gamma: 0.95
+lambda_pi: 0.97
+lambda_v: 0.9
+lambda_rnn: 0.945
+td_lr: 3.0e-05
+rnn_lr: 2.0e-06
+eta_pi: 0.38
+eta_f: 0.5
+entropy_rate: 3.0e-05
+update_period: 0.1
+b1: 0.9
+b2: 0.999
+eps: 1.0e-08
+rnn_grad_clip: 1.0

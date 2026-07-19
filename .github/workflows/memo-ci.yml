@@ -1,0 +1,88 @@
+name: Memo CI
+
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - ".github/workflows/memo-ci.yml"
+      - "memo/**"
+  push:
+    paths:
+      - ".github/workflows/memo-ci.yml"
+      - "memo/**"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: memo-ci-${{ github.ref }}
+  cancel-in-progress: true
+
+defaults:
+  run:
+    working-directory: memo
+
+env:
+  JAX_PLATFORM_NAME: cpu
+  XLA_PYTHON_CLIENT_PREALLOCATE: "false"
+
+jobs:
+  static:
+    name: Static checks
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: true
+          cache-dependency-glob: memo/uv.lock
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install dependencies
+        run: uv sync --frozen --group development
+      - name: Type check
+        run: uv run pyright memorax/online_ac tests/online_ac
+      - name: Check formatting
+        run: uv run black --check memorax/online_ac tests/online_ac
+      - name: Check import order
+        run: uv run isort --check-only --profile=black memorax/online_ac tests/online_ac
+      - name: Lint
+        run: uv run ruff check memorax/online_ac tests/online_ac
+
+  online-ac:
+    name: Online AC full suite
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: true
+          cache-dependency-glob: memo/uv.lock
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install dependencies
+        run: uv sync --frozen --group development
+      - name: Run online AC suite
+        run: uv run pytest tests/online_ac -v
+
+  legacy-golden:
+    name: Legacy golden characterization
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: true
+          cache-dependency-glob: memo/uv.lock
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install dependencies
+        run: uv sync --frozen --group development
+      - name: Verify legacy goldens
+        run: uv run pytest tests/online_ac/test_legacy_characterization.py -v
