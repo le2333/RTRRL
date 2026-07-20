@@ -46,6 +46,16 @@ def test_context_preserves_user_experiment_and_structured_identity(tmp_path):
     assert context.artifact_directory == tmp_path / "artifacts"
 
 
+def test_context_rejects_negative_run_number(tmp_path):
+    with pytest.raises(ValueError, match="run_number"):
+        RunContext.from_path(write_context(tmp_path, run_number=-1))
+
+
+def test_context_rejects_run_number_above_four_digits(tmp_path):
+    with pytest.raises(ValueError, match="run_number"):
+        RunContext.from_path(write_context(tmp_path, run_number=10_000))
+
+
 def test_context_nested_data_cannot_drift_after_construction(tmp_path):
     metadata = {"labels": ["original"], "nested": {"enabled": True}}
     loaded = RunContext.from_path(write_context(tmp_path))

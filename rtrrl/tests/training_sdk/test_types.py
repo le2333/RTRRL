@@ -25,10 +25,9 @@ def test_episode_accepts_n_plus_one_observations():
     assert len(episode.observations) == len(episode.actions) + 1
 
 
-def test_episode_accepts_one_observation_per_transition():
-    episode = make_episode(observations=[1, 2])
-
-    assert len(episode.observations) == len(episode.actions)
+def test_episode_rejects_one_observation_per_transition():
+    with pytest.raises(ValueError, match="observations"):
+        make_episode(observations=[1, 2])
 
 
 @pytest.mark.parametrize(
@@ -44,7 +43,7 @@ def test_episode_transition_arrays_must_have_equal_lengths(field, value):
         make_episode(**{field: value})
 
 
-def test_episode_observations_must_match_n_or_n_plus_one_transitions():
+def test_episode_observations_must_match_n_plus_one_transitions():
     with pytest.raises(ValueError, match="observations"):
         make_episode(observations=[1, 2, 3, 4])
 

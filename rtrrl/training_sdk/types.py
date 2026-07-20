@@ -40,9 +40,9 @@ class Episode:
         }
         if len(transition_lengths) != 1:
             raise ValueError("episode transition arrays must have equal lengths")
-        if len(self.observations) not in {transition_count, transition_count + 1}:
+        if len(self.observations) != transition_count + 1:
             raise ValueError(
-                "episode observations must contain N or N+1 values for N transitions"
+                "episode observations must contain N+1 values for N transitions"
             )
         if transition_count == 0 or not (
             self.terminals[-1] or self.truncations[-1]
