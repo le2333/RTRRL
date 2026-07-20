@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 import tempfile
 from pathlib import Path
 from typing import Callable, Protocol, Sequence
@@ -51,6 +52,15 @@ def _numeric_array(name: str, values: Sequence[object]) -> np.ndarray:
     ):
         raise TypeError(f"{name} must contain only numeric values")
     return array
+
+
+def _fsync_directory(path: Path) -> None:
+    flags = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0)
+    directory_fd = os.open(path, flags)
+    try:
+        os.fsync(directory_fd)
+    finally:
+        os.close(directory_fd)
 
 
 class _RerunRecording:
@@ -178,12 +188,10 @@ class RerunAdapter:
             recording.flush()
             recording.close()
             recording = None
-            if target.exists():
-                raise FileExistsError(
-                    f"episode artifact already exists: {target}"
-                )
-            temporary_path.replace(target)
+            os.link(temporary_path, target)
+            temporary_path.unlink()
             temporary_path = None
+            _fsync_directory(target.parent)
             return target
         finally:
             if recording is not None:

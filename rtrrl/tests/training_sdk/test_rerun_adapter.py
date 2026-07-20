@@ -1,4 +1,5 @@
 from dataclasses import replace
+import os
 from pathlib import Path
 import subprocess
 import warnings
@@ -238,6 +239,43 @@ def test_existing_episode_artifact_is_never_overwritten(tmp_path):
 
     assert target.read_bytes() == b"existing episode"
     assert list(target.parent.iterdir()) == [target]
+
+
+def test_publish_race_never_overwrites_competing_artifact(tmp_path, monkeypatch):
+    target = tmp_path / "hopper" / "dual-0012" / "episode-000100.rrd"
+    real_link = os.link
+
+    def competing_link(source, destination):
+        Path(destination).write_bytes(b"competing episode")
+        return real_link(source, destination)
+
+    monkeypatch.setattr(os, "link", competing_link)
+    adapter = RerunAdapter(
+        make_context(tmp_path), root=tmp_path, factory=FakeFactory()
+    )
+
+    with pytest.raises(FileExistsError, match="episode-000100"):
+        adapter.log_episode(complete_episode())
+
+    assert target.read_bytes() == b"competing episode"
+    assert list(target.parent.iterdir()) == [target]
+
+
+def test_successful_publish_fsyncs_target_directory(tmp_path, monkeypatch):
+    fsynced_paths = []
+
+    def recording_fsync(fd):
+        fsynced_paths.append(Path(os.readlink(f"/proc/self/fd/{fd}")))
+
+    monkeypatch.setattr(os, "fsync", recording_fsync)
+    adapter = RerunAdapter(
+        make_context(tmp_path), root=tmp_path, factory=FakeFactory()
+    )
+
+    target = adapter.log_episode(complete_episode())
+
+    assert target is not None
+    assert fsynced_paths == [target.parent]
 
 
 def test_training_run_returns_delegated_episode_path(tmp_path):

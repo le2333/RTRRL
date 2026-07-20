@@ -63,3 +63,49 @@ in the task response because a Git commit cannot contain its own hash.
 - Ragged, object, and non-numeric arrays fail at the adapter boundary with the
   offending field name.
 - No unresolved concerns found.
+
+## Review Follow-up: Atomic No-replace Publication
+
+The Task 3 review identified a TOCTOU race between the final `exists()` check
+and `Path.replace()`: another writer could create the target after the check,
+and `replace()` would silently overwrite it.
+
+### RED / GREEN
+
+- RED: `test_publish_race_never_overwrites_competing_artifact` simulated a
+  competing artifact appearing at the publication syscall. The old
+  implementation did not call `os.link`, did not raise `FileExistsError`, and
+  published its own bytes.
+- RED: `test_successful_publish_fsyncs_target_directory` observed no parent
+  directory fsync after publication.
+- GREEN: publication now uses same-filesystem `os.link(temp, target)`, whose
+  create-if-absent semantics atomically reject an existing target. On success,
+  the temporary link is removed and the target parent directory is fsynced.
+  There is no overwrite-capable rename/replace fallback.
+- GREEN: the race test confirms the competing artifact bytes remain unchanged,
+  `FileExistsError` propagates, and only the competing target remains in the
+  directory.
+
+### Follow-up Verification
+
+- SDK Task 1-3: `94 passed` with
+  `PYTHONPATH=. uv run --with pytest pytest tests/training_sdk -v`.
+- Ruff: `uvx ruff check training_sdk tests/training_sdk` passed.
+- Lock: `uv lock --check` passed.
+- Patch hygiene: `git diff --check` passed.
+- IDE diagnostics: no errors in the changed source or test.
+
+### Follow-up Commit
+
+This follow-up is included in a separate review-fix commit; its hash is reported
+in the final task response.
+
+### Follow-up Self-review
+
+- The early `exists()` check remains only as a fast failure; correctness comes
+  from atomic hard-link creation.
+- A failed link never removes the target path, so a competitor's artifact is
+  preserved. The adapter's temporary file is still cleaned in `finally`.
+- Directory fsync occurs only after the temporary hard link is removed, making
+  the final target directory state durable.
+- No unresolved concerns found.
