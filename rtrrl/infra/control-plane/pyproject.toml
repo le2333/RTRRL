@@ -1,0 +1,26 @@
+[project]
+name = "trainer-infra"
+version = "0.1.0"
+requires-python = ">=3.10"
+dependencies = [
+  "aim==3.28.0",
+  "boto3>=1.35,<2",
+  "optuna>=4,<5",
+  "pydantic>=2.8,<3",
+  "pyyaml>=6,<7",
+]
+
+[project.scripts]
+trainerctl = "trainer_infra.cli:main"
+
+[dependency-groups]
+dev = ["pytest>=8,<9", "ruff>=0.9,<1"]
+
+[tool.uv]
+package = true
+
+[tool.pytest.ini_options]
+pythonpath = ["src"]
+
+[tool.ruff]
+line-length = 100

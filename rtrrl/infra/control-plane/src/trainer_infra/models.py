@@ -1,0 +1,242 @@
+from __future__ import annotations
+
+import math
+from dataclasses import dataclass
+from enum import Enum
+from types import MappingProxyType
+from typing import Any, Literal, Mapping, TypeAlias
+
+from pydantic import BaseModel, ConfigDict, NonNegativeInt, PositiveInt, model_validator
+
+JsonScalar: TypeAlias = str | int | float | bool | None
+
+
+class ContractModel(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+
+class ParameterPolicy(str, Enum):
+    SCAN_UNFIXED = "scan_unfixed"
+    EXPLICIT_SCAN = "explicit_scan"
+
+
+class DiscreteDomain(ContractModel):
+    values: list[JsonScalar]
+
+    @model_validator(mode="after")
+    def require_values(self) -> DiscreteDomain:
+        if not self.values:
+            raise ValueError("values must not be empty")
+        return self
+
+
+class ContinuousDomain(ContractModel):
+    min: float
+    max: float
+    scale: Literal["linear", "log"] = "linear"
+
+    @model_validator(mode="after")
+    def require_finite_ordered_bounds(self) -> ContinuousDomain:
+        if not math.isfinite(self.min) or not math.isfinite(self.max) or self.min >= self.max:
+            raise ValueError("continuous bounds must be finite and min < max")
+        if self.scale == "log" and self.min <= 0:
+            raise ValueError("log domains require min > 0")
+        return self
+
+
+ParameterDomain: TypeAlias = DiscreteDomain | ContinuousDomain
+
+
+class HpoSpec(ContractModel):
+    total_trials: PositiveInt
+    configs_per_batch: PositiveInt
+    parameter_policy: ParameterPolicy = ParameterPolicy.SCAN_UNFIXED
+
+    @model_validator(mode="after")
+    def batch_fits_budget(self) -> HpoSpec:
+        if self.configs_per_batch > self.total_trials:
+            raise ValueError("configs_per_batch must not exceed total_trials")
+        return self
+
+
+class ExecutionSpec(ContractModel):
+    runs_per_job: PositiveInt
+    max_infra_retries: NonNegativeInt = 2
+    max_algorithm_retries: NonNegativeInt = 0
+    retry_backoff_seconds: PositiveInt = 30
+    aim_result_timeout_seconds: PositiveInt = 600
+
+
+class ExperimentIdentity(ContractModel):
+    name: str
+    description: str | None = None
+    metadata: dict[str, Any] = {}
+
+
+class EnvironmentSpec(ContractModel):
+    env_name: str
+    backend: str
+    observation_mode: str
+    max_episode_steps: PositiveInt
+
+
+class TrainingBudgetSpec(ContractModel):
+    env_steps: PositiveInt
+
+
+class LoggingSpec(ContractModel):
+    aim_every_env_steps: PositiveInt
+    rerun_every_episodes: PositiveInt
+
+
+class ResourcesSpec(ContractModel):
+    profile: str
+
+
+class ExperimentDefaults(ContractModel):
+    image: str
+    environment: EnvironmentSpec | None = None
+    training_budget: TrainingBudgetSpec | None = None
+    logging: LoggingSpec | None = None
+    resources: ResourcesSpec
+    hpo: HpoSpec
+    execution: ExecutionSpec
+    parameters: dict[str, ParameterDomain] = {}
+
+
+class GroupSpec(ContractModel):
+    script: str
+    image: str | None = None
+    environment: EnvironmentSpec | None = None
+    training_budget: TrainingBudgetSpec | None = None
+    logging: LoggingSpec | None = None
+    resources: ResourcesSpec | None = None
+    hpo: HpoSpec | None = None
+    execution: ExecutionSpec | None = None
+    metadata: dict[str, Any] = {}
+    parameters: dict[str, ParameterDomain] = {}
+    overrides: dict[str, Any] = {}
+
+
+class ExperimentSpec(ContractModel):
+    experiment: ExperimentIdentity
+    defaults: ExperimentDefaults
+    groups: dict[str, GroupSpec]
+
+    @model_validator(mode="after")
+    def require_groups(self) -> ExperimentSpec:
+        if not self.groups:
+            raise ValueError("groups must not be empty")
+        return self
+
+
+class FieldConstraints(ContractModel):
+    gt: float | None = None
+    ge: float | None = None
+    lt: float | None = None
+    le: float | None = None
+
+
+class FieldDescriptor(ContractModel):
+    path: str
+    type: Literal["str", "int", "float", "bool"]
+    default: JsonScalar
+    searchable: bool = False
+    constraints: FieldConstraints = FieldConstraints()
+    default_search: ParameterDomain | None = None
+
+
+class DescriptorDefaults(ContractModel):
+    environment: EnvironmentSpec
+    training_budget: TrainingBudgetSpec
+    logging: LoggingSpec
+
+
+class ObjectiveSpec(ContractModel):
+    metric: str
+    direction: Literal["minimize", "maximize"]
+    reduction: str
+
+
+class ScriptDescriptor(ContractModel):
+    name: str
+    argv: list[str]
+    sdk_protocol_version: str
+    defaults: DescriptorDefaults
+    objective: ObjectiveSpec
+    fields: dict[str, FieldDescriptor]
+
+
+class ScriptCatalog(ContractModel):
+    protocol_version: str
+    scripts: dict[str, ScriptDescriptor]
+
+
+class ResolvedConfiguration(ContractModel):
+    image: str
+    environment: EnvironmentSpec
+    training_budget: TrainingBudgetSpec
+    logging: LoggingSpec
+    resources: ResourcesSpec
+    hpo: HpoSpec
+    execution: ExecutionSpec
+    parameters: dict[str, ParameterDomain] = {}
+
+
+@dataclass(frozen=True)
+class DiscreteSearch:
+    values: tuple[JsonScalar, ...]
+
+
+@dataclass(frozen=True)
+class ContinuousSearch:
+    low: float
+    high: float
+    log: bool
+    integer: bool
+    step: int | float | None
+
+
+SearchDomain: TypeAlias = DiscreteSearch | ContinuousSearch
+
+
+@dataclass(frozen=True)
+class ResolvedParameter:
+    fixed_value: JsonScalar | None
+    search_domain: SearchDomain | None
+
+
+@dataclass(frozen=True)
+class ResolvedGroup:
+    name: str
+    study_key: str
+    image: str
+    script: str
+    argv: tuple[str, ...]
+    sdk_protocol_version: str
+    objective: ObjectiveSpec
+    environment: EnvironmentSpec
+    training_budget: TrainingBudgetSpec
+    logging: LoggingSpec
+    resources: ResourcesSpec
+    hpo: HpoSpec
+    execution: ExecutionSpec
+    metadata: Mapping[str, Any]
+    parameters: Mapping[str, ResolvedParameter]
+
+    def searchable_parameters(self) -> Mapping[str, SearchDomain]:
+        return MappingProxyType(
+            {
+                name: parameter.search_domain
+                for name, parameter in self.parameters.items()
+                if parameter.search_domain is not None
+            }
+        )
+
+
+@dataclass(frozen=True)
+class ResolvedExperiment:
+    name: str
+    description: str | None
+    metadata: Mapping[str, Any]
+    groups: tuple[ResolvedGroup, ...]
