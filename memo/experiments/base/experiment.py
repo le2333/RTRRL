@@ -14,7 +14,7 @@ across experiments.
 import time
 from dataclasses import asdict, dataclass, replace
 from pprint import pprint
-from typing import Any
+from typing import Any, cast
 
 import flax.linen as nn
 import jax
@@ -870,10 +870,10 @@ def run_experiment(train_fn, cfg: ExperimentConfig, project_name: str = "memorax
     run_name = cfg.run_name or cfg.experiment
     with_logger(
         wrapped,
-        cfg,
-        logger_name=cfg.logging,
+        cast(dict, cfg),
+        logger_name=cfg.logging or "",
         project_name=project_name,
-        aim_repo=cfg.log_repo,
+        aim_repo=cfg.log_repo or "",
         run_name=run_name,
         hparams_type=type(cfg),
     )

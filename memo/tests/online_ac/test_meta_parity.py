@@ -37,13 +37,9 @@ def _tree_at(tree, index):
 
 def _golden_section(snapshot, section):
     prefix = f"{section}/"
-
-    def canonical(path):
-        return path.replace("/.", "/").removeprefix(".")
-
     return GoldenSnapshot(
         {
-            canonical(path[len(prefix) :]): leaf
+            path[len(prefix) :]: leaf
             for path, leaf in snapshot.leaves.items()
             if path.startswith(prefix)
         }

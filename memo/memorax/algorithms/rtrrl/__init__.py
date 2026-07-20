@@ -1,3 +1,5 @@
+from typing import TYPE_CHECKING
+
 from .compatibility import (
     InvalidRTRRLConfig,
     LegacyRTRRLConfig,
@@ -7,6 +9,21 @@ from .compatibility import (
     normalize_legacy_config,
     to_component_config,
 )
+
+if TYPE_CHECKING:
+    from .legacy import (
+        RTRRL as RTRRL,
+        RTRRLConfig as RTRRLConfig,
+        _find_leaf as _find_leaf,
+        _tree_norm as _tree_norm,
+    )
+    from .program import (
+        RTRRLEpochSummary as RTRRLEpochSummary,
+        aggregate_epoch_summary as aggregate_epoch_summary,
+        build_rtrrl_program as build_rtrrl_program,
+    )
+    from .state_machine import make_init_fn as make_init_fn, make_step_fn as make_step_fn
+    from .types import RTRRLComponents as RTRRLComponents, RTRRLState as RTRRLState
 
 
 _LAZY_EXPORTS = {

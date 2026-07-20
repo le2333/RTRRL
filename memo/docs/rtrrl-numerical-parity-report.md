@@ -1,230 +1,191 @@
 # RTRRL Numerical Parity and Resource Report
 
-## Scope and conclusion
+## Scope and evidence identity
 
-This report records fresh Task 12 evidence for commit
-`33448c2a12ef93edf4389b9286b1da60d8a8a17f`.  All JAX parity,
-finite-difference, full `online_ac`, independent-RTRRL, and Brax work ran on the
-authorized AWS Batch queue.  The local host ran only static/configuration
-checks; it did not construct or execute a complete RL environment.
+This report closes Task 12 against the true feature base and records the
+review fixes found by that comparison. The complete machine-readable record is
+[`rtrrl-task12-evidence.json`](rtrrl-task12-evidence.json). Exact commands,
+working directories, relevant environment variables, exits, pytest counts,
+nodeids, failures, timing, RSS, numerical leaves, smoke payload, and source
+hashes are recorded there. The committed command source is
+`tests/rtrrl_parity/task12_batch_verification.sh`.
 
-The strict Memorax LRU path passes its complete parity suite and a real
-legacy-entrypoint Brax smoke.  The full `online_ac` suite is **not green**:
-head has 12 failures and base `5a89953b5d09909b35c5016118dc11a1adb0dec2`
-has the same 12 failures plus six old meta failures.  There are no head-only
-failures.  Those baseline exclusions are listed below rather than hidden.
+Commit identities are intentionally distinct:
+
+- true feature functional base: `5f7ff4e40e66da0b7df4f3edc9a928185ad73ae6`;
+- initial docs-only feature root: `ffa90b5ae50b67bae1cbfe84c85eb0e21325eac3`;
+- Task 10-local comparison base: `5a89953b5d09909b35c5016118dc11a1adb0dec2`;
+- pre-report functional head: `33448c2a12ef93edf4389b9286b1da60d8a8a17f`;
+- first Task 12 report commit / review parent:
+  `62246110d39256dba5641293920cebbb0b626a65`;
+- reviewed functional overlay applied to `33448c2`:
+  SHA-256 `9452b8661b2de7ee2afb09ab80a30dc8f94ec5527021e43d46192f8e45770052`.
+
+The final report commit is the commit containing this document. Its SHA is
+reported by the task handoff rather than embedded recursively in its own
+contents.
+
+## Final Batch runtime and resources
+
+Acceptance job `d39f3e52-04fb-4fbb-ab61-1a5bcb694c46` succeeded with exit 0.
+It used queue `rtrrl-cpu2-queue`, definition `rtrrl-cpu-job:14`, 4 vCPUs,
+8,192 MiB, and compute environment `rtrrl-cpu2-ce` (`c7a.2xlarge`). Overall
+container runtime was 735.194 seconds. Runtime versions were Python 3.12.13,
+JAX/JAXLIB 0.10.0, Flax 0.12.7, Brax 0.14.2, backend `cpu`, device `cpu:0`.
+
+| Workload | Result | Wall time | Peak RSS |
+| --- | --- | ---: | ---: |
+| strict parity, accelerated cases enabled | 205 passed | 42.81 s | 2,146,172 KiB |
+| five directional finite differences | 5 passed | 4.84 s | 466,916 KiB |
+| selected RTRRL/meta/legacy-builder `online_ac` | 36 passed | 85.81 s | 3,204,560 KiB |
+| independent RTRRL | 11 passed | 22.82 s | 1,476,120 KiB |
+| full head `online_ac` | 112 passed, 1 failed | 218.42 s | 5,130,104 KiB |
+| full true-base `online_ac` | 105 passed, 1 failed | 216.13 s | 5,051,516 KiB |
+| eager/JIT/oracle harness | succeeded | 12.40 s | 1,078,424 KiB |
+| strict real Brax smoke | succeeded | 21.98 s | 1,378,324 KiB |
+| ruff | passed | 0.01 s | 24,620 KiB |
+| compileall | passed | 0.11 s | 16,312 KiB |
+
+The maximum measured RSS was 4.89 GiB. The existing 8-GiB allocation remains
+appropriate; compilation did not demonstrate a need to increase memory.
 
 ## Fixture provenance
 
-The versioned fixture is `tests/rtrrl_parity/golden/manifest.json` plus its
-NPZ payload.  The manifest pins:
+`tests/rtrrl_parity/golden/manifest.json` and its NPZ payload pin source
+`RTRRL-AAAI25` commit `4301943c349171d828d0fcf3e40944c286451415`,
+LRU seed 7, hidden/input/action dimensions 2/4/2, batch 1,
+float32/complex64, and capture runtime Python 3.12.13 with JAX/JAXLIB 0.4.38
+on CPU. The fixture protocol contains one deterministic mock environment,
+terminal on transition two, and three eager transitions. Task 12 did not
+regenerate or recalibrate the fixture.
 
-- source: `RTRRL-AAAI25`;
-- source commit: `4301943c349171d828d0fcf3e40944c286451415`;
-- algorithm and seed: LRU, seed 7;
-- dimensions: hidden 2, input 4, action 2, batch 1;
-- dtype policy: float32/complex64;
-- capture runtime: Python 3.12.13, JAX/JAXLIB 0.4.38, CPU;
-- state-machine protocol: one deterministic mock environment, terminal on the
-  second transition, three eager transitions;
-- instrumentation: only the nested step JIT was removed, observation hooks
-  were inserted without changing statements/returns, and `lax.scan` was
-  replaced by an eager test driver.
+## Fresh finite differences
 
-The fixture was not regenerated or recalibrated in Task 12.
+The final command explicitly set `RTRRL_RUN_ACCELERATED_NUMERICS=1`; it ran all
+five parameterizations with no skips:
 
-## Batch runtime and resources
+| Parameter group | Cosine | Relative error |
+| --- | ---: | ---: |
+| `nu_log` | 1.00000012 | 0.000119965051 |
+| `theta_log` | 0.99999994 | 0.0000730149404 |
+| `gamma_log` | 1.0 | 0.000206126366 |
+| `B_real` | 1.0 | 0.0000286421237 |
+| `B_img` | 1.0 | 0.0000388202425 |
 
-All successful final jobs used queue `rtrrl-cpu2-queue`, job definition
-`rtrrl-cpu-job:14`, 4 vCPUs, and 8,192 MiB.  The EC2 compute environment is
-`rtrrl-cpu2-ce` on `c7a.2xlarge`.  Test and numerical-comparison runtime was
-Python 3.12.13, JAX/JAXLIB 0.10.0, Flax 0.12.7, backend `cpu`, device
-`cpu:0`.  The Brax smoke additionally used Brax 0.14.2 with the `spring`
-physics backend.
+The five tests retain their original acceptance assertions:
+cosine at least 0.999 and relative error at most 0.01.
 
-Fresh measurements:
+## Exact eager/JIT/oracle leaves
 
-| Workload | Result | Duration | Peak RSS |
-| --- | --- | ---: | ---: |
-| Complete `tests/rtrrl_parity` | 200 passed, 5 skipped | 44.83 s | 2,145,140 KiB |
-| RTRRL/meta/independent-selected `online_ac` | 34 passed, 2 baseline failures | 82.632 s | 3,126,540 KiB |
-| `tests/test_independent_rtrrl.py` | 11 passed | 25.545 s | 1,484,776 KiB |
-| Full head `tests/online_ac` | 101 passed, 12 baseline failures | 210.409 s | 4,880,076 KiB |
-| Full base `tests/online_ac` | 90 passed, 18 failures | 191.380 s | 4,679,072 KiB |
-| Strict real Brax smoke | succeeded | 22.34 s | 1,392,252 KiB |
-| Complete-step eager/JIT comparison | succeeded | 13.42 s | 1,079,284 KiB |
-| Local 697-file config audit | 697 accepted | 1.64 s | 18,412 KiB |
+`task12_numerical_evidence.py` is committed and its SHA-256 is recorded in the
+evidence JSON. It runs after the unchanged acceptance suite and does not wrap,
+replace, or relax any assertion. Every comparison first requires identical
+canonical path sets, shapes, and dtypes. There are 82 canonical leaves,
+including 73 floating/complex leaves. “Exact” means `numpy.array_equal`.
 
-The five parity skips are the deliberately opt-in directional finite-difference
-parameterizations.  They are skipped unless their separate authorization flag
-is enabled; all non-skipped credit, eager/JIT, and fixture comparisons passed.
-
-An 8-GiB, 4-vCPU EC2/Batch allocation remains the recommendation.  The largest
-measured resident set was 4.66 GiB for full `online_ac`; 8 GiB leaves practical
-headroom for installation, compiler, and teardown.  The shortest Brax
-integration needed only 1.33 GiB RSS, so no memory increase was justified.
-
-## Numerical differences by module
-
-The final parity job instrumented floating assertions without changing their
-pass/fail policies.  “Exact” below counts observed floating comparison events,
-not unique fixture paths.  No broad ULP tolerance is inferred from these
-measurements.
-
-| Module | Exact / compared | Maximum absolute | Maximum relative | Measured named ULP |
-| --- | ---: | ---: | ---: | --- |
-| strict heads | 20 / 21 | `2.9802322e-08` | `1.0697146e-07` | one ULP observed, but the NumPy assertion supplied no leaf label; no ULP bound adopted |
-| strict LRU forward | 35 / 35 | `0` | `0` | 0 |
-| strict LRU credit | 40 / 61 | `2.3841858e-07` | `2.4061205e-07` at `1/B_img` | 3 at `B_img` |
-| historical initialization | 128 / 128 | `0` | `0` | 0 |
-| pure update rules | 28 / 37 | `1.1920929e-07` | `2.2351742e-07` | no bound: the largest bit distance crossed zero and had no named leaf |
-| complete/optimizer step assertions | 1004 / 1270 | `1.1920929e-07` at `action` | `6.7169371e-05` at `params/rnn/OnlineLRUCell_0/LRUCell_0/gamma_log` | 766 at that exact `gamma_log` leaf; measured only, not generalized |
-| historical logging reductions | 10 / 17 | `1.2715658e-06` | `8.9406967e-08` | no bound: zero/sign-crossing synthetic reductions had no named leaf |
-
-The helper’s intentional one-ULP self-test in `test_public_api.py` is excluded
-from algorithm-module maxima.
-
-## CPU eager, CPU JIT, and complete scan
-
-The selected Batch backend is CPU, so eager and JIT were compared in the same
-fresh Batch runtime and against the CPU oracle fixture.  Canonical state
-structure, shape, dtype, and PRNG keys were checked before values.
-
-| Comparison | Exact leaves | Max abs leaf/value | Max rel leaf/value | Max ULP leaf/value |
+| Comparison | Exact all / float | Maximum absolute | Maximum relative | Maximum ULP |
 | --- | ---: | --- | --- | --- |
-| one-step eager vs oracle | 76 / 82 | `traces/rnn/D`, `1.4901161e-08` | `traces/rnn/OnlineLRUCell_0/LRUCell_0/nu_log`, `2.2639420e-06` | same `nu_log`, 26 |
-| one-step JIT vs oracle | 70 / 82 | `traces/rnn/D`, `1.4901161e-08` | same `nu_log`, `2.2639420e-06` | same `nu_log`, 26 |
-| one-step JIT vs eager | 76 / 82 | `traces/td/critic/kernel`, `3.7252903e-09` | TD actor Adam `nu` kernel, `2.5525941e-07` | that exact kernel, 4 |
-| three-step eager vs oracle | 54 / 82 | `action`, `1.1920929e-07` | RNN Adam `nu/.../nu_log`, `4.6432751e-06` | that exact leaf, 55 |
-| three-step JIT vs oracle | 46 / 82 | `action`, `1.1920929e-07` | same RNN Adam leaf, `4.6432751e-06` | same leaf, 55 |
-| three-step JIT vs eager | 61 / 82 | `action`, `5.9604645e-08` | TD actor Adam `nu` kernel, `4.3495504e-07` | that exact kernel, 6 |
+| one-step eager vs oracle | 76/82; 67/73 | `traces/rnn/D`, shape `[1,2,4]`, float32, `1.4901161193847656e-08` | `traces/rnn/OnlineLRUCell_0/LRUCell_0/nu_log`, shape `[1,2]`, float32, `2.263941951241577e-06` | same `nu_log` path/shape/dtype, 26 |
+| one-step JIT vs oracle | 70/82; 61/73 | `traces/rnn/D`, shape `[1,2,4]`, float32, `1.4901161193847656e-08` | `traces/rnn/OnlineLRUCell_0/LRUCell_0/nu_log`, shape `[1,2]`, float32, `2.263941951241577e-06` | same `nu_log` path/shape/dtype, 26 |
+| one-step JIT vs eager | 76/82; 67/73 | `traces/td/critic/kernel`, shape `[1,2,1]`, float32, `3.725290298461914e-09` | `optimizer_state/inner_states/td/inner_state/inner_state/2/0/nu/td/actor/kernel`, shape `[2,4]`, float32, `2.552594082771975e-07` | same optimizer path/shape/dtype, 4 |
+| three-step eager vs oracle | 54/82; 45/73 | `action`, shape `[1,2]`, float32, `1.1920928955078125e-07` | `optimizer_state/inner_states/rnn/inner_state/inner_state/2/0/nu/rnn/OnlineLRUCell_0/LRUCell_0/nu_log`, shape `[2]`, float32, `4.643275133275893e-06` | same optimizer path/shape/dtype, 55 |
+| three-step JIT vs oracle | 46/82; 37/73 | `action`, shape `[1,2]`, float32, `1.1920928955078125e-07` | `optimizer_state/inner_states/rnn/inner_state/inner_state/2/0/nu/rnn/OnlineLRUCell_0/LRUCell_0/nu_log`, shape `[2]`, float32, `4.643275133275893e-06` | same optimizer path/shape/dtype, 55 |
+| three-step JIT vs eager | 61/82; 52/73 | `action`, shape `[1,2]`, float32, `5.960464477539063e-08` | `optimizer_state/inner_states/td/inner_state/inner_state/2/0/nu/td/actor/kernel`, shape `[2,4]`, float32, `4.349550408733194e-07` | same optimizer path/shape/dtype, 6 |
 
-The one-step and three-step output keys were bitwise exact between eager and
-JIT.  The three-step comparison includes the terminal transition and every
-persisted final-state leaf.  Existing tests separately compare each of the
-three eager intermediate states, complete debug observables, gradients,
-traces, optimizer updates, and slow parameters to the fixture.  Production
-scan tests confirm fixed pytree schemas and scalar/event-only epoch summaries.
+One- and three-step output keys were bitwise exact between eager and JIT. The
+three-step result includes the terminal transition and every persisted final
+state leaf. ULP values above are observations only for the named leaf,
+shape, dtype, runtime, and comparison; they are not generalized bounds.
 
-The ULP values in this section are observations for the exact named leaves and
-runtime only.  They are not tree-wide acceptance limits.
+The strict component modules all pass their unchanged tests: heads, LRU
+forward, two-step credit, initialization, update rules, complete step, short
+scan, and logging reductions. Those individual assertion sites do not all
+provide stable canonical leaf labels, so this report does not repeat the old
+unlabeled module maxima or infer leaf-specific ULP bounds from them. The
+reviewable complete-state table above is the authoritative numerical maximum
+record.
 
-## Configuration and unsupported branches
+## True-base `online_ac` comparison
 
-The fresh lightweight repository audit discovered 697 runtime RTRRL YAML files,
-11 more than the plan’s original 686:
+Both revisions ran in the same virtual environment and Batch container. Exact
+collection contains 106 base nodeids and 113 head nodeids. Fourteen nodeids
+were added and seven old `test_meta_parity.py` nodeids were replaced; all lists
+are stored verbatim in the evidence JSON.
 
-- `rtrrl/config`: 684;
-- `memo/config`: 13;
-- accepted: 697;
-- unsupported explicit branch: 0;
-- unknown fields: 0;
-- deprecated no-op: 0;
-- invalid config/profile/value: 0.
+After fixing review-discovered compatibility regressions, base and head have
+the exact same one-test failure set:
 
-No YAML was edited.  Synthetic contracts still prove the classification paths:
-explicit `rnn_model: ctrnn` and explicit no-RNN/`None` are unsupported in the
-strict profile and fail during construction.  CTRNN wiring, CTRNN RFLO/RTRL,
-and no-RNN training remain intentionally unsupported.  RTU, encoding,
-bounded actor, clipping, frozen gain, prediction, fresh traces, sum reduction,
-normalization, and independent topology remain explicit
-`memo_experimental` components rather than strict-baseline options.
+`tests/online_ac/test_standard_parity.py::test_standard_one_step_matches_legacy_every_exposed_leaf`
 
-## Logging compatibility
+Therefore `head_only_failures = []`. The failure is a small exact-zero
+floating comparison against the old standard legacy path and is not hidden or
+called green. The selected RTRRL/meta/legacy-builder set is fully green:
+36 passed.
 
-The complete parity suite verifies the historical training keys, optional
-learning-rate/magnitude keys, `norms/*`, logger scan-step semantics,
-`eval/rewards`, `eval/best_eval_reward`, and `env/video`.  The pinned mock epoch
-remains an exact versioned dictionary comparison.
+The fixes restore the old `online_ac` helper’s permissive numeric/dtype
+contract, preserve historical `RTRRL._update_step` logging while returning
+`aux=None`, and remove the branch-introduced static diagnostics. Task 10’s
+older `5a89953` comparison remains historical Task 10 evidence only; it is not
+used as the final branch baseline.
 
-The real Brax smoke emitted, at historical logger step 1:
+## Static correctness
 
-`steps`, `mean_reward`, `num_episodes`, `mean_delta`, `mean_r_bar`, `mean_v`,
-`total_td_loss`, `actor_loss`, `critic_loss`, `entropy`, `v_targ`,
-`eval/rewards`, and `eval/best_eval_reward`.
+The original report’s “four errors and 12 warnings are baseline” statement was
+false. Same-runtime evidence showed that three `with_logger` errors and 12
+lazy-export warnings were branch-introduced; only
+`tests/test_independent_rtrrl.py`’s dynamic `base.experiment` import was present
+at true base. The branch-introduced diagnostics were fixed.
 
-Its evaluation reward was `49.92558288574219`.  Rendering was disabled, so
-`env/video` was correctly not requested in this shortest integration run.
+The final review-scope pyright command reports 1 error, 0 warnings at head: the
+same dynamic test import. The corresponding base command reports 34 errors,
+0 warnings because the base experiment annotations have additional debt.
+Full-project pyright remains non-green: head 465 errors/2 warnings versus base
+653 errors/2 warnings. This report does not relabel full-project debt as green.
+Exact commands and exits are in the evidence JSON. Ruff and compileall pass.
 
-## Real legacy/Memory Brax integration
+## Configuration, logging, and unsupported branches
 
-Final job `64b129a9-964e-4293-a724-c1cd25bdd839` called the public historical
-`rtrrl.train_rtrrl` entrypoint with an explicit `aaai25_strict_lru` mapping.
-That delegated to Memorax, constructed real `brax-hopper` with the `spring`
-backend, compiled the closed strict program, executed one real training
-environment transition/update, executed a 1,000-transition evaluation scan,
-and finalized the recording logger.  One training transition is the minimum
-valid strict epoch budget.  A full training run was neither needed nor run.
+The configuration audit still discovers and accepts all 697 runtime YAMLs:
+684 under `rtrrl/config`, 13 under `memo/config`, with zero unknown,
+deprecated-no-op, unsupported, or invalid files. Synthetic contracts continue
+to reject explicit CTRNN and no-RNN strict construction. CTRNN wiring/RFLO/RTRL
+and no-RNN training remain unsupported in strict mode; retained RTU,
+normalization, clipping, prediction, fresh-trace, and independent variants are
+explicit experimental components.
 
-Two earlier smoke calibrations are not acceptance evidence: the first selected
-the experimental profile through an over-complete mutable compatibility
-dataclass and used a falsey empty recorder; the second proved strict training
-but only two evaluation transitions, too short to complete a Hopper episode
-and therefore too short to emit `eval/rewards`.  Neither revealed a production
-defect.
+Historical logging keys remain covered by parity tests. The review fix also
+restores the old per-step lox log schema on the experimental compatibility
+facade while preserving `aux=None`.
 
-## Full `online_ac` baseline classification
+## Real public-entrypoint Brax smoke
 
-Head has 12 failures; base has those same 12 plus six.  Set comparison is
-exact: `head_only = []`.  The shared failures are:
+The final job invoked committed `task12_brax_smoke.py`, which calls public
+`rtrrl.train_rtrrl` with the exact payload stored in the evidence JSON:
+`aaai25_strict_lru`, real `brax-hopper`, spring backend, one training
+transition/update, and 1,000 evaluation transitions. It emitted one logger
+record at historical step 1, finalized the logger, and produced
+`eval/rewards = eval/best_eval_reward = 49.92558288574219`. Rendering was
+disabled, so `env/video` was intentionally not requested.
 
-1. `test_evaluation_parity.py::test_standard_legacy_evaluate_matches_leaf_for_leaf`
-2. `test_legacy_builders.py::test_legacy_builder_combined_normalization_train_and_eval_parity[stream-ac-rtrl]`
-3. `test_legacy_builders.py::test_stream_ac_legacy_builder_translates_exact_rtrl_and_runs_one_step`
-4. `test_legacy_characterization.py::test_rtrrl_lru_matches_versioned_legacy_oracle[fresh]`
-5. `test_legacy_characterization.py::test_rtrrl_lru_matches_versioned_legacy_oracle[incoming]`
-6. `test_legacy_characterization.py::test_stream_ac_rtu_matches_versioned_legacy_oracle[adaptive]`
-7. `test_legacy_characterization.py::test_stream_ac_rtu_matches_versioned_legacy_oracle[non_adaptive]`
-8. `test_standard_parity.py::test_standard_continuous_wrapper_clip_does_not_replace_feedback`
-9. `test_standard_parity.py::test_standard_fresh_trace_resets_nonzero_incoming_at_initial_boundary`
-10. `test_standard_parity.py::test_standard_init_matches_legacy_and_golden_leaf_for_leaf`
-11. `test_standard_parity.py::test_standard_one_step_matches_legacy_every_exposed_leaf`
-12. `test_standard_parity.py::test_standard_three_steps_match_each_state_and_terminal_zeroing`
+## Isolation and acceptance boundary
 
-Base alone also fails six pre-modularization `test_meta_parity.py` cases:
-initialization, captured-parts immutability, incoming/fresh one-step views,
-three-step intermediate/final state, and prediction direct gradient.  Head
-makes all six green.  The 12 shared failures are the known versioned
-legacy-golden/path and JAX x64-disabled int64/int32 StreamAC/standard
-characterization differences.  The two selected tests whose names include
-`rtrrl_lru` exercise that old generic meta characterization, not the new strict
-AAAI25 fixture suite; they fail identically at base and head.  They are reported
-as exclusions, not described as passing.
+Task 12 did not run a complete RL environment locally. Local work was limited
+to source/static/configuration checks and report assembly; real Brax execution
+occurred on authorized Batch.
 
-## Repository-state verification
+The final acceptance is scoped to this worktree and this change:
 
-- The Task 12 worktree was clean before this report and only this worktree was
-  modified by Task 12.
-- Other pre-existing worktrees are not clean.  Their changes predate this task
-  and were not touched, so the stronger literal statement “only one worktree
-  in the repository is dirty” cannot be made.
-- A tracked-text credential scan found no AWS access-key IDs, private-key
-  blocks, or assigned API key/password/secret literals.
-- `rtrrl/rtrrl.py` is a 164-line compatibility/delegation entrypoint.  Its AST
-  contract and source audit find no JAX/Optax/Distrax imports or TD, recurrent,
-  trace, optimizer, train-step, or evaluation mathematics.
-- The remaining `rtrrl/` package still contains other historical algorithms
-  and utilities (`rtrrl_lru.py`, generic optimizers, environment wrappers).
-  The old AAAI25 strict mathematical core removed from `rtrrl/rtrrl.py` is not
-  duplicated there; strict lifecycle construction delegates to Memorax.
-- No full RL environment ran locally.  Local activity was configuration audit,
-  source/state inspection, documentation, and static verification only.
-- Task 12 changed no Python source.  Expanded branch-wide ruff and compileall
-  passed.  Expanded branch-wide pyright is not green: it reports three existing
-  `with_logger` annotation errors in `experiments/base/experiment.py`, one
-  existing `base.experiment` test-import error in
-  `tests/test_independent_rtrrl.py`, and 12 dynamic-export warnings.  These are
-  recorded as baseline static-analysis debt rather than silently excluded or
-  changed by this documentation-only task.
+- no credential-like content or secret filename is present in the Task 12 diff;
+- the external historical entrypoint delegates to Memorax;
+- no duplicate AAAI25 strict mathematical core was reintroduced outside
+  Memorax;
+- unrelated worktrees may have pre-existing changes and are not claimed clean;
+- worktree cleanliness, no untracked files, and final diff checks are recorded
+  after the report commit in the task handoff.
 
-## Acceptance boundary
-
-Fresh evidence supports strict fixture parity, complete eager and JIT steps,
-the terminal short scan, configuration compatibility, construction-time
-unsupported-branch rejection, historical logging, legacy delegation,
-scalar-only production scans, retained extension/independent contracts, and a
-real Brax integration.
-
-This report does **not** claim that full `online_ac` is green, does not claim
-bitwise equality across arbitrary backends, does not turn measured ULP values
-into broad bounds, and does not claim that unrelated worktrees are clean.
+Fresh evidence supports strict parity including accelerated finite
+differences, complete eager/JIT one- and three-step state comparisons,
+configuration compatibility, historical logging, true-base regression
+closure, and real Brax integration. It does not claim arbitrary-backend
+bitwise equality, broad ULP limits, a globally green pyright run, or a fully
+green `online_ac` suite.

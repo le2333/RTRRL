@@ -2,135 +2,100 @@
 
 ## Status
 
-Final strict parity, independent RTRRL, CPU eager/JIT comparison, configuration
-audit, and real strict-LRU Brax integration succeeded with fresh evidence.
-Full `memo/tests/online_ac` remains non-green: head has 12 failures, all also
-present at base `5a89953`; base has six additional meta failures.  No
-Task-12-owned production defect was found, so Task 12 changes documentation
-only.
+Review blockers are resolved. Final acceptance job
+`d39f3e52-04fb-4fbb-ab61-1a5bcb694c46` succeeded with exit 0 on authorized
+Batch. Strict parity, all five accelerated finite differences, selected
+RTRRL/meta/legacy-builder tests, independent RTRRL, numerical harness, Brax
+smoke, ruff, and compileall passed.
 
-The local Task 12 commit SHA is reported in the final handoff because this
-ignored implementation report is finalized before the commit is created.
+Full `online_ac` is not claimed green. True base `5f7ff4e` and final head each
+have the same single failure; there are no head-only failures. The final
+report is `memo/docs/rtrrl-numerical-parity-report.md`; exact evidence is
+`memo/docs/rtrrl-task12-evidence.json`.
 
-## Commands and results
+## Commit and baseline identities
 
-### Local, non-RL checks
+- feature functional base: `5f7ff4e40e66da0b7df4f3edc9a928185ad73ae6`;
+- docs-only feature root: `ffa90b5ae50b67bae1cbfe84c85eb0e21325eac3`;
+- Task 10 comparison base only: `5a89953b5d09909b35c5016118dc11a1adb0dec2`;
+- pre-report functional head: `33448c2a12ef93edf4389b9286b1da60d8a8a17f`;
+- prior Task 12 report/review parent:
+  `62246110d39256dba5641293920cebbb0b626a65`;
+- reviewed overlay SHA-256:
+  `9452b8661b2de7ee2afb09ab80a30dc8f94ec5527021e43d46192f8e45770052`.
 
-- `python3 rtrrl/rtrrl.py --compat-action audit`
-  - exit 0; 697 discovered/accepted; 0 unsupported, unknown, deprecated no-op,
-    or invalid; 1.64 s; 18,412 KiB peak RSS.
-- repository/worktree status, tracked credential regex audit, delegation/core
-  source audit, and branch `git diff --check`.
-  - Task worktree was clean before report creation.
-  - No credential pattern was found.
-  - Other worktrees contain pre-existing changes and were not modified.
-  - `rtrrl/rtrrl.py` delegates and contains no old training mathematics.
-- No full RL environment ran locally.
+The final commit SHA is returned by the task handoff; embedding it in the file
+contained by that commit would be recursive.
 
-### Static gates
+## Final commands and results
 
-- Task 12 changes no Python source, so task-owned pyright input is empty.
-- Expanded branch-wide ruff over Python files changed since `5a89953`: passed.
-- Expanded branch-wide `compileall`: passed.
-- Expanded branch-wide pyright, run from `memo` with its configured `.venv`:
-  non-green with four existing errors and 12 dynamic-export warnings.  The
-  errors are three `with_logger` annotations in
-  `experiments/base/experiment.py` and the long-standing
-  `base.experiment` test import path in `tests/test_independent_rtrrl.py`.
-  They are not Task-12-owned and were not changed.
-- IDE diagnostics for the new report: no errors.
-- Final staged `git diff --check` is run immediately before commit.
+The exact command, cwd, environment, exit, counts, duration, and RSS for every
+run are stored in `memo/docs/rtrrl-task12-evidence.json`. The exact orchestration
+source is committed as
+`memo/tests/rtrrl_parity/task12_batch_verification.sh`.
 
-### Authorized Batch test matrix
+Final Batch resources: `rtrrl-cpu2-queue`, `rtrrl-cpu-job:14`, 4 vCPU,
+8,192 MiB, `rtrrl-cpu2-ce` on `c7a.2xlarge`. Runtime: Python 3.12.13,
+JAX/JAXLIB 0.10.0, Flax 0.12.7, CPU.
 
-Queue/definition/resources for final jobs:
-`rtrrl-cpu2-queue` / `rtrrl-cpu-job:14`, 4 vCPU, 8,192 MiB,
-`c7a.2xlarge` compute environment.
+- strict parity with `RTRRL_RUN_ACCELERATED_NUMERICS=1`: 205 passed,
+  42.81 s, 2,146,172 KiB;
+- separate five-case finite differences: 5 passed, 4.84 s, 466,916 KiB;
+- selected online_ac: 36 passed, 85.81 s, 3,204,560 KiB;
+- independent RTRRL: 11 passed, 22.82 s, 1,476,120 KiB;
+- full head online_ac: 112 passed, 1 failed, 218.42 s, 5,130,104 KiB;
+- full base online_ac: 105 passed, 1 failed, 216.13 s, 5,051,516 KiB;
+- eager/JIT/oracle harness: exit 0, 12.40 s, 1,078,424 KiB;
+- public strict Brax smoke: exit 0, 21.98 s, 1,378,324 KiB;
+- ruff and compileall: exit 0.
 
-Runtime: Python 3.12.13, JAX/JAXLIB 0.10.0, Flax 0.12.7, CPU.
+Finite-difference cosine/relative-error pairs:
 
-- Job `c73f26ab-c908-4358-852f-de721986833c`:
-  `pytest memo/tests/rtrrl_parity -q` with passive comparison measurement.
-  - 200 passed, five authorized directional finite-difference skips;
-    44.83 s; 2,145,140 KiB peak RSS.
-- Job `acad4da8-c1ba-45bc-8de1-10444fd437fd`:
-  - RTRRL/meta/independent-selected `online_ac`: 34 passed, two shared
-    base/head legacy-characterization failures; 82.632 s; 3,126,540 KiB.
-  - `pytest memo/tests/test_independent_rtrrl.py -q`: 11 passed; 25.545 s;
-    1,484,776 KiB.
-  - full head `memo/tests/online_ac`: 101 passed, 12 failed; 210.409 s;
-    4,880,076 KiB.
-  - full base `memo/tests/online_ac`: 90 passed, 18 failed; 191.380 s;
-    4,679,072 KiB.
-  - exact failure-set comparison: no head-only failures; base-only failures
-    are the six old `test_meta_parity.py` cases restored by this branch.
-  - Job exit 1 is expected from the explicitly retained diagnostics and an
-    initial invalid pytest plugin path; the parity command was rerun
-    successfully in the preceding job.
-- Job `838ef324-dead-4a65-b035-269e810109a1`:
-  canonical complete one-step and terminal three-step CPU eager/JIT/oracle
-  comparison.
-  - succeeded; exact path/shape/dtype/key checks; 13.42 s; 1,079,284 KiB.
-  - one-step JIT-vs-eager max abs `3.7252903e-09`, max rel
-    `2.5525941e-07`, max ULP 4 at the exact TD actor Adam `nu` kernel.
-  - three-step JIT-vs-eager max abs `5.9604645e-08`, max rel
-    `4.3495504e-07`, max ULP 6 at that exact kernel.
+- `nu_log`: 1.00000012 / 0.000119965051;
+- `theta_log`: 0.99999994 / 0.0000730149404;
+- `gamma_log`: 1.0 / 0.000206126366;
+- `B_real`: 1.0 / 0.0000286421237;
+- `B_img`: 1.0 / 0.0000388202425.
 
-### Real Brax integration
+## Review defects fixed
 
-Final job `64b129a9-964e-4293-a724-c1cd25bdd839`:
+The true-base comparison invalidated two claims in the first report.
 
-- public `rtrrl.train_rtrrl` legacy entrypoint;
-- explicit `aaai25_strict_lru`;
-- real `brax-hopper`, Brax 0.14.2, spring backend;
-- one compiled real training transition/update (minimum valid epoch);
-- 1,000 evaluation transitions, enough for a completed episode;
-- historical train and eval metrics emitted at logger step 1;
-- `eval/rewards = eval/best_eval_reward = 49.92558288574219`;
-- 22.34 s, 1,392,252 KiB peak RSS, exit 0.
+1. Full base `online_ac` had one failure, not 18. Eleven head-only failures
+   were real review blockers. Root causes were a test helper that replaced the
+   established permissive numeric/dtype/path contract with strict RTRRL
+   assertions, and the experimental compatibility facade returning debug
+   metrics instead of historical `aux=None` without emitting the old lox
+   schema. Existing failing tests provided RED evidence. The helper contract
+   and compatibility logging were restored. Final base/head failure sets are
+   identical.
+2. Three `with_logger` errors and 12 lazy-export warnings were branch
+   introduced, not baseline. They were fixed. Review-scope pyright now has
+   one error and zero warnings, the true-base `base.experiment` test import.
 
-Calibration jobs not used as acceptance evidence:
+Full-project pyright is still diagnostic rather than green: head
+465 errors/2 warnings, base 653 errors/2 warnings. This is reported exactly.
 
-- `7da88cd4-fd52-49c2-bf23-2a05142794a2`: selected the experimental profile
-  through an over-complete compatibility dataclass and used a falsey recorder.
-- `0cabca63-193d-4036-bd01-2452ce075ee6`: strict one-step training succeeded,
-  but two evaluation transitions were insufficient to emit an episode return.
-- JIT measurement jobs `81951c02-5f46-4a48-a17b-c44b0132029d`,
-  `943c4ad2-cd95-4dc6-99a1-beabc7de02e6`, and
-  `a9ca0974-5821-4bfb-9810-44bc366c3792` calibrated only the standalone
-  measurement harness (test-package import, environment pytree registration,
-  and nested-tree flattening).  They did not expose production defects.
+## Numerical and Brax evidence
 
-## Numerical and acceptance evidence
+Committed `task12_numerical_evidence.py` checks all 82 canonical state leaves,
+including path, shape, dtype, and 73 floating/complex leaves. It runs after
+unchanged acceptance assertions and does not modify them. The report and JSON
+contain the full canonical path, shape, dtype, max absolute, relative, and ULP
+measurement for all six eager/JIT/oracle comparisons.
 
-The complete report at `memo/docs/rtrrl-numerical-parity-report.md` records:
+Committed `task12_brax_smoke.py` calls public `rtrrl.train_rtrrl` with strict
+LRU, real hopper/spring, one training update, and 1,000 evaluation transitions.
+It emitted and recorded historical train/eval metrics, finalized the logger,
+and returned reward `49.92558288574219`.
 
-- fixture source commit/runtime/protocol;
-- module-by-module abs/rel/ULP observations;
-- complete eager/JIT one-step and terminal three-step results;
-- all 697 runtime config counts;
-- historical logging and real smoke metric keys;
-- peak RSS and 8-GiB/4-vCPU recommendation;
-- explicit CTRNN/no-RNN exclusions;
-- exact full-`online_ac` base/head failure sets;
-- repository isolation, delegation, secret scan, duplicate-core audit, and
-  no-local-full-RL boundary.
+## Concerns and acceptance boundary
 
-No tree-wide ULP policy was introduced.  Named ULP values are measurements for
-the exact recorded leaf/runtime only.
-
-## Concerns
-
-- Full `online_ac` is not green and is not reported as green.  Its 12 head
-  failures are unchanged base failures in old generic RTRRL/StreamAC/standard
-  characterization under the current JAX runtime.
-- Other pre-existing worktrees are dirty, so only the narrower claim that Task
-  12 itself modified the isolated worktree is supported.
-- The five directional finite-difference cases remain explicitly opt-in and
-  skipped in the complete parity command.
-- Expanded branch-wide pyright remains non-green with the four exact
-  pre-existing errors recorded above; Task 12 does not claim a green result.
-
-## Report path
-
-`memo/docs/rtrrl-numerical-parity-report.md`
+- Full `online_ac` retains one base/head shared exact-zero legacy-standard
+  failure and is not reported green.
+- Full-project pyright retains broad repository debt and is not reported
+  green.
+- ULP values are leaf/runtime observations, not broad tolerance policy.
+- Isolation and secret claims apply to this Task 12 diff/worktree only, not
+  unrelated worktrees or the entire host.
+- No complete RL environment ran locally.

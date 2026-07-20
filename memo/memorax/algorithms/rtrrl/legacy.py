@@ -9,6 +9,7 @@ import flax.linen as nn
 from flax import struct
 import jax
 import jax.numpy as jnp
+import lox
 
 from memorax.utils.typing import (
     Array,
@@ -250,7 +251,36 @@ class RTRRL:
             return next_state, None
         debug = self._debug_interface
         if debug is not None:
-            return debug.step(state, key)
+            next_state, metrics = debug.step(state, key)
+            lox.log(
+                {
+                    "info": metrics.info,
+                    "critic/td_error": metrics.td_error.mean(),
+                    "actor/entropy": metrics.entropy.mean(),
+                    "critic/value": metrics.value.mean(),
+                    "emphasis/I": metrics.emphasis,
+                    "diag/lambda_max": metrics.diag_lambda_max,
+                    "diag/gamma_max": metrics.diag_gamma_max,
+                    "diag/sens_norm": metrics.diag_sens_norm,
+                    "diag/carry_norm": metrics.diag_carry_norm,
+                    "diag/z_rnn": metrics.diag_z_rnn,
+                    "diag/z_actor": metrics.diag_z_actor,
+                    "diag/z_critic": metrics.diag_z_critic,
+                    "diag/grad_rnn": metrics.diag_grad_rnn,
+                    "diag/grad_actor": metrics.diag_grad_actor,
+                    "diag/grad_critic": metrics.diag_grad_critic,
+                    "diag/upd_rnn": metrics.diag_upd_rnn,
+                    "diag/p_torso": metrics.diag_p_torso,
+                    "diag/p_actor": metrics.diag_p_actor,
+                    "diag/p_critic": metrics.diag_p_critic,
+                    "diag/value_abs": metrics.diag_value_abs,
+                    "diag/td_abs": metrics.diag_td_abs,
+                    "diag/actor_loc_abs": metrics.diag_actor_loc_abs,
+                    "diag/actor_scale": metrics.diag_actor_scale,
+                    "diag/act_abs": metrics.diag_act_abs,
+                }
+            )
+            return next_state, None
         return self._delegate.train(key, state, self.num_envs), None
 
 
