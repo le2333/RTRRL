@@ -262,6 +262,16 @@ class ResolvedGroup:
     metadata: Mapping[str, Any]
     parameters: Mapping[str, ResolvedParameter]
 
+    @property
+    def fixed_parameters(self) -> Mapping[str, JsonScalar]:
+        return MappingProxyType(
+            {
+                name: parameter.fixed_value
+                for name, parameter in self.parameters.items()
+                if parameter.search_domain is None
+            }
+        )
+
     def searchable_parameters(self) -> Mapping[str, SearchDomain]:
         return MappingProxyType(
             {
@@ -278,3 +288,32 @@ class ResolvedExperiment:
     description: str | None
     metadata: Mapping[str, Any]
     groups: tuple[ResolvedGroup, ...]
+
+
+@dataclass(frozen=True)
+class ConcreteRun:
+    study_key: str
+    run_id: str
+    run_name: str
+    run_number: int
+    trial_number: int
+    image: str
+    script: str
+    argv: tuple[str, ...]
+    sdk_protocol_version: str
+    objective: ObjectiveSpec
+    environment: EnvironmentSpec
+    training_budget: TrainingBudgetSpec
+    logging: LoggingSpec
+    resources: ResourcesSpec
+    hpo: HpoSpec
+    execution: ExecutionSpec
+    metadata: Mapping[str, Any]
+    fixed_parameters: Mapping[str, JsonScalar]
+    sampled_parameters: Mapping[str, JsonScalar]
+    final_parameters: Mapping[str, JsonScalar]
+    context: Mapping[str, Any]
+    config_yaml: str
+    config_sha256: str
+    run_json: str
+    run_sha256: str
