@@ -671,7 +671,7 @@ def test_one_job_per_exact_test_file() -> None:
     assert len(batch.submit_job_calls) == 2
     assert all(" /usr/bin/time -v " in f" {job.command_text} " for job in jobs)
     assert all(
-        call["containerOverrides"]["command"][0:2] == ["bash", "-lc"]
+        call["containerOverrides"]["command"][0:2] == ["bash", "-c"]
         for call in batch.submit_job_calls
     )
     assert "test_eval_trace.py -q" in jobs[0].command_text

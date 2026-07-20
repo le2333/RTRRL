@@ -484,7 +484,7 @@ class HeavyTestRunner:
                 jobName=f"heavy-{profile}-{stem}-{unique}"[:128],
                 jobQueue=validated.queue_arn,
                 jobDefinition=definition_arn,
-                containerOverrides={"command": ["bash", "-lc", command]},
+                containerOverrides={"command": ["bash", "-c", command]},
             )
             job_id = response.get("jobId")
             if not isinstance(job_id, str) or not job_id:
