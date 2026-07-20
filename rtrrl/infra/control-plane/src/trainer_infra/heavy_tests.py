@@ -23,6 +23,7 @@ class HeavyTestProfile:
     queue: str
     compute_environment: str
     instance_type: str
+    max_vcpus: int
     vcpus: int
     memory_mib: int
     gpus: int
@@ -147,6 +148,7 @@ TEST_PROFILES: Mapping[str, HeavyTestProfile] = MappingProxyType(
             queue="rtrrl-cpu-c7am-queue",
             compute_environment="rtrrl-cpu-c7am-ce",
             instance_type="c7a.medium",
+            max_vcpus=16,
             vcpus=1,
             memory_mib=1600,
             gpus=0,
@@ -155,6 +157,7 @@ TEST_PROFILES: Mapping[str, HeavyTestProfile] = MappingProxyType(
             queue="rtrrl-cpu-c7ax-queue",
             compute_environment="rtrrl-cpu-c7ax-ce",
             instance_type="c7a.xlarge",
+            max_vcpus=16,
             vcpus=4,
             memory_mib=7168,
             gpus=0,
@@ -163,6 +166,7 @@ TEST_PROFILES: Mapping[str, HeavyTestProfile] = MappingProxyType(
             queue="rtrrl-gpu-g6x-queue",
             compute_environment="rtrrl-gpu-g6x-ce",
             instance_type="g6.xlarge",
+            max_vcpus=32,
             vcpus=4,
             memory_mib=12000,
             gpus=1,
@@ -175,7 +179,6 @@ _COMPUTE_RESOURCE_FIELDS: Mapping[str, object] = MappingProxyType(
     {
         "type": "EC2",
         "minvCpus": 0,
-        "maxvCpus": 16,
     }
 )
 _QUEUE_FIELDS: Mapping[str, object] = MappingProxyType(
@@ -291,6 +294,7 @@ def _validate_compute_environment(
         )
     for field, expected in _COMPUTE_RESOURCE_FIELDS.items():
         _require_field(resources, field, expected)
+    _require_field(resources, "maxvCpus", profile.max_vcpus)
     _require_field(resources, "instanceTypes", [profile.instance_type])
     _require_string_set(resources, "subnets", settings.subnets)
     _require_string_set(
@@ -364,7 +368,7 @@ def create_c7ax_if_missing(batch: Any, settings: AwsNetworkSettings) -> None:
             computeResources={
                 "type": "EC2",
                 "minvCpus": 0,
-                "maxvCpus": 16,
+                "maxvCpus": profile.max_vcpus,
                 "desiredvCpus": 0,
                 "instanceTypes": [profile.instance_type],
                 "subnets": list(settings.subnets),

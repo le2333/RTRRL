@@ -71,7 +71,7 @@ class FakeBatch:
             "computeResources": {
                 "type": "EC2",
                 "minvCpus": 0,
-                "maxvCpus": 16,
+                "maxvCpus": {"c7am": 16, "c7ax": 16, "g6x": 32}[name],
                 "desiredvCpus": 0,
                 "instanceTypes": [profile.instance_type],
                 "subnets": list(NETWORK_SETTINGS.subnets),
@@ -160,6 +160,7 @@ def test_profiles_are_exact_and_immutable() -> None:
     assert TEST_PROFILES["c7am"].compute_environment == "rtrrl-cpu-c7am-ce"
     assert TEST_PROFILES["c7am"].instance_type == "c7a.medium"
     assert TEST_PROFILES["c7am"].vcpus == 1
+    assert TEST_PROFILES["c7am"].max_vcpus == 16
     assert TEST_PROFILES["c7am"].memory_mib == 1600
     assert TEST_PROFILES["c7am"].gpus == 0
     assert TEST_PROFILES["c7am"].gpu_model is None
@@ -167,6 +168,7 @@ def test_profiles_are_exact_and_immutable() -> None:
     assert TEST_PROFILES["c7ax"].compute_environment == "rtrrl-cpu-c7ax-ce"
     assert TEST_PROFILES["c7ax"].instance_type == "c7a.xlarge"
     assert TEST_PROFILES["c7ax"].vcpus == 4
+    assert TEST_PROFILES["c7ax"].max_vcpus == 16
     assert TEST_PROFILES["c7ax"].memory_mib == 7168
     assert TEST_PROFILES["c7ax"].gpus == 0
     assert TEST_PROFILES["c7ax"].gpu_model is None
@@ -174,6 +176,7 @@ def test_profiles_are_exact_and_immutable() -> None:
     assert TEST_PROFILES["g6x"].compute_environment == "rtrrl-gpu-g6x-ce"
     assert TEST_PROFILES["g6x"].instance_type == "g6.xlarge"
     assert TEST_PROFILES["g6x"].vcpus == 4
+    assert TEST_PROFILES["g6x"].max_vcpus == 32
     assert TEST_PROFILES["g6x"].memory_mib == 12000
     assert TEST_PROFILES["g6x"].gpus == 1
     assert TEST_PROFILES["g6x"].gpu_model == "NVIDIA L4"
@@ -182,6 +185,41 @@ def test_profiles_are_exact_and_immutable() -> None:
         TEST_PROFILES["other"] = TEST_PROFILES["c7am"]
     with pytest.raises(FrozenInstanceError):
         TEST_PROFILES["c7am"].vcpus = 2
+
+
+@pytest.mark.parametrize(
+    ("name", "expected_max_vcpus"),
+    [("c7am", 16), ("c7ax", 16), ("g6x", 32)],
+)
+def test_each_profile_accepts_its_exact_max_vcpus(
+    fake_batch: FakeBatch,
+    name: str,
+    expected_max_vcpus: int,
+) -> None:
+    resources = fake_batch.compute_environments[name]["computeResources"]
+    assert isinstance(resources, dict)
+    assert resources["maxvCpus"] == expected_max_vcpus
+
+    validated = validate_test_profile(fake_batch, name)
+
+    assert validated.profile is TEST_PROFILES[name]
+
+
+@pytest.mark.parametrize(
+    ("name", "drifted_max_vcpus"),
+    [("c7am", 32), ("c7ax", 32), ("g6x", 16)],
+)
+def test_each_profile_rejects_other_profiles_max_vcpus(
+    fake_batch: FakeBatch,
+    name: str,
+    drifted_max_vcpus: int,
+) -> None:
+    resources = fake_batch.compute_environments[name]["computeResources"]
+    assert isinstance(resources, dict)
+    resources["maxvCpus"] = drifted_max_vcpus
+
+    with pytest.raises(ProfileDriftError, match="maxvCpus"):
+        validate_test_profile(fake_batch, name)
 
 
 def test_validate_returns_exact_profile_and_resource_arns(fake_batch: FakeBatch) -> None:
