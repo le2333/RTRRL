@@ -48,9 +48,7 @@ from memorax.networks import (
 )
 from memorax.online_ac import (
     LegacyProgram,
-    MetaProgramConfig,
     StandardProgramConfig,
-    build_meta_program,
     build_standard_program,
     legacy_env_adapter,
     legacy_normalization_config,
@@ -344,6 +342,8 @@ def build_rtrrl_agent(cfg: ExperimentConfig, env, env_params):
         pred_obs=getattr(cfg, "pred_obs", False),
         pred_coeff=getattr(cfg, "pred_coeff", 1.0),
         update_trace_before_td=getattr(cfg, "update_trace_before_td", True),
+        normalize_obs=getattr(cfg, "normalize_obs", False),
+        normalize_reward=getattr(cfg, "normalize_reward", False),
         # sum->mean ablation: original averages log_prob/entropy over action dims.
         logprob_scale=(
             1.0 / action_space.shape[0]
@@ -360,16 +360,10 @@ def build_rtrrl_agent(cfg: ExperimentConfig, env, env_params):
         actor_head,
         critic_head,
         pred_head=pred_head,
+        program_normalization=legacy_normalization_config(env, cfg),
+        strip_environment_normalization=True,
     )
-    adapter = legacy_env_adapter(env, env_params)
-    program_config = MetaProgramConfig.from_legacy_parts(
-        parts,
-        normalization=legacy_normalization_config(env, cfg),
-    )
-    return LegacyProgram(
-        build_meta_program(program_config, adapter),
-        program_config,
-    )
+    return parts.as_legacy_program()
 
 
 def build_independent_rtrrl_agent(cfg: ExperimentConfig, env, env_params):
@@ -553,6 +547,81 @@ def _episode_stats(info: dict) -> tuple[float, float]:
     returns = float(jnp.mean(info["returned_episode_returns"], where=mask))
     lengths = float(jnp.mean(info["returned_episode_lengths"], where=mask))
     return returns, lengths
+
+
+def _historical_rtrrl_metrics(
+    summary,
+    *,
+    log_td_lr: bool,
+    log_rnn_lr: bool,
+    log_norms: bool,
+):
+    """Translate a closed-program summary to the pinned AAAI25 metric schema."""
+
+    metrics = {
+        "steps": summary.steps,
+        "mean_reward": summary.mean_reward,
+        "num_episodes": summary.num_episodes,
+        "mean_delta": summary.mean_delta,
+        "mean_r_bar": summary.mean_r_bar,
+        "mean_v": summary.mean_v,
+        "total_td_loss": summary.total_td_loss,
+        "actor_loss": summary.actor_loss,
+        "critic_loss": summary.critic_loss,
+        "entropy": summary.entropy,
+        "v_targ": summary.v_targ,
+    }
+    if summary.magnitude_loss is not None:
+        metrics["magnitude_loss"] = summary.magnitude_loss
+    if log_td_lr:
+        metrics["lr/td"] = summary.learning_rate_td
+    if log_rnn_lr:
+        metrics["lr/rnn"] = summary.learning_rate_rnn
+    if log_norms:
+        metrics.update(
+            {f"norms/{key}": value for key, value in summary.norms.items()}
+        )
+    return metrics
+
+
+def _log_historical_rtrrl_epoch(
+    logger,
+    summary,
+    *,
+    epoch_index: int,
+    steps_per_epoch: int,
+    log_every: int,
+    log_td_lr: bool,
+    log_rnn_lr: bool,
+    log_norms: bool,
+    eval_reward: float | None = None,
+    video_frames=None,
+):
+    """Preserve historical logger cadence, step, best-eval, and video semantics."""
+
+    metrics = (
+        _historical_rtrrl_metrics(
+            summary,
+            log_td_lr=log_td_lr,
+            log_rnn_lr=log_rnn_lr,
+            log_norms=log_norms,
+        )
+        if epoch_index % log_every == 0
+        else {}
+    )
+    if eval_reward is not None:
+        metrics["eval/rewards"] = eval_reward
+        if video_frames is not None:
+            logger.log_video(
+                "env/video",
+                video_frames,
+                fps=30,
+                caption=f"Reward: {eval_reward:.2f}",
+            )
+        if eval_reward > logger["best_eval_reward"]:
+            logger["best_eval_reward"] = eval_reward
+            metrics["eval/best_eval_reward"] = eval_reward
+    logger.log(metrics, step=(epoch_index + 1) * steps_per_epoch)
 
 
 def train_loop(agent, cfg: ExperimentConfig, logger=DummyLogger()):
