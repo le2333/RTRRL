@@ -19,6 +19,7 @@ sys.path.insert(0, str(WORKTREE_ROOT / "memo" / "experiments" / "base"))
 sys.path.insert(0, str(WORKTREE_ROOT / "memo" / "tests" / "online_ac"))
 
 from memorax.algorithms.rtrrl import RTRRL, RTRRLState as PublicRTRRLState
+from memorax.algorithms.rtrrl.compatibility import LegacyRTRRLConfig
 from memorax.algorithms.rtrrl.heads import RTRRLTDHead
 from memorax.algorithms.rtrrl.lru import AAAI25LRU
 from memorax.algorithms.rtrrl import program as program_module
@@ -139,6 +140,47 @@ def test_strict_experiment_builder_reaches_only_closed_program(monkeypatch):
     assert captured["config"].observation_dim == 2
     assert captured["config"].action_dim == 2
     assert captured["config"].num_envs == 2
+
+
+@pytest.mark.parametrize(
+    ("builder_name", "field", "value"),
+    [
+        ("build_rtrrl_agent", "backbone", "rtu"),
+        ("build_rtrrl_agent", "normalize_obs", True),
+        ("build_rtrrl_agent", "act_magnitude_factor", 0.25),
+        ("build_independent_rtrrl_agent", "backbone", "rtu"),
+        ("build_independent_rtrrl_agent", "normalize_obs", True),
+        ("build_independent_rtrrl_agent", "act_magnitude_factor", 0.25),
+    ],
+)
+def test_public_builders_revalidate_direct_strict_configs_before_selection(
+    monkeypatch, builder_name, field, value
+):
+    import experiment
+    from conftest import TinyContinuousEnv
+
+    invalid = LegacyRTRRLConfig()
+    object.__setattr__(invalid, field, value)
+    monkeypatch.setattr(
+        experiment,
+        "select_memorax_components",
+        lambda *args, **kwargs: pytest.fail(
+            "invalid strict config reached component selection"
+        ),
+    )
+    monkeypatch.setattr(
+        experiment,
+        "build_rtrrl_program",
+        lambda *args, **kwargs: pytest.fail(
+            "invalid strict config reached program construction"
+        ),
+    )
+    env = TinyContinuousEnv()
+
+    with pytest.raises(
+        ValueError, match=rf"strict profile.*experimental.*{field}"
+    ):
+        getattr(experiment, builder_name)(invalid, env, env.default_params)
 
 
 def test_strict_update_step_executes_one_vector_transition_for_multiple_envs():

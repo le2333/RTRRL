@@ -62,7 +62,14 @@ class LegacyConfigWarning:
 
 @dataclass(frozen=True)
 class LegacyRTRRLConfig:
-    """Complete typed union of supported AAAI25 and Memorax RTRRL fields."""
+    """Complete typed union of supported AAAI25 and Memorax RTRRL fields.
+
+    Direct strict construction rejects experimental values that differ from
+    their dataclass defaults. Python dataclasses cannot detect whether a caller
+    explicitly supplied a value equal to its default; field-presence rejection
+    is therefore performed by ``normalize_legacy_config`` for raw mappings
+    that explicitly select the strict profile.
+    """
 
     profile: str = "aaai25_strict_lru"
 
@@ -171,6 +178,9 @@ class LegacyRTRRLConfig:
 
     warning_records: tuple[LegacyConfigWarning, ...] = ()
     explicit_fields: tuple[str, ...] = ()
+
+    def __post_init__(self) -> None:
+        _validate_strict_value_immutability(self)
 
 
 @dataclass(frozen=True)
@@ -312,6 +322,33 @@ _STRICT_EXPERIMENTAL_FIELDS = frozenset(
 )
 
 
+def _strict_nondefault_experimental_fields(
+    config: LegacyRTRRLConfig,
+) -> tuple[str, ...]:
+    declared = {item.name: item.default for item in fields(LegacyRTRRLConfig)}
+    return tuple(
+        sorted(
+            name
+            for name in _STRICT_EXPERIMENTAL_FIELDS
+            if getattr(config, name) != declared[name]
+        )
+    )
+
+
+def _validate_strict_value_immutability(
+    config: LegacyRTRRLConfig,
+) -> LegacyRTRRLConfig:
+    if config.profile != "aaai25_strict_lru":
+        return config
+    conflicts = _strict_nondefault_experimental_fields(config)
+    if conflicts:
+        raise ValueError(
+            "strict profile cannot use nondefault experimental values: "
+            f"{', '.join(conflicts)}"
+        )
+    return config
+
+
 def _freeze(value: Any) -> Any:
     if isinstance(value, Mapping):
         return FrozenMapping(tuple((str(key), _freeze(item)) for key, item in value.items()))
@@ -388,7 +425,7 @@ def normalize_legacy_config(raw: Any) -> LegacyRTRRLConfig:
     """Validate and freeze a supported historical RTRRL configuration."""
 
     if isinstance(raw, LegacyRTRRLConfig):
-        return raw
+        return _validate_strict_value_immutability(raw)
     values = _raw_mapping(raw)
     _unknown_fields(values, LegacyRTRRLConfig)
     explicit = set(values)
@@ -432,6 +469,18 @@ def normalize_legacy_config(raw: Any) -> LegacyRTRRLConfig:
         for path in _NO_OP_FIELDS
         if path in explicit
     )
+    if "profile" not in explicit:
+        if _STRICT_EXPERIMENTAL_FIELDS & explicit:
+            values["profile"] = "memo_experimental"
+    if values.get("profile", "aaai25_strict_lru") == "aaai25_strict_lru":
+        conflicts = tuple(
+            sorted(_STRICT_EXPERIMENTAL_FIELDS & explicit)
+        )
+        if conflicts:
+            raise ValueError(
+                "strict profile cannot be combined with experimental branch "
+                f"flags: {', '.join(conflicts)}"
+            )
     values["explicit_fields"] = tuple(sorted(explicit))
     return LegacyRTRRLConfig(**values)
 

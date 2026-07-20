@@ -1,4 +1,4 @@
-from dataclasses import FrozenInstanceError
+from dataclasses import FrozenInstanceError, replace
 from pathlib import Path
 import runpy
 
@@ -201,14 +201,14 @@ def test_normalized_configuration_is_frozen():
 def test_strict_profile_rejects_every_explicit_experimental_field(
     field, value
 ):
-    legacy = normalize_legacy_config(
-        {"profile": "aaai25_strict_lru", field: value}
-    )
-
     with pytest.raises(
         ValueError, match=rf"strict profile.*experimental.*{field}"
     ):
-        to_component_config(legacy)
+        to_component_config(
+            normalize_legacy_config(
+                {"profile": "aaai25_strict_lru", field: value}
+            )
+        )
 
 
 @pytest.mark.parametrize(
@@ -238,6 +238,76 @@ def test_strict_profile_accepts_required_dimensions_and_optimizers(field):
     )
 
     assert effective.profile == "aaai25_strict_lru"
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("backbone", "rtu"),
+        ("normalize_obs", True),
+        ("act_magnitude_factor", 0.25),
+    ],
+)
+def test_direct_strict_constructor_rejects_nondefault_experimental_values(
+    field, value
+):
+    with pytest.raises(
+        ValueError, match=rf"strict profile.*experimental.*{field}"
+    ):
+        LegacyRTRRLConfig(**{field: value})
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("backbone", "rtu"),
+        ("normalize_obs", True),
+        ("act_magnitude_factor", 0.25),
+    ],
+)
+def test_replace_of_normalized_strict_config_revalidates_values(field, value):
+    strict = normalize_legacy_config({"profile": "aaai25_strict_lru"})
+
+    with pytest.raises(
+        ValueError, match=rf"strict profile.*experimental.*{field}"
+    ):
+        replace(strict, **{field: value})
+
+
+def test_direct_strict_constructor_contract_cannot_infer_same_value_presence():
+    direct = LegacyRTRRLConfig(backbone="lru")
+
+    assert direct.backbone == "lru"
+    assert direct.explicit_fields == ()
+
+
+def test_raw_mapping_rejects_same_value_presence_during_normalization():
+    with pytest.raises(
+        ValueError, match=r"strict profile.*experimental.*backbone"
+    ):
+        normalize_legacy_config(
+            {"profile": "aaai25_strict_lru", "backbone": "lru"}
+        )
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("backbone", "rtu"),
+        ("normalize_obs", True),
+        ("act_magnitude_factor", 0.25),
+    ],
+)
+def test_normalizer_revalidates_direct_strict_values_at_its_boundary(
+    field, value
+):
+    invalid = LegacyRTRRLConfig()
+    object.__setattr__(invalid, field, value)
+
+    with pytest.raises(
+        ValueError, match=rf"strict profile.*experimental.*{field}"
+    ):
+        normalize_legacy_config(invalid)
 
 
 def test_experimental_profile_records_effective_overrides():

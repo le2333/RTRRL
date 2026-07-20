@@ -1,12 +1,16 @@
 from dataclasses import replace
+from typing import Any, cast
 
 import jax
 import jax.numpy as jnp
 import numpy as np
+import optax
 import pytest
 from golden import (
+    GoldenSnapshot,
     _rtrrl_observables,
     assert_tree_allclose,
+    load_golden,
 )
 
 from memorax.algorithms.rtrrl import RTRRL
@@ -29,6 +33,31 @@ from memorax.utils.axes import (
 
 def _tree_at(tree, index):
     return jax.tree.map(lambda leaf: leaf[index], tree)
+
+
+def _golden_section(snapshot, section):
+    prefix = f"{section}/"
+
+    def canonical(path):
+        return path.replace("/.", "/").removeprefix(".")
+
+    return GoldenSnapshot(
+        {
+            canonical(path[len(prefix) :]): leaf
+            for path, leaf in snapshot.leaves.items()
+            if path.startswith(prefix)
+        }
+    )
+
+
+def _legacy_init_counter_view(state):
+    """Adapt only the pre-JIT Python-counter schema recorded by the oracle."""
+    assert state.step.dtype == jnp.int32
+    assert state.update_step.dtype == jnp.int32
+    return state.replace(
+        step=np.asarray(state.step, dtype=np.int64),
+        update_step=np.asarray(state.update_step, dtype=np.int64),
+    )
 
 
 def _exact_gradients(agent, state, sampled_action):
@@ -313,6 +342,9 @@ def test_composed_program_clips_only_environment_action(rtrrl_agent_factory):
     assert np.max(np.abs(env_action)) <= 0.05
     assert not np.allclose(sampled, env_action)
     assert_tree_allclose(metrics.action_decision.logprob_action[0], sampled)
+    assert_tree_allclose(
+        metrics.action_decision.bootstrap_feedback_action[0], env_action
+    )
 
 
 def test_composed_program_routes_prediction_head_direct_gradient(
@@ -334,16 +366,22 @@ def test_composed_program_routes_prediction_head_direct_gradient(
     )
 
 
-def test_composed_init_is_construction_deterministic_leaf_for_leaf(
+def test_composed_init_matches_versioned_legacy_golden_leaf_for_leaf(
     rtrrl_agent_factory,
 ):
     agent = rtrrl_agent_factory(fresh_trace=False)
-    reference = rtrrl_agent_factory(fresh_trace=False)
     key = jax.random.fold_in(jax.random.key(7), 0)
 
     actual = agent.program.init_fn(key)
-    expected = reference.init(key)
-    assert_tree_allclose(actual, expected, rtol=0.0, atol=0.0)
+    golden, manifest = load_golden("rtrrl_lru")
+
+    assert manifest["algorithm"] == "rtrrl_lru"
+    assert_tree_allclose(
+        _legacy_init_counter_view(actual),
+        _golden_section(golden["trace_timing/incoming"], "init"),
+        rtol=0.0,
+        atol=0.0,
+    )
 
 
 @pytest.mark.parametrize("fresh_trace", [False, True], ids=["incoming", "fresh"])
@@ -364,6 +402,26 @@ def test_composed_one_step_preserves_exact_update_domain_and_adam(
         agent, initial, observables["sampled_action"]
     )
 
+    assert_tree_allclose(
+        metrics.action_decision.sampled_action[0],
+        observables["sampled_action"],
+    )
+    assert_tree_allclose(
+        metrics.action_decision.logprob_action[0],
+        observables["logprob_action"],
+    )
+    assert_tree_allclose(
+        metrics.action_decision.env_action[0],
+        observables["env_action"],
+    )
+    assert_tree_allclose(
+        metrics.action_decision.bootstrap_feedback_action[0],
+        observables["feedback_action"],
+    )
+    assert_tree_allclose(metrics.value[0], observables["value"])
+    assert_tree_allclose(metrics.next_value[0], observables["next_value"])
+    assert_tree_allclose(metrics.td_error[0], observables["td"])
+    assert_tree_allclose(metrics.log_prob[0], observables["logprob"])
     assert_tree_allclose(
         _tree_at(metrics.differentiation_grads, 0), expected_traced
     )
@@ -396,6 +454,27 @@ def test_composed_one_step_preserves_exact_update_domain_and_adam(
         "adam_state",
     ):
         assert_tree_allclose(_tree_at(getattr(metrics, name), 0), debug[name])
+    expected_fast_params = cast(
+        Any,
+        optax.apply_updates(initial.params, debug["adam_updates"]),
+    )
+    expected_slow_torso = (
+        expected_fast_params["torso"]
+        if agent.cfg.update_period == 1.0
+        else optax.incremental_update(
+            expected_fast_params["torso"],
+            initial.slow_torso,
+            agent.cfg.update_period,
+        )
+    )
+    assert_tree_allclose(
+        _tree_at(metrics.fast_params, 0), expected_fast_params
+    )
+    assert_tree_allclose(final.params, expected_fast_params)
+    assert_tree_allclose(
+        _tree_at(metrics.slow_torso, 0), expected_slow_torso
+    )
+    assert_tree_allclose(final.slow_torso, expected_slow_torso)
 
     wrong_sign = jax.tree.map(lambda update: -update, debug["ascent_updates"])
     wrong_adam_sign, _ = agent.optimizer.update(
@@ -422,6 +501,13 @@ def test_composed_one_step_preserves_exact_update_domain_and_adam(
             assert_tree_allclose(
                 _tree_at(metrics.ascent_updates, 0), wrong_domain
             )
+        wrong_trace_timing = debug["incoming_traces"]
+    else:
+        wrong_trace_timing = debug["carried_traces"]
+    with pytest.raises(AssertionError):
+        assert_tree_allclose(
+            _tree_at(metrics.update_traces, 0), wrong_trace_timing
+        )
 
 
 def test_composed_terminal_step_preserves_exact_intermediate_states(
@@ -430,15 +516,17 @@ def test_composed_terminal_step_preserves_exact_intermediate_states(
     agent = rtrrl_agent_factory(fresh_trace=False)
     init_key = jax.random.fold_in(jax.random.key(7), 0)
     train_key = jax.random.fold_in(jax.random.key(7), 2)
-    expected = agent.init(init_key)
+    initial = agent.init(init_key)
     actual, metrics = agent.program.train_epoch_fn(
-        train_key, expected, num_steps=3
+        train_key, initial, num_steps=3
     )
+    golden, _ = load_golden("rtrrl_lru")
 
-    for index, key in enumerate(jax.random.split(train_key, 3)):
-        expected, _ = agent._update_step(expected, key)
-        assert_tree_allclose(_tree_at(metrics.state_after, index), expected)
-    assert_tree_allclose(actual, expected)
+    assert_tree_allclose(
+        actual,
+        _golden_section(golden["trace_timing/incoming"], "train"),
+    )
+    assert_tree_allclose(_tree_at(metrics.state_after, -1), actual)
     np.testing.assert_array_equal(
         metrics.action_decision.persisted_feedback_action[-1],
         np.zeros((1, 2), np.float32),
@@ -447,6 +535,10 @@ def test_composed_terminal_step_preserves_exact_intermediate_states(
         metrics.state_after.timestep.reward[-1], np.zeros((1,), np.float32)
     )
     assert bool(metrics.state_after.timestep.done[-1, 0])
+    assert not np.allclose(
+        metrics.action_decision.bootstrap_feedback_action[-1],
+        metrics.action_decision.persisted_feedback_action[-1],
+    )
 
 
 def test_composed_prediction_gradient_matches_exact_objective(
