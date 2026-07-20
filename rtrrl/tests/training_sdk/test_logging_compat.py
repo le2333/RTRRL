@@ -158,6 +158,29 @@ def test_facility_log_rejects_non_integer_canonical_env_steps(env_steps):
     assert logger._final_metrics == {}
 
 
+@pytest.mark.parametrize("step", [True, 20.0])
+def test_facility_log_rejects_non_integer_explicit_step(step):
+    training_run = RecordingTrainingRun()
+    logger = AimLogger("ignored", training_run=training_run)
+
+    with pytest.raises(ValueError, match="explicit step.*integer"):
+        logger.log({"eval/reward": 1.0}, step=step)
+
+    assert training_run.calls == []
+    assert logger._final_metrics == {}
+
+
+def test_facility_log_validates_step_type_before_canonical_comparison():
+    training_run = RecordingTrainingRun()
+    logger = AimLogger("ignored", training_run=training_run)
+
+    with pytest.raises(ValueError, match="explicit step.*integer"):
+        logger.log({"train/env_steps": 1, "eval/reward": 1.0}, step=True)
+
+    assert training_run.calls == []
+    assert logger._final_metrics == {}
+
+
 def test_facility_aim_logger_propagates_missing_objective_error():
     training_run = RecordingTrainingRun()
     logger = AimLogger("ignored", training_run=training_run)
@@ -281,11 +304,13 @@ def test_legacy_aim_logger_preserves_run_setup_and_episode_noops(monkeypatch):
     assert created[0]["hparams"] == {"seed": 7}
     assert created[0].name == "legacy-name abc123"
     logger.log({"eval/reward": 2.0}, step=4)
+    logger.log({"eval/reward": 2.25}, step=20.0)
     logger.log({"eval/reward": 2.5})
     logger["summary"] = 3
     logger.finalize()
     assert created[0].tracked == [
         ("eval/reward", 2.0, 4),
+        ("eval/reward", 2.25, 20),
         ("eval/reward", 2.5, None),
     ]
     assert logger["summary"] == 3.0

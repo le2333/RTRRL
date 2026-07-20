@@ -166,6 +166,8 @@ class AimLogger(DummyLogger):
     def log(self, metrics, step=None):
         """Loop over scalars and track them with aim."""
         if self.training_run is not None:
+            if step is not None and type(step) is not int:
+                raise ValueError("explicit step must be an integer")
             canonical_env_steps = metrics.get("train/env_steps")
             if "train/env_steps" in metrics and type(canonical_env_steps) is not int:
                 raise ValueError(
