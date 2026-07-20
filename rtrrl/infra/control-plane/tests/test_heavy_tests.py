@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from concurrent.futures import ThreadPoolExecutor
 from copy import deepcopy
 from dataclasses import FrozenInstanceError
 import json
@@ -14,6 +15,7 @@ from trainer_infra.heavy_tests import (
     AggregateJobFailure,
     HeavyTestRunner,
     JobEvidence,
+    PartialSubmissionError,
     SubmittedTestJob,
     TEST_PROFILES,
     AwsNetworkSettings,
@@ -588,12 +590,115 @@ printf '%s\n' '{"images":[],"failures":[{"failureCode":"ImageNotFound","failureR
     assert '"images":[]' in result.stderr
 
 
+def test_gpu_rebase_builder_is_pinned_reproducible_and_emits_provenance(
+    tmp_path: Path,
+) -> None:
+    fake_bin = tmp_path / "bin"
+    fake_bin.mkdir()
+    calls = tmp_path / "crane-calls"
+    base_digest = f"sha256:{'a' * 64}"
+    overlay_digest = f"sha256:{'b' * 64}"
+    final_digest = f"sha256:{'c' * 64}"
+    overlay = (
+        "007122174918.dkr.ecr.eu-north-1.amazonaws.com/rtrrl@"
+        f"{overlay_digest}"
+    )
+    _write_executable(
+        fake_bin / "aws",
+        f"""#!/usr/bin/env bash
+set -eu
+case "$*" in
+  *get-login-password*) echo password ;;
+  *batch-get-image*) printf '%s\\n' '{{"images":[{{"imageId":{{"imageDigest":"{base_digest}"}}}}],"failures":[]}}' ;;
+  *) echo "unexpected aws call: $*" >&2; exit 1 ;;
+esac
+""",
+    )
+    _write_executable(
+        fake_bin / "crane",
+        f"""#!/usr/bin/env bash
+set -eu
+printf '%s\\n' "$*" >>"$CRANE_CALLS"
+case "$1" in
+  version) echo 0.21.7 ;;
+  auth) read -r password ;;
+  rebase|mutate) echo "pushed" >&2 ;;
+  config) printf '%s\\n' '{{"config":{{"Env":["PATH=/opt/venv/bin:/usr/bin","JAX_PLATFORM_NAME=gpu","XLA_FLAGS="]}}}}' ;;
+  manifest) printf '%s\\n' '{{"config":{{"digest":"sha256:{'d' * 64}"}}}}' ;;
+  digest)
+    case "${{@: -1}}" in
+      *@{overlay_digest}) echo "{overlay_digest}" ;;
+      *) echo "{final_digest}" ;;
+    esac
+    ;;
+  *) echo "unexpected crane call: $*" >&2; exit 1 ;;
+esac
+""",
+    )
+    env = {
+        **os.environ,
+        "ACCOUNT_ID": "007122174918",
+        "CRANE_BIN": str(fake_bin / "crane"),
+        "CRANE_CALLS": str(calls),
+        "ECR_RETRY_DELAY_SECONDS": "0",
+        "PATH": f"{fake_bin}:{os.environ['PATH']}",
+    }
+
+    result = subprocess.run(
+        [
+            str(HEAVY_TEST_IMAGE_DIR / "build-image.sh"),
+            "--profile",
+            "g6x",
+            "--gpu-rebase-from",
+            overlay,
+        ],
+        check=True,
+        capture_output=True,
+        text=True,
+        env=env,
+    )
+
+    payload = json.loads(result.stdout)
+    assert payload["mode"] == "registry-rebase"
+    assert payload["crane_version"] == "0.21.7"
+    assert payload["overlay_source_image"] == overlay
+    assert payload["overlay_manifest_digest"] == overlay_digest
+    assert payload["overlay_config_digest"] == "sha256:" + "d" * 64
+    assert payload["old_cpu_base"].endswith(f"@{base_digest}")
+    assert payload["new_gpu_base"].endswith(f"@{base_digest}")
+    assert payload["digest"] == final_digest
+    assert payload["config_environment"] == {
+        "JAX_PLATFORM_NAME": "gpu",
+        "XLA_FLAGS": "",
+    }
+    crane_calls = calls.read_text()
+    assert (
+        f"rebase --platform linux/amd64 --old_base "
+        f"007122174918.dkr.ecr.eu-north-1.amazonaws.com/rtrrl@{base_digest} "
+        f"--new_base 007122174918.dkr.ecr.eu-north-1.amazonaws.com/rtrrl@{base_digest}"
+        in crane_calls
+    )
+    assert "mutate --platform linux/amd64 --env JAX_PLATFORM_NAME=gpu" in crane_calls
+    assert "--env XLA_FLAGS=" in crane_calls
+
+
+def test_gpu_rebase_builder_pins_crane_release_and_checksum() -> None:
+    builder = (HEAVY_TEST_IMAGE_DIR / "build-image.sh").read_text()
+
+    assert 'CRANE_VERSION="0.21.7"' in builder
+    assert (
+        'CRANE_ARCHIVE_SHA256="1a57bc98207fa1c0d04bf760699099e26'
+        'f8383499bfd55b99c1b919a928a7230"' in builder
+    )
+
+
 class FakeJobBatch(FakeBatch):
     def __init__(self) -> None:
         super().__init__()
         self.job_definitions: list[dict[str, object]] = []
         self.register_job_definition_calls: list[dict[str, object]] = []
         self.submit_job_calls: list[dict[str, object]] = []
+        self.describe_jobs_calls: list[list[str]] = []
         self.jobs: dict[str, dict[str, object]] = {}
 
     def describe_job_definitions(self, **kwargs: object) -> dict[str, object]:
@@ -644,6 +749,7 @@ class FakeJobBatch(FakeBatch):
         return {"jobName": str(kwargs["jobName"]), "jobId": job_id}
 
     def describe_jobs(self, *, jobs: list[str]) -> dict[str, object]:
+        self.describe_jobs_calls.append(list(jobs))
         return {"jobs": [deepcopy(self.jobs[job_id]) for job_id in jobs]}
 
 
@@ -686,6 +792,13 @@ def test_one_job_per_exact_test_file() -> None:
     )
     assert "test_eval_trace.py -q" in jobs[0].command_text
     assert "test_jit_contract.py -q" in jobs[1].command_text
+    assert all(
+        str(call["jobName"]).startswith("trainer-heavy-test-c7ax-")
+        for call in batch.submit_job_calls
+    )
+    assert str(batch.register_job_definition_calls[0]["jobDefinitionName"]).startswith(
+        "trainer-heavy-test-c7ax-"
+    )
 
 
 @pytest.mark.parametrize(
@@ -706,6 +819,78 @@ def test_rejects_non_memo_test_path(path: str) -> None:
         runner.submit(profile="c7ax", image=IMAGE, tests=[path])
 
 
+def test_rejects_missing_directory_and_wrong_suffix(
+    tmp_path: Path,
+) -> None:
+    tests_root = tmp_path / "memo" / "tests"
+    tests_root.mkdir(parents=True)
+    (tests_root / "directory.py").mkdir()
+    (tests_root / "wrong.txt").write_text("not python")
+    runner = HeavyTestRunner(
+        FakeJobBatch(),
+        FakeLogs({}),
+        repository_root=tmp_path,
+        sleep=lambda _: None,
+    )
+
+    for path in (
+        "memo/tests/missing.py",
+        "memo/tests/directory.py",
+        "memo/tests/wrong.txt",
+    ):
+        with pytest.raises(ValueError, match="regular.*\\.py"):
+            runner.submit(profile="c7ax", image=IMAGE, tests=[path])
+
+
+def test_rejects_test_file_and_parent_directory_symlinks(
+    tmp_path: Path,
+) -> None:
+    tests_root = tmp_path / "memo" / "tests"
+    real_parent = tests_root / "real"
+    real_parent.mkdir(parents=True)
+    real_test = real_parent / "test_real.py"
+    real_test.write_text("def test_ok(): pass")
+    (tests_root / "test_link.py").symlink_to(real_test)
+    (tests_root / "linked_parent").symlink_to(real_parent, target_is_directory=True)
+    runner = HeavyTestRunner(
+        FakeJobBatch(),
+        FakeLogs({}),
+        repository_root=tmp_path,
+        sleep=lambda _: None,
+    )
+
+    for path in (
+        "memo/tests/test_link.py",
+        "memo/tests/linked_parent/test_real.py",
+    ):
+        with pytest.raises(ValueError, match="symlink"):
+            runner.submit(profile="c7ax", image=IMAGE, tests=[path])
+
+
+def test_rejects_resolved_path_outside_memo_tests(
+    tmp_path: Path,
+) -> None:
+    tests_root = tmp_path / "memo" / "tests"
+    tests_root.mkdir(parents=True)
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    (outside / "test_escape.py").write_text("def test_escape(): pass")
+    (tests_root / "escape").symlink_to(outside, target_is_directory=True)
+    runner = HeavyTestRunner(
+        FakeJobBatch(),
+        FakeLogs({}),
+        repository_root=tmp_path,
+        sleep=lambda _: None,
+    )
+
+    with pytest.raises(ValueError, match="symlink|memo/tests"):
+        runner.submit(
+            profile="c7ax",
+            image=IMAGE,
+            tests=["memo/tests/escape/test_escape.py"],
+        )
+
+
 @pytest.mark.parametrize(
     "image",
     [
@@ -713,6 +898,12 @@ def test_rejects_non_memo_test_path(path: str) -> None:
         "repo@sha256:abc",
         "repo@sha256:" + "A" * 64,
         "repo@sha256:" + "a" * 63,
+        "https://registry.example/repo@sha256:" + "a" * 64,
+        "Registry.example/repo@sha256:" + "a" * 64,
+        "registry.example/Repo@sha256:" + "a" * 64,
+        "registry..example/repo@sha256:" + "a" * 64,
+        "registry.example/@sha256:" + "a" * 64,
+        "registry.example/repo:tag@sha256:" + "a" * 64,
     ],
 )
 def test_rejects_image_without_exact_digest(image: str) -> None:
@@ -724,6 +915,31 @@ def test_rejects_image_without_exact_digest(image: str) -> None:
             image=image,
             tests=["memo/tests/online_ac/test_eval_trace.py"],
         )
+
+
+def test_partial_submission_error_retains_every_successful_job_id() -> None:
+    class FailSecondSubmitBatch(FakeJobBatch):
+        def submit_job(self, **kwargs: object) -> dict[str, str]:
+            if self.submit_job_calls:
+                raise RuntimeError("second submit rejected")
+            return super().submit_job(**kwargs)
+
+    batch = FailSecondSubmitBatch()
+    runner = HeavyTestRunner(batch, FakeLogs({}), sleep=lambda _: None)
+
+    with pytest.raises(PartialSubmissionError) as raised:
+        runner.submit(
+            profile="c7ax",
+            image=IMAGE,
+            tests=[
+                "memo/tests/online_ac/test_eval_trace.py",
+                "memo/tests/online_ac/test_jit_contract.py",
+            ],
+        )
+
+    assert [job.job_id for job in raised.value.submitted] == ["job-1"]
+    assert raised.value.failed_test == "memo/tests/online_ac/test_jit_contract.py"
+    assert "second submit rejected" in raised.value.cause
 
 
 def test_reuses_only_exact_digest_bound_job_definition() -> None:
@@ -755,6 +971,81 @@ def test_reuses_only_exact_digest_bound_job_definition() -> None:
     assert all("propagateTags" not in call for call in batch.submit_job_calls)
     assert first[0].job_definition_arn == second[0].job_definition_arn
     assert first[0].job_definition_revision == 1
+
+
+def test_job_definition_search_follows_all_pages() -> None:
+    batch = FakeJobBatch()
+    seed_runner = HeavyTestRunner(batch, FakeLogs({}), sleep=lambda _: None)
+    seed_runner.submit(
+        profile="c7ax",
+        image=IMAGE,
+        tests=["memo/tests/online_ac/test_eval_trace.py"],
+    )
+    existing = deepcopy(batch.job_definitions[0])
+    batch.job_definitions.clear()
+    batch.register_job_definition_calls.clear()
+    calls: list[dict[str, object]] = []
+
+    def paginated_describe(**kwargs: object) -> dict[str, object]:
+        calls.append(deepcopy(kwargs))
+        if "nextToken" not in kwargs:
+            return {"jobDefinitions": [], "nextToken": "page-2"}
+        return {"jobDefinitions": [deepcopy(existing)]}
+
+    batch.describe_job_definitions = paginated_describe  # type: ignore[method-assign]
+    runner = HeavyTestRunner(batch, FakeLogs({}), sleep=lambda _: None)
+
+    submitted = runner.submit(
+        profile="c7ax",
+        image=IMAGE,
+        tests=["memo/tests/online_ac/test_eval_trace.py"],
+    )
+
+    assert submitted[0].job_definition_revision == 1
+    assert [call.get("nextToken") for call in calls] == [None, "page-2"]
+    assert batch.register_job_definition_calls == []
+
+
+def test_registration_is_requeried_and_must_match() -> None:
+    class InvisibleRegistrationBatch(FakeJobBatch):
+        def describe_job_definitions(self, **kwargs: object) -> dict[str, object]:
+            return {"jobDefinitions": []}
+
+    batch = InvisibleRegistrationBatch()
+    runner = HeavyTestRunner(batch, FakeLogs({}), sleep=lambda _: None)
+
+    with pytest.raises(RuntimeError, match="registered.*exact"):
+        runner.submit(
+            profile="c7ax",
+            image=IMAGE,
+            tests=["memo/tests/online_ac/test_eval_trace.py"],
+        )
+
+    assert len(batch.register_job_definition_calls) == 1
+    assert batch.submit_job_calls == []
+
+
+def test_local_process_lock_prevents_duplicate_registration(tmp_path: Path) -> None:
+    batch = FakeJobBatch()
+
+    def submit_once() -> tuple[SubmittedTestJob, ...]:
+        return HeavyTestRunner(
+            batch,
+            FakeLogs({}),
+            definition_lock_dir=tmp_path / "locks",
+            sleep=lambda _: None,
+        ).submit(
+            profile="c7ax",
+            image=IMAGE,
+            tests=["memo/tests/online_ac/test_eval_trace.py"],
+        )
+
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        results = list(executor.map(lambda _: submit_once(), range(2)))
+
+    assert len(batch.register_job_definition_calls) == 1
+    assert results[0][0].job_definition_arn == results[1][0].job_definition_arn
+    assert list((tmp_path / "locks").glob("trainer-heavy-test-*.lock"))
 
 
 def test_gpu_job_probes_jax_and_l4_before_pytest() -> None:
@@ -854,6 +1145,187 @@ def test_wait_aggregates_all_terminal_failures_with_evidence() -> None:
     assert raised.value.evidence[0].log_lines[0] == "assert False"
 
 
+def test_wait_chunks_describe_jobs_at_aws_limit() -> None:
+    batch = FakeJobBatch()
+    job_ids = [f"job-{index}" for index in range(205)]
+    batch.jobs = {
+        job_id: {"jobId": job_id, "status": "FAILED"} for job_id in job_ids
+    }
+    runner = HeavyTestRunner(batch, FakeLogs({}), sleep=lambda _: None)
+
+    with pytest.raises(AggregateJobFailure) as raised:
+        runner.wait(job_ids)
+
+    assert len(raised.value.evidence) == 205
+    assert [len(call) for call in batch.describe_jobs_calls[:3]] == [100, 100, 5]
+    assert all(len(call) <= 100 for call in batch.describe_jobs_calls)
+
+
+def test_wait_timeout_aggregates_every_unfinished_job() -> None:
+    batch = FakeJobBatch()
+    batch.jobs = {
+        "running": {"jobId": "running", "status": "RUNNING"},
+        "pending": {"jobId": "pending", "status": "RUNNABLE"},
+    }
+    now = iter((0.0, 0.0, 2.0))
+    runner = HeavyTestRunner(
+        batch,
+        FakeLogs({}),
+        monotonic=lambda: next(now),
+        sleep=lambda _: None,
+        wait_timeout_seconds=1.0,
+    )
+
+    with pytest.raises(AggregateJobFailure) as raised:
+        runner.wait(["running", "pending"])
+
+    assert [item.job_id for item in raised.value.evidence] == ["running", "pending"]
+    assert [item.status for item in raised.value.evidence] == ["RUNNING", "RUNNABLE"]
+    assert all("timeout" in item.evidence_errors[0] for item in raised.value.evidence)
+
+
+def test_wait_retries_late_log_stream_without_blocking_other_jobs() -> None:
+    class LateStreamBatch(FakeJobBatch):
+        def __init__(self) -> None:
+            super().__init__()
+            self.refreshes = 0
+            self.jobs = {
+                "late": {
+                    "jobId": "late",
+                    "jobName": "trainer-heavy-test-c7ax-late",
+                    "status": "SUCCEEDED",
+                    "container": {},
+                },
+                "ready": {
+                    "jobId": "ready",
+                    "jobName": "trainer-heavy-test-c7ax-ready",
+                    "status": "SUCCEEDED",
+                    "container": {"logStreamName": "stream/ready"},
+                },
+            }
+
+        def describe_jobs(self, *, jobs: list[str]) -> dict[str, object]:
+            response = super().describe_jobs(jobs=jobs)
+            if jobs == ["late"]:
+                self.refreshes += 1
+                if self.refreshes >= 2:
+                    response["jobs"][0]["container"] = {
+                        "logStreamName": "stream/late"
+                    }
+            return response
+
+    batch = LateStreamBatch()
+    logs = FakeLogs(
+        {
+            "stream/late": ["Maximum resident set size (kbytes): 111"],
+            "stream/ready": ["Maximum resident set size (kbytes): 222"],
+        }
+    )
+    runner = HeavyTestRunner(
+        batch,
+        logs,
+        evidence_max_attempts=3,
+        retry_delay_seconds=0,
+        sleep=lambda _: None,
+    )
+
+    evidence = runner.wait(["late", "ready"])
+
+    assert [item.maximum_rss_lines for item in evidence] == [
+        ("Maximum resident set size (kbytes): 111",),
+        ("Maximum resident set size (kbytes): 222",),
+    ]
+
+
+def test_wait_retries_empty_cloudwatch_log_until_required_evidence_arrives() -> None:
+    batch = FakeJobBatch()
+    batch.jobs = {
+        "cpu": {
+            "jobId": "cpu",
+            "jobName": "trainer-heavy-test-c7ax-cpu",
+            "status": "SUCCEEDED",
+            "container": {"logStreamName": "stream/cpu"},
+        }
+    }
+
+    class LateLogs(FakeLogs):
+        def get_log_events(self, **kwargs: object) -> dict[str, object]:
+            self.calls.append(deepcopy(kwargs))
+            if len(self.calls) == 1:
+                return {"events": [], "nextForwardToken": "done"}
+            return {
+                "events": [
+                    {"message": "Maximum resident set size (kbytes): 444"}
+                ],
+                "nextForwardToken": "done",
+            }
+
+    logs = LateLogs({})
+    runner = HeavyTestRunner(
+        batch,
+        logs,
+        evidence_max_attempts=2,
+        retry_delay_seconds=0,
+        sleep=lambda _: None,
+    )
+
+    evidence = runner.wait(["cpu"])
+
+    assert evidence[0].maximum_rss_lines == (
+        "Maximum resident set size (kbytes): 444",
+    )
+    assert len(logs.calls) >= 2
+
+
+def test_wait_collects_per_job_log_errors_and_requires_success_evidence() -> None:
+    batch = FakeJobBatch()
+    batch.jobs = {
+        "broken-log": {
+            "jobId": "broken-log",
+            "jobName": "trainer-heavy-test-c7ax-broken",
+            "status": "SUCCEEDED",
+            "container": {"logStreamName": "stream/broken"},
+        },
+        "gpu": {
+            "jobId": "gpu",
+            "jobName": "trainer-heavy-test-g6x-gpu",
+            "status": "SUCCEEDED",
+            "container": {"logStreamName": "stream/gpu"},
+        },
+    }
+
+    class PartiallyBrokenLogs(FakeLogs):
+        def get_log_events(self, **kwargs: object) -> dict[str, object]:
+            if kwargs["logStreamName"] == "stream/broken":
+                raise RuntimeError("logs unavailable")
+            return super().get_log_events(**kwargs)
+
+    logs = PartiallyBrokenLogs(
+        {
+            "stream/gpu": [
+                "NVIDIA L4, 23034 MiB",
+                "Maximum resident set size (kbytes): 333",
+            ]
+        }
+    )
+    runner = HeavyTestRunner(
+        batch,
+        logs,
+        evidence_max_attempts=2,
+        retry_delay_seconds=0,
+        sleep=lambda _: None,
+    )
+
+    with pytest.raises(AggregateJobFailure) as raised:
+        runner.wait(["broken-log", "gpu"])
+
+    broken, gpu = raised.value.evidence
+    assert any("logs unavailable" in error for error in broken.evidence_errors)
+    assert any("RSS" in error for error in broken.evidence_errors)
+    assert any("JAX GPU" in error for error in gpu.evidence_errors)
+    assert gpu.gpu_lines == ("NVIDIA L4, 23034 MiB",)
+
+
 def test_submit_cli_prints_machine_readable_job_evidence(
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
@@ -921,4 +1393,102 @@ def test_wait_cli_prints_failure_evidence_and_summary(
 
     assert result == 1
     assert json.loads(captured.out)["log_lines"] == ["assert False"]
-    assert "job-1=FAILED" in captured.err
+    error = json.loads(captured.err)
+    assert error["error"] == "aggregate_job_failure"
+    assert error["job_ids"] == ["job-1"]
+
+
+def test_submit_cli_reports_partial_submission_as_stderr_json(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    submitted = SubmittedTestJob(
+        job_id="job-1",
+        test_file="memo/tests/online_ac/test_eval_trace.py",
+        profile="c7ax",
+        image=IMAGE,
+        job_definition_arn="arn:definition:1",
+        job_definition_revision=1,
+        command_text="/usr/bin/time -v python -m pytest test.py",
+    )
+
+    class Runner:
+        def submit(self, **kwargs: object) -> tuple[SubmittedTestJob, ...]:
+            raise PartialSubmissionError(
+                submitted=[submitted],
+                failed_test="memo/tests/online_ac/test_jit_contract.py",
+                cause=RuntimeError("submit rejected"),
+            )
+
+    monkeypatch.setattr(heavy_test_cli, "_runner", Runner)
+
+    result = heavy_test_cli.main(
+        [
+            "submit",
+            "--profile",
+            "c7ax",
+            "--image",
+            IMAGE,
+            "memo/tests/online_ac/test_eval_trace.py",
+            "memo/tests/online_ac/test_jit_contract.py",
+        ]
+    )
+    captured = capsys.readouterr()
+
+    assert result != 0
+    assert captured.out == ""
+    error = json.loads(captured.err)
+    assert error["error"] == "partial_submission"
+    assert error["submitted_job_ids"] == ["job-1"]
+    assert error["failed_test"] == "memo/tests/online_ac/test_jit_contract.py"
+
+
+def test_cli_expected_runner_error_is_json_and_stdout_stays_empty(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    class Runner:
+        def submit(self, **kwargs: object) -> tuple[SubmittedTestJob, ...]:
+            raise ValueError("invalid request")
+
+    monkeypatch.setattr(heavy_test_cli, "_runner", Runner)
+
+    result = heavy_test_cli.main(
+        [
+            "submit",
+            "--profile",
+            "c7ax",
+            "--image",
+            IMAGE,
+            "memo/tests/online_ac/test_eval_trace.py",
+        ]
+    )
+    captured = capsys.readouterr()
+
+    assert result != 0
+    assert captured.out == ""
+    assert json.loads(captured.err) == {
+        "error": "ValueError",
+        "message": "invalid request",
+    }
+
+
+def test_wait_cli_passes_configured_timeout(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class Runner:
+        def wait(
+            self, job_ids: list[str], *, timeout_seconds: float
+        ) -> tuple[JobEvidence, ...]:
+            assert job_ids == ["job-1"]
+            assert timeout_seconds == 12.5
+            return ()
+
+    monkeypatch.setattr(heavy_test_cli, "_runner", Runner)
+
+    assert (
+        heavy_test_cli.main(
+            ["wait", "--timeout-seconds", "12.5", "job-1"]
+        )
+        == 0
+    )

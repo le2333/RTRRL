@@ -8,12 +8,22 @@ import sys
 from typing import Sequence
 
 import boto3
+from botocore.exceptions import BotoCoreError, ClientError
 
-from trainer_infra.heavy_tests import AggregateJobFailure, HeavyTestRunner, TEST_PROFILES
+from trainer_infra.heavy_tests import (
+    AggregateJobFailure,
+    HeavyTestRunner,
+    PartialSubmissionError,
+    TEST_PROFILES,
+)
 
 
 def _print_json(value: object) -> None:
     print(json.dumps(value, sort_keys=True))
+
+
+def _print_error(value: object) -> None:
+    print(json.dumps(value, sort_keys=True), file=sys.stderr)
 
 
 def _runner() -> HeavyTestRunner:
@@ -36,28 +46,58 @@ def _parser() -> argparse.ArgumentParser:
     submit.add_argument("tests", nargs="+", metavar="TEST_FILE")
 
     wait = subparsers.add_parser("wait", help="wait for jobs and print evidence")
+    wait.add_argument("--timeout-seconds", type=float)
     wait.add_argument("job_ids", nargs="+", metavar="JOB_ID")
     return parser
 
 
 def main(argv: Sequence[str] | None = None) -> int:
     args = _parser().parse_args(argv)
-    runner = _runner()
-    if args.command == "submit":
-        for job in runner.submit(
-            profile=args.profile,
-            image=args.image,
-            tests=args.tests,
-        ):
-            _print_json(asdict(job))
-        return 0
-
     try:
-        evidence = runner.wait(args.job_ids)
+        runner = _runner()
+        if args.command == "submit":
+            for job in runner.submit(
+                profile=args.profile,
+                image=args.image,
+                tests=args.tests,
+            ):
+                _print_json(asdict(job))
+            return 0
+
+        wait_arguments: dict[str, object] = {}
+        if args.timeout_seconds is not None:
+            wait_arguments["timeout_seconds"] = args.timeout_seconds
+        evidence = runner.wait(args.job_ids, **wait_arguments)
+    except PartialSubmissionError as error:
+        _print_error(
+            {
+                "error": "partial_submission",
+                "message": str(error),
+                "failed_test": error.failed_test,
+                "cause": error.cause,
+                "submitted_job_ids": [job.job_id for job in error.submitted],
+                "submitted": [asdict(job) for job in error.submitted],
+            }
+        )
+        return 1
     except AggregateJobFailure as error:
         for item in error.evidence:
             _print_json(asdict(item))
-        print(str(error), file=sys.stderr)
+        _print_error(
+            {
+                "error": "aggregate_job_failure",
+                "message": str(error),
+                "job_ids": [item.job_id for item in error.evidence],
+            }
+        )
+        return 1
+    except (BotoCoreError, ClientError, ValueError, RuntimeError) as error:
+        _print_error(
+            {
+                "error": type(error).__name__,
+                "message": str(error),
+            }
+        )
         return 1
     for item in evidence:
         _print_json(asdict(item))

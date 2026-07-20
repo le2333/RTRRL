@@ -1,10 +1,12 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import fcntl
 import hashlib
-from pathlib import PurePosixPath
+from pathlib import Path, PurePosixPath
 import re
 import shlex
+import tempfile
 import time
 from types import MappingProxyType
 from typing import Any, Callable, Mapping, Sequence
@@ -61,6 +63,8 @@ class JobEvidence:
     status_reason: str | None = None
     container_reason: str | None = None
     exit_code: int | None = None
+    jax_gpu_lines: tuple[str, ...] = ()
+    evidence_errors: tuple[str, ...] = ()
 
 
 class AggregateJobFailure(RuntimeError):
@@ -71,9 +75,28 @@ class AggregateJobFailure(RuntimeError):
         failed = ", ".join(
             f"{item.job_id}={item.status}"
             for item in self.evidence
-            if item.status != "SUCCEEDED"
+            if item.status != "SUCCEEDED" or item.evidence_errors
         )
         super().__init__(f"heavy-test jobs did not all succeed: {failed}")
+
+
+class PartialSubmissionError(RuntimeError):
+    """Raised when a multi-file submission fails after one or more jobs exist."""
+
+    def __init__(
+        self,
+        *,
+        submitted: Sequence[SubmittedTestJob],
+        failed_test: str,
+        cause: Exception,
+    ) -> None:
+        self.submitted = tuple(submitted)
+        self.failed_test = failed_test
+        self.cause = f"{type(cause).__name__}: {cause}"
+        super().__init__(
+            f"submission failed for {failed_test!r} after "
+            f"{len(self.submitted)} successful jobs: {self.cause}"
+        )
 
 
 DEFAULT_AWS_NETWORK_SETTINGS = AwsNetworkSettings(
@@ -133,10 +156,20 @@ _QUEUE_FIELDS: Mapping[str, object] = MappingProxyType(
         "priority": 1,
     }
 )
-_DIGEST_IMAGE_RE = re.compile(r".+@sha256:[0-9a-f]{64}")
+_IMAGE_COMPONENT = r"[a-z0-9]+(?:[._-][a-z0-9]+)*"
+_REGISTRY_LABEL = r"[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?"
+_REGISTRY = rf"(?:localhost|{_REGISTRY_LABEL}(?:\.{_REGISTRY_LABEL})*)(?::[0-9]+)?"
+_DIGEST_IMAGE_RE = re.compile(
+    rf"(?:{_REGISTRY}/)?{_IMAGE_COMPONENT}(?:/{_IMAGE_COMPONENT})*"
+    r"@sha256:[0-9a-f]{64}"
+)
 _TERMINAL_JOB_STATES = frozenset({"SUCCEEDED", "FAILED"})
 _LOG_GROUP = "/aws/batch/job"
 _JOB_DEFINITION_COMMAND = ["bash", "-lc", "exit 64"]
+_DEFAULT_REPOSITORY_ROOT = Path(__file__).resolve().parents[5]
+_DEFAULT_DEFINITION_LOCK_DIR = (
+    Path(tempfile.gettempdir()) / "trainer-heavy-test-definition-locks"
+)
 _EMPTY_CONTAINER_DEFAULTS = (
     "environment",
     "mountPoints",
@@ -333,7 +366,7 @@ def _validate_digest_image(image: str) -> None:
         raise ValueError("image must be an exact lowercase sha256 digest reference")
 
 
-def _validate_test_path(test_file: str) -> str:
+def _validate_test_path(test_file: str, repository_root: Path) -> str:
     path = PurePosixPath(test_file)
     parts = path.parts
     if (
@@ -344,8 +377,27 @@ def _validate_test_path(test_file: str) -> str:
         or path.suffix != ".py"
     ):
         raise ValueError(
-            f"test path must be a Python file below memo/tests: {test_file!r}"
+            "test path must be an existing regular .py file below "
+            f"memo/tests: {test_file!r}"
         )
+    candidate = repository_root.joinpath(*parts)
+    current = repository_root
+    for part in parts:
+        current /= part
+        if current.is_symlink():
+            raise ValueError(f"test path must not contain symlinks: {test_file!r}")
+    if not candidate.is_file():
+        raise ValueError(
+            f"test path must be an existing regular .py file below memo/tests: {test_file!r}"
+        )
+    tests_root = (repository_root / "memo" / "tests").resolve(strict=True)
+    resolved = candidate.resolve(strict=True)
+    try:
+        resolved.relative_to(tests_root)
+    except ValueError as error:
+        raise ValueError(
+            f"resolved test path must remain below memo/tests: {test_file!r}"
+        ) from error
     return path.as_posix()
 
 
@@ -372,7 +424,7 @@ def _container_properties(
 
 def _definition_name(profile_name: str, image: str) -> str:
     digest = image.rsplit("@sha256:", 1)[1]
-    return f"rtrrl-heavy-test-{profile_name}-{digest}"
+    return f"trainer-heavy-test-{profile_name}-{digest}"
 
 
 def _definition_matches(
@@ -448,47 +500,98 @@ class HeavyTestRunner:
         batch: Any,
         logs: Any,
         *,
+        repository_root: Path = _DEFAULT_REPOSITORY_ROOT,
+        definition_lock_dir: Path = _DEFAULT_DEFINITION_LOCK_DIR,
         sleep: Callable[[float], None] = time.sleep,
+        monotonic: Callable[[], float] = time.monotonic,
         poll_interval_seconds: float = 15.0,
+        wait_timeout_seconds: float = 3600.0,
+        evidence_max_attempts: int = 5,
+        retry_delay_seconds: float = 1.0,
     ) -> None:
         self._batch = batch
         self._logs = logs
+        self._repository_root = repository_root.resolve(strict=True)
+        self._definition_lock_dir = definition_lock_dir
         self._sleep = sleep
+        self._monotonic = monotonic
         self._poll_interval_seconds = poll_interval_seconds
+        self._wait_timeout_seconds = wait_timeout_seconds
+        self._evidence_max_attempts = evidence_max_attempts
+        self._retry_delay_seconds = retry_delay_seconds
+        if wait_timeout_seconds <= 0:
+            raise ValueError("wait timeout must be positive")
+        if evidence_max_attempts < 1:
+            raise ValueError("evidence attempts must be at least one")
 
     def _get_or_register_definition(
         self, profile_name: str, profile: HeavyTestProfile, image: str
     ) -> tuple[str, int]:
         name = _definition_name(profile_name, image)
         container = _container_properties(profile, image)
-        response = self._batch.describe_job_definitions(
-            jobDefinitionName=name,
-            status="ACTIVE",
-        )
-        definitions = response.get("jobDefinitions", [])
-        matching = [
+        self._definition_lock_dir.mkdir(parents=True, exist_ok=True)
+        lock_path = self._definition_lock_dir / f"{name}.lock"
+        with lock_path.open("a+") as lock_file:
+            fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX)
+            matching = self._find_matching_definitions(name, container)
+            if matching:
+                latest = max(matching, key=lambda item: item.get("revision", -1))
+                return _job_definition_identity(latest)
+
+            self._batch.register_job_definition(
+                jobDefinitionName=name,
+                type="container",
+                platformCapabilities=["EC2"],
+                containerProperties=container,
+            )
+            for attempt in range(self._evidence_max_attempts):
+                matching = self._find_matching_definitions(name, container)
+                if matching:
+                    latest = max(
+                        matching, key=lambda item: item.get("revision", -1)
+                    )
+                    return _job_definition_identity(latest)
+                if attempt + 1 < self._evidence_max_attempts:
+                    self._sleep(self._retry_delay_seconds)
+            raise RuntimeError(
+                "registered job definition could not be re-read as an exact match"
+            )
+
+    def _find_matching_definitions(
+        self, name: str, container: Mapping[str, object]
+    ) -> list[Mapping[str, Any]]:
+        definitions: list[Mapping[str, Any]] = []
+        token: str | None = None
+        while True:
+            arguments: dict[str, object] = {
+                "jobDefinitionName": name,
+                "status": "ACTIVE",
+            }
+            if token is not None:
+                arguments["nextToken"] = token
+            response = self._batch.describe_job_definitions(**arguments)
+            definitions.extend(
+                definition
+                for definition in response.get("jobDefinitions", [])
+                if isinstance(definition, Mapping)
+            )
+            next_token = response.get("nextToken")
+            if not isinstance(next_token, str) or not next_token:
+                break
+            token = next_token
+        return [
             definition
             for definition in definitions
-            if isinstance(definition, Mapping)
-            and _definition_matches(definition, container)
+            if _definition_matches(definition, container)
         ]
-        if matching:
-            latest = max(matching, key=lambda item: item.get("revision", -1))
-            return _job_definition_identity(latest)
-
-        registered = self._batch.register_job_definition(
-            jobDefinitionName=name,
-            type="container",
-            platformCapabilities=["EC2"],
-            containerProperties=container,
-        )
-        return _job_definition_identity(registered)
 
     def submit(
         self, *, profile: str, image: str, tests: Sequence[str]
     ) -> tuple[SubmittedTestJob, ...]:
         _validate_digest_image(image)
-        test_files = tuple(_validate_test_path(test_file) for test_file in tests)
+        test_files = tuple(
+            _validate_test_path(test_file, self._repository_root) for test_file in tests
+        )
         if not test_files:
             raise ValueError("at least one memo/tests file is required")
         validated = validate_test_profile(self._batch, profile)
@@ -503,15 +606,22 @@ class HeavyTestRunner:
             unique = hashlib.sha256(
                 f"{time.time_ns()}:{test_file}".encode()
             ).hexdigest()[:12]
-            response = self._batch.submit_job(
-                jobName=f"heavy-{profile}-{stem}-{unique}"[:128],
-                jobQueue=validated.queue_arn,
-                jobDefinition=definition_arn,
-                containerOverrides={"command": ["bash", "-c", command]},
-            )
-            job_id = response.get("jobId")
-            if not isinstance(job_id, str) or not job_id:
-                raise RuntimeError("Batch submit_job returned no jobId")
+            try:
+                response = self._batch.submit_job(
+                    jobName=f"trainer-heavy-test-{profile}-{stem}-{unique}"[:128],
+                    jobQueue=validated.queue_arn,
+                    jobDefinition=definition_arn,
+                    containerOverrides={"command": ["bash", "-c", command]},
+                )
+                job_id = response.get("jobId")
+                if not isinstance(job_id, str) or not job_id:
+                    raise RuntimeError("Batch submit_job returned no jobId")
+            except Exception as error:
+                raise PartialSubmissionError(
+                    submitted=submitted,
+                    failed_test=test_file,
+                    cause=error,
+                ) from error
             submitted.append(
                 SubmittedTestJob(
                     job_id=job_id,
@@ -525,34 +635,73 @@ class HeavyTestRunner:
             )
         return tuple(submitted)
 
-    def _wait_for_terminal_jobs(
+    def _describe_job_chunks(
         self, job_ids: Sequence[str]
-    ) -> list[Mapping[str, Any]]:
+    ) -> tuple[dict[str, Mapping[str, Any]], dict[str, list[str]]]:
+        described: dict[str, Mapping[str, Any]] = {}
+        errors: dict[str, list[str]] = {}
+        for offset in range(0, len(job_ids), 100):
+            chunk = list(job_ids[offset : offset + 100])
+            last_error: Exception | None = None
+            response: Mapping[str, Any] | None = None
+            for attempt in range(self._evidence_max_attempts):
+                try:
+                    candidate = self._batch.describe_jobs(jobs=chunk)
+                    if not isinstance(candidate, Mapping):
+                        raise RuntimeError("Batch describe_jobs returned a non-mapping")
+                    response = candidate
+                    break
+                except Exception as error:
+                    last_error = error
+                    if attempt + 1 < self._evidence_max_attempts:
+                        self._sleep(self._retry_delay_seconds)
+            if response is None:
+                message = f"describe_jobs failed: {last_error}"
+                for job_id in chunk:
+                    errors.setdefault(job_id, []).append(message)
+                continue
+            for job in response.get("jobs", []):
+                if isinstance(job, Mapping) and isinstance(job.get("jobId"), str):
+                    described[str(job["jobId"])] = job
+            for job_id in chunk:
+                if job_id not in described:
+                    errors.setdefault(job_id, []).append(
+                        "Batch did not return the requested job"
+                    )
+        return described, errors
+
+    def _wait_for_terminal_jobs(
+        self, job_ids: Sequence[str], timeout_seconds: float
+    ) -> tuple[list[Mapping[str, Any]], dict[str, list[str]]]:
         pending = set(job_ids)
         terminal: dict[str, Mapping[str, Any]] = {}
+        last_seen: dict[str, Mapping[str, Any]] = {}
+        evidence_errors: dict[str, list[str]] = {}
+        deadline = self._monotonic() + timeout_seconds
         while pending:
-            response = self._batch.describe_jobs(jobs=sorted(pending))
-            described = response.get("jobs", [])
-            seen: set[str] = set()
-            for job in described:
-                if not isinstance(job, Mapping):
-                    continue
-                job_id = job.get("jobId")
+            described, errors = self._describe_job_chunks(sorted(pending))
+            for job_id, messages in errors.items():
+                evidence_errors.setdefault(job_id, []).extend(messages)
+            for job_id, job in described.items():
+                last_seen[job_id] = job
                 status = job.get("status")
-                if not isinstance(job_id, str):
-                    continue
-                seen.add(job_id)
                 if status in _TERMINAL_JOB_STATES:
                     terminal[job_id] = job
                     pending.discard(job_id)
-            missing = pending - seen
-            if missing:
-                raise RuntimeError(
-                    f"Batch did not return requested jobs: {', '.join(sorted(missing))}"
-                )
             if pending:
+                if self._monotonic() >= deadline:
+                    for job_id in pending:
+                        evidence_errors.setdefault(job_id, []).append(
+                            f"wait timeout after {timeout_seconds:g} seconds"
+                        )
+                        terminal[job_id] = last_seen.get(
+                            job_id,
+                            {"jobId": job_id, "status": "UNKNOWN"},
+                        )
+                    pending.clear()
+                    break
                 self._sleep(self._poll_interval_seconds)
-        return [terminal[job_id] for job_id in job_ids]
+        return [terminal[job_id] for job_id in job_ids], evidence_errors
 
     def _read_log_lines(self, stream: str | None) -> tuple[str, ...]:
         if stream is None:
@@ -581,45 +730,144 @@ class HeavyTestRunner:
             token = next_token
         return tuple(lines)
 
-    def wait(self, job_ids: Sequence[str]) -> tuple[JobEvidence, ...]:
+    def _collect_job_evidence(
+        self,
+        job: Mapping[str, Any],
+        initial_errors: Sequence[str],
+    ) -> JobEvidence:
+        errors = list(initial_errors)
+        job_id = str(job["jobId"])
+        status = str(job.get("status", "UNKNOWN"))
+        latest = job
+        identity = " ".join(
+            str(latest.get(field, "")) for field in ("jobName", "jobDefinition")
+        )
+        is_gpu = "trainer-heavy-test-g6x-" in identity
+        container = latest.get("container")
+        if not isinstance(container, Mapping):
+            container = {}
+        stream = container.get("logStreamName")
+        if not isinstance(stream, str):
+            stream = None
+
+        if status in _TERMINAL_JOB_STATES and stream is None:
+            last_error: Exception | None = None
+            for attempt in range(self._evidence_max_attempts):
+                try:
+                    response = self._batch.describe_jobs(jobs=[job_id])
+                    refreshed = response.get("jobs", [])
+                    if refreshed and isinstance(refreshed[0], Mapping):
+                        latest = refreshed[0]
+                        refreshed_container = latest.get("container")
+                        if isinstance(refreshed_container, Mapping):
+                            container = refreshed_container
+                            candidate = container.get("logStreamName")
+                            if isinstance(candidate, str) and candidate:
+                                stream = candidate
+                                break
+                except Exception as error:
+                    last_error = error
+                if attempt + 1 < self._evidence_max_attempts:
+                    self._sleep(self._retry_delay_seconds)
+            if stream is None:
+                detail = f": {last_error}" if last_error is not None else ""
+                errors.append(f"CloudWatch log stream unavailable{detail}")
+
+        log_lines: tuple[str, ...] = ()
+        if stream is not None:
+            last_error = None
+            for attempt in range(self._evidence_max_attempts):
+                try:
+                    candidate_lines = self._read_log_lines(stream)
+                    log_lines = candidate_lines
+                    has_rss = any(
+                        "Maximum resident set size (kbytes):" in line
+                        for line in candidate_lines
+                    )
+                    has_jax_gpu = any(
+                        "CudaDevice(" in line for line in candidate_lines
+                    )
+                    has_l4 = any(
+                        line.strip().startswith("NVIDIA L4")
+                        for line in candidate_lines
+                    )
+                    if candidate_lines and (
+                        status != "SUCCEEDED"
+                        or (has_rss and (not is_gpu or (has_jax_gpu and has_l4)))
+                    ):
+                        break
+                except Exception as error:
+                    last_error = error
+                if attempt + 1 < self._evidence_max_attempts:
+                    self._sleep(self._retry_delay_seconds)
+            if last_error is not None and not log_lines:
+                errors.append(f"CloudWatch logs unavailable: {last_error}")
+            elif not log_lines:
+                errors.append("CloudWatch logs unavailable: no events returned")
+
+        maximum_rss_lines = tuple(
+            line
+            for line in log_lines
+            if "Maximum resident set size (kbytes):" in line
+        )
+        gpu_lines = tuple(
+            line
+            for line in log_lines
+            if line.strip().startswith("NVIDIA L4")
+        )
+        jax_gpu_lines = tuple(line for line in log_lines if "CudaDevice(" in line)
+        if status == "SUCCEEDED" and not maximum_rss_lines:
+            errors.append("SUCCEEDED job is missing maximum RSS evidence")
+        if status == "SUCCEEDED" and is_gpu and not jax_gpu_lines:
+            errors.append("SUCCEEDED g6x job is missing JAX GPU evidence")
+        if status == "SUCCEEDED" and is_gpu and not gpu_lines:
+            errors.append("SUCCEEDED g6x job is missing NVIDIA L4 evidence")
+
+        return JobEvidence(
+            job_id=job_id,
+            status=status,
+            log_stream_name=stream,
+            maximum_rss_lines=maximum_rss_lines,
+            gpu_lines=gpu_lines,
+            log_lines=log_lines,
+            status_reason=latest.get("statusReason")
+            if isinstance(latest.get("statusReason"), str)
+            else None,
+            container_reason=container.get("reason")
+            if isinstance(container.get("reason"), str)
+            else None,
+            exit_code=container.get("exitCode")
+            if isinstance(container.get("exitCode"), int)
+            else None,
+            jax_gpu_lines=jax_gpu_lines,
+            evidence_errors=tuple(errors),
+        )
+
+    def wait(
+        self,
+        job_ids: Sequence[str],
+        *,
+        timeout_seconds: float | None = None,
+    ) -> tuple[JobEvidence, ...]:
         if not job_ids:
             raise ValueError("at least one job ID is required")
-        jobs = self._wait_for_terminal_jobs(tuple(job_ids))
-        evidence = []
-        for job in jobs:
-            container = job.get("container")
-            if not isinstance(container, Mapping):
-                container = {}
-            stream = container.get("logStreamName")
-            if not isinstance(stream, str):
-                stream = None
-            log_lines = self._read_log_lines(stream)
-            evidence.append(
-                JobEvidence(
-                    job_id=str(job["jobId"]),
-                    status=str(job.get("status", "UNKNOWN")),
-                    log_stream_name=stream,
-                    maximum_rss_lines=tuple(
-                        line
-                        for line in log_lines
-                        if "Maximum resident set size (kbytes):" in line
-                    ),
-                    gpu_lines=tuple(
-                        line for line in log_lines if "NVIDIA L4" in line
-                    ),
-                    log_lines=log_lines,
-                    status_reason=job.get("statusReason")
-                    if isinstance(job.get("statusReason"), str)
-                    else None,
-                    container_reason=container.get("reason")
-                    if isinstance(container.get("reason"), str)
-                    else None,
-                    exit_code=container.get("exitCode")
-                    if isinstance(container.get("exitCode"), int)
-                    else None,
-                )
-            )
+        effective_timeout = (
+            self._wait_timeout_seconds
+            if timeout_seconds is None
+            else timeout_seconds
+        )
+        if effective_timeout <= 0:
+            raise ValueError("wait timeout must be positive")
+        jobs, initial_errors = self._wait_for_terminal_jobs(
+            tuple(job_ids), effective_timeout
+        )
+        evidence = [
+            self._collect_job_evidence(job, initial_errors.get(str(job["jobId"]), ()))
+            for job in jobs
+        ]
         result = tuple(evidence)
-        if any(item.status != "SUCCEEDED" for item in result):
+        if any(
+            item.status != "SUCCEEDED" or item.evidence_errors for item in result
+        ):
             raise AggregateJobFailure(result)
         return result
