@@ -740,6 +740,9 @@ def test_reuses_only_exact_digest_bound_job_definition() -> None:
         {"type": "VCPU", "value": "4"},
         {"type": "MEMORY", "value": "7168"},
     ]
+    assert "tags" not in definition
+    assert all("tags" not in call for call in batch.submit_job_calls)
+    assert all("propagateTags" not in call for call in batch.submit_job_calls)
     assert first[0].job_definition_arn == second[0].job_definition_arn
     assert first[0].job_definition_revision == 1
 

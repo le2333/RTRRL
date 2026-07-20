@@ -458,11 +458,6 @@ class HeavyTestRunner:
             type="container",
             platformCapabilities=["EC2"],
             containerProperties=container,
-            tags={
-                "Purpose": "heavy-test",
-                "Profile": profile_name,
-                "ImageDigest": image.rsplit("@", 1)[1],
-            },
         )
         return _job_definition_identity(registered)
 
@@ -490,12 +485,6 @@ class HeavyTestRunner:
                 jobQueue=validated.queue_arn,
                 jobDefinition=definition_arn,
                 containerOverrides={"command": ["bash", "-lc", command]},
-                tags={
-                    "Purpose": "heavy-test",
-                    "Profile": profile,
-                    "TestFile": test_file,
-                },
-                propagateTags=True,
             )
             job_id = response.get("jobId")
             if not isinstance(job_id, str) or not job_id:
