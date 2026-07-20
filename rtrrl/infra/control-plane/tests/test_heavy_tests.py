@@ -609,8 +609,17 @@ class FakeJobBatch(FakeBatch):
         self.register_job_definition_calls.append(deepcopy(kwargs))
         revision = len(self.job_definitions) + 1
         name = str(kwargs["jobDefinitionName"])
+        container = deepcopy(kwargs["containerProperties"])
+        container["logConfiguration"] = {
+            "logDriver": "awslogs",
+            "options": {},
+            "secretOptions": [],
+        }
+        for field in ("volumes", "environment", "mountPoints", "ulimits", "secrets"):
+            container[field] = []
         definition = {
             **deepcopy(kwargs),
+            "containerProperties": container,
             "revision": revision,
             "jobDefinitionArn": (
                 f"arn:aws:batch:eu-north-1:123456789012:job-definition/{name}:{revision}"

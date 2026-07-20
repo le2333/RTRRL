@@ -137,6 +137,13 @@ _DIGEST_IMAGE_RE = re.compile(r".+@sha256:[0-9a-f]{64}")
 _TERMINAL_JOB_STATES = frozenset({"SUCCEEDED", "FAILED"})
 _LOG_GROUP = "/aws/batch/job"
 _JOB_DEFINITION_COMMAND = ["bash", "-lc", "exit 64"]
+_EMPTY_CONTAINER_DEFAULTS = (
+    "environment",
+    "mountPoints",
+    "secrets",
+    "ulimits",
+    "volumes",
+)
 
 
 def _require_field(resource: Mapping[str, Any], field: str, expected: object) -> None:
@@ -378,7 +385,23 @@ def _definition_matches(
     container = definition.get("containerProperties")
     if not isinstance(container, Mapping):
         return False
-    return all(container.get(key) == value for key, value in expected_container.items())
+    return _canonical_container(container) == _canonical_container(expected_container)
+
+
+def _canonical_container(container: Mapping[str, Any]) -> dict[str, Any]:
+    canonical = dict(container)
+    for field in _EMPTY_CONTAINER_DEFAULTS:
+        if canonical.get(field) == []:
+            canonical.pop(field)
+    log_configuration = canonical.get("logConfiguration")
+    if isinstance(log_configuration, Mapping):
+        normalized_log_configuration = dict(log_configuration)
+        if normalized_log_configuration.get("options") == {}:
+            normalized_log_configuration.pop("options")
+        if normalized_log_configuration.get("secretOptions") == []:
+            normalized_log_configuration.pop("secretOptions")
+        canonical["logConfiguration"] = normalized_log_configuration
+    return canonical
 
 
 def _job_definition_identity(
