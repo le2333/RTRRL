@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Iterator, Mapping
-from dataclasses import dataclass, field, fields
+from dataclasses import dataclass, field, fields, replace
 from typing import Any
 
 
@@ -409,6 +409,100 @@ def _normalize_optimizer(raw: Any, path: str, default: LegacyOptimizerConfig):
     )
 
 
+def _rates_conflict(first: float, second: float) -> bool:
+    return float(first) != float(second)
+
+
+def _raise_rate_conflict(
+    top_field: str,
+    nested_field: str,
+    top_rate: float,
+    nested_rate: float,
+) -> None:
+    raise InvalidRTRRLConfig(
+        "conflicting optimizer learning rates: "
+        f"{top_field}={top_rate!r} != "
+        f"{nested_field}.learning_rate={nested_rate!r}"
+    )
+
+
+def _canonicalize_mapping_rate(
+    values: dict[str, Any],
+    explicit: set[str],
+    raw_nested: Any,
+    *,
+    top_field: str,
+    nested_field: str,
+) -> None:
+    optimizer = values[nested_field]
+    top_explicit = top_field in explicit
+    nested_explicit = nested_field in explicit and (
+        not isinstance(raw_nested, Mapping)
+        or "learning_rate" in raw_nested
+    )
+    top_rate = float(values.get(top_field, optimizer.learning_rate))
+    nested_rate = float(optimizer.learning_rate)
+    if (
+        top_explicit
+        and nested_explicit
+        and _rates_conflict(top_rate, nested_rate)
+    ):
+        _raise_rate_conflict(
+            top_field,
+            nested_field,
+            top_rate,
+            nested_rate,
+        )
+    canonical_rate = top_rate if top_explicit else nested_rate
+    values[top_field] = canonical_rate
+    values[nested_field] = replace(
+        optimizer,
+        learning_rate=canonical_rate,
+    )
+
+
+def _canonicalize_existing_rates(
+    config: LegacyRTRRLConfig,
+) -> LegacyRTRRLConfig:
+    defaults = LegacyRTRRLConfig.__dataclass_fields__
+    explicit = set(config.explicit_fields)
+    replacements: dict[str, Any] = {}
+    for top_field, nested_field in (
+        ("td_lr", "optimizer_params_td"),
+        ("rnn_lr", "optimizer_params_rnn"),
+    ):
+        optimizer = getattr(config, nested_field)
+        top_rate = float(getattr(config, top_field))
+        nested_rate = float(optimizer.learning_rate)
+        default_top = float(defaults[top_field].default)
+        default_optimizer = defaults[nested_field].default_factory()
+        default_nested = float(default_optimizer.learning_rate)
+        if explicit:
+            top_explicit = top_field in explicit
+            nested_explicit = nested_field in explicit
+        else:
+            top_explicit = top_rate != default_top
+            nested_explicit = nested_rate != default_nested
+        if (
+            top_explicit
+            and nested_explicit
+            and _rates_conflict(top_rate, nested_rate)
+        ):
+            _raise_rate_conflict(
+                top_field,
+                nested_field,
+                top_rate,
+                nested_rate,
+            )
+        canonical_rate = top_rate if top_explicit else nested_rate
+        replacements[top_field] = canonical_rate
+        replacements[nested_field] = replace(
+            optimizer,
+            learning_rate=canonical_rate,
+        )
+    return replace(config, **replacements)
+
+
 def _canonical_environment_name(value: Any) -> str:
     name = str(value)
     if name.startswith("brax-") or name.startswith("brax::"):
@@ -453,10 +547,14 @@ def normalize_legacy_config(raw: Any) -> LegacyRTRRLConfig:
     """Validate and freeze a supported historical RTRRL configuration."""
 
     if isinstance(raw, LegacyRTRRLConfig):
-        return _validate_strict_value_immutability(raw)
+        return _canonicalize_existing_rates(
+            _validate_strict_value_immutability(raw)
+        )
     values = _raw_mapping(raw)
     _unknown_fields(values, LegacyRTRRLConfig)
     explicit = set(values)
+    raw_td_optimizer = values.get("optimizer_params_td")
+    raw_rnn_optimizer = values.get("optimizer_params_rnn")
 
     if "rnn_model" in values and values["rnn_model"] != "lru":
         raise UnsupportedRTRRLBranch(
@@ -483,10 +581,20 @@ def normalize_legacy_config(raw: Any) -> LegacyRTRRLConfig:
         if values[key] is not None:
             values[key] = int(values[key])
 
-    if "td_lr" not in explicit:
-        values["td_lr"] = values["optimizer_params_td"].learning_rate
-    if "rnn_lr" not in explicit:
-        values["rnn_lr"] = values["optimizer_params_rnn"].learning_rate
+    _canonicalize_mapping_rate(
+        values,
+        explicit,
+        raw_td_optimizer,
+        top_field="td_lr",
+        nested_field="optimizer_params_td",
+    )
+    _canonicalize_mapping_rate(
+        values,
+        explicit,
+        raw_rnn_optimizer,
+        top_field="rnn_lr",
+        nested_field="optimizer_params_rnn",
+    )
     if "rnn_grad_clip" not in explicit:
         clip = values["optimizer_params_rnn"].gradient_clip
         values["rnn_grad_clip"] = 1.0 if clip is None else clip

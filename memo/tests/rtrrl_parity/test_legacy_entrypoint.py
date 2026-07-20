@@ -389,6 +389,69 @@ def test_train_rtrrl_normalizes_mutable_params_before_delegating(monkeypatch):
     assert observed["logger"] is logger
 
 
+def test_direct_rtrrl_params_budget_matches_equivalent_yaml_mapping():
+    module = _load_legacy_entrypoint_module()
+    params = module.RTRRLParams(episodes=3, steps=5)
+    params.env_params = module.EnvironmentParams(
+        env_name="brax-hopper",
+        batch_size=64,
+    )
+
+    direct = compatibility_entrypoint.normalize_legacy_invocation(params)
+    mapping = compatibility_entrypoint.normalize_legacy_invocation(
+        {
+            "episodes": 3,
+            "steps": 5,
+            "env_params": {
+                "env_name": "brax-hopper",
+                "batch_size": 64,
+            },
+        }
+    )
+
+    assert direct.total_timesteps == mapping.total_timesteps == 960
+    assert direct.num_epochs == mapping.num_epochs == 3
+    assert direct.num_envs == mapping.num_envs == 64
+
+
+def test_explicit_budget_overrides_take_precedence_over_nested_batch_size():
+    config = compatibility_entrypoint.normalize_legacy_invocation(
+        {
+            "episodes": 3,
+            "steps": 5,
+            "num_envs": 8,
+            "total_timesteps": 777,
+            "env_params": {
+                "env_name": "brax-hopper",
+                "batch_size": 64,
+            },
+        }
+    )
+
+    assert config.num_envs == 8
+    assert config.total_timesteps == 777
+    assert config.num_epochs == 3
+
+
+def test_direct_rtrrl_params_nested_optimizer_rates_become_canonical():
+    module = _load_legacy_entrypoint_module()
+    params = module.RTRRLParams()
+    params.optimizer_params_td = module.OptimizerConfig(
+        learning_rate=0.071
+    )
+    params.optimizer_params_rnn = module.OptimizerConfig(
+        learning_rate=0.072,
+        gradient_clip=1.0,
+    )
+
+    config = compatibility_entrypoint.normalize_legacy_invocation(params)
+
+    assert config.td_lr == pytest.approx(0.071)
+    assert config.rnn_lr == pytest.approx(0.072)
+    assert config.optimizer_params_td.learning_rate == pytest.approx(0.071)
+    assert config.optimizer_params_rnn.learning_rate == pytest.approx(0.072)
+
+
 def test_rtrrl_fixed_parse_then_assignment_remains_executable(monkeypatch):
     module = _load_legacy_entrypoint_module()
     observed = {}

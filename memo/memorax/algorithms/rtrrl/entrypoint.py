@@ -186,10 +186,14 @@ def normalize_legacy_invocation(raw: Any):
 
     values = dict(raw) if isinstance(raw, Mapping) else dict(vars(raw))
     environment = values.get("env_params")
-    legacy_num_envs = (
-        environment.get("batch_size", 1)
-        if isinstance(environment, dict)
-        else values.get("num_envs", 1)
+    environment_num_envs = (
+        environment.get("batch_size")
+        if isinstance(environment, Mapping)
+        else getattr(environment, "batch_size", None)
+    )
+    legacy_num_envs = values.get(
+        "num_envs",
+        environment_num_envs if environment_num_envs is not None else 1,
     )
     if "episodes" in values:
         values.setdefault("num_epochs", values["episodes"])
@@ -218,8 +222,12 @@ def describe_legacy_build(config) -> dict[str, Any]:
             "profile": effective.profile,
             "logging": config.logging,
             "run_name": config.run_name,
-            "td_learning_rate": config.td_lr,
-            "rnn_learning_rate": config.rnn_lr,
+            "td_learning_rate": (
+                effective.optimizer_params_td.learning_rate
+            ),
+            "rnn_learning_rate": (
+                effective.optimizer_params_rnn.learning_rate
+            ),
             "rnn_gradient_clip": config.rnn_grad_clip,
             "environment": {
                 "env_name": config.env_params.env_name,

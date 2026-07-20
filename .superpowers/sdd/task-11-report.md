@@ -247,3 +247,76 @@ The exact fixture has `steps=30` and `num_episodes=3`.
 - Batch ruff and compileall passed; pyright reported 0 errors and 0 warnings.
 
 No complete RL environment ran locally.
+
+## Final Review Findings: Budget and Optimizer Sources
+
+### Honest RED Evidence
+
+The focused pre-implementation command selected nine parametrized outcomes.
+Six failed for the requested missing behavior and three nested-only/override
+controls passed:
+
+- direct mutable `RTRRLParams` produced `total_timesteps=15` instead of 960
+  when `episodes=3`, `steps=5`, and `env_params.batch_size=64`;
+- strict and experimental top-level `td_lr`/`rnn_lr` remained metadata while
+  final component optimizer learning rates stayed at `1e-4`;
+- conflicting top-level and dotted nested optimizer rates did not fail;
+- a direct `LegacyRTRRLConfig(td_lr=...)` did not canonicalize its nested
+  optimizer rate.
+
+This RED run used only config/entrypoint tests, exited 1, and peaked at
+46,780 KiB RSS.
+
+### Budget Resolution
+
+`normalize_legacy_invocation` now reads `batch_size` from either a mapping
+`env_params` or the mutable compatibility `EnvironmentParams` object. Budget
+precedence is:
+
+1. explicit `total_timesteps` is preserved;
+2. otherwise `total_timesteps = episodes * steps * num_envs`;
+3. explicit top-level `num_envs` overrides `env_params.batch_size`;
+4. otherwise `env_params.batch_size` supplies `num_envs`.
+
+Regression coverage proves direct-object/YAML equivalence at 64 environments
+(`3 * 5 * 64 = 960`) and explicit `num_envs`/`total_timesteps` precedence.
+
+### Canonical Optimizer Resolution
+
+Top-level and nested learning-rate aliases now resolve before construction:
+
+- only `td_lr`/`rnn_lr` explicit: propagate into
+  `optimizer_params_td.learning_rate` /
+  `optimizer_params_rnn.learning_rate`;
+- only the dotted nested field explicit: copy it into the top-level
+  compatibility alias;
+- both explicit and equal: accept;
+- both explicit and unequal: raise `InvalidRTRRLConfig` naming both the
+  top-level and dotted nested paths.
+
+Direct `LegacyRTRRLConfig` instances use non-default values to identify the
+source when `explicit_fields` metadata is unavailable. Direct mutable
+`RTRRLParams` nested optimizer objects normalize to the same canonical result.
+Strict and experimental tests prove that non-default values agree across the
+canonical config, final `RTRRLComponentConfig.optimizer_params_td/rnn`, and
+`describe_legacy_build`. The description now reads only from that final
+component config.
+
+### Final Verification
+
+- Local config/entrypoint: 100 passed, peak RSS 468,052 KiB.
+- Focused GREEN for the original RED selection: nine passed, peak RSS
+  45,092 KiB.
+- Local ruff, pyright (0 errors/0 warnings), compileall, `git diff --check`,
+  and IDE diagnostics passed.
+- Repository audit remains 697 discovered and accepted; all unsupported,
+  unknown, deprecated no-op, and invalid counts remain zero.
+- Authorized 8,192-MiB Batch
+  `5522e151-8cbe-472c-b6c8-cb20446a5a92` succeeded with exit 0.
+- Batch relevant parity/builders: 225 passed and five intentional authorized
+  directional finite-difference skips, plus the separately selected RTRRL
+  combined-normalization builder case passed; peak RSS 3,909,088 KiB.
+- Batch ruff and compileall passed; pyright reported 0 errors and 0 warnings.
+
+No complete RL environment ran locally. The only warning was the pre-existing
+TensorFlow Probability/JAX deprecation warning.

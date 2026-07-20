@@ -13,6 +13,7 @@ from memorax.algorithms.rtrrl.compatibility import (
     normalize_legacy_config,
     to_component_config,
 )
+from memorax.algorithms.rtrrl.entrypoint import describe_legacy_build
 
 
 REPOSITORY_ROOT = Path(__file__).parents[3]
@@ -66,6 +67,122 @@ def test_nested_environment_and_optimizer_fields_survive_and_numeric_strings_coe
     assert config.optimizer_params_rnn.learning_rate == pytest.approx(2e-6)
     assert config.optimizer_params_rnn.gradient_clip == pytest.approx(1.0)
     assert isinstance(config.optimizer_params_td.learning_rate, float)
+
+
+@pytest.mark.parametrize(
+    ("profile", "raw_rates", "td_rate", "rnn_rate"),
+    (
+        (
+            "aaai25_strict_lru",
+            {"td_lr": 0.011, "rnn_lr": 0.012},
+            0.011,
+            0.012,
+        ),
+        (
+            "aaai25_strict_lru",
+            {
+                "optimizer_params_td": {"learning_rate": 0.021},
+                "optimizer_params_rnn": {"learning_rate": 0.022},
+            },
+            0.021,
+            0.022,
+        ),
+        (
+            "memo_experimental",
+            {"td_lr": 0.031, "rnn_lr": 0.032},
+            0.031,
+            0.032,
+        ),
+        (
+            "memo_experimental",
+            {
+                "optimizer_params_td": {"learning_rate": 0.041},
+                "optimizer_params_rnn": {"learning_rate": 0.042},
+            },
+            0.041,
+            0.042,
+        ),
+    ),
+)
+def test_final_optimizer_rates_match_report_and_component_construction(
+    profile, raw_rates, td_rate, rnn_rate
+):
+    config = normalize_legacy_config({"profile": profile, **raw_rates})
+    effective = to_component_config(config)
+    described = describe_legacy_build(config)["effective"]
+
+    assert config.td_lr == pytest.approx(td_rate)
+    assert config.rnn_lr == pytest.approx(rnn_rate)
+    assert effective.optimizer_params_td.learning_rate == pytest.approx(
+        td_rate
+    )
+    assert effective.optimizer_params_rnn.learning_rate == pytest.approx(
+        rnn_rate
+    )
+    assert described["td_learning_rate"] == pytest.approx(td_rate)
+    assert described["rnn_learning_rate"] == pytest.approx(rnn_rate)
+
+
+@pytest.mark.parametrize(
+    ("top_field", "nested_field"),
+    (
+        ("td_lr", "optimizer_params_td"),
+        ("rnn_lr", "optimizer_params_rnn"),
+    ),
+)
+def test_conflicting_optimizer_rate_sources_fail_with_dotted_paths(
+    top_field, nested_field
+):
+    with pytest.raises(
+        ValueError,
+        match=rf"{top_field}.*{nested_field}\.learning_rate",
+    ):
+        normalize_legacy_config(
+            {
+                top_field: 0.051,
+                nested_field: {"learning_rate": 0.052},
+            }
+        )
+
+
+def test_equal_top_level_and_nested_optimizer_rates_are_accepted():
+    config = normalize_legacy_config(
+        {
+            "td_lr": 0.055,
+            "optimizer_params_td": {"learning_rate": 0.055},
+            "rnn_lr": 0.056,
+            "optimizer_params_rnn": {"learning_rate": 0.056},
+        }
+    )
+
+    assert config.optimizer_params_td.learning_rate == pytest.approx(0.055)
+    assert config.optimizer_params_rnn.learning_rate == pytest.approx(0.056)
+
+
+def test_direct_legacy_config_optimizer_sources_are_canonicalized():
+    top_only = normalize_legacy_config(LegacyRTRRLConfig(td_lr=0.061))
+    nested_only = normalize_legacy_config(
+        LegacyRTRRLConfig(
+            optimizer_params_td=LegacyOptimizerConfig(
+                learning_rate=0.062
+            )
+        )
+    )
+
+    assert top_only.optimizer_params_td.learning_rate == pytest.approx(0.061)
+    assert nested_only.td_lr == pytest.approx(0.062)
+    with pytest.raises(
+        ValueError,
+        match=r"td_lr.*optimizer_params_td\.learning_rate",
+    ):
+        normalize_legacy_config(
+            LegacyRTRRLConfig(
+                td_lr=0.063,
+                optimizer_params_td=LegacyOptimizerConfig(
+                    learning_rate=0.064
+                ),
+            )
+        )
 
 
 def test_component_config_preserves_complete_grouped_optimizer_settings():
