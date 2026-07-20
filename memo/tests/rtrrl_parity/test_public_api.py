@@ -1,8 +1,15 @@
+import json
+import os
+import subprocess
+import sys
+from pathlib import Path
+
 import numpy as np
 import pytest
 
 from .assertions import assert_tree_close, flatten_with_paths
-from .oracle_capture import load_oracle
+from . import oracle_capture
+from .oracle_capture import SOURCE_COMMIT, load_oracle
 
 
 def test_oracle_manifest_pins_source_and_runtime():
@@ -33,6 +40,94 @@ def test_oracle_fixture_has_required_sections():
         "step/td_error",
     }
     assert required <= arrays.keys()
+
+
+def test_oracle_fixture_matches_all_manifest_leaf_metadata():
+    arrays, manifest = load_oracle()
+
+    assert sorted(manifest["leaves"]) == manifest["leaf_paths"]
+    for path in manifest["leaf_paths"]:
+        array = arrays[path]
+        assert list(array.shape) == manifest["leaves"][path]["shape"], path
+        assert str(array.dtype) == manifest["leaves"][path]["dtype"], path
+        if array.dtype.kind in "fc":
+            assert np.isfinite(array).all(), path
+
+
+def test_load_oracle_rejects_invalid_leaf_metadata(tmp_path, monkeypatch):
+    manifest = {
+        "leaf_paths": ["value"],
+        "leaves": {"value": {"shape": [2], "dtype": "float32"}},
+    }
+    (tmp_path / "manifest.json").write_text(json.dumps(manifest))
+    np.savez(tmp_path / "aaai25_lru.npz", value=np.array([np.inf], np.float32))
+    monkeypatch.setattr(oracle_capture, "GOLDEN_DIR", tmp_path)
+
+    with pytest.raises(ValueError, match="shape mismatch"):
+        load_oracle()
+
+
+def test_source_commit_rejects_dirty_oracle(tmp_path):
+    subprocess.run(["git", "init", "-q", str(tmp_path)], check=True)
+    tracked = tmp_path / "tracked.py"
+    tracked.write_text("clean = True\n")
+    subprocess.run(["git", "-C", str(tmp_path), "add", "tracked.py"], check=True)
+    env = {
+        **os.environ,
+        "GIT_AUTHOR_NAME": "Oracle Test",
+        "GIT_AUTHOR_EMAIL": "oracle@example.invalid",
+        "GIT_COMMITTER_NAME": "Oracle Test",
+        "GIT_COMMITTER_EMAIL": "oracle@example.invalid",
+    }
+    subprocess.run(
+        ["git", "-C", str(tmp_path), "commit", "-q", "-m", "fixture"],
+        check=True,
+        env=env,
+    )
+    tracked.write_text("clean = False\n")
+
+    with pytest.raises(RuntimeError, match="dirty"):
+        oracle_capture._source_commit(tmp_path)
+
+
+def test_failed_overwrite_preserves_existing_fixture(tmp_path, monkeypatch):
+    archive = tmp_path / "aaai25_lru.npz"
+    manifest = tmp_path / "manifest.json"
+    archive.write_bytes(b"existing archive")
+    manifest.write_bytes(b"existing manifest")
+    monkeypatch.setattr(oracle_capture, "_source_commit", lambda _: SOURCE_COMMIT)
+
+    def fail_capture(_):
+        raise RuntimeError("capture failed")
+
+    monkeypatch.setattr(oracle_capture, "_capture_arrays", fail_capture)
+
+    with pytest.raises(RuntimeError, match="capture failed"):
+        oracle_capture.main(tmp_path, tmp_path, overwrite=True)
+    assert archive.read_bytes() == b"existing archive"
+    assert manifest.read_bytes() == b"existing manifest"
+
+
+def test_legacy_golden_import_does_not_change_sys_path():
+    memo_root = Path(__file__).parents[2]
+    env = {
+        **os.environ,
+        "PYTHONPATH": os.pathsep.join(
+            [str(memo_root / "tests" / "online_ac"), str(memo_root)]
+        ),
+    }
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-c",
+            "import sys; before=list(sys.path); import golden; "
+            "assert sys.path == before, (before, sys.path)",
+        ],
+        capture_output=True,
+        text=True,
+        env=env,
+    )
+    assert result.returncode == 0, result.stderr
 
 
 def test_flatten_with_paths_uses_keys_and_sequence_indices():

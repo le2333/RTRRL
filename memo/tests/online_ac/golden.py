@@ -19,13 +19,18 @@ from memorax.utils import Timestep
 from memorax.utils.axes import remove_feature_axis, remove_time_axis
 
 TESTS_DIR = Path(__file__).parents[1]
-if str(TESTS_DIR) not in sys.path:
+_added_tests_dir = str(TESTS_DIR) not in sys.path
+if _added_tests_dir:
     sys.path.insert(0, str(TESTS_DIR))
 
-from rtrrl_parity.assertions import (  # noqa: E402
-    assert_tree_close,
-    flatten_with_paths as _flatten_with_paths,
-)
+try:
+    from rtrrl_parity.assertions import (  # noqa: E402
+        assert_tree_close,
+        flatten_with_paths as _flatten_with_paths,
+    )
+finally:
+    if _added_tests_dir:
+        sys.path.remove(str(TESTS_DIR))
 
 GOLDEN_DIR = Path(__file__).with_name("golden")
 

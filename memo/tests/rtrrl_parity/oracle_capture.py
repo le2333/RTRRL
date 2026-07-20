@@ -6,8 +6,10 @@ import argparse
 import importlib
 import importlib.metadata
 import json
+import os
 import subprocess
 import sys
+import tempfile
 from pathlib import Path
 from typing import Any
 
@@ -24,10 +26,41 @@ def load_oracle() -> tuple[dict[str, np.ndarray], dict[str, Any]]:
     manifest = json.loads((GOLDEN_DIR / MANIFEST_NAME).read_text())
     with np.load(GOLDEN_DIR / ARCHIVE_NAME, allow_pickle=False) as payload:
         arrays = {path: np.array(payload[path]) for path in payload.files}
+    leaf_paths = manifest["leaf_paths"]
+    if sorted(arrays) != leaf_paths or sorted(manifest["leaves"]) != leaf_paths:
+        raise ValueError("fixture leaf paths do not match manifest")
+    for path in leaf_paths:
+        array = arrays[path]
+        metadata = manifest["leaves"][path]
+        if list(array.shape) != metadata["shape"]:
+            raise ValueError(
+                f"shape mismatch at {path}: {list(array.shape)} != {metadata['shape']}"
+            )
+        if str(array.dtype) != metadata["dtype"]:
+            raise ValueError(
+                f"dtype mismatch at {path}: {array.dtype} != {metadata['dtype']}"
+            )
+        if array.dtype.kind in "fc" and not np.isfinite(array).all():
+            raise ValueError(f"non-finite fixture leaf: {path}")
     return arrays, manifest
 
 
 def _source_commit(oracle_root: Path) -> str:
+    status = subprocess.run(
+        [
+            "git",
+            "-C",
+            str(oracle_root),
+            "status",
+            "--porcelain",
+            "--untracked-files=all",
+        ],
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout
+    if status:
+        raise RuntimeError(f"oracle worktree is dirty:\n{status.rstrip()}")
     return subprocess.run(
         ["git", "-C", str(oracle_root), "rev-parse", "HEAD"],
         check=True,
@@ -143,6 +176,8 @@ def main(
     oracle_root: Path,
     output_dir: Path,
     seed: int = 7,
+    *,
+    overwrite: bool = False,
 ) -> None:
     """Generate the deterministic fixture from an explicitly selected oracle."""
     oracle_root = oracle_root.resolve()
@@ -150,7 +185,7 @@ def main(
     archive_path = output_dir / ARCHIVE_NAME
     manifest_path = output_dir / MANIFEST_NAME
     existing = [path for path in (archive_path, manifest_path) if path.exists()]
-    if existing:
+    if existing and not overwrite:
         raise FileExistsError(
             "refusing to overwrite existing fixture(s): "
             + ", ".join(str(path) for path in existing)
@@ -170,10 +205,7 @@ def main(
         if array.dtype.kind in "fc" and not np.isfinite(array).all():
             raise ValueError(f"oracle produced non-finite leaf: {path}")
 
-    output_dir.mkdir(parents=True, exist_ok=True)
     leaf_paths = sorted(arrays)
-    arrays_to_save: Any = {path: arrays[path] for path in leaf_paths}
-    np.savez(archive_path, **arrays_to_save)
     manifest = {
         "source": "RTRRL-AAAI25",
         "commit": commit,
@@ -197,7 +229,18 @@ def main(
             for path in leaf_paths
         },
     }
-    manifest_path.write_text(json.dumps(manifest, indent=2, sort_keys=True) + "\n")
+    output_dir.mkdir(parents=True, exist_ok=True)
+    with tempfile.TemporaryDirectory(dir=output_dir) as temporary:
+        temporary_dir = Path(temporary)
+        staged_archive = temporary_dir / ARCHIVE_NAME
+        staged_manifest = temporary_dir / MANIFEST_NAME
+        arrays_to_save: Any = {path: arrays[path] for path in leaf_paths}
+        np.savez(staged_archive, **arrays_to_save)
+        staged_manifest.write_text(
+            json.dumps(manifest, indent=2, sort_keys=True) + "\n"
+        )
+        os.replace(staged_archive, archive_path)
+        os.replace(staged_manifest, manifest_path)
 
 
 def _parse_args() -> argparse.Namespace:
@@ -211,7 +254,9 @@ def _parse_args() -> argparse.Namespace:
 
 if __name__ == "__main__":
     arguments = _parse_args()
-    if arguments.overwrite:
-        for filename in (ARCHIVE_NAME, MANIFEST_NAME):
-            (arguments.output_dir / filename).unlink(missing_ok=True)
-    main(arguments.oracle_root, arguments.output_dir, arguments.seed)
+    main(
+        arguments.oracle_root,
+        arguments.output_dir,
+        arguments.seed,
+        overwrite=arguments.overwrite,
+    )
