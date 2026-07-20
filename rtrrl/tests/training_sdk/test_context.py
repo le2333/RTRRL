@@ -3,7 +3,12 @@ from dataclasses import replace
 
 import pytest
 
-from training_sdk import RunContext, current_run, set_current_run
+from training_sdk import (
+    RunContext,
+    current_run,
+    maybe_current_run,
+    set_current_run,
+)
 
 
 def write_context(tmp_path, **overrides):
@@ -127,6 +132,21 @@ def test_current_run_fails_clearly_when_not_initialized():
     set_current_run(None)
     with pytest.raises(RuntimeError, match="initialized"):
         current_run()
+
+
+def test_maybe_current_run_returns_none_when_not_initialized():
+    set_current_run(None)
+
+    assert maybe_current_run() is None
+
+
+def test_maybe_current_run_returns_initialized_run():
+    sentinel = object()
+    set_current_run(sentinel)
+    try:
+        assert maybe_current_run() is sentinel
+    finally:
+        set_current_run(None)
 
 
 def test_current_run_can_be_explicitly_initialized():

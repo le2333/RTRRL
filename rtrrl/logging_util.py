@@ -3,6 +3,8 @@
 import collections
 import contextlib
 from dataclasses import asdict
+import math
+import numbers
 import os
 import traceback
 from typing import Callable
@@ -96,6 +98,14 @@ class DummyLogger(dict, object):
         """
         pass
 
+    def log_episode_summary(self, **summary) -> None:
+        """Ignore an episode summary."""
+        del summary
+
+    def log_episode(self, episode) -> None:
+        """Ignore a complete episode."""
+        del episode
+
 
 def update_nested_dict(d, u):
     """Update nested dict d with values from nested dict u.
@@ -127,8 +137,22 @@ class AimLogger(DummyLogger):
         return "AimLogger"
 
     @override
-    def __init__(self, name, repo=None, hparams=None, run_name=""):
+    def __init__(
+        self,
+        name,
+        repo=None,
+        hparams=None,
+        run_name="",
+        *,
+        training_run=None,
+    ):
         """Create aim run."""
+        self.training_run = training_run
+        self._final_metrics = {}
+        self._summary = {}
+        if training_run is not None:
+            return
+
         global aim
         import aim
 
@@ -141,6 +165,21 @@ class AimLogger(DummyLogger):
     @override
     def log(self, metrics, step=None):
         """Loop over scalars and track them with aim."""
+        if self.training_run is not None:
+            self.training_run.log_metrics(step, metrics)
+            self._final_metrics.update(
+                {
+                    key: value
+                    for key, value in metrics.items()
+                    if (
+                        isinstance(value, numbers.Real)
+                        and not isinstance(value, bool)
+                        and math.isfinite(float(value))
+                    )
+                }
+            )
+            return
+
         for k, v in metrics.items():
             self.run.track(v, name=k, step=None if step is None else int(step))
 
@@ -153,10 +192,14 @@ class AimLogger(DummyLogger):
         params_dict : dict
             Dict of hyperparameters.
         """
-        self.run["hparams"] = params_dict
+        if self.training_run is None:
+            self.run["hparams"] = params_dict
 
     def __setitem__(self, key, value):
         """Log scalar for aim."""
+        if self.training_run is not None:
+            self._summary[key] = value
+            return
         if not isinstance(value, dict):
             # Attempt conversion to float if not a dict
             value = float(value)
@@ -164,11 +207,17 @@ class AimLogger(DummyLogger):
 
     def __getitem__(self, key):
         """Get value from aim run."""
+        if self.training_run is not None:
+            return self._summary[key]
         return self.run[key]
 
     @override
     def finalize(self, all_param_norms=None, x_vals=None):
         """Make lineplots for param norms and block until all metrics are logged."""
+        if self.training_run is not None:
+            self.training_run.finish(self._final_metrics)
+            return
+
         if all_param_norms:
             all_param_norms = tree_stack(all_param_norms)
             self.log(
@@ -193,11 +242,24 @@ class AimLogger(DummyLogger):
     @override
     def log_video(self, name, frames, step=None, fps=30, caption=""):
         """Log a video to wandb."""
+        if self.training_run is not None:
+            return
         filename = os.path.join("logs/gifs", self.run.hash + ".gif")
         images = [Image.fromarray(frames[i].transpose(1, 2, 0)) for i in range(len(frames))]
         os.makedirs("logs/gifs", exist_ok=True)
         images[0].save(filename, save_all=True, append_images=images[1:], duration=int(1000 / fps), loop=0)
         self.log({name: aim.Image(filename, caption=caption, format="gif")}, step=step)
+
+    def log_episode_summary(self, **summary) -> None:
+        """Log an episode summary through the facility SDK when available."""
+        if self.training_run is not None:
+            self.training_run.log_episode_summary(**summary)
+
+    def log_episode(self, episode):
+        """Log a complete episode through the facility SDK when available."""
+        if self.training_run is not None:
+            return self.training_run.log_episode(episode)
+        return None
 
 
 class WandbLogger(DummyLogger):
@@ -255,45 +317,59 @@ class MultiLogger(DummyLogger):
         self.loggers = list(loggers)
 
     def __repr__(self) -> str:  # noqa
-        return "MultiLogger(" + ", ".join(repr(l) for l in self.loggers) + ")"
+        return (
+            "MultiLogger("
+            + ", ".join(repr(logger) for logger in self.loggers)
+            + ")"
+        )
 
     @override
     def log(self, metrics, step=None):
         """Forward metrics to every logger."""
-        for l in self.loggers:
-            l.log(metrics, step=step)
+        for logger in self.loggers:
+            logger.log(metrics, step=step)
 
     @override
     def log_params(self, params_dict):
         """Forward hyperparameters to every logger."""
-        for l in self.loggers:
-            l.log_params(params_dict)
+        for logger in self.loggers:
+            logger.log_params(params_dict)
 
     @override
     def finalize(self, *args, **kwargs):
         """Forward finalize to every logger."""
-        for l in self.loggers:
-            l.finalize(*args, **kwargs)
+        for logger in self.loggers:
+            logger.finalize(*args, **kwargs)
 
     @override
     def save_model(self, *args, **kwargs):
         """Save with whichever logger supports it (skip the ones that don't)."""
-        for l in self.loggers:
+        for logger in self.loggers:
             try:
-                l.save_model(*args, **kwargs)
+                logger.save_model(*args, **kwargs)
             except NotImplementedError:
                 pass
 
     @override
     def log_video(self, *args, **kwargs):
         """Forward video logging to every logger."""
-        for l in self.loggers:
-            l.log_video(*args, **kwargs)
+        for logger in self.loggers:
+            logger.log_video(*args, **kwargs)
+
+    def log_episode_summary(self, **summary) -> None:
+        """Forward an episode summary to every logger in order."""
+        for logger in self.loggers:
+            logger.log_episode_summary(**summary)
+
+    def log_episode(self, episode) -> None:
+        """Forward a complete episode to every logger in order."""
+        for logger in self.loggers:
+            logger.log_episode(episode)
 
     def __setitem__(self, key, value):
         """Set the summary value on every logger."""
-        for l in self.loggers:
-            l[key] = value
+        for logger in self.loggers:
+            logger[key] = value
 
     def __getitem__(self, key):
         """Read the summary value from the first logger."""
@@ -355,6 +431,7 @@ def with_logger(
     aim_repo: str = None,
     run_name="",
     hparams_type=None,
+    training_run=None,
 ):
     """Wrap a training function with one or more loggers.
 
@@ -371,6 +448,10 @@ def with_logger(
     use_wandb = "wandb" in backends
     use_aim = "aim" in backends
     if use_aim:
+        if training_run is None:
+            from training_sdk import maybe_current_run
+
+            training_run = maybe_current_run()
         aim_repo = _resolve_aim_repo(aim_repo, hparams)
     base = hparams if isinstance(hparams, dict) else asdict(hparams)
 
@@ -404,14 +485,26 @@ def with_logger(
             loggers = []
             if use_aim:
                 loggers.append(
-                    AimLogger(project_name, repo=aim_repo, hparams=hparams, run_name=run_name)
+                    AimLogger(
+                        project_name,
+                        repo=aim_repo,
+                        hparams=hparams,
+                        run_name=run_name,
+                        training_run=training_run,
+                    )
                 )
             loggers.append(WandbLogger())
             logger = loggers[0] if len(loggers) == 1 else MultiLogger(loggers)
             return func(hparams, logger=logger)
 
     if use_aim:
-        logger = AimLogger(project_name, repo=aim_repo, hparams=hparams, run_name=run_name)
+        logger = AimLogger(
+            project_name,
+            repo=aim_repo,
+            hparams=hparams,
+            run_name=run_name,
+            training_run=training_run,
+        )
         return func(hparams, logger=logger)
 
     # Unknown / "none" backend -> run without any logger.

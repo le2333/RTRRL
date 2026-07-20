@@ -19,6 +19,10 @@ def set_current_run(run: TrainingRun | None) -> None:
     _current_run = run
 
 
+def maybe_current_run() -> TrainingRun | None:
+    return _current_run
+
+
 def current_run() -> TrainingRun:
     if _current_run is None:
         raise RuntimeError("no training run has been initialized")
@@ -36,5 +40,6 @@ __all__ = [
     "SpoolCorruptionError",
     "TrainingRun",
     "current_run",
+    "maybe_current_run",
     "set_current_run",
 ]
