@@ -149,6 +149,13 @@ def test_experimental_profile_records_effective_overrides():
     }
 
 
+def test_memo_experimental_omitted_trace_flag_preserves_builder_fresh_default():
+    legacy = normalize_legacy_config({"profile": "memo_experimental"})
+
+    assert legacy.update_trace_before_td is True
+    assert to_component_config(legacy).trace_timing == "fresh"
+
+
 def test_unknown_profile_fails_during_component_resolution():
     legacy = normalize_legacy_config({"profile": "future"})
 

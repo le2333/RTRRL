@@ -153,7 +153,7 @@ class LegacyRTRRLConfig:
     mlp_actor: bool = False
     pass_obs: bool = False
     align_action_logprob: bool = False
-    update_trace_before_td: bool = False
+    update_trace_before_td: bool = True
     update_period: float = 1.0
     dropout_rate: float = 0.0
     act_magnitude_factor: float = 0.0

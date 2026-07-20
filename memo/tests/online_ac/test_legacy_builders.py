@@ -481,6 +481,18 @@ def test_rtrrl_legacy_builder_rejects_removed_recurrent_branch():
         )
 
 
+def test_rtrrl_legacy_builder_preserves_fresh_trace_default_when_omitted():
+    from experiment import build_rtrrl_agent
+
+    env = TinyContinuousEnv()
+    cfg = _rtrrl_config()
+    del cfg.update_trace_before_td
+
+    agent = build_rtrrl_agent(cfg, env, env.default_params)
+
+    assert agent.program_config.static_config.update_trace_before_td is True
+
+
 def test_independent_rtrrl_builder_and_export_remain_constructible():
     from experiment import build_independent_rtrrl_agent
 
