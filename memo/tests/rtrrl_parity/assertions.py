@@ -3,12 +3,41 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
+from dataclasses import fields, is_dataclass
 from typing import Any
 
 import jax
 import numpy as np
 
 ComparisonPolicy = str | tuple[float, float] | Mapping[str, int]
+NONE_SENTINEL = np.asarray("<none>")
+
+
+def canonicalize_dataclass_pytree(tree: Any) -> Any:
+    """Expose every dataclass field while retaining complete nested pytrees."""
+
+    if tree is None:
+        return NONE_SENTINEL
+    if is_dataclass(tree) and not isinstance(tree, type):
+        return {
+            field.name: canonicalize_dataclass_pytree(
+                getattr(tree, field.name)
+            )
+            for field in fields(tree)
+        }
+    if isinstance(tree, Mapping):
+        return {
+            key: canonicalize_dataclass_pytree(value)
+            for key, value in tree.items()
+        }
+    if isinstance(tree, tuple):
+        values = tuple(canonicalize_dataclass_pytree(value) for value in tree)
+        if hasattr(tree, "_fields"):
+            return type(tree)(*values)
+        return values
+    if isinstance(tree, list):
+        return [canonicalize_dataclass_pytree(value) for value in tree]
+    return tree
 
 
 def _path_component(key: Any) -> str:

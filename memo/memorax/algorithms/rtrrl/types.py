@@ -71,6 +71,9 @@ class DebugStepMetrics:
     sampled_next_action: Any
     value_target: Any
     td_error: Any
+    value: Any
+    actor_loss: Any
+    entropy: Any
     gradients: Any
     direct_gradients: Any
     incoming_traces: Any

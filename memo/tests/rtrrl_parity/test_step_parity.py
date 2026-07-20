@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, fields, replace
 import inspect
 
 import jax
@@ -101,7 +101,10 @@ def _fixture_tree(arrays, prefix):
 def _assert_tree_fixture(tree, arrays, prefix, *, atol=2e-7):
     actual = flatten_with_paths(tree)
     expected = _fixture_tree(arrays, prefix)
-    assert actual.keys() == expected.keys()
+    assert actual.keys() == expected.keys(), {
+        "missing": sorted(expected.keys() - actual.keys()),
+        "unexpected": sorted(actual.keys() - expected.keys()),
+    }
     for path, value in actual.items():
         expected_value = expected[path]
         assert value.shape == expected_value.shape, path
@@ -135,7 +138,7 @@ def _assert_step(step_number, state, metrics, arrays):
         _canonical_state_tree(state), arrays, f"{prefix}/state"
     )
     np.testing.assert_allclose(
-        state.environment_state.last_action,
+        metrics.environment_action,
         arrays[f"{prefix}/environment_action"],
         rtol=2e-6,
         atol=2e-7,
@@ -147,7 +150,7 @@ def _assert_step(step_number, state, metrics, arrays):
         atol=2e-7,
     )
     np.testing.assert_allclose(
-        state.action,
+        metrics.sampled_next_action,
         arrays[f"{prefix}/sampled_next_action"],
         rtol=2e-6,
         atol=2e-7,
@@ -155,6 +158,24 @@ def _assert_step(step_number, state, metrics, arrays):
     np.testing.assert_allclose(
         metrics.value_target,
         arrays[f"{prefix}/value_target"],
+        rtol=2e-6,
+        atol=2e-7,
+    )
+    np.testing.assert_allclose(
+        metrics.value,
+        arrays[f"{prefix}/value"],
+        rtol=2e-6,
+        atol=2e-7,
+    )
+    np.testing.assert_allclose(
+        metrics.actor_loss,
+        arrays[f"{prefix}/actor_loss"],
+        rtol=2e-6,
+        atol=2e-7,
+    )
+    np.testing.assert_allclose(
+        metrics.entropy,
+        arrays[f"{prefix}/entropy"],
         rtol=2e-6,
         atol=2e-7,
     )
@@ -178,7 +199,7 @@ def _assert_step(step_number, state, metrics, arrays):
         f"{prefix}/incoming_traces",
     )
     _assert_tree_fixture(
-        state.traces, arrays, f"{prefix}/carried_traces"
+        metrics.carried_traces, arrays, f"{prefix}/carried_traces"
     )
     _assert_tree_fixture(
         metrics.mean_directions,
@@ -189,6 +210,12 @@ def _assert_step(step_number, state, metrics, arrays):
         metrics.optimizer_updates,
         arrays,
         f"{prefix}/optimizer_updates",
+    )
+    _assert_tree_fixture(
+        metrics.fast_parameters, arrays, f"{prefix}/state/parameters"
+    )
+    _assert_tree_fixture(
+        metrics.slow_parameters, arrays, f"{prefix}/state/slow_parameters"
     )
     _assert_tree_fixture(
         state.parameters, arrays, f"{prefix}/state/parameters"
@@ -263,18 +290,59 @@ def test_two_environment_complete_production_step_matches_oracle():
     prefix = "state_machine/two_env/step_1"
     assert isinstance(metrics, DebugStepMetrics)
     _assert_tree_fixture(_canonical_state_tree(state), arrays, f"{prefix}/state")
+    np.testing.assert_allclose(
+        metrics.environment_action,
+        arrays[f"{prefix}/environment_action"],
+        rtol=2e-6,
+        atol=2e-7,
+    )
+    np.testing.assert_allclose(
+        metrics.model_input,
+        arrays[f"{prefix}/model_input"],
+        rtol=2e-6,
+        atol=2e-7,
+    )
+    np.testing.assert_allclose(
+        metrics.sampled_next_action,
+        arrays[f"{prefix}/sampled_next_action"],
+        rtol=2e-6,
+        atol=2e-7,
+    )
+    for name in (
+        "value_target",
+        "value",
+        "actor_loss",
+        "entropy",
+        "td_error",
+    ):
+        np.testing.assert_allclose(
+            getattr(metrics, name),
+            arrays[f"{prefix}/{name}"],
+            rtol=2e-6,
+            atol=2e-7,
+            err_msg=name,
+        )
     _assert_tree_fixture(metrics.gradients, arrays, f"{prefix}/gradients")
+    _assert_tree_fixture(
+        metrics.direct_gradients, arrays, f"{prefix}/direct_gradients"
+    )
     _assert_tree_fixture(
         metrics.incoming_traces, arrays, f"{prefix}/incoming_traces"
     )
     _assert_tree_fixture(
+        metrics.carried_traces, arrays, f"{prefix}/carried_traces"
+    )
+    _assert_tree_fixture(
         metrics.mean_directions, arrays, f"{prefix}/mean_directions"
     )
-    np.testing.assert_allclose(
-        metrics.td_error,
-        arrays[f"{prefix}/td_error"],
-        rtol=2e-6,
-        atol=2e-7,
+    _assert_tree_fixture(
+        metrics.optimizer_updates, arrays, f"{prefix}/optimizer_updates"
+    )
+    _assert_tree_fixture(
+        metrics.fast_parameters, arrays, f"{prefix}/state/parameters"
+    )
+    _assert_tree_fixture(
+        metrics.slow_parameters, arrays, f"{prefix}/state/slow_parameters"
     )
     np.testing.assert_array_equal(
         state.environment_state.done, np.array([False, True])
@@ -291,6 +359,12 @@ def test_two_environment_complete_production_step_matches_oracle():
     np.testing.assert_array_equal(
         next_key, arrays[f"{prefix}/key_out"]
     )
+
+
+def test_debug_metrics_schema_contains_per_environment_observables():
+    names = {field.name for field in fields(DebugStepMetrics)}
+
+    assert {"value", "actor_loss", "entropy"} <= names
 
 
 def test_train_metrics_are_scalar_event_only_and_debug_fails_before_fourth_step():

@@ -1,5 +1,13 @@
 # Task 8 Report: Historical Initialization and Online State Machine
 
+> **Authority notice (2026-07-20):** The original implementation narrative
+> through `## Concerns` is retained only as historical TDD context and is
+> superseded by `## Review-Blocker Correction` and
+> `## Final Coverage Resolution` below. Earlier fixture checksums and test
+> totals are not authoritative. The only authoritative fixture checksum is in
+> `### Corrected Fixture Provenance`; the only authoritative verification
+> result is in `### Final Verification` at the end of this report.
+
 ## Status
 
 Implemented the first complete strict numerical integration:
@@ -386,3 +394,62 @@ changed production, capture, and test file. The five skips are the pre-existing
 opt-in Task 6 finite-difference cases. Local execution remained limited to
 configuration/provenance RED checks, the small optimizer characterization,
 ruff, pyright, compileall, and diff checks—no full RL environment was run.
+
+## Final Coverage Resolution
+
+### Focused RED/GREEN
+
+The remaining review began with three focused tests and no production change.
+The RED run failed exactly on the intended omissions:
+
+```text
+3 failed
+- non-None observation/reward statistics were replaced by the None sentinel
+- a future dataclass field was absent from the canonical path set
+- DebugStepMetrics lacked value, actor_loss, and entropy
+```
+
+The comparator now recursively canonicalizes every dataclass field, mapping,
+sequence, and nested pytree leaf. `None` alone becomes the exact `<none>`
+sentinel; a non-None statistics tree retains all of its paths and values.
+Named-tuple classes are reconstructed rather than converted to plain tuples,
+so semantic optimizer-state paths are preserved. A synthetic future field is
+therefore visible to the generic path comparison and cannot silently escape.
+The focused local GREEN run for these three contract tests passed.
+
+### Complete Observable Coverage
+
+The stable eager `DebugStepMetrics` schema now includes per-environment
+`value`, `actor_loss`, and `entropy` in addition to the previously exposed
+fields. Production `TrainStepMetrics` remains scalar/event-only.
+
+For every one-environment step, tests independently compare environment
+action, model input, sampled action, value target, value, actor loss, entropy,
+TD error, TD gradients, direct gradients, incoming traces, carried traces,
+mean directions, optimizer updates, fast parameters, slow parameters, and the
+complete resulting state.
+
+The real two-environment production call independently compares that same
+observable/intermediate set against the complete-path fixture. It also retains
+the heterogeneous done/reward/delta and leading environment-axis assertions;
+complete state equality is an additional check, not a substitute for any
+observable assertion.
+
+### Final Verification
+
+Authorized Batch job `102f1826-2d7d-4ba3-8f8b-a65b55361be3` used 4 vCPU and
+8192 MiB and completed successfully:
+
+```text
+focused init/step: 12 passed
+full rtrrl_parity: 90 passed, 5 skipped
+ruff: All checks passed!
+pyright: 0 errors, 0 warnings, 0 informations
+compileall: exit 0
+git diff --check: exit 0
+```
+
+The five skips remain the pre-existing opt-in Task 6 directional
+finite-difference cases. The oracle fixture was not changed by this final
+coverage-only correction; its sole authoritative provenance and checksum are
+the values in `### Corrected Fixture Provenance`.

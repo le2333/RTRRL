@@ -3,10 +3,12 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from types import SimpleNamespace
 
 import jax
 import jax.numpy as jnp
 import numpy as np
+import pytest
 
 from memorax.algorithms.rtrrl.compatibility import (
     LegacyOptimizerConfig,
@@ -15,9 +17,12 @@ from memorax.algorithms.rtrrl.compatibility import (
 from memorax.algorithms.rtrrl.heads import RTRRLTDHead
 from memorax.algorithms.rtrrl.lru import AAAI25LRU
 from memorax.algorithms.rtrrl.state_machine import make_init_fn
-from memorax.algorithms.rtrrl.types import RTRRLComponents
+from memorax.algorithms.rtrrl.types import RTRRLComponents, RTRRLState
 
-from .assertions import flatten_with_paths
+from .assertions import (
+    canonicalize_dataclass_pytree as _canonical_state_tree,
+    flatten_with_paths,
+)
 from .oracle_capture import load_oracle
 
 
@@ -56,7 +61,10 @@ def _fixture_tree(arrays, prefix):
 def _assert_flat_tree_matches_fixture(tree, arrays, prefix, *, atol=0.0):
     actual = flatten_with_paths(tree)
     expected = _fixture_tree(arrays, prefix)
-    assert actual.keys() == expected.keys()
+    assert actual.keys() == expected.keys(), {
+        "missing": sorted(expected.keys() - actual.keys()),
+        "unexpected": sorted(actual.keys() - expected.keys()),
+    }
     for path, value in actual.items():
         expected_value = expected[path]
         assert value.shape == expected_value.shape, path
@@ -161,31 +169,105 @@ def test_historical_pre_sample_advanced_state_traces_and_statistics_match_oracle
     assert state.reward_statistics is None
 
 
-def _canonical_state_tree(state):
-    environment = state.environment_state
-    return {
-        "parameters": state.parameters,
-        "slow_parameters": state.slow_parameters,
-        "optimizer_state": state.optimizer_state,
-        "environment_state": {
-            "obs": environment.obs,
-            "reward": environment.reward,
-            "done": environment.done,
-            "phase": environment.phase,
-            "last_action": environment.last_action,
-        },
-        "action": state.action,
-        "recurrent_state": state.recurrent_state,
-        "traces": state.traces,
-        "value": state.value,
-        "average_reward": state.average_reward,
-        "emphasis": state.emphasis,
-        "observation_statistics": np.asarray("<none>"),
-        "reward_statistics": np.asarray("<none>"),
-        "model_input": state.model_input,
-        "initial_recurrent_state": state.initial_recurrent_state,
-        "step_count": state.step_count,
-    }
+def test_state_canonicalization_preserves_non_none_statistics_trees():
+    state = RTRRLState(
+        parameters={},
+        slow_parameters={},
+        optimizer_state=(),
+        environment_state=_EnvironmentState(
+            obs=jnp.zeros((1, 1)),
+            reward=jnp.zeros((1,)),
+            done=jnp.zeros((1,), dtype=jnp.bool_),
+            phase=jnp.array(0),
+            last_action=jnp.zeros((1, 2)),
+        ),
+        action=jnp.zeros((1, 2)),
+        recurrent_state=(),
+        traces={},
+        value=jnp.zeros((1, 1)),
+        average_reward=jnp.zeros((1,)),
+        emphasis=jnp.ones((1,)),
+        observation_statistics={"mean": jnp.asarray([1.25])},
+        reward_statistics={"variance": jnp.asarray([0.75])},
+        model_input=jnp.zeros((1, 4)),
+        initial_recurrent_state=(),
+        step_count=jnp.array(0),
+    )
+
+    flattened = flatten_with_paths(_canonical_state_tree(state))
+
+    assert "observation_statistics/mean" in flattened
+    assert "reward_statistics/variance" in flattened
+    assert not any(
+        np.asarray(value).dtype.kind in "US"
+        for path, value in flattened.items()
+        if path.startswith(("observation_statistics", "reward_statistics"))
+    )
+    with pytest.raises(AssertionError):
+        _assert_flat_tree_matches_fixture(
+            {
+                "observation_statistics": state.observation_statistics,
+                "reward_statistics": state.reward_statistics,
+            },
+            {
+                "statistics/observation_statistics": np.asarray("<none>"),
+                "statistics/reward_statistics": np.asarray("<none>"),
+            },
+            "statistics",
+        )
+
+
+def test_state_canonicalization_cannot_ignore_future_dataclass_fields():
+    @dataclass(frozen=True)
+    class StateWithFutureField:
+        parameters: object
+        slow_parameters: object
+        optimizer_state: object
+        environment_state: object
+        action: object
+        recurrent_state: object
+        traces: object
+        value: object
+        average_reward: object
+        emphasis: object
+        observation_statistics: object
+        reward_statistics: object
+        model_input: object
+        initial_recurrent_state: object
+        step_count: object
+        future_probe: object
+
+    base = SimpleNamespace(
+        parameters={},
+        slow_parameters={},
+        optimizer_state=(),
+        environment_state=_EnvironmentState(
+            obs=jnp.zeros((1, 1)),
+            reward=jnp.zeros((1,)),
+            done=jnp.zeros((1,), dtype=jnp.bool_),
+            phase=jnp.array(0),
+            last_action=jnp.zeros((1, 2)),
+        ),
+        action=jnp.zeros((1, 2)),
+        recurrent_state=(),
+        traces={},
+        value=jnp.zeros((1, 1)),
+        average_reward=jnp.zeros((1,)),
+        emphasis=jnp.ones((1,)),
+        observation_statistics=None,
+        reward_statistics=None,
+        model_input=jnp.zeros((1, 4)),
+        initial_recurrent_state=(),
+        step_count=jnp.array(0),
+    )
+    extended = StateWithFutureField(
+        **vars(base),
+        future_probe=jnp.asarray([42.0]),
+    )
+
+    flattened = flatten_with_paths(_canonical_state_tree(extended))
+
+    assert "future_probe" in flattened
 
 
 def test_complete_initialized_state_and_every_split_key_match_oracle():
