@@ -34,6 +34,7 @@ from memorax.algorithms import (
     StreamACConfig,
     StreamACRtrl,
 )
+from memorax.algorithms.rtrrl.compatibility import normalize_legacy_config
 from memorax.networks import (
     RNN,
     FeatureExtractor,
@@ -248,6 +249,7 @@ def build_rtrrl_agent(cfg: ExperimentConfig, env, env_params):
     faithful streaming-rtrrl OnlineLRULayer(d_output, d_hidden) topology.
     """
     _reject_legacy_new_conflict(cfg)
+    cfg = normalize_legacy_config(cfg)
     action_space = env.action_space(env_params)
     if isinstance(action_space, Discrete):
         raise ValueError(
@@ -372,6 +374,7 @@ def build_rtrrl_agent(cfg: ExperimentConfig, env, env_params):
 
 def build_independent_rtrrl_agent(cfg: ExperimentConfig, env, env_params):
     """Build strict two-path legacy RTRRL with no actor/critic state sharing."""
+    cfg = normalize_legacy_config(cfg)
     if getattr(cfg, "pred_obs", False):
         raise ValueError("Independent RTRRL does not support pred_obs.")
     action_space = env.action_space(env_params)

@@ -467,6 +467,20 @@ def test_legacy_builder_rejects_legacy_new_config_conflict():
         build_rtrrl_agent(cfg, env, env.default_params)
 
 
+def test_rtrrl_legacy_builder_rejects_removed_recurrent_branch():
+    from experiment import build_rtrrl_agent
+
+    from memorax.algorithms.rtrrl.compatibility import UnsupportedRTRRLBranch
+
+    env = TinyContinuousEnv()
+    with pytest.raises(UnsupportedRTRRLBranch, match="ctrnn"):
+        build_rtrrl_agent(
+            _rtrrl_config(rnn_model="ctrnn"),
+            env,
+            env.default_params,
+        )
+
+
 def test_independent_rtrrl_builder_and_export_remain_constructible():
     from experiment import build_independent_rtrrl_agent
 

@@ -10,6 +10,8 @@ lambda_v/pi/rnn = 0.9/0.97/0.945, td_lr 3e-5, rnn_lr 2e-6, eta_pi 0.38,
 eta_f 0.5, entropy_rate 3e-5, update_period 0.1, obs/reward normalisation,
 hidden 32, spring backend, single-env streaming (num_envs=1).
 """
+# ruff: noqa: E402
+
 import os
 import sys
 from dataclasses import dataclass
@@ -44,6 +46,9 @@ ENVIRONMENT = "hopper"
 class RTRRLHopperConfig(ExperimentConfig):
     experiment: str = "rtrrl_hopper"
     rtrrl_topology: str = "shared"
+    # Preserve the existing Memorax branch while strict AAAI25 components are
+    # introduced incrementally in later tasks.
+    profile: str = "memo_experimental"
 
     # Brax env.
     env_name: str = "hopper"

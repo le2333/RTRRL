@@ -1,3 +1,10 @@
+from .compatibility import (
+    LegacyRTRRLConfig,
+    RTRRLComponentConfig,
+    UnsupportedRTRRLBranch,
+    normalize_legacy_config,
+    to_component_config,
+)
 from .legacy import (
     RTRRL,
     RTRRLConfig,
@@ -8,6 +15,11 @@ from .legacy import (
 
 __all__ = [
     "RTRRL",
+    "LegacyRTRRLConfig",
+    "RTRRLComponentConfig",
     "RTRRLConfig",
     "RTRRLState",
+    "UnsupportedRTRRLBranch",
+    "normalize_legacy_config",
+    "to_component_config",
 ]
