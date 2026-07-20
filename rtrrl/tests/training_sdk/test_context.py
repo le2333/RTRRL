@@ -3,7 +3,7 @@ from dataclasses import replace
 
 import pytest
 
-from training_sdk import RunContext, current_run
+from training_sdk import RunContext, current_run, set_current_run
 
 
 def write_context(tmp_path, **overrides):
@@ -51,6 +51,11 @@ def test_context_rejects_negative_run_number(tmp_path):
         RunContext.from_path(write_context(tmp_path, run_number=-1))
 
 
+def test_context_rejects_zero_run_number(tmp_path):
+    with pytest.raises(ValueError, match="run_number"):
+        RunContext.from_path(write_context(tmp_path, run_number=0))
+
+
 def test_context_rejects_run_number_above_four_digits(tmp_path):
     with pytest.raises(ValueError, match="run_number"):
         RunContext.from_path(write_context(tmp_path, run_number=10_000))
@@ -96,6 +101,38 @@ def test_hparams_returns_independent_plain_json_data(tmp_path):
     assert context.hparams["environment"]["options"]["difficulty"] == 2
 
 
+def test_logging_and_objective_default_to_immutable_empty_mappings(tmp_path):
+    context = RunContext.from_path(write_context(tmp_path))
+
+    assert context.logging == {}
+    assert context.objective == {}
+    with pytest.raises(TypeError):
+        context.logging["aim_every_env_steps"] = 10
+
+
+def test_logging_and_objective_are_copied_and_frozen(tmp_path):
+    logging = {"aim_every_env_steps": 10, "nested": {"enabled": True}}
+    objective = {"metric": "eval/reward"}
+    context = RunContext.from_path(
+        write_context(tmp_path, logging=logging, objective=objective)
+    )
+    logging["nested"]["enabled"] = False
+    objective["metric"] = "changed"
+
+    assert context.logging["nested"]["enabled"] is True
+    assert context.objective["metric"] == "eval/reward"
+
+
 def test_current_run_fails_clearly_when_not_initialized():
+    set_current_run(None)
     with pytest.raises(RuntimeError, match="initialized"):
         current_run()
+
+
+def test_current_run_can_be_explicitly_initialized():
+    sentinel = object()
+    set_current_run(sentinel)
+    try:
+        assert current_run() is sentinel
+    finally:
+        set_current_run(None)

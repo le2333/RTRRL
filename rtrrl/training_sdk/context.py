@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import json
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from types import MappingProxyType
 from typing import Mapping, TypeAlias, cast
@@ -55,12 +55,14 @@ class RunContext:
     image_digest: str
     resource_profile: str
     artifact_directory: Path
+    logging: Mapping[str, JsonValue] = field(default_factory=dict)
+    objective: Mapping[str, JsonValue] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
         if type(self.run_number) is not int:
             raise TypeError("run_number must be an integer")
-        if not 0 <= self.run_number <= 9999:
-            raise ValueError("run_number must be between 0 and 9999")
+        if not 1 <= self.run_number <= 9999:
+            raise ValueError("run_number must be between 1 and 9999")
         for field_name in (
             "metadata",
             "environment",
@@ -68,6 +70,8 @@ class RunContext:
             "fixed_parameters",
             "sampled_parameters",
             "final_parameters",
+            "logging",
+            "objective",
         ):
             value = cast(dict[str, JsonValue], dict(getattr(self, field_name)))
             object.__setattr__(self, field_name, _freeze(value))

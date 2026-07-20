@@ -1,31 +1,24 @@
 from __future__ import annotations
 
-from pathlib import Path
-from typing import Mapping, Protocol
-
+from .aim_adapter import AimAdapter
 from .context import JsonValue, RunContext
+from .run import NullRerun, TrainingRun
+from .spool import (
+    AimUnavailable,
+    EventSpool,
+    MemorySpool,
+    MetricEvent,
+    SpoolCorruptionError,
+)
 from .types import Episode
 
 
-class TrainingRun(Protocol):
-    def log_metrics(self, env_steps: int, metrics: Mapping[str, float]) -> None: ...
-
-    def log_episode_summary(
-        self,
-        *,
-        env_steps: int,
-        episode_return: float,
-        episode_length: int,
-    ) -> None: ...
-
-    def log_episode(self, episode: Episode) -> None: ...
-
-    def register_checkpoint(self, path: Path) -> None: ...
-
-    def finish(self, final_metrics: Mapping[str, float]) -> None: ...
-
-
 _current_run: TrainingRun | None = None
+
+
+def set_current_run(run: TrainingRun | None) -> None:
+    global _current_run
+    _current_run = run
 
 
 def current_run() -> TrainingRun:
@@ -35,9 +28,17 @@ def current_run() -> TrainingRun:
 
 
 __all__ = [
+    "AimAdapter",
+    "AimUnavailable",
     "Episode",
+    "EventSpool",
     "JsonValue",
+    "MemorySpool",
+    "MetricEvent",
+    "NullRerun",
     "RunContext",
+    "SpoolCorruptionError",
     "TrainingRun",
     "current_run",
+    "set_current_run",
 ]
