@@ -12,11 +12,13 @@ def materialize_run(
     group: ResolvedGroup,
     trial: Trial,
     sampled: Mapping[str, JsonScalar],
-    run_number: int | None = None,
+    *,
+    run_number: int,
 ) -> ConcreteRun:
-    sequence = trial.number + 1 if run_number is None else run_number
-    if type(sequence) is not int or not 1 <= sequence <= 9999:
-        raise ValueError("run_number must be a one-based integer no greater than 9999")
+    if type(run_number) is not int:
+        raise TypeError("run_number must be an integer")
+    if not 1 <= run_number <= 9999:
+        raise ValueError("run_number must be between 1 and 9999")
 
     fixed = dict(group.fixed_parameters)
     for name, value in fixed.items():
@@ -28,8 +30,8 @@ def materialize_run(
             raise ValueError(f"missing searchable parameter '{name}'")
         sampled_values[name] = sampled[name]
     final = {**fixed, **sampled_values}
-    run_name = f"{group.name}-{group.script}-{sequence:04d}"
-    run_id = f"{group.study_key}:{sequence:04d}"
+    run_name = f"{group.name}-{run_number:04d}"
+    run_id = f"{group.study_key}:{run_number:04d}"
 
     config = {
         "environment": group.environment.model_dump(mode="json"),
@@ -46,7 +48,7 @@ def materialize_run(
         "group": group.name,
         "run_id": run_id,
         "run_name": run_name,
-        "run_number": sequence,
+        "run_number": run_number,
         "script": group.script,
         "trial_number": trial.number,
     }
@@ -75,7 +77,7 @@ def materialize_run(
         study_key=group.study_key,
         run_id=run_id,
         run_name=run_name,
-        run_number=sequence,
+        run_number=run_number,
         trial_number=trial.number,
         image=group.image,
         script=group.script,

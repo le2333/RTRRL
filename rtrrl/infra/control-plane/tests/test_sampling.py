@@ -42,9 +42,15 @@ class FakeTrial:
         return choices[-1]
 
     def suggest_int(
-        self, name: str, low: int, high: int, *, step: int = 1
+        self,
+        name: str,
+        low: int,
+        high: int,
+        *,
+        step: int = 1,
+        log: bool = False,
     ) -> int:
-        self.calls.append(("int", name, (low, high, step)))
+        self.calls.append(("int", name, (low, high, step, log)))
         return high
 
     def suggest_float(
@@ -124,9 +130,50 @@ def test_sampling_uses_stable_public_optuna_calls_and_never_suggests_fixed_field
     assert "seed" not in trial.suggested_names
     assert trial.calls == [
         ("categorical", "topology", ("shared", "dual")),
-        ("int", "layers", (2, 8, 2)),
+        ("int", "layers", (2, 8, 2, False)),
         ("float", "learning_rate", (1e-5, 1e-2, True)),
     ]
+
+
+def test_integer_log_domain_is_forwarded_to_optuna() -> None:
+    trial = FakeTrial()
+    group = make_group(
+        {
+            "layers": ResolvedParameter(
+                fixed_value=None,
+                search_domain=ContinuousSearch(
+                    low=1,
+                    high=8,
+                    log=True,
+                    integer=True,
+                    step=1,
+                ),
+            )
+        }
+    )
+
+    sample_parameters(trial, group)
+
+    assert trial.calls == [("int", "layers", (1, 8, 1, True))]
+
+
+def test_integer_log_domain_rejects_non_unit_step() -> None:
+    with pytest.raises(ValueError, match="log integer domains require step 1"):
+        ContinuousSearch(
+            low=1,
+            high=8,
+            log=True,
+            integer=True,
+            step=2,
+        )
+
+
+@pytest.mark.parametrize("values", [(True, 1), (1, 1.0), ("same", "same")])
+def test_discrete_search_rejects_python_equal_categorical_values(
+    values: tuple[object, object],
+) -> None:
+    with pytest.raises(ValueError, match="duplicate categorical values"):
+        DiscreteSearch(values)
 
 
 def test_create_study_uses_constant_liar_tpe_sampler() -> None:

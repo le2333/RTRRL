@@ -110,6 +110,7 @@ def sample_parameters(
                 int(domain.low),
                 int(domain.high),
                 step=int(domain.step or 1),
+                log=domain.log,
             )
         else:
             values[name] = trial.suggest_float(

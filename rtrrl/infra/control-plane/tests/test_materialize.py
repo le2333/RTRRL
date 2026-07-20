@@ -66,36 +66,85 @@ def test_study_name_is_group_scoped() -> None:
     assert study_name("experiment-123", "shared") != study_name("experiment-123", "dual")
 
 
-def test_run_identity_defaults_to_trial_sequence_but_accepts_controller_sequence() -> None:
+def test_run_identity_uses_explicit_sequence_independent_of_trial_number() -> None:
     group = make_group()
 
-    default = materialize_run(group, FakeTrial(7), {"topology": "shared"})
-    accepted = materialize_run(
+    first = materialize_run(
         group,
-        FakeTrial(19),
+        FakeTrial(7),
+        {"topology": "shared"},
+        run_number=1,
+    )
+    second = materialize_run(
+        group,
+        FakeTrial(7),
         {"topology": "dual"},
-        run_number=3,
+        run_number=2,
     )
 
-    assert default.run_number == 8
-    assert default.trial_number == 7
-    assert default.run_name == "shared-rtrrl-0008"
-    assert default.run_id == "experiment-123:shared:0008"
-    assert accepted.run_number == 3
-    assert accepted.trial_number == 19
-    assert accepted.run_name == "shared-rtrrl-0003"
-    assert accepted.run_id == "experiment-123:shared:0003"
-    assert accepted.context["run_number"] == 3
-    assert accepted.context["trial_number"] == 19
-    assert accepted.context["run_id"] == accepted.run_id
+    assert first.run_number == 1
+    assert first.trial_number == 7
+    assert first.run_name == "shared-0001"
+    assert first.run_id == "experiment-123:shared:0001"
+    assert second.run_number == 2
+    assert second.trial_number == 7
+    assert second.run_name == "shared-0002"
+    assert second.run_id == "experiment-123:shared:0002"
+    assert second.context["run_number"] == 2
+    assert second.context["trial_number"] == 7
+    assert second.context["run_name"] == second.run_name
+    assert json.loads(second.run_json)["context"] == dict(second.context)
+
+
+def test_materialize_requires_keyword_only_run_number() -> None:
+    group = make_group()
+    trial = FakeTrial(0)
+    sampled = {"topology": "shared"}
+
+    with pytest.raises(TypeError):
+        materialize_run(group, trial, sampled)
+    with pytest.raises(TypeError):
+        materialize_run(group, trial, sampled, 1)
+
+
+@pytest.mark.parametrize("run_number", [True, False, 1.5, "1", None])
+def test_materialize_rejects_non_integer_run_number(run_number: object) -> None:
+    with pytest.raises(TypeError, match="run_number must be an integer"):
+        materialize_run(
+            make_group(),
+            FakeTrial(0),
+            {"topology": "shared"},
+            run_number=run_number,
+        )
+
+
+@pytest.mark.parametrize("run_number", [0, -1, 10_000])
+def test_materialize_rejects_out_of_range_run_number(run_number: int) -> None:
+    with pytest.raises(ValueError, match="between 1 and 9999"):
+        materialize_run(
+            make_group(),
+            FakeTrial(0),
+            {"topology": "shared"},
+            run_number=run_number,
+        )
 
 
 def test_run_identity_is_independent_per_group() -> None:
-    first = materialize_run(make_group("shared"), FakeTrial(0), {"topology": "shared"})
-    second = materialize_run(make_group("dual"), FakeTrial(0), {"topology": "dual"})
+    first = materialize_run(
+        make_group("shared"),
+        FakeTrial(0),
+        {"topology": "shared"},
+        run_number=1,
+    )
+    second = materialize_run(
+        make_group("dual"),
+        FakeTrial(0),
+        {"topology": "dual"},
+        run_number=1,
+    )
 
-    assert first.run_name == "shared-rtrrl-0001"
-    assert second.run_name == "dual-rtrrl-0001"
+    assert first.run_name == "shared-0001"
+    assert second.run_name == "dual-0001"
     assert first.study_key != second.study_key
     assert first.run_id != second.run_id
 
@@ -105,6 +154,7 @@ def test_materialized_run_is_an_immutable_complete_snapshot() -> None:
         make_group(),
         FakeTrial(0),
         {"seed": 7, "topology": "dual"},
+        run_number=1,
     )
 
     assert run.fixed_parameters == {"seed": 7}
@@ -136,9 +186,10 @@ def test_materialize_rejects_fixed_overrides_and_missing_searchable_values() -> 
             make_group(),
             FakeTrial(0),
             {"seed": 9, "topology": "dual"},
+            run_number=1,
         )
     with pytest.raises(ValueError, match="missing searchable parameter 'topology'"):
-        materialize_run(make_group(), FakeTrial(0), {"seed": 7})
+        materialize_run(make_group(), FakeTrial(0), {"seed": 7}, run_number=1)
 
 
 def test_canonical_serialization_and_hashes_ignore_mapping_input_order() -> None:
@@ -152,6 +203,7 @@ def test_canonical_serialization_and_hashes_ignore_mapping_input_order() -> None
         make_group(),
         FakeTrial(0),
         {"topology": "dual"},
+        run_number=1,
     )
     reordered_group = make_group()
     object.__setattr__(
@@ -163,6 +215,7 @@ def test_canonical_serialization_and_hashes_ignore_mapping_input_order() -> None
         reordered_group,
         FakeTrial(0),
         {"topology": "dual"},
+        run_number=1,
     )
 
     assert first.config_yaml == second.config_yaml

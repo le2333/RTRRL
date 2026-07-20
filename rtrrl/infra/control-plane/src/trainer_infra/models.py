@@ -225,6 +225,11 @@ class ResolvedConfiguration(ContractModel):
 class DiscreteSearch:
     values: tuple[JsonScalar, ...]
 
+    def __post_init__(self) -> None:
+        for index, value in enumerate(self.values):
+            if any(value == previous for previous in self.values[:index]):
+                raise ValueError("duplicate categorical values are not allowed")
+
 
 @dataclass(frozen=True)
 class ContinuousSearch:
@@ -233,6 +238,10 @@ class ContinuousSearch:
     log: bool
     integer: bool
     step: int | float | None
+
+    def __post_init__(self) -> None:
+        if self.integer and self.log and self.step not in (None, 1):
+            raise ValueError("log integer domains require step 1")
 
 
 SearchDomain: TypeAlias = DiscreteSearch | ContinuousSearch
