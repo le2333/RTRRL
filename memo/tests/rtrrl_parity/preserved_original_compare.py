@@ -47,14 +47,7 @@ def _maximum(left: Any, right: Any) -> float:
     return max(maxima, default=0.0)
 
 
-def main() -> None:
-    parser = argparse.ArgumentParser()
-    parser.add_argument("--preserved", type=Path, required=True)
-    parser.add_argument("--oracle", type=Path, required=True)
-    arguments = parser.parse_args()
-    preserved = json.loads(arguments.preserved.read_text())
-    oracle = json.loads(arguments.oracle.read_text())
-
+def compare_probes(preserved: dict[str, Any], oracle: dict[str, Any]) -> dict[str, Any]:
     comparable = (
         "explicit_lru_params",
         "lru_carry_0",
@@ -64,7 +57,6 @@ def main() -> None:
         "explicit_lru_output_2",
         "trace_1",
         "trace_update",
-        "actor_objective",
     )
     maxima = {name: _maximum(preserved[name], oracle[name]) for name in comparable}
     runtime_sensitive_maxima = {
@@ -78,30 +70,72 @@ def main() -> None:
             "native_lru_output_2",
         )
     }
-    actor_grad_maxima = {
-        name: _maximum(preserved[name], oracle[name])
-        for name in ("actor_grad_loc", "actor_grad_raw_scale")
+    within_runtime = {
+        runtime_name: {
+            "grad_loc": _maximum(
+                payload["actor_results"]["detached"]["grad_loc"],
+                payload["actor_results"]["reparameterized"]["grad_loc"],
+            ),
+            "grad_raw_scale": _maximum(
+                payload["actor_results"]["detached"]["grad_raw_scale"],
+                payload["actor_results"]["reparameterized"]["grad_raw_scale"],
+            ),
+        }
+        for runtime_name, payload in (
+            ("preserved_runtime", preserved),
+            ("oracle_runtime", oracle),
+        )
+    }
+    cross_runtime = {
+        semantics: {
+            field: _maximum(
+                preserved["actor_results"][semantics][field],
+                oracle["actor_results"][semantics][field],
+            )
+            for field in ("objective", "grad_loc", "grad_raw_scale")
+        }
+        for semantics in ("detached", "reparameterized")
     }
     if any(value > 2e-6 for value in maxima.values()):
         raise AssertionError(f"unexpected forward/trace mismatch: {maxima}")
-    if not any(value > 1e-4 for value in actor_grad_maxima.values()):
+    if any(
+        value > 2e-6
+        for fields in cross_runtime.values()
+        for value in fields.values()
+    ):
+        raise AssertionError(f"same-semantics cross-runtime mismatch: {cross_runtime}")
+    if any(
+        not any(value > 1e-4 for value in fields.values())
+        for fields in within_runtime.values()
+    ):
         raise AssertionError(
-            f"expected preserved actor-gradient mismatch: {actor_grad_maxima}"
+            f"expected within-runtime semantic mismatch: {within_runtime}"
         )
+    return {
+        "schema_version": 2,
+        "preserved_runtime": preserved["runtime"],
+        "oracle_runtime": oracle["runtime"],
+        "explicit_forward_trace_max_abs": maxima,
+        "runtime_sensitive_max_abs": runtime_sensitive_maxima,
+        "within_runtime_semantic_max_abs": within_runtime,
+        "cross_runtime_same_semantic_max_abs": cross_runtime,
+        "verdict": (
+            "both runtimes reproduce the detached-vs-reparameterized gradient "
+            "delta; same-semantics cross-runtime controls agree"
+        ),
+    }
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--preserved", type=Path, required=True)
+    parser.add_argument("--oracle", type=Path, required=True)
+    arguments = parser.parse_args()
+    preserved = json.loads(arguments.preserved.read_text())
+    oracle = json.loads(arguments.oracle.read_text())
     print(
         json.dumps(
-            {
-                "schema_version": 1,
-                "preserved_runtime": preserved["runtime"],
-                "oracle_runtime": oracle["runtime"],
-                "explicit_forward_trace_max_abs": maxima,
-                "runtime_sensitive_max_abs": runtime_sensitive_maxima,
-                "actor_gradient_max_abs": actor_grad_maxima,
-                "verdict": (
-                    "explicit forward/trace matches; native PRNG/init and "
-                    "actor gradient differ"
-                ),
-            },
+            compare_probes(preserved, oracle),
             allow_nan=False,
             sort_keys=True,
         )

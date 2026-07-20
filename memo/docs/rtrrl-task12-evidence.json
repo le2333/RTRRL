@@ -1,5 +1,5 @@
 {
-  "batch_job_id": "a5f1b64e-3ad3-4994-a107-6ca4241b182d",
+  "batch_job_id": "98ce6669-9be8-49f5-a66e-d57b09985f42",
   "brax_smoke": {
     "best_reward": 49.92558288574219,
     "config_payload": {
@@ -84,7 +84,7 @@
       "relative_error": 7.30149404e-05
     }
   },
-  "functional_head_sha": "6ce99ff9aa569a764c525466fb245a463b23a7d7",
+  "functional_head_sha": "64c24a27371b5327fc742b28b9993d3c52eafcad",
   "numerical_measurements": {
     "comparison_semantics": {
       "acceptance_assertions_modified": false,
@@ -559,12 +559,19 @@
     ]
   },
   "preserved_original_comparison": {
-    "actor_gradient_max_abs": {
-      "actor_grad_loc": 1.0449076890945435,
-      "actor_grad_raw_scale": 0.5879773795604706
+    "cross_runtime_same_semantic_max_abs": {
+      "detached": {
+        "grad_loc": 0.0,
+        "grad_raw_scale": 0.0,
+        "objective": 0.0
+      },
+      "reparameterized": {
+        "grad_loc": 0.0,
+        "grad_raw_scale": 0.0,
+        "objective": 0.0
+      }
     },
     "explicit_forward_trace_max_abs": {
-      "actor_objective": 0.0,
       "explicit_lru_carry_1": 0.0,
       "explicit_lru_carry_2": 0.0,
       "explicit_lru_output_1": 0.0,
@@ -596,11 +603,41 @@
       "native_lru_params": 5.048454284667969,
       "prng_split": 2793280701.0
     },
-    "schema_version": 1,
-    "verdict": "explicit forward/trace matches; native PRNG/init and actor gradient differ"
+    "schema_version": 2,
+    "verdict": "both runtimes reproduce the detached-vs-reparameterized gradient delta; same-semantics cross-runtime controls agree",
+    "within_runtime_semantic_max_abs": {
+      "oracle_runtime": {
+        "grad_loc": 1.0449076890945435,
+        "grad_raw_scale": 0.5879773795604706
+      },
+      "preserved_runtime": {
+        "grad_loc": 1.0449076890945435,
+        "grad_raw_scale": 0.5879773795604706
+      }
+    }
   },
-  "report_parent_sha": "6ce99ff9aa569a764c525466fb245a463b23a7d7",
-  "review_fix_patch_sha256": "a2c062212511c4cd59dedb3cfe355c1246521fc055cc1b2ab0f6ffb79ec030b2",
+  "preserved_original_source_audit": {
+    "actor_log_prob_structure": {
+      "oracle_argument": "action",
+      "oracle_detaches_action": false,
+      "preserved_argument": "stop_gradient(action)",
+      "preserved_detaches_action": true
+    },
+    "ast_normalization": {
+      "models/online_lru.py": {
+        "equal_after_all_standalone_string_removal": true,
+        "equal_after_docstring_removal": false
+      },
+      "traces.py": {
+        "equal_after_all_standalone_string_removal": true,
+        "equal_after_docstring_removal": true
+      }
+    },
+    "interpretation": "structural AST evidence only; controlled objectives separately measure the numerical effect",
+    "schema_version": 1
+  },
+  "report_parent_sha": "64c24a27371b5327fc742b28b9993d3c52eafcad",
+  "review_fix_patch_sha256": "5d9a6af579ce55215cd2f12d2e652ae7f43cc10f4d7eccf694ebac89bb64f269",
   "runs": {
     "brax_smoke": {
       "command": "PYTHONPATH=/tmp/head/memo /tmp/venv/bin/python -m tests.rtrrl_parity.task12_brax_smoke > /tmp/task12-results/brax_smoke.stdout.json",
@@ -612,10 +649,10 @@
       "exit_code": 0,
       "failures": [],
       "time": {
-        "elapsed": "0:22.11",
-        "peak_rss_kib": 1374304,
-        "system_seconds": 2.55,
-        "user_seconds": 32.8
+        "elapsed": "0:22.15",
+        "peak_rss_kib": 1373084,
+        "system_seconds": 2.5,
+        "user_seconds": 32.7
       },
       "working_directory": "/tmp/head"
     },
@@ -627,10 +664,10 @@
       "exit_code": 0,
       "failures": [],
       "time": {
-        "elapsed": "0:00.12",
-        "peak_rss_kib": 16472,
-        "system_seconds": 0.0,
-        "user_seconds": 0.11
+        "elapsed": "0:00.11",
+        "peak_rss_kib": 16300,
+        "system_seconds": 0.02,
+        "user_seconds": 0.09
       },
       "working_directory": "/tmp/head"
     },
@@ -650,10 +687,10 @@
       "exit_code": 0,
       "failures": [],
       "time": {
-        "elapsed": "0:06.13",
-        "peak_rss_kib": 468508,
-        "system_seconds": 0.5,
-        "user_seconds": 6.77
+        "elapsed": "0:04.85",
+        "peak_rss_kib": 466616,
+        "system_seconds": 0.4,
+        "user_seconds": 5.76
       },
       "working_directory": "/tmp/head/memo"
     },
@@ -672,10 +709,10 @@
       "exit_code": 0,
       "failures": [],
       "time": {
-        "elapsed": "0:28.41",
-        "peak_rss_kib": 1494664,
-        "system_seconds": 2.32,
-        "user_seconds": 28.95
+        "elapsed": "0:22.51",
+        "peak_rss_kib": 1477888,
+        "system_seconds": 2.13,
+        "user_seconds": 23.84
       },
       "working_directory": "/tmp/head/memo"
     },
@@ -689,10 +726,10 @@
       "exit_code": 0,
       "failures": [],
       "time": {
-        "elapsed": "0:12.40",
-        "peak_rss_kib": 1081472,
-        "system_seconds": 1.05,
-        "user_seconds": 14.94
+        "elapsed": "0:12.34",
+        "peak_rss_kib": 1073608,
+        "system_seconds": 0.87,
+        "user_seconds": 15.01
       },
       "working_directory": "/tmp/head/memo"
     },
@@ -713,10 +750,10 @@
         "tests/online_ac/test_standard_parity.py::test_standard_one_step_matches_legacy_every_exposed_leaf"
       ],
       "time": {
-        "elapsed": "3:31.31",
-        "peak_rss_kib": 5079376,
-        "system_seconds": 23.53,
-        "user_seconds": 311.22
+        "elapsed": "3:33.45",
+        "peak_rss_kib": 5045192,
+        "system_seconds": 23.47,
+        "user_seconds": 312.82
       },
       "working_directory": "/tmp/base/memo"
     },
@@ -737,15 +774,15 @@
         "tests/online_ac/test_standard_parity.py::test_standard_one_step_matches_legacy_every_exposed_leaf"
       ],
       "time": {
-        "elapsed": "4:27.61",
-        "peak_rss_kib": 5144648,
-        "system_seconds": 24.72,
-        "user_seconds": 375.33
+        "elapsed": "3:36.03",
+        "peak_rss_kib": 5126928,
+        "system_seconds": 22.84,
+        "user_seconds": 324.98
       },
       "working_directory": "/tmp/head/memo"
     },
     "oracle_probe": {
-      "command": "PYTHONPATH=/tmp/oracle /tmp/oracle-venv/bin/python memo/tests/rtrrl_parity/preserved_original_probe.py --source-root /tmp/oracle --actor-semantics aaai25 > /tmp/task12-results/oracle_probe.stdout.json",
+      "command": "PYTHONPATH=/tmp/oracle /tmp/oracle-venv/bin/python memo/tests/rtrrl_parity/preserved_original_probe.py --source-root /tmp/oracle > /tmp/task12-results/oracle_probe.stdout.json",
       "counts": null,
       "diagnostic_summary": null,
       "environment": {
@@ -755,10 +792,10 @@
       "exit_code": 0,
       "failures": [],
       "time": {
-        "elapsed": "0:02.36",
-        "peak_rss_kib": 361044,
-        "system_seconds": 0.24,
-        "user_seconds": 3.68
+        "elapsed": "0:02.32",
+        "peak_rss_kib": 363072,
+        "system_seconds": 0.32,
+        "user_seconds": 3.58
       },
       "working_directory": "/tmp/head"
     },
@@ -770,15 +807,15 @@
       "exit_code": 0,
       "failures": [],
       "time": {
-        "elapsed": "0:00.11",
-        "peak_rss_kib": 29536,
-        "system_seconds": 0.02,
-        "user_seconds": 0.57
+        "elapsed": "0:00.10",
+        "peak_rss_kib": 29632,
+        "system_seconds": 0.01,
+        "user_seconds": 0.53
       },
       "working_directory": "/tmp/head"
     },
     "preserved_probe": {
-      "command": "PYTHONPATH=/tmp/head/rtrrl /tmp/preserved-venv/bin/python memo/tests/rtrrl_parity/preserved_original_probe.py --source-root /tmp/head/rtrrl --actor-semantics preserved > /tmp/task12-results/preserved_probe.stdout.json",
+      "command": "PYTHONPATH=/tmp/head/rtrrl /tmp/preserved-venv/bin/python memo/tests/rtrrl_parity/preserved_original_probe.py --source-root /tmp/head/rtrrl > /tmp/task12-results/preserved_probe.stdout.json",
       "counts": null,
       "diagnostic_summary": null,
       "environment": {
@@ -789,9 +826,9 @@
       "failures": [],
       "time": {
         "elapsed": "0:02.36",
-        "peak_rss_kib": 364700,
-        "system_seconds": 0.27,
-        "user_seconds": 3.63
+        "peak_rss_kib": 367016,
+        "system_seconds": 0.31,
+        "user_seconds": 3.61
       },
       "working_directory": "/tmp/head"
     },
@@ -807,10 +844,10 @@
       "exit_code": 1,
       "failures": [],
       "time": {
-        "elapsed": "0:06.74",
-        "peak_rss_kib": 872020,
-        "system_seconds": 0.56,
-        "user_seconds": 11.32
+        "elapsed": "0:06.80",
+        "peak_rss_kib": 880436,
+        "system_seconds": 0.55,
+        "user_seconds": 11.38
       },
       "working_directory": "/tmp/base/memo"
     },
@@ -818,7 +855,7 @@
       "command": "/tmp/venv/bin/pyright",
       "counts": null,
       "diagnostic_summary": {
-        "errors": 465,
+        "errors": 468,
         "informations": 0,
         "warnings": 2
       },
@@ -826,10 +863,10 @@
       "exit_code": 1,
       "failures": [],
       "time": {
-        "elapsed": "0:11.92",
-        "peak_rss_kib": 962020,
-        "system_seconds": 2.35,
-        "user_seconds": 14.69
+        "elapsed": "0:12.02",
+        "peak_rss_kib": 978716,
+        "system_seconds": 2.33,
+        "user_seconds": 14.78
       },
       "working_directory": "/tmp/head/memo"
     },
@@ -846,9 +883,9 @@
       "failures": [],
       "time": {
         "elapsed": "0:01.98",
-        "peak_rss_kib": 449744,
-        "system_seconds": 0.31,
-        "user_seconds": 3.23
+        "peak_rss_kib": 449660,
+        "system_seconds": 0.34,
+        "user_seconds": 3.17
       },
       "working_directory": "/tmp/base/memo"
     },
@@ -864,10 +901,10 @@
       "exit_code": 1,
       "failures": [],
       "time": {
-        "elapsed": "0:02.02",
-        "peak_rss_kib": 461800,
-        "system_seconds": 0.32,
-        "user_seconds": 3.24
+        "elapsed": "0:02.03",
+        "peak_rss_kib": 460844,
+        "system_seconds": 0.4,
+        "user_seconds": 3.15
       },
       "working_directory": "/tmp/head/memo"
     },
@@ -879,8 +916,8 @@
       "exit_code": 0,
       "failures": [],
       "time": {
-        "elapsed": "0:00.10",
-        "peak_rss_kib": 24048,
+        "elapsed": "0:00.13",
+        "peak_rss_kib": 24044,
         "system_seconds": 0.04,
         "user_seconds": 0.0
       },
@@ -901,33 +938,49 @@
       "exit_code": 0,
       "failures": [],
       "time": {
-        "elapsed": "1:49.08",
-        "peak_rss_kib": 3316524,
-        "system_seconds": 7.77,
-        "user_seconds": 163.82
+        "elapsed": "1:25.41",
+        "peak_rss_kib": 3196132,
+        "system_seconds": 6.96,
+        "user_seconds": 140.43
       },
       "working_directory": "/tmp/head/memo"
     },
+    "source_audit": {
+      "command": "/tmp/venv/bin/python memo/tests/rtrrl_parity/preserved_original_source_audit.py --preserved-root /tmp/head/rtrrl --oracle-root /tmp/oracle > /tmp/task12-results/source_audit.stdout.json",
+      "counts": null,
+      "diagnostic_summary": null,
+      "environment": {},
+      "exit_code": 0,
+      "failures": [],
+      "time": {
+        "elapsed": "0:00.09",
+        "peak_rss_kib": 17248,
+        "system_seconds": 0.01,
+        "user_seconds": 0.07
+      },
+      "working_directory": "/tmp/head"
+    },
     "strict_parity": {
-      "command": "PYTHONPATH=/tmp/head/memo RTRRL_RUN_ACCELERATED_NUMERICS=1 /tmp/venv/bin/pytest -q tests/rtrrl_parity --junitxml=/tmp/task12-results/strict_parity.xml",
+      "command": "PYTHONPATH=/tmp/head/memo RTRRL_AAAI25_ROOT=/tmp/oracle RTRRL_RUN_ACCELERATED_NUMERICS=1 /tmp/venv/bin/pytest -q tests/rtrrl_parity --junitxml=/tmp/task12-results/strict_parity.xml",
       "counts": {
         "errors": 0,
         "failures": 0,
         "skipped": 0,
-        "tests": 203
+        "tests": 207
       },
       "diagnostic_summary": null,
       "environment": {
         "PYTHONPATH": "/tmp/head/memo",
+        "RTRRL_AAAI25_ROOT": "/tmp/oracle",
         "RTRRL_RUN_ACCELERATED_NUMERICS": "1"
       },
       "exit_code": 0,
       "failures": [],
       "time": {
-        "elapsed": "0:52.35",
-        "peak_rss_kib": 2158956,
-        "system_seconds": 3.5,
-        "user_seconds": 59.84
+        "elapsed": "0:42.22",
+        "peak_rss_kib": 2145452,
+        "system_seconds": 2.78,
+        "user_seconds": 51.44
       },
       "working_directory": "/tmp/head/memo"
     }
@@ -952,11 +1005,12 @@
     "memo/memorax/algorithms/rtrrl/legacy.py": "b9edc5926402fb782d02fa055a5290681dc08d427a219d49b14c8b53724966e3",
     "memo/tests/online_ac/golden.py": "5beba2bb142f61660fd5be807cc43e18ec448ce2d55f8c42e55714ca4c77248e",
     "memo/tests/online_ac/test_meta_parity.py": "08ae8d948816eb0ef7593fa861d26f9b68d5d4dc380e1ebcf7d3bf044d952c60",
-    "preserved_original_compare.py": "01c3375e015239ac934b253dff83e312f9bbd9fd356cd1c3c0b25d8904ee48b9",
-    "preserved_original_probe.py": "a6c15619dc867f2ac75b426595e91ed626e16f0417b2333717a3faa7eb51fb1f",
-    "task12_batch_verification.sh": "31099c6020e510f65c570d7d263ddabfcf2605494d7e68adcbf74ab5877fb300",
+    "preserved_original_compare.py": "b32bd1da5707d49fd061da43ba27136a18442f85a3778d7cb925c8c1f4daac98",
+    "preserved_original_probe.py": "0b00dddbe2d8ac9c0efeb0332cc363f8f7e8596c014af097fd75cc3e85ce836c",
+    "preserved_original_source_audit.py": "6bc9848b8faa89a2d31bdc59e749f1154180d38cd79e750103b09db37b9a561e",
+    "task12_batch_verification.sh": "db80e0b84de1b75af1501cbcdab07a413c48889fe500231412130ab6c4a52fb9",
     "task12_brax_smoke.py": "7b3c0e05118736a8b9fe9de018daea8a70533c5fc45c3bbd8a201a5cb40f1df7",
-    "task12_collect_evidence.py": "9f48781f64dd62b519110424d531e206ae659c9250d3c4254cb672de5c422b24",
+    "task12_collect_evidence.py": "4558f77d886e4059100dee42ec86a6fc77331a27a9e5992b534d217f8c7c87e4",
     "task12_nodeids.py": "c29892d9bae3472989afaac0541187bba57db7848331ae67955c7c957d155003",
     "task12_numerical_evidence.py": "a6ee7ccb2e7ef2010868d912b87bc5bac4b67e23c78757fefc44fbbcf094099c"
   },

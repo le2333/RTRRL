@@ -15,7 +15,7 @@ import jax.numpy as jnp
 import numpy as np
 
 WORKTREE_ROOT = Path(__file__).parents[3]
-sys.path.insert(0, str(WORKTREE_ROOT / "rtrrl"))
+sys.path.insert(0, str(WORKTREE_ROOT / "memo"))
 sys.path.insert(0, str(WORKTREE_ROOT / "memo" / "experiments" / "base"))
 
 from experiment import (  # noqa: E402
@@ -32,6 +32,14 @@ from memorax.algorithms.rtrrl.types import TrainStepMetrics
 
 from .test_init_parity import _strict_setup
 from .test_step_parity import _ThreeStepEnvironment
+
+
+def test_logging_contract_uses_memo_logging_utility():
+    import logging_util
+
+    assert Path(logging_util.__file__).resolve() == (
+        WORKTREE_ROOT / "memo" / "logging_util.py"
+    ).resolve()
 
 
 class _RecordingLogger(dict):

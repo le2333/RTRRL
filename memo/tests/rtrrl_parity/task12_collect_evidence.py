@@ -100,6 +100,7 @@ def main() -> None:
         "preserved_probe",
         "oracle_probe",
         "preserved_compare",
+        "source_audit",
         "brax_smoke",
         "ruff",
         "pyright_head",
@@ -145,6 +146,9 @@ def main() -> None:
         ),
         "preserved_original_comparison": _last_json(
             RESULTS / "preserved_compare.stdout.json"
+        ),
+        "preserved_original_source_audit": _last_json(
+            RESULTS / "source_audit.stdout.json"
         ),
         "brax_smoke": _last_json(RESULTS / "brax_smoke.stdout.json"),
         "source_hashes": json.loads(_text(RESULTS / "source_hashes.json")),

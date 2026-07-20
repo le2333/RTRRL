@@ -3,14 +3,14 @@ set -uo pipefail
 
 export DEBIAN_FRONTEND=noninteractive
 export TASK12_RESULTS_DIR=/tmp/task12-results
-export TASK12_FUNCTIONAL_HEAD_SHA=6ce99ff9aa569a764c525466fb245a463b23a7d7
+export TASK12_FUNCTIONAL_HEAD_SHA=64c24a27371b5327fc742b28b9993d3c52eafcad
 export TASK12_FEATURE_BASE_SHA=5f7ff4e40e66da0b7df4f3edc9a928185ad73ae6
 export TASK12_TASK10_BASE_SHA=5a89953b5d09909b35c5016118dc11a1adb0dec2
-export TASK12_REPORT_PARENT_SHA=6ce99ff9aa569a764c525466fb245a463b23a7d7
-export TASK12_REVIEW_PATCH_SHA256=a2c062212511c4cd59dedb3cfe355c1246521fc055cc1b2ab0f6ffb79ec030b2
+export TASK12_REPORT_PARENT_SHA=64c24a27371b5327fc742b28b9993d3c52eafcad
+export TASK12_REVIEW_PATCH_SHA256=5d9a6af579ce55215cd2f12d2e652ae7f43cc10f4d7eccf694ebac89bb64f269
 export NODE_OPTIONS=--max-old-space-size=4096
 
-HEAD_URI=s3://rtrrl-artifacts-007122174918/oracle/task12-preserved/head-6ce99ff-overlay.tar
+HEAD_URI=s3://rtrrl-artifacts-007122174918/oracle/task12-preserved/head-64c24a2-review-overlay.tar
 BASE_URI=s3://rtrrl-artifacts-007122174918/oracle/task12-review/base-5f7ff4e.tar
 ORACLE_URI=s3://rtrrl-artifacts-007122174918/oracle/task12-preserved/aaai25-4301943.tar
 RESULT_URI=s3://rtrrl-artifacts-007122174918/oracle/task12-preserved/results
@@ -95,8 +95,8 @@ run_cmd finite_differences /tmp/head/memo \
   "PYTHONPATH=$HEAD_PYTHONPATH RTRRL_RUN_ACCELERATED_NUMERICS=1 /tmp/venv/bin/pytest -q -s tests/rtrrl_parity/test_lru_credit_parity.py::test_two_step_credit_directional_finite_differences --junitxml=$TASK12_RESULTS_DIR/finite_differences.xml"
 
 run_cmd strict_parity /tmp/head/memo \
-  '{"PYTHONPATH":"/tmp/head/memo","RTRRL_RUN_ACCELERATED_NUMERICS":"1"}' \
-  "PYTHONPATH=$HEAD_PYTHONPATH RTRRL_RUN_ACCELERATED_NUMERICS=1 /tmp/venv/bin/pytest -q tests/rtrrl_parity --junitxml=$TASK12_RESULTS_DIR/strict_parity.xml"
+  '{"PYTHONPATH":"/tmp/head/memo","RTRRL_AAAI25_ROOT":"/tmp/oracle","RTRRL_RUN_ACCELERATED_NUMERICS":"1"}' \
+  "PYTHONPATH=$HEAD_PYTHONPATH RTRRL_AAAI25_ROOT=/tmp/oracle RTRRL_RUN_ACCELERATED_NUMERICS=1 /tmp/venv/bin/pytest -q tests/rtrrl_parity --junitxml=$TASK12_RESULTS_DIR/strict_parity.xml"
 
 run_cmd selected_online_ac /tmp/head/memo \
   '{"PYTHONPATH":"/tmp/head/memo"}' \
@@ -120,15 +120,19 @@ run_cmd numerical_harness /tmp/head/memo \
 
 run_cmd preserved_probe /tmp/head \
   '{"PYTHONPATH":"/tmp/head/rtrrl","JAX_VERSION":"0.5.0"}' \
-  "PYTHONPATH=/tmp/head/rtrrl /tmp/preserved-venv/bin/python memo/tests/rtrrl_parity/preserved_original_probe.py --source-root /tmp/head/rtrrl --actor-semantics preserved > $TASK12_RESULTS_DIR/preserved_probe.stdout.json"
+  "PYTHONPATH=/tmp/head/rtrrl /tmp/preserved-venv/bin/python memo/tests/rtrrl_parity/preserved_original_probe.py --source-root /tmp/head/rtrrl > $TASK12_RESULTS_DIR/preserved_probe.stdout.json"
 
 run_cmd oracle_probe /tmp/head \
   '{"PYTHONPATH":"/tmp/oracle","JAX_VERSION":"0.4.38"}' \
-  "PYTHONPATH=/tmp/oracle /tmp/oracle-venv/bin/python memo/tests/rtrrl_parity/preserved_original_probe.py --source-root /tmp/oracle --actor-semantics aaai25 > $TASK12_RESULTS_DIR/oracle_probe.stdout.json"
+  "PYTHONPATH=/tmp/oracle /tmp/oracle-venv/bin/python memo/tests/rtrrl_parity/preserved_original_probe.py --source-root /tmp/oracle > $TASK12_RESULTS_DIR/oracle_probe.stdout.json"
 
 run_cmd preserved_compare /tmp/head \
   '{}' \
   "/tmp/venv/bin/python memo/tests/rtrrl_parity/preserved_original_compare.py --preserved $TASK12_RESULTS_DIR/preserved_probe.stdout.json --oracle $TASK12_RESULTS_DIR/oracle_probe.stdout.json > $TASK12_RESULTS_DIR/preserved_compare.stdout.json"
+
+run_cmd source_audit /tmp/head \
+  '{}' \
+  "/tmp/venv/bin/python memo/tests/rtrrl_parity/preserved_original_source_audit.py --preserved-root /tmp/head/rtrrl --oracle-root /tmp/oracle > $TASK12_RESULTS_DIR/source_audit.stdout.json"
 
 run_cmd brax_smoke /tmp/head \
   '{"PYTHONPATH":"/tmp/head/memo"}' \
@@ -173,6 +177,7 @@ paths = {
         "task12_nodeids.py",
         "preserved_original_probe.py",
         "preserved_original_compare.py",
+        "preserved_original_source_audit.py",
     )
 }
 paths["task12_batch_verification.sh"] = Path(
@@ -216,7 +221,7 @@ aws s3 cp --recursive "$TASK12_RESULTS_DIR/" \
 echo "TASK12_EVIDENCE_URI $RESULT_URI/$AWS_BATCH_JOB_ID/evidence.json"
 
 for required in finite_differences strict_parity independent \
-  numerical_harness preserved_probe oracle_probe preserved_compare \
+  numerical_harness preserved_probe oracle_probe preserved_compare source_audit \
   brax_smoke ruff compileall; do
   if [[ "$(<"$TASK12_RESULTS_DIR/$required.exit")" != "0" ]]; then
     overall=1

@@ -9,7 +9,7 @@
 ## Status
 
 Review blockers are resolved. Superseding acceptance job
-`a5f1b64e-3ad3-4994-a107-6ca4241b182d` succeeded with exit 0 on authorized
+`98ce6669-9be8-49f5-a66e-d57b09985f42` succeeded with exit 0 on authorized
 Batch. Strict parity, all five accelerated finite differences, selected
 RTRRL/meta/legacy-builder tests, independent RTRRL, numerical harness, Brax
 smoke, ruff, and compileall passed.
@@ -44,16 +44,16 @@ Final Batch resources: `rtrrl-cpu2-queue`, `rtrrl-cpu-job:14`, 4 vCPU,
 8,192 MiB, `rtrrl-cpu2-ce` on `c7a.2xlarge`. Runtime: Python 3.12.13,
 JAX/JAXLIB 0.10.0, Flax 0.12.7, CPU.
 
-- strict parity with `RTRRL_RUN_ACCELERATED_NUMERICS=1`: 203 passed,
-  52.35 s, 2,158,956 KiB;
-- separate five-case finite differences: 5 passed, 6.13 s, 468,508 KiB;
-- selected online_ac: 36 passed, 109.08 s, 3,316,524 KiB;
-- independent RTRRL: 11 passed, 28.41 s, 1,494,664 KiB;
-- full head online_ac: 112 passed, 1 failed, 267.61 s, 5,144,648 KiB;
-- full base online_ac: 105 passed, 1 failed, 211.31 s, 5,079,376 KiB;
-- eager/JIT/oracle harness: exit 0, 12.40 s, 1,078,424 KiB;
-- isolated preserved/oracle comparison: exit 0;
-- direct Memo strict Brax smoke: exit 0, 22.11 s, 1,374,304 KiB;
+- strict parity with `RTRRL_RUN_ACCELERATED_NUMERICS=1`: 207 passed,
+  42.22 s, 2,145,452 KiB;
+- separate five-case finite differences: 5 passed, 4.85 s, 466,616 KiB;
+- selected online_ac: 36 passed, 85.41 s, 3,196,132 KiB;
+- independent RTRRL: 11 passed, 22.51 s, 1,477,888 KiB;
+- full head online_ac: 112 passed, 1 failed, 216.03 s, 5,126,928 KiB;
+- full base online_ac: 105 passed, 1 failed, 213.45 s, 5,045,192 KiB;
+- eager/JIT/oracle harness: exit 0, 12.34 s, 1,073,608 KiB;
+- isolated preserved/oracle 2×2 comparison and source audit: exit 0;
+- direct Memo strict Brax smoke: exit 0, 22.15 s, 1,373,084 KiB;
 - ruff and compileall: exit 0.
 
 Finite-difference cosine/relative-error pairs:

@@ -5,7 +5,7 @@
 The superseding decision is implemented. `rtrrl/rtrrl.py` is restored exactly
 from functional base `5f7ff4e`; Memo owns all maintained compatibility helpers
 and runtime execution. Authorized Batch job
-`a5f1b64e-3ad3-4994-a107-6ca4241b182d` succeeded with exit 0. No complete RL
+`98ce6669-9be8-49f5-a66e-d57b09985f42` succeeded with exit 0. No complete RL
 environment ran locally.
 
 ## RED / GREEN preservation contract
@@ -45,6 +45,27 @@ requirement. Memo normalization, build description, mock metrics, CLI override,
 and repository audit tests call Memo helpers directly and make no delegation
 claim.
 
+## Reviewer-control RED / GREEN
+
+The review contracts were added before their implementations:
+
+- RED: `test_preserved_original_audit.py` failed collection because
+  `compare_probes` did not exist; the source-audit module also did not exist.
+  GREEN: two contracts pass, covering precise AST normalization, structural
+  actor evidence, and synthetic 2×2 result classification.
+- RED: the new provenance assertions in `test_program_contract.py` and
+  `test_logging_compat.py` both resolved `logging_util` to
+  `rtrrl/logging_util.py`. GREEN: external path injection was removed, Memo's
+  root was added explicitly, and each isolated provenance contract resolves
+  `memo/logging_util.py`.
+- Batch RED `b90fbf31-ac9c-4b2f-bf29-880d0fe683ea`: 206 strict tests passed
+  and the source-audit contract failed because its local absolute oracle path
+  was absent. GREEN `98ce6669-9be8-49f5-a66e-d57b09985f42`: the explicit
+  `RTRRL_AAAI25_ROOT=/tmp/oracle` contract produced 207/207 strict passes.
+
+The local focused set covering audit, provenance, program, logging, and
+preservation produced 48 passed. `git diff --check` and focused Ruff passed.
+
 ## Runtime and smoke decision
 
 `task12_brax_smoke.py` now normalizes with
@@ -55,9 +76,10 @@ transitions. It emitted one historical metric record at step 1, finalized the
 logger, and returned `49.92558288574219`.
 
 `PYTHONPATH` for Memo parity/smoke contains `/tmp/head/memo`, not the external
-`rtrrl/` project. The main-branch workflow path filters remain separate:
-`memo/**` triggers only `build-memo-image.yml`; `build-rtrrl-image.yml` requires
-an `rtrrl/**` diff, which final verification forbids.
+`rtrrl/` project. Among the two Docker image workflows, `memo/**` triggers
+`build-memo-image.yml` and does not trigger `build-rtrrl-image.yml`, whose path
+filter requires `rtrrl/**`. Separately, `memo-ci.yml` also triggers on
+`memo/**` for pushes and pull requests.
 
 ## Numerical audit
 
@@ -67,8 +89,8 @@ Oracle identity:
 The preserved process used Python 3.12.13, JAX/JAXLIB 0.5.0, Flax 0.10.2, CPU.
 The oracle process separately used Python 3.12.13, JAX/JAXLIB 0.4.38,
 Flax 0.10.2, CPU. Deterministic probes used explicit float32 inputs, two LRU
-steps, fixed trace tensors, fixed actor noise, and source-specific actor
-differentiation.
+steps, fixed trace tensors, fixed actor noise, and a 2×2 actor control: both
+detached and reparameterized semantics execute in each pinned runtime.
 
 Measured exact (maximum absolute difference 0):
 
@@ -79,7 +101,7 @@ Measured exact (maximum absolute difference 0):
 - trace-derived update;
 - actor objective value.
 
-Measured different:
+Within each runtime, changing only actor semantics measured:
 
 - actor location gradient maximum: `1.0449076890945435`;
 - actor raw-scale gradient maximum: `0.5879773795604706`;
@@ -93,12 +115,24 @@ pinned JAX releases produce different PRNG values. They are reported rather
 than attributed only to source. Explicit equal parameters isolate and confirm
 the LRU/trace equations.
 
-The decisive source-level mismatch is not runtime-sensitive:
-the preserved script always applies `stop_gradient` to the sampled action
-before `log_prob`; AAAI25 differentiates through the reparameterized sample.
-No preserved option disables detachment. Thus the preserved path is
-numerically inconsistent with AAAI25 for actor gradients and downstream
-trace/optimizer state.
+Cross-runtime comparisons hold actor semantics fixed; those controls determine
+whether the two pinned JAX versions add a gradient difference. A separate
+structural AST audit finds the preserved `log_prob` argument is
+`stop_gradient(action)`, whereas AAAI25's is `action`. The AST result is source
+structure, not direct execution of the nested training closure. Combined with
+the 2×2 synthetic objective, it supports the conclusion that no preserved
+option disables detachment and that the preserved path differs for actor
+gradients and downstream trace/optimizer state.
+
+The cross-runtime same-semantic maxima were exactly zero for actor objective,
+location gradient, and raw-scale gradient under both detached and
+reparameterized semantics. Both runtimes independently reproduced the same
+within-runtime semantic deltas above.
+
+AST normalization is also recorded exactly: `traces.py` becomes equal after
+ordinary leading-docstring removal; `models/online_lru.py` does not. Both
+become equal only after removing every standalone string expression statement,
+including the descriptive class-body string following field declarations.
 
 Closest options:
 
@@ -123,14 +157,14 @@ Complete-step parity is not claimed. Detailed evidence and verdict:
 Final orchestration is committed as
 `memo/tests/rtrrl_parity/task12_batch_verification.sh`. The implementation
 manifest SHA-256 embedded in evidence is
-`a2c062212511c4cd59dedb3cfe355c1246521fc055cc1b2ab0f6ffb79ec030b2`;
+`5d9a6af579ce55215cd2f12d2e652ae7f43cc10f4d7eccf694ebac89bb64f269`;
 the script SHA-256 is
-`31099c6020e510f65c570d7d263ddabfcf2605494d7e68adcbf74ab5877fb300`.
+`db80e0b84de1b75af1501cbcdab07a413c48889fe500231412130ab6c4a52fb9`.
 
 Inputs:
 
 - head overlay archive SHA-256:
-  `8968497929847c9927e4828ac73611b5a0cf10e91d54d4344dfb89faf70974dd`;
+  `54a4044999ff299f52ef208b2efe6eacc75de8ef6a9f9f543f0fb583f7bae0dc`;
 - corrected AAAI25 archive SHA-256:
   `f9a97fd54cb2786324ea83dc10078b4f9dbcc6e83bc2becf51c0d62d497b9740`.
 
@@ -138,13 +172,13 @@ Final submission:
 
 ```text
 aws batch submit-job
-  --job-name rtrrl-preserved-original-final-20260720
+  --job-name rtrrl-preserved-review-controls-rerun-20260721
   --job-queue rtrrl-cpu2-queue
   --job-definition rtrrl-cpu-job:14
   --container-overrides <bash orchestration; 4 vCPU; 8192 MiB>
 ```
 
-Final job `a5f1b64e-3ad3-4994-a107-6ca4241b182d` succeeded. Two earlier attempts
+Final job `98ce6669-9be8-49f5-a66e-d57b09985f42` succeeded. Earlier attempts
 are retained as diagnostic history:
 
 - `0dc0aa1b-54c1-43cc-bfeb-e5694ed5bff9`: failed because the uploaded oracle
@@ -153,16 +187,20 @@ are retained as diagnostic history:
   cross-JAX PRNG initialization cannot be asserted equal; the probe was then
   corrected to report native initialization separately and compare equations
   under explicit equal parameters.
+- `b90fbf31-ac9c-4b2f-bf29-880d0fe683ea`: the new source-audit test used a
+  workstation-only absolute oracle path. It failed one strict test while the
+  standalone 2×2 comparison and source audit passed. The test now accepts
+  `RTRRL_AAAI25_ROOT`, and the successful rerun sets it to `/tmp/oracle`.
 
 ## Final Batch tests
 
-- strict parity: 203 passed, 0 failed, 52.35 s, 2,158,956 KiB peak RSS;
-- finite differences: 5 passed, 0 failed, 6.13 s, 468,508 KiB;
-- selected RTRRL/meta/independent online AC: 36 passed, 0 failed, 109.08 s,
-  3,316,524 KiB;
-- independent RTRRL: 11 passed, 0 failed, 28.41 s, 1,494,664 KiB;
+- strict parity: 207 passed, 0 failed, 42.22 s, 2,145,452 KiB peak RSS;
+- finite differences: 5 passed, 0 failed, 4.85 s, 466,616 KiB;
+- selected RTRRL/meta/independent online AC: 36 passed, 0 failed, 85.41 s,
+  3,196,132 KiB;
+- independent RTRRL: 11 passed, 0 failed, 22.51 s, 1,477,888 KiB;
 - numerical complete-state harness: exit 0;
-- preserved/oracle probes and semantic comparison: exit 0;
+- preserved/oracle probes, 2×2 semantic comparison, and source audit: exit 0;
 - direct Memo real Brax smoke: exit 0;
 - Ruff and compileall: exit 0.
 
@@ -174,7 +212,7 @@ Review-scope head Pyright has one existing dynamic-import error.
 
 Machine-readable evidence:
 `memo/docs/rtrrl-task12-evidence.json`, SHA-256
-`8a97bfb8d9f4872c88b9bdfe40cc75f1e580dbe04d3e05e81f4e5013b36ec31e`.
+`cf817f8ffaa3d3e48dd07ee4d021cd1aa69768bcbeb206da4f4810a98fc21aba`.
 
 ## Concerns
 
@@ -184,5 +222,6 @@ Machine-readable evidence:
   generalized beyond the pinned runtimes.
 - Full preserved-script training, unsupported branches, full `online_ac`, and
   project-wide Pyright are not claimed green.
-- No image was built locally. On integration to `main`, only the Memo workflow
-  is eligible because final `rtrrl/**` diff is empty.
+- No image was built locally. On integration to `main`, only the Memo Docker
+  image workflow is eligible among the two image workflows; Memo CI is also
+  eligible for `memo/**`.

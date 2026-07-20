@@ -31,7 +31,7 @@ def _arrays(tree: Any, jax: Any) -> list[list[Any]]:
     return records
 
 
-def capture(source_root: Path, actor_semantics: str) -> dict[str, Any]:
+def capture(source_root: Path) -> dict[str, Any]:
     sys.path.insert(0, str(source_root))
     import distrax
     import jax
@@ -41,7 +41,7 @@ def capture(source_root: Path, actor_semantics: str) -> dict[str, Any]:
     traces = importlib.import_module("traces")
 
     root_key = jax.random.PRNGKey(7)
-    lru_key, action_key, split_key = jax.random.split(root_key, 3)
+    lru_key, _, split_key = jax.random.split(root_key, 3)
     inputs_1 = jnp.asarray([[0.25, -0.5, 0.75, -1.0]], jnp.float32)
     inputs_2 = jnp.asarray([[-0.125, 0.375, 0.5, -0.25]], jnp.float32)
     layer = online_lru.OnlineLRULayer(
@@ -104,21 +104,27 @@ def capture(source_root: Path, actor_semantics: str) -> dict[str, Any]:
 
     fixed_noise = jnp.asarray([0.625, -1.25], jnp.float32)
 
-    def actor_objective(loc, raw_scale):
-        distribution = distrax.Normal(loc, jax.nn.softplus(raw_scale))
-        action = loc + distribution.scale * fixed_noise
-        if actor_semantics == "preserved":
-            action = jax.lax.stop_gradient(action)
-        return distribution.log_prob(action).mean()
+    actor_results = {}
+    for semantics in ("detached", "reparameterized"):
+        def actor_objective(loc, raw_scale):
+            distribution = distrax.Normal(loc, jax.nn.softplus(raw_scale))
+            action = loc + distribution.scale * fixed_noise
+            if semantics == "detached":
+                action = jax.lax.stop_gradient(action)
+            return distribution.log_prob(action).mean()
 
-    actor_value, actor_grads = jax.value_and_grad(
-        actor_objective,
-        argnums=(0, 1),
-    )(loc_0, raw_scale_0)
+        actor_value, actor_grads = jax.value_and_grad(
+            actor_objective,
+            argnums=(0, 1),
+        )(loc_0, raw_scale_0)
+        actor_results[semantics] = {
+            "objective": float(actor_value),
+            "grad_loc": np.asarray(actor_grads[0]).tolist(),
+            "grad_raw_scale": np.asarray(actor_grads[1]).tolist(),
+        }
     return {
         "schema_version": 1,
         "source_root": str(source_root),
-        "actor_semantics": actor_semantics,
         "runtime": {
             "python": platform.python_version(),
             "jax": jax.__version__,
@@ -140,24 +146,17 @@ def capture(source_root: Path, actor_semantics: str) -> dict[str, Any]:
         "explicit_lru_output_2": np.asarray(explicit_output_2).tolist(),
         "trace_1": _arrays(trace_1, jax),
         "trace_update": _arrays(update, jax),
-        "actor_objective": float(actor_value),
-        "actor_grad_loc": np.asarray(actor_grads[0]).tolist(),
-        "actor_grad_raw_scale": np.asarray(actor_grads[1]).tolist(),
+        "actor_results": actor_results,
     }
 
 
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--source-root", type=Path, required=True)
-    parser.add_argument(
-        "--actor-semantics",
-        choices=("aaai25", "preserved"),
-        required=True,
-    )
     arguments = parser.parse_args()
     print(
         json.dumps(
-            capture(arguments.source_root, arguments.actor_semantics),
+            capture(arguments.source_root),
             allow_nan=False,
             sort_keys=True,
         )

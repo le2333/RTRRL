@@ -31,18 +31,25 @@ unchanged backup/reference and is not invoked by Memo.
 ## Measured focused probe
 
 The committed `preserved_original_probe.py` runs the preserved and AAAI25
-modules in separate Python processes and pinned dependency environments. It
-uses seed 7, explicit float32 inputs, two LRU steps, a fixed trace/update, and
-the two source-specific sampled-action objectives. The comparison is performed
-by `preserved_original_compare.py`.
+modules in separate Python processes and pinned dependency environments. Each
+process evaluates both detached and reparameterized actor objectives using the
+same explicit parameters and fixed noise. This 2×2 control measures the
+within-runtime semantic delta and the cross-runtime same-semantic delta
+separately. The comparison is performed by
+`preserved_original_compare.py`.
 
-Final Batch job `a5f1b64e-3ad3-4994-a107-6ca4241b182d` measured exact equality
+Final Batch job `98ce6669-9be8-49f5-a66e-d57b09985f42` measures exact equality
 for explicit parameters, initial carry, both forward carries/outputs,
-accumulated trace, trace-derived update, and fixed-noise actor objective. It
-measured these maximum absolute actor-gradient differences:
+accumulated trace, and trace-derived update. In both pinned runtimes, changing
+only actor semantics produces these maximum absolute gradient deltas:
 
 - location gradient: `1.0449076890945435`;
 - raw-scale gradient: `0.5879773795604706`.
+
+Holding semantics fixed across JAX 0.5.0 and 0.4.38 produces maximum absolute
+differences of zero for objective, location gradient, and raw-scale gradient
+under both detached and reparameterized semantics. The semantic delta therefore
+does not arise from changing runtime in this control.
 
 The source-native JAX environments did not produce equal PRNG/initialization
 observables: the uint32 split maximum was `2793280701`, native LRU parameter
@@ -52,16 +59,28 @@ not attributed solely to source: the preserved process used JAX/JAXLIB 0.5.0,
 while the pinned AAAI25 process used 0.4.38. Explicit equal parameters isolate
 the LRU equations from that runtime PRNG difference and produce exact outputs.
 
-Fresh Batch evidence, including the cross-version maxima and exact runtimes, is
-recorded in `rtrrl-task12-evidence.json` under
-`preserved_original_comparison`.
+Fresh Batch evidence, including both within-runtime semantic deltas,
+cross-runtime same-semantic controls, source AST audit, and exact runtimes, is
+recorded in `rtrrl-task12-evidence.json`.
 
 ## Source and operation-order audit
 
-After removing docstrings only, the executable ASTs of
-`models/online_lru.py` and `traces.py` are identical between the preserved
-streaming tree and AAAI25. The preserved top-level script differs in four
-functional areas:
+The normalization check is deliberately precise:
+
+- `traces.py` ASTs are equal after removing conventional leading docstrings;
+- `models/online_lru.py` ASTs are **not** equal after only that normalization,
+  because the class contains an additional standalone descriptive string
+  expression after field declarations;
+- both files are equal after removing every standalone string expression
+  statement. Comments are absent from Python ASTs and require no normalization.
+
+Separately, a structural AST check finds that the preserved `log_prob` argument
+is `stop_gradient(action)`, while AAAI25's is `action`. This is static
+structural evidence; the controlled synthetic 2×2 objective measures the
+numerical effect without claiming to execute the nested training closure
+directly.
+
+The preserved top-level script differs in four functional areas:
 
 1. `run_name` is an added logging/configuration field and does not alter math.
 2. `align_action_logprob` is added. With its default `False`, sampled action

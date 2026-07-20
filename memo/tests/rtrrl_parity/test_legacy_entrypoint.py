@@ -625,5 +625,3 @@ def test_memo_audit_classifies_every_repository_rtrrl_yaml():
     )
     assert payload["expected_plan_count"] == 686
     assert payload["count_delta"] == 11
-
-

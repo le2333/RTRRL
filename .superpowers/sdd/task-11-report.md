@@ -1,11 +1,20 @@
 # Task 11 Report: Legacy Entry Point and Configuration Migration
 
-## Status
+> **SUPERSEDED — NOT FINAL STATE (2026-07-20):** The decision implemented in
+> commit `64c24a2` retracts every claim below that `rtrrl/rtrrl.py` delegates,
+> is compatibility-only, has had its mathematical core removed, or is Memo's
+> runtime path. The external script is restored byte-for-byte from
+> `5f7ff4e`, retains its original training mathematics, and is only a
+> backup/reference. Memo's own helpers and runner are tested and invoked
+> directly. The authoritative current report is
+> `.superpowers/sdd/preserve-rtrrl-report.md`.
 
-The historical `rtrrl/rtrrl.py` is now a compatibility-only module. It keeps
-`RTRRLParams`, `train_rtrrl`, `--config_path`, legacy YAML fields, and CLI
-overrides, while Memorax owns normalization, component/program selection,
-training, evaluation, historical metric translation, and logger lifecycle.
+## Current status
+
+The historical `rtrrl/rtrrl.py` is an unchanged backup/reference. Memo owns
+its maintained normalization, component/program selection, training,
+evaluation, metric translation, and logger lifecycle without external-script
+delegation.
 
 ## Preserved Work Audit and TDD
 
@@ -27,34 +36,19 @@ The audit found one remaining behavior gap: discovery used `rtrrl*.yml` in
 
 No production change made during this continuation preceded its failing test.
 
-## Delegation and Old-Core Removal
+## Retracted delegation and core-removal design
 
-- `rtrrl/rtrrl.py` contains CLI/path compatibility and delegation only.
-- Parse/build imports stop at the lightweight Memorax compatibility and
-  entrypoint modules. Package exports were made lazy so this path does not
-  import JAX, Brax, Optax, Distrax, environments, or the AAAI oracle.
-- `normalize_legacy_invocation()` maps old budget names and delegates to
-  `normalize_legacy_config()`.
-- `describe_legacy_build()` delegates effective recipe construction to
-  `to_component_config()` without creating an environment.
-- Training delegates dynamically to `experiments/rtrrl_hopper/run.py`;
-  `train_legacy()` selects the Memorax shared or independent builder and calls
-  the common `train_loop()`.
-- Evaluation remains in that common program lifecycle. `run_legacy_experiment`
-  delegates logger creation/finalization to `with_logger` while preserving
-  project `"RTRRL"`, legacy run names, logger backend, and repository.
-- Historical strict logging now calls the shared
-  `historical_rtrrl_metrics()` translator.
+The former delegation/core-removal implementation described in the historical
+Task 11 work was reverted. None of its external-entrypoint claims represent the
+final branch. Memo still provides `normalize_legacy_invocation()`,
+`describe_legacy_build()`, `train_legacy()`, and historical metric translation,
+but Memo tests and runtime call those APIs directly. The external script still
+imports and contains its original JAX/Brax/Optax/Distrax training path.
 
-Against base `87fbcf5`, the external script changed from 983 lines to 72
-lines (965 deletions, 54 compatibility additions). Its former TD, recurrent,
-trace, optimizer, train-step, evaluation, and logging mathematics are absent.
-The AST contract rejects JAX/Optax/Distrax/oracle imports and the former core
-definitions.
+## Memo parse/build evidence
 
-## Subprocess Parse/Build Evidence
-
-Representative legacy and Memorax YAMLs are parsed in fresh subprocesses:
+Representative legacy and Memorax YAMLs are parsed by Memo's lightweight
+compatibility helpers:
 
 - `rtrrl/config/rtrrl_hop_533.yml`: 10,000,000 steps, 10,000 epochs,
   `memo_experimental`, Aim, old run name, TD LR `3e-5`, RNN LR `2e-6`, and
@@ -63,20 +57,20 @@ Representative legacy and Memorax YAMLs are parsed in fresh subprocesses:
   `memo_experimental`, no logger, Memorax run name, and the same optimizer
   values.
 
-Both report `environment_started: false` and `jax_imported: false`. These
-actions resolve only the static AgentProgram recipe; no Brax environment,
-JAX trace, or compilation occurs.
+Both report `environment_started: false`. These actions resolve only the
+static AgentProgram recipe; no Brax environment, JAX trace, or compilation
+occurs.
 
 ## Exact Historical Mock Epoch
 
-`--compat-action mock-epoch` emits the frozen 16-key historical dictionary
+Memo's `run_mock_epoch()` emits the frozen 16-key historical dictionary
 exactly, including `steps=30`, `mean_reward=4.0`,
 `mean_delta=0.8333333134651184`,
 `total_td_loss=19.399999618530273`,
 `v_targ=20.66666603088379`, both optimizer learning rates, and all three
-historical norm paths. The subprocess compares the complete decoded dictionary,
-not a subset or tolerance. A separate test replaces the shared translator and
-proves the mock epoch goes through that production logging boundary.
+historical norm paths. The test compares the complete decoded dictionary, not
+a subset or tolerance. A separate test replaces the shared translator and
+proves the mock epoch goes through that Memo production boundary.
 
 ## Repository YAML Discovery and Classification
 
@@ -145,10 +139,12 @@ recorded in Task 10; Task 11 does not modify StreamAC. HPO study YAMLs are
 configuration generators rather than direct legacy CLI inputs and therefore
 are reported as explicitly out of runtime-audit scope.
 
-## Review-Blocker Corrections (Authoritative)
+## Historical review-blocker corrections (superseded)
 
-This section supersedes the earlier build-description, parameter-API, CLI,
-classification, mock-provenance, local-count, and final-Batch statements.
+This section records review work completed before the preservation decision.
+It is not authoritative for the external script; only the Memo helper,
+configuration, fixture, and numerical results that remain independently
+tested carry forward.
 
 ### TDD Evidence
 
@@ -161,9 +157,8 @@ The review regressions were added before their production fixes:
   and nested names did not fail;
 - static build description reported top-level backend even when the runner
   would use nested `env_params.init_kwargs.backend`;
-- `RTRRLParams` was the frozen Memorax schema rather than the historical
-  mutable dataclass, so mutation and `rtrrl_fixed.py` parse-then-assignment
-  failed;
+- the then-proposed compatibility copy of `RTRRLParams` did not preserve the
+  historical mutable surface;
 - `--field=value` and boolean disable forms were not parsed;
 - invalid profile/value files were reported as accepted and every other
   `ValueError` was treated as unknown; malformed YAML aborted the audit;
@@ -190,28 +185,26 @@ Static build output no longer claims a fixed construction string. It reports:
 - selected recurrent, feature, and actor components;
 - meta-RL, observation/reward normalization, and pass-observation inputs.
 
-Subprocess contracts cover the historical shared YAML, the top-level Memorax
+Memo helper contracts cover the historical shared YAML, the top-level Memorax
 shared YAML, and
 `memo/config/independent_rtrrl_hopper_maskP_lru.yml`. Every parse/build
-subprocess still reports no environment startup and no JAX import.
+helper call reports no environment startup.
 
 ### Historical Mutable Parameter API
 
-`rtrrl/rtrrl.py` contains compatibility-only copies of historical
-`EnvironmentParams`, `OptimizerConfig`, and
-`@dataclass(unsafe_hash=True) RTRRLParams`. The RTRRL class preserves base
-`87fbcf5` field order, defaults, constructor surface, class name, and mutable
-assignment behavior. Tests cover representative construction/mutation,
-all historical field names, nested defaults, `rtrrl_fixed.py` parsing followed
-by both assignments, and `train_rtrrl` normalization/delegation. No training
-math was restored.
+The final external script contains the original historical
+`@dataclass(unsafe_hash=True) RTRRLParams` and original imported data carriers,
+not compatibility-only copies. Preservation tests execute the exact class AST
+with lightweight stand-ins to verify field order, defaults, construction, and
+mutation without importing Brax. Memo normalization tests consume equivalent
+objects directly. Original training mathematics remains present.
 
 ### CLI and Classification
 
-Overrides support spaced and equals forms, dotted optimizer paths, boolean
-enable forms, and `--no-*`/`--no_*` disable forms. Tests run the external
-script from both repository root and `rtrrl/`; CLI values deterministically
-override YAML budgets, optimizer values, and booleans.
+Memo compatibility parsing supports spaced and equals forms, dotted optimizer
+paths, boolean enable forms, and `--no-*`/`--no_*` disable forms. Tests invoke
+Memo parsing helpers directly; they do not claim that the preserved external
+CLI accepts those added forms.
 
 Audit categories are now:
 
