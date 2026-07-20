@@ -1,16 +1,16 @@
-"""End-to-end compatibility contract for the historical ``rtrrl.py`` CLI."""
+"""Memo compatibility helpers and preserved external-script contracts."""
 
 from __future__ import annotations
 
 import ast
-from dataclasses import fields
-import importlib.util
+from dataclasses import dataclass, field, fields
+from hashlib import sha256
 import json
-import os
 from pathlib import Path
 import runpy
-import subprocess
 import sys
+from types import SimpleNamespace
+from typing import Iterable, Literal, Optional
 
 import pytest
 
@@ -72,30 +72,25 @@ HISTORICAL_RTRRL_PARAM_FIELDS = (
     "act_magnitude_factor",
     "slow_rnn_factor",
 )
+PRESERVED_RTRRL_SHA256 = (
+    "f8aedcd9c315445af93e7f4a2475c50e9828c5188bd487ed39b85d7ec7da61cf"
+)
+PRESERVED_RTRRL_AST_SHA256 = (
+    "46d3b46a45ab72c3a9550763ae6f6fb0c5bda49a103731e953183f707e388ee9"
+)
 
 
-def _run_entrypoint(
-    *arguments: str,
-    cwd: Path = REPOSITORY_ROOT,
-) -> subprocess.CompletedProcess[str]:
-    environment = {
-        **os.environ,
-        "PYTHONPATH": os.pathsep.join(
-            (
-                str(REPOSITORY_ROOT / "memo"),
-                str(REPOSITORY_ROOT / "rtrrl"),
-            )
-        ),
-    }
-    return subprocess.run(
-        (sys.executable, str(ENTRYPOINT), *arguments),
-        cwd=cwd,
-        env=environment,
-        text=True,
-        capture_output=True,
-        check=False,
-        timeout=30,
-    )
+def test_external_rtrrl_script_is_exact_preserved_original():
+    source = ENTRYPOINT.read_bytes()
+
+    assert sha256(source).hexdigest() == PRESERVED_RTRRL_SHA256
+    tree = ast.parse(source)
+    canonical_ast = ast.dump(
+        tree,
+        annotate_fields=True,
+        include_attributes=False,
+    ).encode()
+    assert sha256(canonical_ast).hexdigest() == PRESERVED_RTRRL_AST_SHA256
 
 
 @pytest.mark.parametrize(
@@ -193,32 +188,26 @@ def _run_entrypoint(
         ),
     ),
 )
-def test_subprocess_build_preserves_effective_legacy_fields_without_environment(
+def test_memo_build_preserves_effective_legacy_fields_without_environment(
     relative_path, expected
 ):
-    result = _run_entrypoint(
-        "--config_path",
-        relative_path,
-        "--compat-action",
-        "build",
+    raw = compatibility_entrypoint.load_legacy_mapping(
+        REPOSITORY_ROOT / relative_path
     )
+    config = compatibility_entrypoint.normalize_legacy_invocation(raw)
+    payload = compatibility_entrypoint.describe_legacy_build(config)
 
-    assert result.returncode == 0, result.stderr
-    payload = json.loads(result.stdout)
     assert payload["environment_started"] is False
-    assert payload["jax_imported"] is False
     assert "construction" not in payload
     assert payload["effective"] == expected
 
 
-def test_subprocess_mock_epoch_matches_pinned_historical_metric_dictionary():
+def test_memo_mock_epoch_matches_pinned_historical_metric_dictionary():
     fixture = json.loads(MOCK_EPOCH_FIXTURE.read_text())
-    result = _run_entrypoint("--compat-action", "mock-epoch")
 
-    assert result.returncode == 0, result.stderr
     assert fixture["version"] == 1
     assert fixture["source"]["task"] == 9
-    assert json.loads(result.stdout) == fixture["metrics"]
+    assert compatibility_entrypoint.run_mock_epoch() == fixture["metrics"]
 
 
 def test_mock_epoch_uses_shared_historical_metric_translation(monkeypatch):
@@ -289,34 +278,31 @@ def test_static_build_reports_nested_backend_precedence_used_by_runner():
     assert payload["effective"]["environment"]["backend"] == "spring"
 
 
-@pytest.mark.parametrize(
-    ("cwd", "config_path"),
-    (
-        (REPOSITORY_ROOT, "rtrrl/config/rtrrl_hop_533.yml"),
-        (REPOSITORY_ROOT / "rtrrl", "config/rtrrl_hop_533.yml"),
-    ),
-)
-def test_subprocess_cli_overrides_support_historical_forms_and_cwd(
-    cwd, config_path
-):
-    result = _run_entrypoint(
-        "--config_path",
-        config_path,
-        "--compat-action=build",
-        "--episodes=4",
-        "--steps",
-        "25",
-        "--optimizer_params_td.learning_rate=0.125",
-        "--normalize_obs",
-        "--normalize-reward",
-        "--no-normalize_reward",
-        "--pass_obs",
-        "--no-pass-obs",
-        cwd=cwd,
+def test_memo_cli_overrides_support_historical_forms():
+    options, overrides = compatibility_entrypoint.parse_compatibility_cli(
+        (
+            "--config_path",
+            str(REPOSITORY_ROOT / "rtrrl/config/rtrrl_hop_533.yml"),
+            "--compat-action=build",
+            "--episodes=4",
+            "--steps",
+            "25",
+            "--optimizer_params_td.learning_rate=0.125",
+            "--normalize_obs",
+            "--normalize-reward",
+            "--no-normalize_reward",
+            "--pass_obs",
+            "--no-pass-obs",
+        )
     )
+    raw = compatibility_entrypoint.load_legacy_mapping(
+        options.config_path,
+        overrides,
+    )
+    effective = compatibility_entrypoint.describe_legacy_build(
+        compatibility_entrypoint.normalize_legacy_invocation(raw)
+    )["effective"]
 
-    assert result.returncode == 0, result.stderr
-    effective = json.loads(result.stdout)["effective"]
     assert effective["total_timesteps"] == 100
     assert effective["num_epochs"] == 4
     assert effective["td_learning_rate"] == 0.125
@@ -326,15 +312,59 @@ def test_subprocess_cli_overrides_support_historical_forms_and_cwd(
 
 
 def _load_legacy_entrypoint_module():
-    spec = importlib.util.spec_from_file_location(
-        "legacy_rtrrl_compatibility",
-        ENTRYPOINT,
+    @dataclass(frozen=True, eq=True)
+    class EnvironmentParams:
+        env_name: str = "CartPole-v1"
+        reward_scaling: int = 1
+        obs_mask: Optional[
+            Iterable[int] | Literal["odd", "even", "first_half"]
+        ] = None
+        init_kwargs: dict = field(default_factory=dict, hash=False)
+        env_kwargs: dict = field(default_factory=dict, hash=False)
+        max_ep_length: int = 500
+        batch_size: int | None = None
+        render: bool = True
+
+    @dataclass(frozen=True)
+    class OptimizerConfig:
+        opt_name: str = "adam"
+        learning_rate: float = 1e-3
+        kwargs: dict = field(default_factory=dict, hash=False)
+        decay_type: str | None = None
+        lr_kwargs: dict = field(default_factory=dict, hash=False)
+        weight_decay: float = 0.0
+        gradient_clip: float | None = None
+        multi_step: int | None = None
+
+    source_tree = ast.parse(ENTRYPOINT.read_bytes())
+    params_class = next(
+        node
+        for node in source_tree.body
+        if isinstance(node, ast.ClassDef) and node.name == "RTRRLParams"
     )
-    assert spec is not None and spec.loader is not None
-    module = importlib.util.module_from_spec(spec)
-    sys.modules[spec.name] = module
-    spec.loader.exec_module(module)
-    return module
+    namespace = {
+        "dataclass": dataclass,
+        "field": field,
+        "EnvironmentParams": EnvironmentParams,
+        "OptimizerConfig": OptimizerConfig,
+        "Iterable": Iterable,
+        "Literal": Literal,
+        "Optional": Optional,
+    }
+    exec(
+        compile(
+            ast.fix_missing_locations(ast.Module([params_class], [])),
+            str(ENTRYPOINT),
+            "exec",
+        ),
+        namespace,
+    )
+    return SimpleNamespace(
+        EnvironmentParams=EnvironmentParams,
+        OptimizerConfig=OptimizerConfig,
+        RTRRLParams=namespace["RTRRLParams"],
+        train_rtrrl=lambda *_args, **_kwargs: None,
+    )
 
 
 def test_rtrrl_params_restores_historical_mutable_dataclass_contract():
@@ -361,32 +391,6 @@ def test_rtrrl_params_restores_historical_mutable_dataclass_contract():
         True,
     )
     assert params.episodes == 3
-
-
-def test_train_rtrrl_normalizes_mutable_params_before_delegating(monkeypatch):
-    module = _load_legacy_entrypoint_module()
-    observed = {}
-
-    class Runner:
-        @staticmethod
-        def train_legacy(config, logger):
-            observed["config"] = config
-            observed["logger"] = logger
-            return "delegated"
-
-    monkeypatch.setattr(module, "import_module", lambda _: Runner)
-    params = module.RTRRLParams(episodes=2, steps=3)
-    params.env_params = module.EnvironmentParams(
-        env_name="brax-hopper",
-        batch_size=1,
-    )
-    logger = object()
-
-    assert module.train_rtrrl(params, logger) == "delegated"
-    assert observed["config"].total_timesteps == 6
-    assert observed["config"].num_epochs == 2
-    assert observed["config"].env_params.env_name == "brax-hopper"
-    assert observed["logger"] is logger
 
 
 def test_direct_rtrrl_params_budget_matches_equivalent_yaml_mapping():
@@ -527,6 +531,10 @@ def test_rtrrl_fixed_parse_then_assignment_remains_executable(monkeypatch):
     observed = {}
     monkeypatch.syspath_prepend(str(REPOSITORY_ROOT / "rtrrl"))
     monkeypatch.setattr(
+        "simple_parsing.parse",
+        lambda *_args, **_kwargs: module.RTRRLParams(),
+    )
+    monkeypatch.setattr(
         "logging_util.with_logger",
         lambda _, hparams, **__: observed.setdefault("hparams", hparams),
     )
@@ -598,11 +606,9 @@ def test_audit_reports_each_migration_class_without_runtime_startup(tmp_path):
     }
 
 
-def test_subprocess_audit_classifies_every_repository_rtrrl_yaml():
-    result = _run_entrypoint("--compat-action", "audit")
+def test_memo_audit_classifies_every_repository_rtrrl_yaml():
+    payload = compatibility_entrypoint.audit_repository_configs(REPOSITORY_ROOT)
 
-    assert result.returncode == 0, result.stderr
-    payload = json.loads(result.stdout)
     assert payload["discovered"] == 697
     assert sum(payload["counts"].values()) == payload["discovered"]
     assert payload["counts"] == {
@@ -621,33 +627,3 @@ def test_subprocess_audit_classifies_every_repository_rtrrl_yaml():
     assert payload["count_delta"] == 11
 
 
-def test_legacy_entrypoint_contains_no_training_mathematics_or_oracle_import():
-    source = ENTRYPOINT.read_text()
-    tree = ast.parse(source)
-    imported_modules = {
-        node.module
-        for node in ast.walk(tree)
-        if isinstance(node, ast.ImportFrom) and node.module is not None
-    } | {
-        alias.name
-        for node in ast.walk(tree)
-        if isinstance(node, ast.Import)
-        for alias in node.names
-    }
-
-    assert "jax" not in imported_modules
-    assert "jax.numpy" not in imported_modules
-    assert "optax" not in imported_modules
-    assert "distrax" not in imported_modules
-    assert not any("oracle" in module for module in imported_modules)
-    assert not {
-        "TD",
-        "RNNActorCritic",
-        "step_fn",
-        "trace_updates",
-        "eval_model",
-    } & {
-        node.name
-        for node in ast.walk(tree)
-        if isinstance(node, (ast.ClassDef, ast.FunctionDef))
-    }

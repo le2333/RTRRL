@@ -1,5 +1,12 @@
 # RTRRL Numerical Parity and Resource Report
 
+> **SUPERSEDING DECISION — 2026-07-20:** The strict-parity result in this
+> report applies to Memo's modular implementation. `rtrrl/rtrrl.py` has been
+> restored byte-for-byte to functional base `5f7ff4e` as a non-runtime
+> backup/reference; it does not delegate to Memo and retains its original
+> mathematics. Its separate, non-parity verdict is documented in
+> [`rtrrl-preserved-original-comparison.md`](rtrrl-preserved-original-comparison.md).
+
 ## Scope and evidence identity
 
 This report closes Task 12 against the true feature base and records the
@@ -27,26 +34,28 @@ contents.
 
 ## Final Batch runtime and resources
 
-Acceptance job `d39f3e52-04fb-4fbb-ab61-1a5bcb694c46` succeeded with exit 0.
+Superseding acceptance job `a5f1b64e-3ad3-4994-a107-6ca4241b182d`
+succeeded with exit 0.
 It used queue `rtrrl-cpu2-queue`, definition `rtrrl-cpu-job:14`, 4 vCPUs,
 8,192 MiB, and compute environment `rtrrl-cpu2-ce` (`c7a.2xlarge`). Overall
-container runtime was 735.194 seconds. Runtime versions were Python 3.12.13,
+container runtime was 879.285 seconds. Runtime versions were Python 3.12.13,
 JAX/JAXLIB 0.10.0, Flax 0.12.7, Brax 0.14.2, backend `cpu`, device `cpu:0`.
 
 | Workload | Result | Wall time | Peak RSS |
 | --- | --- | ---: | ---: |
-| strict parity, accelerated cases enabled | 205 passed | 42.81 s | 2,146,172 KiB |
-| five directional finite differences | 5 passed | 4.84 s | 466,916 KiB |
-| selected RTRRL/meta/legacy-builder `online_ac` | 36 passed | 85.81 s | 3,204,560 KiB |
-| independent RTRRL | 11 passed | 22.82 s | 1,476,120 KiB |
-| full head `online_ac` | 112 passed, 1 failed | 218.42 s | 5,130,104 KiB |
-| full true-base `online_ac` | 105 passed, 1 failed | 216.13 s | 5,051,516 KiB |
+| strict parity, accelerated cases enabled | 203 passed | 52.35 s | 2,158,956 KiB |
+| five directional finite differences | 5 passed | 6.13 s | 468,508 KiB |
+| selected RTRRL/meta/legacy-builder `online_ac` | 36 passed | 109.08 s | 3,316,524 KiB |
+| independent RTRRL | 11 passed | 28.41 s | 1,494,664 KiB |
+| full head `online_ac` | 112 passed, 1 failed | 267.61 s | 5,144,648 KiB |
+| full true-base `online_ac` | 105 passed, 1 failed | 211.31 s | 5,079,376 KiB |
 | eager/JIT/oracle harness | succeeded | 12.40 s | 1,078,424 KiB |
-| strict real Brax smoke | succeeded | 21.98 s | 1,378,324 KiB |
-| ruff | passed | 0.01 s | 24,620 KiB |
-| compileall | passed | 0.11 s | 16,312 KiB |
+| preserved/oracle isolated probes + comparison | succeeded | 4.83 s | 364,700 KiB |
+| strict real Brax smoke | succeeded | 22.11 s | 1,374,304 KiB |
+| ruff | passed | 0.10 s | 24,048 KiB |
+| compileall | passed | 0.12 s | 16,472 KiB |
 
-The maximum measured RSS was 4.89 GiB. The existing 8-GiB allocation remains
+The maximum measured RSS was 4.91 GiB. The existing 8-GiB allocation remains
 appropriate; compilation did not demonstrate a need to increase memory.
 
 ## Fixture provenance
@@ -157,10 +166,26 @@ Historical logging keys remain covered by parity tests. The review fix also
 restores the old per-step lox log schema on the experimental compatibility
 facade while preserving `aux=None`.
 
-## Real public-entrypoint Brax smoke
+## Preserved external-script audit
 
-The final job invoked committed `task12_brax_smoke.py`, which calls public
-`rtrrl.train_rtrrl` with the exact payload stored in the evidence JSON:
+The external copy is exact functional-base content (byte SHA-256
+`f8aedcd9c315445af93e7f4a2475c50e9828c5188bd487ed39b85d7ec7da61cf`).
+Separate JAX 0.5.0 preserved and JAX 0.4.38 AAAI25 processes measured exact
+explicit-parameter LRU forward/carry, trace/update, and objective values.
+Source-native PRNG and initialization differed across those runtimes. More
+importantly, the fixed-noise actor-gradient maxima differed by
+`1.0449076890945435` (location) and `0.5879773795604706` (raw scale), matching
+the audited unconditional sampled-action `stop_gradient` difference.
+
+Therefore Memo strict parity does not imply parity of the preserved external
+script. Its detailed option mapping and unverified branches are in
+`rtrrl-preserved-original-comparison.md`.
+
+## Real Memo-runner Brax smoke
+
+The superseding Batch job invokes committed `task12_brax_smoke.py`, which calls
+`experiments.rtrrl_hopper.run.train_legacy` directly after Memo configuration
+normalization, with the exact payload stored in the evidence JSON:
 `aaai25_strict_lru`, real `brax-hopper`, spring backend, one training
 transition/update, and 1,000 evaluation transitions. It emitted one logger
 record at historical step 1, finalized the logger, and produced
@@ -176,9 +201,10 @@ occurred on authorized Batch.
 The final acceptance is scoped to this worktree and this change:
 
 - no credential-like content or secret filename is present in the Task 12 diff;
-- the external historical entrypoint delegates to Memorax;
-- no duplicate AAAI25 strict mathematical core was reintroduced outside
-  Memorax;
+- the external historical script exactly matches its preserved base copy and
+  is not a Memo runtime path;
+- its retained mathematical core is explicitly a backup/reference and has a
+  separate numerical audit rather than a Memo-parity claim;
 - unrelated worktrees may have pre-existing changes and are not claimed clean;
 - worktree cleanliness, no untracked files, and final diff checks are recorded
   after the report commit in the task handoff.

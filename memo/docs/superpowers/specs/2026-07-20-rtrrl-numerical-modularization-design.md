@@ -1,5 +1,13 @@
 # RTRRL Numerical-Parity Modularization Design
 
+> **SUPERSEDING DECISION — 2026-07-20:** `rtrrl/rtrrl.py` is preserved
+> byte-for-byte from functional base `5f7ff4e` as a backup/reference. It is not
+> Memo's runtime entrypoint and does not delegate to Memo. All maintained
+> strict execution, compatibility helpers, configuration normalization, and
+> smoke validation live under `memo/`. The preserved script still contains its
+> original training mathematics; its independently audited status is recorded
+> in `memo/docs/rtrrl-preserved-original-comparison.md`.
+
 ## Goal
 
 Refactor the existing Memorax RTRRL implementation into composable functional
@@ -8,10 +16,10 @@ AAAI25 LRU-RTRRL algorithm represented by:
 
 `/home/ubuntu/trainer/RTRRL-AAAI25/rtrrl.py`
 
-Memorax becomes the single long-term implementation. The AAAI25 script is an
-executable oracle during migration, not a second implementation to maintain.
-After parity is established, the legacy-compatible entry point calls the
-Memorax implementation.
+Memorax becomes the single maintained runtime implementation. The AAAI25
+repository remains the numerical oracle, while the streaming repository's
+original script remains an unchanged comparison/backup copy outside Memo's
+runtime path.
 
 The resulting framework must support controlled RTRRL ablations and component
 replacement without changing the strict baseline accidentally.
@@ -75,7 +83,7 @@ The migration sequence is:
 3. Compare the old inline operation and candidate module on identical data.
 4. Keep the module only after the red-to-green parity cycle succeeds.
 5. Compose validated modules into initialization and a complete online step.
-6. Redirect the legacy-compatible entry point to the composed Memorax program.
+6. Route Memo experiments and compatibility helpers to the composed program.
 7. Add ablation branches through the same component interfaces.
 
 There must be no permanent duplicate `oracle_rtrrl` mathematical core outside
@@ -344,7 +352,8 @@ The refactor is complete when:
 - explicit removed branches fail clearly
 - historical training and evaluation metrics are still recorded with unchanged
   aggregation and step semantics
-- the legacy-compatible entry point delegates to Memorax
+- Memo's compatibility/configuration helpers feed Memo's own program runner
+- the external streaming script remains an unchanged, non-delegating reference
 - no duplicate maintained AAAI25 mathematical core remains outside Memorax
 - production epoch scans do not stack full debug state
 - existing Memorax RTRRL extension tests remain green

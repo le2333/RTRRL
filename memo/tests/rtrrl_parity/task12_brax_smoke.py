@@ -3,13 +3,15 @@
 from __future__ import annotations
 
 import importlib.metadata as metadata
-from importlib import import_module
 import json
 import platform
 from typing import Any
 
 import jax
 import numpy as np
+
+from experiments.rtrrl_hopper.run import train_legacy
+from memorax.algorithms.rtrrl.entrypoint import normalize_legacy_invocation
 
 
 CONFIG_PAYLOAD: dict[str, Any] = {
@@ -72,12 +74,9 @@ class RecordingLogger(dict):
 
 
 def main() -> None:
-    # Import through the public historical module only after runtime metadata is
-    # available, keeping the evidence explicit about the invoked entrypoint.
-    train_rtrrl = import_module("rtrrl").train_rtrrl
-
     logger = RecordingLogger()
-    best_reward = train_rtrrl(CONFIG_PAYLOAD, logger)
+    config = normalize_legacy_invocation(CONFIG_PAYLOAD)
+    best_reward = train_legacy(config, logger)
     if not logger.finalized:
         raise AssertionError("logger did not finalize")
     if len(logger.records) != 1:
@@ -111,7 +110,9 @@ def main() -> None:
         json.dumps(
             {
                 "schema_version": 1,
-                "entrypoint": "rtrrl.train_rtrrl",
+                "entrypoint": (
+                    "experiments.rtrrl_hopper.run.train_legacy"
+                ),
                 "config_payload": CONFIG_PAYLOAD,
                 "runtime": {
                     "python": platform.python_version(),

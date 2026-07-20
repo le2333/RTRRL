@@ -1,5 +1,12 @@
 # RTRRL Numerical-Parity Modularization Implementation Plan
 
+> **SUPERSEDED IN PART — 2026-07-20:** The later user decision replaces every
+> instruction to modify or delegate `rtrrl/rtrrl.py`. That file must equal
+> functional base `5f7ff4e` byte-for-byte and remains only a backup/reference.
+> Memo's compatibility helpers and strict runtime remain under `memo/`. Task 11
+> is replaced by the preservation contract and independent numerical audit
+> below; Task 12 invokes Memo's runner directly.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use
 > superpowers:subagent-driven-development (recommended) or
 > superpowers:executing-plans to implement this plan task-by-task. Steps use
@@ -720,29 +727,30 @@ and satisfy their contracts.
 
 ---
 
-### Task 11: Legacy Entry Point and Existing Configuration Migration
+### Task 11: Preserved External Copy and Memo Configuration Migration
 
 **Files:**
-- Modify: `rtrrl/rtrrl.py`
+- Preserve: `rtrrl/rtrrl.py` exactly as at `5f7ff4e`
 - Modify: `memo/experiments/rtrrl_hopper/run.py`
 - Modify: legacy builder tests and configuration tests
 
 **Interfaces:**
-- Old CLI/YAML invocation delegates to Memorax.
-- No separate training mathematics remains in `rtrrl/rtrrl.py`.
+- Memo's compatibility/configuration helpers accept old YAML mappings.
+- The external script remains unchanged and retains its original mathematics.
 
-- [ ] **Step 1: Add subprocess-level compatibility tests**
+- [ ] **Step 1: Add Memo-helper compatibility and preservation tests**
 
 For representative YAML files, parse and build without starting a full
 environment. Assert effective budgets, profile, logger settings, and optimizer
 fields.
 
-- [ ] **Step 2: Replace the legacy script body with a compatibility entry point**
+- [ ] **Step 2: Restore and freeze the external script**
 
-Keep CLI parsing and legacy naming. Delegate configuration normalization,
-program construction, training, evaluation, and logging to Memorax.
+Restore `rtrrl/rtrrl.py` byte-for-byte from `5f7ff4e`; enforce byte hash and
+canonical AST hash. Keep Memo normalization, program construction, training,
+evaluation, and logging tests independent of the external script.
 
-- [ ] **Step 3: Verify no historical metric is lost**
+- [ ] **Step 3: Verify Memo historical metric translation**
 
 Run one mock epoch and compare the emitted metric dictionary against the
 pre-refactor fixture.
@@ -757,6 +765,13 @@ Parsing does not create environments or compile JAX. Produce a report of:
 - deprecated no-op fields
 
 Acceptance requires no edits for configurations in the supported LRU scope.
+
+- [ ] **Step 5: Audit the preserved LRU path against AAAI25**
+
+Use separate processes/environments and deterministic inputs. Distinguish
+matching forward/trace behavior, differing actor-gradient semantics, matching
+optional trace order, intentionally different configuration fields, and
+unverified branches. Do not infer complete-step parity from source similarity.
 
 ---
 
@@ -781,11 +796,11 @@ pytest memo/tests/test_independent_rtrrl.py -q
 
 Record test counts, failures, duration, peak RSS, JAX/JAXLIB, and backend.
 
-- [ ] **Step 2: Run a short Batch or EC2 Brax integration smoke**
+- [ ] **Step 2: Run a short Batch or EC2 Memo Brax integration smoke**
 
 Use one environment, strict LRU, and the shortest budget that compiles and
-emits training/evaluation metrics. This is integration validation, not the
-numerical oracle.
+emits training/evaluation metrics. Invoke Memo's strict runner directly, never
+the preserved external script. This is integration validation, not the oracle.
 
 - [ ] **Step 3: Compare CPU eager, CPU JIT, and selected Batch backend**
 
@@ -798,8 +813,9 @@ Confirm:
 
 - only the new worktree contains changes
 - no credentials or environment secrets are present
-- the legacy entry delegates to Memorax
-- no duplicate AAAI25 mathematical core remains outside Memorax
+- the external script exactly matches the preserved base copy
+- Memo's maintained runtime does not import or invoke the external script
+- the preserved duplicate is clearly labeled backup/reference, not maintained
 - no complete RL environment ran locally
 
 - [ ] **Step 5: Write the parity report**

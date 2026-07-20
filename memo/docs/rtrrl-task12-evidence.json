@@ -1,38 +1,5 @@
 {
-  "batch_job": {
-    "compute_environment": "rtrrl-cpu2-ce (c7a.2xlarge)",
-    "duration_seconds": 735.194,
-    "exit_code": 0,
-    "job_definition": "rtrrl-cpu-job:14",
-    "job_id": "d39f3e52-04fb-4fbb-ab61-1a5bcb694c46",
-    "memory_mib": 8192,
-    "queue": "rtrrl-cpu2-queue",
-    "started_at_epoch_ms": 1784581835106,
-    "status": "SUCCEEDED",
-    "stopped_at_epoch_ms": 1784582570300,
-    "vcpus": 4
-  },
-  "batch_job_id": "d39f3e52-04fb-4fbb-ab61-1a5bcb694c46",
-  "calibration_jobs": [
-    {
-      "duration_seconds": 771.42,
-      "job_id": "681dfa24-d3e1-4d3a-b0e1-f5f8b4cdc2ba",
-      "result": "collector rejected non-JSON smoke preamble",
-      "status": "SUCCEEDED"
-    },
-    {
-      "duration_seconds": 683.553,
-      "job_id": "3a04dd28-5c0c-4bfa-a6c0-d2b67b9e6bc2",
-      "result": "exposed true-base online_ac and static regressions",
-      "status": "SUCCEEDED"
-    },
-    {
-      "duration_seconds": 310.599,
-      "job_id": "1ea736dd-a3c3-4ed5-91ca-fac29a975711",
-      "result": "nodeid collector rejected pytest.ini terminal addopts",
-      "status": "FAILED"
-    }
-  ],
+  "batch_job_id": "a5f1b64e-3ad3-4994-a107-6ca4241b182d",
   "brax_smoke": {
     "best_reward": 49.92558288574219,
     "config_payload": {
@@ -58,7 +25,7 @@
       "seed": 7,
       "steps": 1
     },
-    "entrypoint": "rtrrl.train_rtrrl",
+    "entrypoint": "experiments.rtrrl_hopper.run.train_legacy",
     "evaluation_transitions": 1000,
     "logger_finalized": true,
     "record": {
@@ -117,7 +84,7 @@
       "relative_error": 7.30149404e-05
     }
   },
-  "functional_head_sha": "33448c2a12ef93edf4389b9286b1da60d8a8a17f",
+  "functional_head_sha": "6ce99ff9aa569a764c525466fb245a463b23a7d7",
   "numerical_measurements": {
     "comparison_semantics": {
       "acceptance_assertions_modified": false,
@@ -591,43 +558,84 @@
       "tests/online_ac/test_meta_parity.py::test_meta_three_steps_match_every_intermediate_state_and_terminal_zeroing"
     ]
   },
-  "report_parent_sha": "62246110d39256dba5641293920cebbb0b626a65",
-  "review_fix_patch_sha256": "9452b8661b2de7ee2afb09ab80a30dc8f94ec5527021e43d46192f8e45770052",
+  "preserved_original_comparison": {
+    "actor_gradient_max_abs": {
+      "actor_grad_loc": 1.0449076890945435,
+      "actor_grad_raw_scale": 0.5879773795604706
+    },
+    "explicit_forward_trace_max_abs": {
+      "actor_objective": 0.0,
+      "explicit_lru_carry_1": 0.0,
+      "explicit_lru_carry_2": 0.0,
+      "explicit_lru_output_1": 0.0,
+      "explicit_lru_output_2": 0.0,
+      "explicit_lru_params": 0.0,
+      "lru_carry_0": 0.0,
+      "trace_1": 0.0,
+      "trace_update": 0.0
+    },
+    "oracle_runtime": {
+      "backend": "cpu",
+      "flax": "0.10.2",
+      "jax": "0.4.38",
+      "jaxlib": "0.4.38",
+      "python": "3.12.13"
+    },
+    "preserved_runtime": {
+      "backend": "cpu",
+      "flax": "0.10.2",
+      "jax": "0.5.0",
+      "jaxlib": "0.5.0",
+      "python": "3.12.13"
+    },
+    "runtime_sensitive_max_abs": {
+      "native_lru_carry_1": 0.9161574840545654,
+      "native_lru_carry_2": 0.7005938291549683,
+      "native_lru_output_1": 1.8039704756811261,
+      "native_lru_output_2": 1.5446054488420486,
+      "native_lru_params": 5.048454284667969,
+      "prng_split": 2793280701.0
+    },
+    "schema_version": 1,
+    "verdict": "explicit forward/trace matches; native PRNG/init and actor gradient differ"
+  },
+  "report_parent_sha": "6ce99ff9aa569a764c525466fb245a463b23a7d7",
+  "review_fix_patch_sha256": "a2c062212511c4cd59dedb3cfe355c1246521fc055cc1b2ab0f6ffb79ec030b2",
   "runs": {
     "brax_smoke": {
-      "command": "PYTHONPATH=/tmp/head/rtrrl:/tmp/head/memo /tmp/venv/bin/python -m tests.rtrrl_parity.task12_brax_smoke > /tmp/task12-results/brax_smoke.stdout.json",
+      "command": "PYTHONPATH=/tmp/head/memo /tmp/venv/bin/python -m tests.rtrrl_parity.task12_brax_smoke > /tmp/task12-results/brax_smoke.stdout.json",
       "counts": null,
       "diagnostic_summary": null,
       "environment": {
-        "PYTHONPATH": "/tmp/head/rtrrl:/tmp/head/memo"
+        "PYTHONPATH": "/tmp/head/memo"
       },
       "exit_code": 0,
       "failures": [],
       "time": {
-        "elapsed": "0:21.98",
-        "peak_rss_kib": 1378324,
-        "system_seconds": 2.27,
-        "user_seconds": 32.92
+        "elapsed": "0:22.11",
+        "peak_rss_kib": 1374304,
+        "system_seconds": 2.55,
+        "user_seconds": 32.8
       },
       "working_directory": "/tmp/head"
     },
     "compileall": {
-      "command": "/tmp/venv/bin/python -m compileall -q memo/memorax memo/experiments memo/tests/rtrrl_parity memo/tests/online_ac memo/tests/test_independent_rtrrl.py rtrrl/rtrrl.py",
+      "command": "/tmp/venv/bin/python -m compileall -q memo/memorax memo/experiments memo/tests/rtrrl_parity memo/tests/online_ac memo/tests/test_independent_rtrrl.py",
       "counts": null,
       "diagnostic_summary": null,
       "environment": {},
       "exit_code": 0,
       "failures": [],
       "time": {
-        "elapsed": "0:00.11",
-        "peak_rss_kib": 16312,
-        "system_seconds": 0.01,
-        "user_seconds": 0.09
+        "elapsed": "0:00.12",
+        "peak_rss_kib": 16472,
+        "system_seconds": 0.0,
+        "user_seconds": 0.11
       },
       "working_directory": "/tmp/head"
     },
     "finite_differences": {
-      "command": "PYTHONPATH=/tmp/head/rtrrl:/tmp/head/memo RTRRL_RUN_ACCELERATED_NUMERICS=1 /tmp/venv/bin/pytest -q -s tests/rtrrl_parity/test_lru_credit_parity.py::test_two_step_credit_directional_finite_differences --junitxml=/tmp/task12-results/finite_differences.xml",
+      "command": "PYTHONPATH=/tmp/head/memo RTRRL_RUN_ACCELERATED_NUMERICS=1 /tmp/venv/bin/pytest -q -s tests/rtrrl_parity/test_lru_credit_parity.py::test_two_step_credit_directional_finite_differences --junitxml=/tmp/task12-results/finite_differences.xml",
       "counts": {
         "errors": 0,
         "failures": 0,
@@ -636,21 +644,21 @@
       },
       "diagnostic_summary": null,
       "environment": {
-        "PYTHONPATH": "/tmp/head/rtrrl:/tmp/head/memo",
+        "PYTHONPATH": "/tmp/head/memo",
         "RTRRL_RUN_ACCELERATED_NUMERICS": "1"
       },
       "exit_code": 0,
       "failures": [],
       "time": {
-        "elapsed": "0:04.84",
-        "peak_rss_kib": 466916,
-        "system_seconds": 0.35,
-        "user_seconds": 5.82
+        "elapsed": "0:06.13",
+        "peak_rss_kib": 468508,
+        "system_seconds": 0.5,
+        "user_seconds": 6.77
       },
       "working_directory": "/tmp/head/memo"
     },
     "independent": {
-      "command": "PYTHONPATH=/tmp/head/rtrrl:/tmp/head/memo /tmp/venv/bin/pytest -q tests/test_independent_rtrrl.py --junitxml=/tmp/task12-results/independent.xml",
+      "command": "PYTHONPATH=/tmp/head/memo /tmp/venv/bin/pytest -q tests/test_independent_rtrrl.py --junitxml=/tmp/task12-results/independent.xml",
       "counts": {
         "errors": 0,
         "failures": 0,
@@ -659,37 +667,37 @@
       },
       "diagnostic_summary": null,
       "environment": {
-        "PYTHONPATH": "/tmp/head/rtrrl:/tmp/head/memo"
+        "PYTHONPATH": "/tmp/head/memo"
       },
       "exit_code": 0,
       "failures": [],
       "time": {
-        "elapsed": "0:22.82",
-        "peak_rss_kib": 1476120,
-        "system_seconds": 1.99,
-        "user_seconds": 24.27
+        "elapsed": "0:28.41",
+        "peak_rss_kib": 1494664,
+        "system_seconds": 2.32,
+        "user_seconds": 28.95
       },
       "working_directory": "/tmp/head/memo"
     },
     "numerical_harness": {
-      "command": "PYTHONPATH=/tmp/head/rtrrl:/tmp/head/memo /tmp/venv/bin/python -m tests.rtrrl_parity.task12_numerical_evidence > /tmp/task12-results/numerical_harness.stdout.json",
+      "command": "PYTHONPATH=/tmp/head/memo /tmp/venv/bin/python -m tests.rtrrl_parity.task12_numerical_evidence > /tmp/task12-results/numerical_harness.stdout.json",
       "counts": null,
       "diagnostic_summary": null,
       "environment": {
-        "PYTHONPATH": "/tmp/head/rtrrl:/tmp/head/memo"
+        "PYTHONPATH": "/tmp/head/memo"
       },
       "exit_code": 0,
       "failures": [],
       "time": {
         "elapsed": "0:12.40",
-        "peak_rss_kib": 1078424,
-        "system_seconds": 0.98,
-        "user_seconds": 15.0
+        "peak_rss_kib": 1081472,
+        "system_seconds": 1.05,
+        "user_seconds": 14.94
       },
       "working_directory": "/tmp/head/memo"
     },
     "online_ac_base": {
-      "command": "PYTHONPATH=/tmp/base/rtrrl:/tmp/base/memo /tmp/venv/bin/python /tmp/head/memo/tests/rtrrl_parity/task12_nodeids.py /tmp/base/memo /tmp/task12-results/online_ac_base.nodes && PYTHONPATH=/tmp/base/rtrrl:/tmp/base/memo /tmp/venv/bin/pytest -q tests/online_ac --junitxml=/tmp/task12-results/online_ac_base.xml",
+      "command": "PYTHONPATH=/tmp/base/memo /tmp/venv/bin/python /tmp/head/memo/tests/rtrrl_parity/task12_nodeids.py /tmp/base/memo /tmp/task12-results/online_ac_base.nodes && PYTHONPATH=/tmp/base/memo /tmp/venv/bin/pytest -q tests/online_ac --junitxml=/tmp/task12-results/online_ac_base.xml",
       "counts": {
         "errors": 0,
         "failures": 1,
@@ -698,22 +706,22 @@
       },
       "diagnostic_summary": null,
       "environment": {
-        "PYTHONPATH": "/tmp/base/rtrrl:/tmp/base/memo"
+        "PYTHONPATH": "/tmp/base/memo"
       },
       "exit_code": 1,
       "failures": [
         "tests/online_ac/test_standard_parity.py::test_standard_one_step_matches_legacy_every_exposed_leaf"
       ],
       "time": {
-        "elapsed": "3:36.13",
-        "peak_rss_kib": 5051516,
-        "system_seconds": 23.19,
-        "user_seconds": 315.85
+        "elapsed": "3:31.31",
+        "peak_rss_kib": 5079376,
+        "system_seconds": 23.53,
+        "user_seconds": 311.22
       },
       "working_directory": "/tmp/base/memo"
     },
     "online_ac_head": {
-      "command": "PYTHONPATH=/tmp/head/rtrrl:/tmp/head/memo /tmp/venv/bin/python tests/rtrrl_parity/task12_nodeids.py /tmp/head/memo /tmp/task12-results/online_ac_head.nodes && PYTHONPATH=/tmp/head/rtrrl:/tmp/head/memo /tmp/venv/bin/pytest -q tests/online_ac --junitxml=/tmp/task12-results/online_ac_head.xml",
+      "command": "PYTHONPATH=/tmp/head/memo /tmp/venv/bin/python tests/rtrrl_parity/task12_nodeids.py /tmp/head/memo /tmp/task12-results/online_ac_head.nodes && PYTHONPATH=/tmp/head/memo /tmp/venv/bin/pytest -q tests/online_ac --junitxml=/tmp/task12-results/online_ac_head.xml",
       "counts": {
         "errors": 0,
         "failures": 1,
@@ -722,19 +730,70 @@
       },
       "diagnostic_summary": null,
       "environment": {
-        "PYTHONPATH": "/tmp/head/rtrrl:/tmp/head/memo"
+        "PYTHONPATH": "/tmp/head/memo"
       },
       "exit_code": 1,
       "failures": [
         "tests/online_ac/test_standard_parity.py::test_standard_one_step_matches_legacy_every_exposed_leaf"
       ],
       "time": {
-        "elapsed": "3:38.42",
-        "peak_rss_kib": 5130104,
-        "system_seconds": 23.2,
-        "user_seconds": 327.53
+        "elapsed": "4:27.61",
+        "peak_rss_kib": 5144648,
+        "system_seconds": 24.72,
+        "user_seconds": 375.33
       },
       "working_directory": "/tmp/head/memo"
+    },
+    "oracle_probe": {
+      "command": "PYTHONPATH=/tmp/oracle /tmp/oracle-venv/bin/python memo/tests/rtrrl_parity/preserved_original_probe.py --source-root /tmp/oracle --actor-semantics aaai25 > /tmp/task12-results/oracle_probe.stdout.json",
+      "counts": null,
+      "diagnostic_summary": null,
+      "environment": {
+        "JAX_VERSION": "0.4.38",
+        "PYTHONPATH": "/tmp/oracle"
+      },
+      "exit_code": 0,
+      "failures": [],
+      "time": {
+        "elapsed": "0:02.36",
+        "peak_rss_kib": 361044,
+        "system_seconds": 0.24,
+        "user_seconds": 3.68
+      },
+      "working_directory": "/tmp/head"
+    },
+    "preserved_compare": {
+      "command": "/tmp/venv/bin/python memo/tests/rtrrl_parity/preserved_original_compare.py --preserved /tmp/task12-results/preserved_probe.stdout.json --oracle /tmp/task12-results/oracle_probe.stdout.json > /tmp/task12-results/preserved_compare.stdout.json",
+      "counts": null,
+      "diagnostic_summary": null,
+      "environment": {},
+      "exit_code": 0,
+      "failures": [],
+      "time": {
+        "elapsed": "0:00.11",
+        "peak_rss_kib": 29536,
+        "system_seconds": 0.02,
+        "user_seconds": 0.57
+      },
+      "working_directory": "/tmp/head"
+    },
+    "preserved_probe": {
+      "command": "PYTHONPATH=/tmp/head/rtrrl /tmp/preserved-venv/bin/python memo/tests/rtrrl_parity/preserved_original_probe.py --source-root /tmp/head/rtrrl --actor-semantics preserved > /tmp/task12-results/preserved_probe.stdout.json",
+      "counts": null,
+      "diagnostic_summary": null,
+      "environment": {
+        "JAX_VERSION": "0.5.0",
+        "PYTHONPATH": "/tmp/head/rtrrl"
+      },
+      "exit_code": 0,
+      "failures": [],
+      "time": {
+        "elapsed": "0:02.36",
+        "peak_rss_kib": 364700,
+        "system_seconds": 0.27,
+        "user_seconds": 3.63
+      },
+      "working_directory": "/tmp/head"
     },
     "pyright_base": {
       "command": "/tmp/venv/bin/pyright",
@@ -749,9 +808,9 @@
       "failures": [],
       "time": {
         "elapsed": "0:06.74",
-        "peak_rss_kib": 881580,
-        "system_seconds": 0.63,
-        "user_seconds": 11.34
+        "peak_rss_kib": 872020,
+        "system_seconds": 0.56,
+        "user_seconds": 11.32
       },
       "working_directory": "/tmp/base/memo"
     },
@@ -767,10 +826,10 @@
       "exit_code": 1,
       "failures": [],
       "time": {
-        "elapsed": "0:12.02",
-        "peak_rss_kib": 960668,
-        "system_seconds": 2.06,
-        "user_seconds": 15.15
+        "elapsed": "0:11.92",
+        "peak_rss_kib": 962020,
+        "system_seconds": 2.35,
+        "user_seconds": 14.69
       },
       "working_directory": "/tmp/head/memo"
     },
@@ -786,10 +845,10 @@
       "exit_code": 1,
       "failures": [],
       "time": {
-        "elapsed": "0:01.99",
-        "peak_rss_kib": 455480,
-        "system_seconds": 0.34,
-        "user_seconds": 3.22
+        "elapsed": "0:01.98",
+        "peak_rss_kib": 449744,
+        "system_seconds": 0.31,
+        "user_seconds": 3.23
       },
       "working_directory": "/tmp/base/memo"
     },
@@ -805,30 +864,30 @@
       "exit_code": 1,
       "failures": [],
       "time": {
-        "elapsed": "0:02.06",
-        "peak_rss_kib": 460532,
-        "system_seconds": 0.33,
-        "user_seconds": 3.29
+        "elapsed": "0:02.02",
+        "peak_rss_kib": 461800,
+        "system_seconds": 0.32,
+        "user_seconds": 3.24
       },
       "working_directory": "/tmp/head/memo"
     },
     "ruff": {
-      "command": "/tmp/venv/bin/ruff check memorax/algorithms/rtrrl memorax/algorithms/independent_rtrrl.py experiments/base/experiment.py experiments/rtrrl_hopper/run.py tests/rtrrl_parity tests/online_ac/test_meta_parity.py tests/online_ac/test_legacy_builders.py tests/test_independent_rtrrl.py ../rtrrl/rtrrl.py",
+      "command": "/tmp/venv/bin/ruff check memorax/algorithms/rtrrl memorax/algorithms/independent_rtrrl.py experiments/base/experiment.py experiments/rtrrl_hopper/run.py tests/rtrrl_parity tests/online_ac/test_meta_parity.py tests/online_ac/test_legacy_builders.py tests/test_independent_rtrrl.py",
       "counts": null,
       "diagnostic_summary": null,
       "environment": {},
       "exit_code": 0,
       "failures": [],
       "time": {
-        "elapsed": "0:00.01",
-        "peak_rss_kib": 24620,
-        "system_seconds": 0.02,
-        "user_seconds": 0.01
+        "elapsed": "0:00.10",
+        "peak_rss_kib": 24048,
+        "system_seconds": 0.04,
+        "user_seconds": 0.0
       },
       "working_directory": "/tmp/head/memo"
     },
     "selected_online_ac": {
-      "command": "PYTHONPATH=/tmp/head/rtrrl:/tmp/head/memo /tmp/venv/bin/pytest -q tests/online_ac -k 'rtrrl or meta or independent' --junitxml=/tmp/task12-results/selected_online_ac.xml",
+      "command": "PYTHONPATH=/tmp/head/memo /tmp/venv/bin/pytest -q tests/online_ac -k 'rtrrl or meta or independent' --junitxml=/tmp/task12-results/selected_online_ac.xml",
       "counts": {
         "errors": 0,
         "failures": 0,
@@ -837,38 +896,38 @@
       },
       "diagnostic_summary": null,
       "environment": {
-        "PYTHONPATH": "/tmp/head/rtrrl:/tmp/head/memo"
+        "PYTHONPATH": "/tmp/head/memo"
       },
       "exit_code": 0,
       "failures": [],
       "time": {
-        "elapsed": "1:25.81",
-        "peak_rss_kib": 3204560,
-        "system_seconds": 7.44,
-        "user_seconds": 140.85
+        "elapsed": "1:49.08",
+        "peak_rss_kib": 3316524,
+        "system_seconds": 7.77,
+        "user_seconds": 163.82
       },
       "working_directory": "/tmp/head/memo"
     },
     "strict_parity": {
-      "command": "PYTHONPATH=/tmp/head/rtrrl:/tmp/head/memo RTRRL_RUN_ACCELERATED_NUMERICS=1 /tmp/venv/bin/pytest -q tests/rtrrl_parity --junitxml=/tmp/task12-results/strict_parity.xml",
+      "command": "PYTHONPATH=/tmp/head/memo RTRRL_RUN_ACCELERATED_NUMERICS=1 /tmp/venv/bin/pytest -q tests/rtrrl_parity --junitxml=/tmp/task12-results/strict_parity.xml",
       "counts": {
         "errors": 0,
         "failures": 0,
         "skipped": 0,
-        "tests": 205
+        "tests": 203
       },
       "diagnostic_summary": null,
       "environment": {
-        "PYTHONPATH": "/tmp/head/rtrrl:/tmp/head/memo",
+        "PYTHONPATH": "/tmp/head/memo",
         "RTRRL_RUN_ACCELERATED_NUMERICS": "1"
       },
       "exit_code": 0,
       "failures": [],
       "time": {
-        "elapsed": "0:42.81",
-        "peak_rss_kib": 2146172,
-        "system_seconds": 3.18,
-        "user_seconds": 51.69
+        "elapsed": "0:52.35",
+        "peak_rss_kib": 2158956,
+        "system_seconds": 3.5,
+        "user_seconds": 59.84
       },
       "working_directory": "/tmp/head/memo"
     }
@@ -893,9 +952,11 @@
     "memo/memorax/algorithms/rtrrl/legacy.py": "b9edc5926402fb782d02fa055a5290681dc08d427a219d49b14c8b53724966e3",
     "memo/tests/online_ac/golden.py": "5beba2bb142f61660fd5be807cc43e18ec448ce2d55f8c42e55714ca4c77248e",
     "memo/tests/online_ac/test_meta_parity.py": "08ae8d948816eb0ef7593fa861d26f9b68d5d4dc380e1ebcf7d3bf044d952c60",
-    "task12_batch_verification.sh": "5f22913a9bb2d9673a91203993daf324824d5acb7b1979129a93d0c4efeabb44",
-    "task12_brax_smoke.py": "78ef56c8c38fa790009a7019963cd4be7752e2c1e82ce04e42e955011d39aab6",
-    "task12_collect_evidence.py": "fea44ffa50770c5951a9b799fda8ed784e44918495628d0126497ceac22208bb",
+    "preserved_original_compare.py": "01c3375e015239ac934b253dff83e312f9bbd9fd356cd1c3c0b25d8904ee48b9",
+    "preserved_original_probe.py": "a6c15619dc867f2ac75b426595e91ed626e16f0417b2333717a3faa7eb51fb1f",
+    "task12_batch_verification.sh": "31099c6020e510f65c570d7d263ddabfcf2605494d7e68adcbf74ab5877fb300",
+    "task12_brax_smoke.py": "7b3c0e05118736a8b9fe9de018daea8a70533c5fc45c3bbd8a201a5cb40f1df7",
+    "task12_collect_evidence.py": "9f48781f64dd62b519110424d531e206ae659c9250d3c4254cb672de5c422b24",
     "task12_nodeids.py": "c29892d9bae3472989afaac0541187bba57db7848331ae67955c7c957d155003",
     "task12_numerical_evidence.py": "a6ee7ccb2e7ef2010868d912b87bc5bac4b67e23c78757fefc44fbbcf094099c"
   },

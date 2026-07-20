@@ -97,6 +97,9 @@ def main() -> None:
         "online_ac_head",
         "online_ac_base",
         "numerical_harness",
+        "preserved_probe",
+        "oracle_probe",
+        "preserved_compare",
         "brax_smoke",
         "ruff",
         "pyright_head",
@@ -139,6 +142,9 @@ def main() -> None:
         },
         "numerical_measurements": _last_json(
             RESULTS / "numerical_harness.stdout.json"
+        ),
+        "preserved_original_comparison": _last_json(
+            RESULTS / "preserved_compare.stdout.json"
         ),
         "brax_smoke": _last_json(RESULTS / "brax_smoke.stdout.json"),
         "source_hashes": json.loads(_text(RESULTS / "source_hashes.json")),
