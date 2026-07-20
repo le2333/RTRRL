@@ -12,6 +12,7 @@ dependencies = [
 
 [project.scripts]
 trainerctl = "trainer_infra.cli:main"
+trainer-image-catalog = "trainer_infra.image_catalog:main"
 
 [dependency-groups]
 dev = ["pytest>=8,<9", "ruff>=0.9,<1"]

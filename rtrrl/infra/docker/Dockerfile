@@ -29,6 +29,7 @@ RUN uv sync --frozen --no-dev
 FROM python:3.12-slim AS runtime
 
 ARG TRAINER_SCRIPT_CATALOG
+RUN test -n "${TRAINER_SCRIPT_CATALOG}"
 LABEL org.rtrrl.trainer.scripts.v1="${TRAINER_SCRIPT_CATALOG}"
 
 # AWS CLI v2 for S3 checkpoint sync from the container (uses the Batch job role).

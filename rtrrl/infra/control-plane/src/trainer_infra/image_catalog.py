@@ -1,10 +1,12 @@
 from __future__ import annotations
 
+import argparse
 import base64
 import binascii
 import gzip
 import json
 import re
+from collections.abc import Sequence
 from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any, Mapping, Protocol
@@ -25,6 +27,15 @@ class ResolvedImage:
     repository: str
     digest: str
     catalog: ScriptCatalog | None = None
+
+    def __post_init__(self) -> None:
+        canonical_reference, repository, digest = _parse_digest_reference(self.reference)
+        if self.reference != canonical_reference:
+            raise ValueError(
+                f"image {self.reference!r} is not a canonical immutable digest reference"
+            )
+        if self.repository != repository or self.digest != digest:
+            raise ValueError(f"image {self.reference!r} has inconsistent repository or digest")
 
 
 class EcrClient(Protocol):
@@ -61,14 +72,29 @@ def decode_catalog(value: str) -> ScriptCatalog:
         raise ValueError(f"catalog label does not contain a valid catalog: {error}") from error
 
 
-def resolve_image(reference: str) -> ResolvedImage:
-    """Parse an immutable image reference."""
+def _parse_digest_reference(reference: str) -> tuple[str, str, str]:
     if "@" not in reference:
         raise ValueError(f"image {reference!r} is not an immutable digest reference")
     repository, digest = reference.rsplit("@", 1)
     if not repository or not _DIGEST_PATTERN.fullmatch(digest):
         raise ValueError(f"image {reference!r} is not an immutable sha256 digest reference")
-    return ResolvedImage(reference=reference, repository=repository, digest=digest)
+    last_slash = repository.rfind("/")
+    last_colon = repository.rfind(":")
+    if last_colon > last_slash:
+        repository = repository[:last_colon]
+    if not repository:
+        raise ValueError(f"image {reference!r} has no repository")
+    return f"{repository}@{digest}", repository, digest
+
+
+def resolve_image(reference: str) -> ResolvedImage:
+    """Parse and canonicalize an immutable image reference."""
+    canonical_reference, repository, digest = _parse_digest_reference(reference)
+    return ResolvedImage(
+        reference=canonical_reference,
+        repository=repository,
+        digest=digest,
+    )
 
 
 def _json_object(value: Mapping[str, Any] | str | bytes, *, context: str) -> Mapping[str, Any]:
@@ -219,3 +245,17 @@ def load_catalog_index(path: Path) -> ScriptCatalog:
 def encode_catalog_file(path: Path) -> str:
     """Load, validate, and encode an index for a Docker build argument."""
     return encode_catalog(load_catalog_index(path))
+
+
+def main(argv: Sequence[str] | None = None) -> int:
+    parser = argparse.ArgumentParser(
+        description="Validate and encode a trainer script catalog for a Docker label."
+    )
+    parser.add_argument("index", type=Path, help="path to infra/scripts/index.yaml")
+    args = parser.parse_args(argv)
+    print(encode_catalog_file(args.index))
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

@@ -5,10 +5,12 @@ from typing import Any
 import pytest
 from pydantic import ValidationError
 
+from trainer_infra import image_catalog
 from trainer_infra.image_catalog import (
     CATALOG_PROTOCOL_VERSION,
     LABEL,
     EcrCatalogReader,
+    ResolvedImage,
     decode_catalog,
     encode_catalog,
     encode_catalog_file,
@@ -111,6 +113,23 @@ def test_resolve_image_accepts_only_immutable_digest() -> None:
 
     with pytest.raises(ValueError, match="immutable digest"):
         resolve_image("registry.example/repo/image:dev")
+
+
+def test_resolved_image_constructor_rejects_forged_mutable_reference() -> None:
+    with pytest.raises(ValueError, match="immutable digest"):
+        ResolvedImage(
+            reference="registry.example/repo/image:dev",
+            repository="registry.example/repo/image",
+            digest=DIGEST,
+        )
+
+
+def test_resolve_image_removes_tag_before_digest() -> None:
+    image = resolve_image(f"registry.example:5000/repo/image:dev@{DIGEST}")
+
+    assert image.reference == f"registry.example:5000/repo/image@{DIGEST}"
+    assert image.repository == "registry.example:5000/repo/image"
+    assert image.digest == DIGEST
 
 
 def test_tag_is_resolved_once_and_all_reads_use_digest(catalog: ScriptCatalog) -> None:
@@ -274,11 +293,61 @@ def test_repository_descriptors_form_a_real_complete_catalog() -> None:
         assert descriptor.sdk_protocol_version == "1"
 
 
+def test_rtrrl_descriptor_uses_actual_reward_metric() -> None:
+    infra = Path(__file__).parents[2]
+
+    catalog = load_catalog_index(infra / "scripts" / "index.yaml")
+
+    assert catalog.scripts["rtrrl"].objective.metric == "eval/rewards"
+
+
+def test_catalog_cli_prints_encoded_validated_index(capsys: pytest.CaptureFixture[str]) -> None:
+    index = Path(__file__).parents[2] / "scripts" / "index.yaml"
+
+    exit_code = image_catalog.main([str(index)])
+
+    assert exit_code == 0
+    assert decode_catalog(capsys.readouterr().out.strip()) == load_catalog_index(index)
+
+
+def test_catalog_cli_is_registered_as_console_script() -> None:
+    pyproject = Path(__file__).parents[1] / "pyproject.toml"
+    contents = pyproject.read_text(encoding="utf-8")
+
+    assert 'trainer-image-catalog = "trainer_infra.image_catalog:main"' in contents
+
+
 @pytest.mark.parametrize("filename", ["Dockerfile", "Dockerfile.gpu"])
 def test_dockerfile_accepts_catalog_build_arg_and_copies_descriptors(filename: str) -> None:
     dockerfile = Path(__file__).parents[2] / "docker" / filename
     contents = dockerfile.read_text(encoding="utf-8")
 
     assert "ARG TRAINER_SCRIPT_CATALOG" in contents
+    guard = 'RUN test -n "${TRAINER_SCRIPT_CATALOG}"'
+    assert guard in contents
     assert f'LABEL {LABEL}="${{TRAINER_SCRIPT_CATALOG}}"' in contents
+    assert contents.index(guard) < contents.index(f"LABEL {LABEL}")
     assert "COPY infra/scripts /opt/trainer/scripts" in contents
+
+
+def test_shared_build_entrypoint_passes_catalog_arg_conditionally() -> None:
+    script = Path(__file__).parents[4] / "infra" / "build-and-push.sh"
+    contents = script.read_text(encoding="utf-8")
+
+    assert 'CATALOG_INDEX="${PROJECT_DIR}/infra/scripts/index.yaml"' in contents
+    assert 'if [ -f "${CATALOG_INDEX}" ]; then' in contents
+    assert 'uv run --project "${PROJECT_DIR}/infra/control-plane"' in contents
+    assert 'trainer-image-catalog "${CATALOG_INDEX}"' in contents
+    assert 'BUILD_ARGS+=(--build-arg "TRAINER_SCRIPT_CATALOG=${TRAINER_SCRIPT_CATALOG}")' in contents
+    assert '"${BUILD_ARGS[@]}"' in contents
+
+
+def test_github_build_generates_and_passes_catalog_arg() -> None:
+    workflow = Path(__file__).parents[4] / ".github" / "workflows" / "build-rtrrl-image.yml"
+    contents = workflow.read_text(encoding="utf-8")
+
+    assert "uses: astral-sh/setup-uv@" in contents
+    assert "id: catalog" in contents
+    assert "trainer-image-catalog rtrrl/infra/scripts/index.yaml" in contents
+    assert "build-args: |" in contents
+    assert "TRAINER_SCRIPT_CATALOG=${{ steps.catalog.outputs.value }}" in contents

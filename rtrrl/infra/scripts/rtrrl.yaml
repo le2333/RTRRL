@@ -13,7 +13,7 @@ defaults:
     aim_every_env_steps: 10000
     rerun_every_episodes: 100
 objective:
-  metric: eval/episode_reward
+  metric: eval/rewards
   direction: maximize
   reduction: last
 fields:
