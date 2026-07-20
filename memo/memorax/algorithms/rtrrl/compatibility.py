@@ -280,6 +280,37 @@ _INT_FIELDS = {
     "total_timesteps",
 }
 
+_STRICT_EXPERIMENTAL_FIELDS = frozenset(
+    {
+        "act_clip",
+        "act_magnitude_factor",
+        "align_action_logprob",
+        "backbone",
+        "bound_actor",
+        "encoder_dim",
+        "f_align",
+        "freeze_gamma",
+        "gradient_mode",
+        "layer_norm",
+        "logprob_reduction",
+        "lru_output_dim",
+        "meta_rl",
+        "mlp_actor",
+        "normalize_obs",
+        "normalize_reward",
+        "pass_obs",
+        "pred_coeff",
+        "pred_obs",
+        "rnn_model",
+        "rtrrl_topology",
+        "slow_rnn_factor",
+        "update_trace_before_td",
+        "use_encoder",
+        "var_scaling",
+        "wiring",
+    }
+)
+
 
 def _freeze(value: Any) -> Any:
     if isinstance(value, Mapping):
@@ -430,27 +461,21 @@ def to_component_config(legacy: LegacyRTRRLConfig) -> RTRRLComponentConfig:
         "action_magnitude_factor": legacy.act_magnitude_factor,
     }
     if legacy.profile == "aaai25_strict_lru":
-        incompatible = {
-            "backbone": legacy.backbone != "lru",
-            "bound_actor": legacy.bound_actor,
-            "act_clip": legacy.act_clip != 0.0,
-            "freeze_gamma": legacy.freeze_gamma,
-            "pred_obs": legacy.pred_obs,
-            "logprob_reduction": legacy.logprob_reduction != "mean",
-            "update_trace_before_td": not legacy.update_trace_before_td,
-            "rtrrl_topology": legacy.rtrrl_topology != "shared",
-            "use_encoder": legacy.use_encoder,
-        }
         conflicts = tuple(
-            name
-            for name, differs in incompatible.items()
-            if differs and name in legacy.explicit_fields
+            sorted(_STRICT_EXPERIMENTAL_FIELDS & set(legacy.explicit_fields))
         )
         if conflicts:
             raise ValueError(
                 "strict profile cannot be combined with experimental branch "
                 f"flags: {', '.join(conflicts)}"
             )
+        strict_numerical = {
+            **numerical,
+            "meta_rl": True,
+            "normalize_observation": False,
+            "normalize_reward": False,
+            "action_magnitude_factor": 0.0,
+        }
         return RTRRLComponentConfig(
             profile=legacy.profile,
             backbone="aaai25_lru",
@@ -463,7 +488,7 @@ def to_component_config(legacy: LegacyRTRRLConfig) -> RTRRLComponentConfig:
             input_gain="trainable",
             prediction_component="none",
             topology="shared",
-            **numerical,
+            **strict_numerical,
         )
     if legacy.profile == "memo_experimental":
         trace_timing = "fresh" if legacy.update_trace_before_td else "incoming"

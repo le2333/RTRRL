@@ -46,7 +46,6 @@ class RecurrentComponent(Protocol):
         cotangent: Any,
     ) -> Any: ...
 
-
 def _identity(value):
     return value
 
@@ -56,6 +55,18 @@ class MemoraxRecurrentAdapter:
     """Expose an existing Memorax torso through explicit dynamic arguments."""
 
     module: Memoroid | RNN
+
+    def init(self, *args: Any, **kwargs: Any) -> Any:
+        return self.module.init(*args, **kwargs)
+
+    def apply(self, *args: Any, **kwargs: Any) -> Any:
+        return self.module.apply(*args, **kwargs)
+
+    def initialize_carry(self, key: Any, input_shape: Any) -> Any:
+        return self.module.initialize_carry(key, input_shape)
+
+    def initialize_sensitivity(self, key: Any, input_shape: Any) -> Any:
+        return self.module.initialize_sensitivity(key, input_shape)
 
     def initialize(self, key: Any, input_shape: tuple[int, ...]) -> Any:
         carry_shape = cast(Any, (*input_shape[:-1], None))
@@ -103,12 +114,17 @@ class MemoraxComponentSelection:
 
     effective_config: RTRRLComponentConfig
     feature_extractor: FeatureExtractor
-    recurrent: Memoroid | RNN
-    recurrent_adapter: MemoraxRecurrentAdapter
+    recurrent: MemoraxRecurrentAdapter
+    recurrent_module: Memoroid | RNN
     actor_head: nn.Module
     critic_head: nn.Module
     prediction_head: nn.Module | None
     activation: Any
+
+    @property
+    def recurrent_adapter(self) -> MemoraxRecurrentAdapter:
+        """Compatibility name for the selected executable component."""
+        return self.recurrent
 
 
 def select_memorax_components(
@@ -190,11 +206,12 @@ def select_memorax_components(
         if config.pred_obs
         else None
     )
+    recurrent_adapter = MemoraxRecurrentAdapter(recurrent)
     return MemoraxComponentSelection(
         effective_config=effective,
         feature_extractor=feature_extractor,
-        recurrent=recurrent,
-        recurrent_adapter=MemoraxRecurrentAdapter(recurrent),
+        recurrent=recurrent_adapter,
+        recurrent_module=recurrent,
         actor_head=heads.Gaussian(
             action_dim=action_dim, bound=config.bound_actor
         ),

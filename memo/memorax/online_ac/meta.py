@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import replace
+from dataclasses import dataclass, replace
 from typing import Any, cast
 
 import jax
@@ -29,6 +29,19 @@ from .td import make_td0
 from .traces import make_rtrrl_trace
 from .types import ActionDecision, AgentProgram, EvalSummary
 from .updates import make_grouped_adam
+
+
+@dataclass(frozen=True)
+class MetaDebugInterface:
+    """Exact kernel hooks used by parity tests, never by traced control flow."""
+
+    forward: Any
+    optimizer: Any
+    step: Any
+
+    @staticmethod
+    def grad_params(params, slow_torso):
+        return {**params, "torso": slow_torso}
 
 
 @struct.dataclass(frozen=True)
@@ -119,6 +132,7 @@ def make_meta_program(
     *,
     reset_on_start=None,
     update_during_eval=None,
+    _debug_sink=None,
 ) -> AgentProgram:
     """Build the concrete shared-torso RTRRL kernel.
 
@@ -706,7 +720,11 @@ def make_meta_program(
                 sensitivity=sensitivity,
                 normalizer_state=next_normalizer_state,
             ), EvalSummary(
-                info=info,
+                info={
+                    **info,
+                    "environment_info": info,
+                    "reward": next_reward,
+                },
                 normalization=normalization_metrics(
                     next_normalizer_state, normalizer.config.eps
                 ),
@@ -716,6 +734,14 @@ def make_meta_program(
         eval_state, summary = jax.lax.scan(eval_step, eval_state, step_keys)
         return eval_state, summary
 
+    if _debug_sink is not None:
+        _debug_sink.append(
+            MetaDebugInterface(
+                forward=forward,
+                optimizer=optimizer,
+                step=step_fn,
+            )
+        )
     return AgentProgram(
         init_fn=init_fn,
         train_epoch_fn=train_epoch_fn,

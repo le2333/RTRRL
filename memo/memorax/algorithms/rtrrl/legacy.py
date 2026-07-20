@@ -10,13 +10,13 @@ from flax import struct
 import jax
 import jax.numpy as jnp
 
-from memorax.networks.sequence_models.memoroid import Memoroid
 from memorax.utils.typing import (
     Array,
     EnvParams,
     Environment,
 )
 
+from .components import RecurrentComponent
 from .types import RTRRLState
 
 
@@ -89,7 +89,7 @@ class RTRRL:
     env: Environment
     env_params: EnvParams
     feature_extractor: nn.Module
-    torso: Memoroid
+    torso: RecurrentComponent
     actor_head: nn.Module
     critic_head: nn.Module
     pred_head: nn.Module | None = None
@@ -99,6 +99,7 @@ class RTRRL:
     effective_config: Any = None
     compatibility_parts: Any = None
     _delegate: Any = field(default=None, init=False, repr=False)
+    _debug_interface: Any = field(default=None, init=False, repr=False)
     program: Any = field(default=None, init=False, repr=False)
     profile: str = field(default="memo_experimental", init=False)
     num_envs: int = field(default=1, init=False)
@@ -138,6 +139,7 @@ class RTRRL:
             pred_head=self.pred_head,
             activation=self.activation,
         )
+        debug_sink = []
         self.program = make_meta_program(
             parts,
             config.static_config,
@@ -146,7 +148,9 @@ class RTRRL:
             ),
             reset_on_start=config.evaluation.reset_on_start,
             update_during_eval=config.evaluation.update_during_eval,
+            _debug_sink=debug_sink,
         )
+        self._debug_interface = debug_sink[0]
         self._delegate = LegacyProgram(self.program, config)
         self.num_envs = self.cfg.num_envs
         self.runtime_config = self.cfg
@@ -200,6 +204,15 @@ class RTRRL:
         parts = self.__dict__.get("compatibility_parts")
         if parts is not None:
             return getattr(parts, name)
+        debug = self.__dict__.get("_debug_interface")
+        debug_names = {
+            "_forward": "forward",
+            "_grad_params": "grad_params",
+            "optimizer": "optimizer",
+            "_program_step": "step",
+        }
+        if debug is not None and name in debug_names:
+            return getattr(debug, debug_names[name])
         delegate = self.__dict__.get("_delegate")
         if delegate is not None:
             return getattr(delegate, name)
@@ -235,6 +248,9 @@ class RTRRL:
         if self.profile == "aaai25_strict_lru":
             next_state, _ = self.program.train_epoch_fn(key, state, 1)
             return next_state, None
+        debug = self._debug_interface
+        if debug is not None:
+            return debug.step(state, key)
         return self._delegate.train(key, state, self.num_envs), None
 
 

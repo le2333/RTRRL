@@ -7,6 +7,7 @@ import yaml
 
 from memorax.algorithms.rtrrl.compatibility import (
     LegacyOptimizerConfig,
+    LegacyRTRRLConfig,
     RTRRLComponentConfig,
     UnsupportedRTRRLBranch,
     normalize_legacy_config,
@@ -166,18 +167,77 @@ def test_normalized_configuration_is_frozen():
         config.gamma = 0.1  # pyright: ignore[reportAttributeAccessIssue]
 
 
-def test_strict_profile_rejects_experimental_branch_flags():
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("rtrrl_topology", "shared"),
+        ("rnn_model", "lru"),
+        ("gradient_mode", "rflo"),
+        ("wiring", "fully_connected"),
+        ("meta_rl", True),
+        ("f_align", False),
+        ("normalize_obs", False),
+        ("normalize_reward", False),
+        ("var_scaling", False),
+        ("layer_norm", False),
+        ("mlp_actor", False),
+        ("pass_obs", False),
+        ("align_action_logprob", False),
+        ("update_trace_before_td", True),
+        ("act_magnitude_factor", 0.0),
+        ("slow_rnn_factor", 0.0),
+        ("use_encoder", True),
+        ("encoder_dim", 32),
+        ("lru_output_dim", None),
+        ("backbone", "lru"),
+        ("bound_actor", False),
+        ("act_clip", 0.0),
+        ("freeze_gamma", False),
+        ("pred_obs", False),
+        ("pred_coeff", 1.0),
+        ("logprob_reduction", "sum"),
+    ],
+)
+def test_strict_profile_rejects_every_explicit_experimental_field(
+    field, value
+):
     legacy = normalize_legacy_config(
-        {
-            "profile": "aaai25_strict_lru",
-            "backbone": "rtu",
-            "update_trace_before_td": True,
-            "logprob_reduction": "sum",
-        }
+        {"profile": "aaai25_strict_lru", field: value}
     )
 
-    with pytest.raises(ValueError, match="strict profile.*experimental"):
+    with pytest.raises(
+        ValueError, match=rf"strict profile.*experimental.*{field}"
+    ):
         to_component_config(legacy)
+
+
+@pytest.mark.parametrize(
+    "field",
+    [
+        "num_envs",
+        "hidden_dim",
+        "gamma",
+        "lambda_pi",
+        "lambda_v",
+        "lambda_rnn",
+        "eta_pi",
+        "eta_f",
+        "entropy_rate",
+        "td_lr",
+        "rnn_lr",
+        "optimizer_params_td",
+        "optimizer_params_rnn",
+    ],
+)
+def test_strict_profile_accepts_required_dimensions_and_optimizers(field):
+    default = getattr(LegacyRTRRLConfig(), field)
+    effective = to_component_config(
+        normalize_legacy_config(
+            {"profile": "aaai25_strict_lru", field: default}
+        )
+    )
+
+    assert effective.profile == "aaai25_strict_lru"
 
 
 def test_experimental_profile_records_effective_overrides():

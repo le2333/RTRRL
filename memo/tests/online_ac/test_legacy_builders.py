@@ -18,6 +18,7 @@ from conftest import TinyContinuousEnv, TinyDiscreteEnv
 from golden import assert_tree_allclose
 
 from memorax.algorithms import RTRRL
+from memorax.algorithms.rtrrl.components import MemoraxRecurrentAdapter
 from memorax.online_ac import (
     EvalSummary,
     ExactRTRLConfig,
@@ -352,9 +353,10 @@ def test_rtrrl_legacy_builder_translates_every_field_and_runs_one_step():
         logprob_scale=0.5,
     )
     assert isinstance(translated.feature_extractor, FeatureExtractor)
-    assert isinstance(translated.torso, Memoroid)
-    assert isinstance(translated.torso.cell, LRUCell)
-    assert translated.torso.cell.config.output_dim == 3
+    assert isinstance(translated.torso, MemoraxRecurrentAdapter)
+    assert isinstance(translated.torso.module, Memoroid)
+    assert isinstance(translated.torso.module.cell, LRUCell)
+    assert translated.torso.module.cell.config.output_dim == 3
     assert isinstance(translated.actor_head, heads.Gaussian)
     assert translated.actor_head.bound is True
     assert isinstance(translated.pred_head, heads.Regressor)

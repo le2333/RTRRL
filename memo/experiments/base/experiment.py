@@ -400,7 +400,7 @@ def build_rtrrl_agent(cfg: Any, env, env_params):
     return parts
 
 
-def build_independent_rtrrl_agent(cfg: ExperimentConfig, env, env_params):
+def build_independent_rtrrl_agent(cfg: Any, env, env_params):
     """Build strict two-path legacy RTRRL with no actor/critic state sharing."""
     cfg = normalize_legacy_config(cfg)
     if getattr(cfg, "pred_obs", False):
@@ -438,15 +438,23 @@ def build_independent_rtrrl_agent(cfg: ExperimentConfig, env, env_params):
         pred_obs=False,
         pred_coeff=getattr(cfg, "pred_coeff", 1.0),
         update_trace_before_td=getattr(cfg, "update_trace_before_td", True),
+        normalize_obs=cfg.normalize_obs,
+        normalize_reward=cfg.normalize_reward,
         logprob_scale=(
             1.0 / action_space.shape[0]
             if getattr(cfg, "logprob_reduction", "sum") == "mean"
             else 1.0
         ),
     )
+    normalization = legacy_normalization_config(env, cfg)
+    concrete_environment = legacy_env_adapter(
+        env,
+        env_params,
+        strip_normalization=True,
+    ).build_context["env"]
     parts = IndependentRTRRL(
         independent_cfg,
-        env,
+        concrete_environment,
         env_params,
         actor_selection.feature_extractor,
         actor_selection.recurrent,
@@ -454,6 +462,7 @@ def build_independent_rtrrl_agent(cfg: ExperimentConfig, env, env_params):
         critic_selection.feature_extractor,
         critic_selection.recurrent,
         critic_selection.critic_head,
+        program_normalization=normalization,
     )
     return RTRRL.from_program(
         parts.as_program(),

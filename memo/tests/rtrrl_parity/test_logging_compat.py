@@ -266,11 +266,9 @@ def test_normalized_evaluation_logs_original_episode_return():
         RecordEpisodeStatistics(TinyContinuousEnv())
     )
     cfg = SimpleNamespace(
-        profile="aaai25_strict_lru",
+        profile="memo_experimental",
         num_envs=1,
         hidden_dim=3,
-        meta_rl=True,
-        use_encoder=False,
         normalize_obs=False,
         normalize_reward=True,
     )

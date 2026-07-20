@@ -7,7 +7,7 @@ state, eligibility traces, slow targets, and Adam moments.
 
 from dataclasses import dataclass, field
 from functools import partial
-from typing import Any, Callable
+from typing import Any, Callable, Protocol, cast
 
 import flax.linen as nn
 import jax
@@ -16,7 +16,11 @@ import lox
 import optax
 from flax import core, struct
 
-from memorax.networks.sequence_models.memoroid import Memoroid
+from memorax.online_ac.normalization import (
+    NormalizationConfig,
+    make_normalizer,
+    normalization_metrics,
+)
 from memorax.online_ac.types import AgentProgram, EvalSummary
 from memorax.utils import Timestep, Transition
 from memorax.utils.axes import add_time_axis, remove_feature_axis, remove_time_axis
@@ -34,6 +38,18 @@ from memorax.utils.typing import (
 from .rtrrl import RTRRLConfig, _find_leaf, _tree_norm
 
 
+class IndependentRecurrentKernel(Protocol):
+    """Selected recurrent module surface consumed by the independent kernel."""
+
+    def init(self, *args: Any, **kwargs: Any) -> Any: ...
+
+    def apply(self, *args: Any, **kwargs: Any) -> Any: ...
+
+    def initialize_carry(self, key: Any, input_shape: Any) -> Any: ...
+
+    def initialize_sensitivity(self, key: Any, input_shape: Any) -> Any: ...
+
+
 @struct.dataclass(frozen=True)
 class IndependentRTRRLConfig(RTRRLConfig):
     """Legacy RTRRL hyperparameters for the independent two-path topology."""
@@ -47,12 +63,12 @@ class IndependentRTRRLState:
     update_step: int
     timestep: Timestep
     env_state: EnvState
-    actor_params: core.FrozenDict[str, Any]
-    critic_params: core.FrozenDict[str, Any]
-    actor_slow_torso: core.FrozenDict[str, Any]
-    critic_slow_torso: core.FrozenDict[str, Any]
-    actor_traces: core.FrozenDict[str, Any]
-    critic_traces: core.FrozenDict[str, Any]
+    actor_params: PyTree
+    critic_params: PyTree
+    actor_slow_torso: PyTree
+    critic_slow_torso: PyTree
+    actor_traces: PyTree
+    critic_traces: PyTree
     actor_opt_state: Any
     critic_opt_state: Any
     actor_carry: Carry
@@ -60,6 +76,18 @@ class IndependentRTRRLState:
     actor_sensitivity: Any
     critic_sensitivity: Any
     I: Array  # noqa: E741 - retained legacy emphasis-state name
+    normalizer_state: Any
+
+
+@struct.dataclass
+class IndependentStepMetrics:
+    """Fixed metrics emitted by the independent selected-component kernel."""
+
+    info: Any = None
+    td_error: Any = None
+    entropy: Any = None
+    value: Any = None
+    normalization: Any = None
 
 
 @dataclass
@@ -70,18 +98,26 @@ class IndependentRTRRL:
     env: Environment
     env_params: EnvParams
     actor_feature_extractor: nn.Module
-    actor_torso: Memoroid
+    actor_torso: IndependentRecurrentKernel
     actor_head: nn.Module
     critic_feature_extractor: nn.Module
-    critic_torso: Memoroid
+    critic_torso: IndependentRecurrentKernel
     critic_head: nn.Module
     activation: Callable = jax.nn.silu
-    actor_optimizer: optax.GradientTransformation = field(default=None, init=False)
-    critic_optimizer: optax.GradientTransformation = field(default=None, init=False)
+    program_normalization: NormalizationConfig | None = None
+    actor_optimizer: Any = field(default=None, init=False)
+    critic_optimizer: Any = field(default=None, init=False)
+    normalizer: Any = field(default=None, init=False)
 
     def __post_init__(self):
         if self.cfg.pred_obs:
             raise ValueError("IndependentRTRRL does not support pred_obs.")
+        config = self.program_normalization or NormalizationConfig(
+            normalize_observation=self.cfg.normalize_obs,
+            normalize_reward=self.cfg.normalize_reward,
+            reward_gamma=self.cfg.gamma,
+        )
+        self.normalizer = make_normalizer(config)
 
     @staticmethod
     def _grad_params(params: PyTree, slow_torso: PyTree) -> PyTree:
@@ -90,7 +126,7 @@ class IndependentRTRRL:
     def _forward(
         self,
         feature_extractor: nn.Module,
-        torso: Memoroid,
+        torso: IndependentRecurrentKernel,
         head: nn.Module,
         params: PyTree,
         obs: Array,
@@ -252,7 +288,7 @@ class IndependentRTRRL:
         log_prob = remove_time_axis(dist.log_prob(selected))
         selected = remove_time_axis(selected)
         value = remove_feature_axis(remove_time_axis(value))
-        state = state.replace(
+        state = cast(Any, state).replace(
             actor_carry=actor_carry,
             actor_sensitivity=actor_sensitivity,
             critic_carry=critic_carry,
@@ -269,6 +305,15 @@ class IndependentRTRRL:
         next_obs, env_state, reward, done, info = jax.vmap(
             self.env.step, in_axes=(0, 0, 0, None)
         )(step_keys, state.env_state, env_action, self.env_params)
+        normalized = self.normalizer.step(
+            state.normalizer_state,
+            observation=next_obs,
+            reward=reward,
+            done=done,
+            update=self.normalizer.config.update_during_eval,
+        )
+        next_obs = normalized.observation
+        reward = normalized.reward
         transition = Transition(
             first=state.timestep,
             second=Timestep(obs=None, action=action, reward=reward, done=done),
@@ -293,8 +338,9 @@ class IndependentRTRRL:
                     done=done,
                 ),
                 env_state=env_state,
+                normalizer_state=normalized.state,
             ),
-            transition,
+            (transition, info),
         )
 
     def _update_step(self, state: IndependentRTRRLState, key: Key):
@@ -333,6 +379,15 @@ class IndependentRTRRL:
         next_obs, env_state, next_reward, next_done, info = jax.vmap(
             self.env.step, in_axes=(0, 0, 0, None)
         )(step_keys, state.env_state, env_action, self.env_params)
+        normalized = self.normalizer.step(
+            state.normalizer_state,
+            observation=next_obs,
+            reward=next_reward,
+            done=next_done,
+            update=True,
+        )
+        next_obs = normalized.observation
+        next_reward = normalized.reward
 
         next_obs_s, next_done_s, next_action_s, next_reward_s = Timestep(
             obs=next_obs, action=env_action, reward=next_reward, done=next_done
@@ -452,8 +507,12 @@ class IndependentRTRRL:
             state.critic_opt_state,
             state.critic_params,
         )
-        actor_params = optax.apply_updates(state.actor_params, actor_adam_updates)
-        critic_params = optax.apply_updates(state.critic_params, critic_adam_updates)
+        actor_params = cast(
+            Any, optax.apply_updates(state.actor_params, actor_adam_updates)
+        )
+        critic_params = cast(
+            Any, optax.apply_updates(state.critic_params, critic_adam_updates)
+        )
 
         if self.cfg.update_period == 1.0:
             actor_slow_torso = actor_params["torso"]
@@ -502,11 +561,14 @@ class IndependentRTRRL:
         )
 
         broadcast_dims = tuple(
-            range(state.timestep.done.ndim, state.timestep.action.ndim)
+            range(
+                cast(Any, state.timestep.done).ndim,
+                cast(Any, state.timestep.action).ndim,
+            )
         )
         next_reward = jnp.asarray(next_reward, dtype=jnp.float32)
         return (
-            state.replace(
+            cast(Any, state).replace(
                 step=state.step + self.cfg.num_envs,
                 update_step=state.update_step + 1,
                 timestep=Timestep(
@@ -535,8 +597,17 @@ class IndependentRTRRL:
                 actor_sensitivity=actor_sensitivity,
                 critic_sensitivity=critic_sensitivity,
                 I=I_next,
+                normalizer_state=normalized.state,
             ),
-            None,
+            IndependentStepMetrics(
+                info=info,
+                td_error=td_error,
+                entropy=entropy,
+                value=value,
+                normalization=normalization_metrics(
+                    normalized.state, self.normalizer.config.eps
+                ),
+            ),
         )
 
     def _init_branch(
@@ -599,6 +670,9 @@ class IndependentRTRRL:
         obs, env_state = jax.vmap(self.env.reset, in_axes=(0, None))(
             env_keys, self.env_params
         )
+        obs, normalizer_state = self.normalizer.reset(
+            obs, None, update=True
+        )
         action_space = self.env.action_space(self.env_params)
         action = jnp.zeros(
             (self.cfg.num_envs, *action_space.shape), dtype=action_space.dtype
@@ -649,6 +723,7 @@ class IndependentRTRRL:
             actor_sensitivity=actor_sensitivity,
             critic_sensitivity=critic_sensitivity,
             I=jnp.ones((self.cfg.num_envs,), dtype=jnp.float32),
+            normalizer_state=normalizer_state,
         )
 
     def warmup(self, key, state, num_steps):
@@ -660,13 +735,18 @@ class IndependentRTRRL:
         state, _ = jax.lax.scan(self._update_step, state, keys)
         return state
 
-    def evaluate(self, key, state, num_steps):
+    def _evaluate_with_summary(self, key, state, num_steps):
         reset_key, eval_key, actor_sens_key, critic_sens_key = jax.random.split(
             key, 4
         )
         reset_keys = jax.random.split(reset_key, self.cfg.num_envs)
         obs, env_state = jax.vmap(self.env.reset, in_axes=(0, None))(
             reset_keys, self.env_params
+        )
+        obs, normalizer_state = self.normalizer.reset(
+            obs,
+            None if self.normalizer.config.reset_on_start else state.normalizer_state,
+            update=self.normalizer.config.update_during_eval,
         )
         action_space = self.env.action_space(self.env_params)
         action = jnp.zeros(
@@ -690,26 +770,38 @@ class IndependentRTRRL:
             critic_sensitivity=self.critic_torso.initialize_sensitivity(
                 critic_sens_key, carry_shape
             ),
+            normalizer_state=normalizer_state,
         )
         keys = jax.random.split(eval_key, num_steps)
-        state, _ = jax.lax.scan(
+        state, summaries = jax.lax.scan(
             partial(self._step, policy=self._deterministic_action), state, keys
         )
-        return state
+        _, info = summaries
+        return state, EvalSummary(
+            info=info,
+            normalization=normalization_metrics(
+                state.normalizer_state, self.normalizer.config.eps
+            ),
+        )
+
+    def evaluate(self, key, state, num_steps):
+        """Preserve the legacy state-only evaluation lifecycle."""
+        return self._evaluate_with_summary(key, state, num_steps)[0]
 
     def as_program(self) -> AgentProgram:
         """Expose the fixed independent state schema through the common program."""
 
         def train_epoch_fn(key, state, num_steps):
-            return self.train(key, state, num_steps), None
+            keys = jax.random.split(key, num_steps // self.cfg.num_envs)
+            return jax.lax.scan(self._update_step, state, keys)
 
         def evaluate_fn(key, state, num_steps):
-            return self.evaluate(key, state, num_steps), EvalSummary()
+            return self._evaluate_with_summary(key, state, num_steps)
 
         return AgentProgram(
             init_fn=self.init,
             train_epoch_fn=train_epoch_fn,
             evaluate_fn=evaluate_fn,
             state_schema=IndependentRTRRLState,
-            metric_schema=type(None),
+            metric_schema=IndependentStepMetrics,
         )

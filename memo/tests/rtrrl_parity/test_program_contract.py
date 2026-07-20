@@ -127,8 +127,6 @@ def test_strict_experiment_builder_reaches_only_closed_program(monkeypatch):
         profile="aaai25_strict_lru",
         num_envs=2,
         hidden_dim=3,
-        meta_rl=True,
-        use_encoder=False,
     )
 
     agent = experiment.build_rtrrl_agent(cfg, env, env.default_params)
@@ -216,7 +214,7 @@ def test_strict_facade_preserves_state_only_evaluate_and_exposes_summary():
     assert "environment_state" in summary.info
 
 
-def test_strict_builder_owns_normalization_without_host_callbacks():
+def test_experimental_shared_builder_owns_normalization_without_callbacks():
     import experiment
     from conftest import TinyContinuousEnv
     from memorax.environments.wrappers import (
@@ -231,11 +229,9 @@ def test_strict_builder_owns_normalization_without_host_callbacks():
         )
     )
     cfg = SimpleNamespace(
-        profile="aaai25_strict_lru",
+        profile="memo_experimental",
         num_envs=2,
         hidden_dim=3,
-        meta_rl=True,
-        use_encoder=False,
         normalize_obs=True,
         normalize_reward=True,
     )
@@ -246,8 +242,8 @@ def test_strict_builder_owns_normalization_without_host_callbacks():
         lambda key, current: agent.program.train_epoch_fn(key, current, 1)
     )(jax.random.key(7), state)
 
-    assert hasattr(state.environment_state, "observation_mean")
-    assert hasattr(state.environment_state, "reward_mean")
+    assert state.normalizer_state.observation is not None
+    assert state.normalizer_state.reward is not None
     assert not _primitive_names(closed) & {
         "debug_callback",
         "io_callback",

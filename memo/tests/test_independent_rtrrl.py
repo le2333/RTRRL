@@ -14,6 +14,7 @@ from base.experiment import (  # noqa: E402
     build_rtrrl_agent,
 )
 from memorax.algorithms.rtrrl import RTRRL
+from memorax.algorithms.rtrrl.components import MemoraxRecurrentAdapter
 
 
 class TinyContinuousEnv:
@@ -105,6 +106,8 @@ def test_init_has_independent_parameter_state_and_rng():
     assert agent.profile == "memo_experimental"
     assert agent.effective_config.topology == "independent"
     assert agent.program.state_schema.__name__ == "IndependentRTRRLState"
+    assert isinstance(agent.actor_torso, MemoraxRecurrentAdapter)
+    assert isinstance(agent.critic_torso, MemoraxRecurrentAdapter)
     assert agent.actor_feature_extractor is not agent.critic_feature_extractor
     assert agent.actor_torso is not agent.critic_torso
     assert agent.actor_optimizer is not agent.critic_optimizer
@@ -115,6 +118,43 @@ def test_init_has_independent_parameter_state_and_rng():
     assert state.actor_sensitivity is not state.critic_sensitivity
     assert state.actor_traces is not state.critic_traces
     assert state.actor_opt_state is not state.critic_opt_state
+
+
+def test_independent_direct_builder_owns_numeric_normalization_once():
+    agent = make_agent(
+        normalize_obs=True,
+        normalize_reward=True,
+        act_clip=0.0,
+    )
+    state = agent.init(jax.random.key(101))
+    next_state, metrics = agent._update_step(state, jax.random.key(103))
+
+    raw_observation = jnp.asarray(
+        [1.0, next_state.timestep.action[0, 0]], dtype=jnp.float32
+    )
+    observation_mean = raw_observation / 3.0
+    observation_m2 = 1.0 + raw_observation * (
+        raw_observation - observation_mean
+    )
+    expected_observation = (
+        raw_observation - observation_mean
+    ) / jnp.sqrt(observation_m2 / 3.0 + 1e-8)
+    expected_reward = 0.25 / jnp.sqrt((1.0 + 0.25 * 0.125) / 2.0 + 1e-8)
+
+    np.testing.assert_allclose(
+        next_state.timestep.obs[0], expected_observation, rtol=1e-6
+    )
+    np.testing.assert_allclose(
+        next_state.timestep.reward[0], expected_reward, rtol=1e-6
+    )
+    assert next_state.normalizer_state.observation is not None
+    assert next_state.normalizer_state.reward is not None
+    np.testing.assert_allclose(
+        metrics.normalization.observation_mean[0],
+        observation_mean.mean(),
+    )
+    assert agent.effective_config.normalize_observation
+    assert agent.effective_config.normalize_reward
 
 
 def _objective_inputs(state):
