@@ -72,6 +72,18 @@ def test_episode_end_steps_cannot_precede_start_steps():
         make_episode(end_env_steps=99)
 
 
+@pytest.mark.parametrize("number", [0, -1, 1_000_000])
+def test_episode_number_must_fit_one_based_six_digit_artifact_name(number):
+    with pytest.raises(ValueError, match="number"):
+        make_episode(number=number)
+
+
+@pytest.mark.parametrize("number", [1.0, True])
+def test_episode_number_must_be_an_integer(number):
+    with pytest.raises(TypeError, match="number"):
+        make_episode(number=number)
+
+
 def test_episode_copies_transition_sequences():
     rewards = [1.0, 2.0]
     episode = make_episode(rewards=rewards)

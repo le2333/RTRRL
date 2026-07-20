@@ -27,14 +27,15 @@ class Spool(Protocol):
 
 
 class RerunSink(Protocol):
-    def log_episode(self, episode: Episode) -> None: ...
+    def log_episode(self, episode: Episode) -> Path | None: ...
 
 
 class NullRerun:
     """Task 2 placeholder; Task 3 supplies the Rerun implementation."""
 
-    def log_episode(self, episode: Episode) -> None:
+    def log_episode(self, episode: Episode) -> Path | None:
         del episode
+        return None
 
 
 class TrainingRun:
@@ -142,8 +143,8 @@ class TrainingRun:
         self._emit_many(events)
         self._summary_sequence = next_summary_sequence
 
-    def log_episode(self, episode: Episode) -> None:
-        self.rerun.log_episode(episode)
+    def log_episode(self, episode: Episode) -> Path | None:
+        return self.rerun.log_episode(episode)
 
     def register_checkpoint(self, path: Path) -> None:
         del path

@@ -18,6 +18,10 @@ class Episode:
     environment_states: Sequence[Any] | None = None
 
     def __post_init__(self) -> None:
+        if type(self.number) is not int:
+            raise TypeError("episode number must be an integer")
+        if not 1 <= self.number <= 999_999:
+            raise ValueError("episode number must be between 1 and 999999")
         for field_name in (
             "observations",
             "actions",
