@@ -14,9 +14,15 @@ from trainer_infra.heavy_tests import (
 )
 
 NETWORK_SETTINGS = AwsNetworkSettings(
-    subnets=("subnet-a", "subnet-b"),
-    security_group_ids=("sg-a",),
-    instance_role="arn:aws:iam::123456789012:instance-profile/batch",
+    subnets=(
+        "subnet-08127d1c5d4de6ac2",
+        "subnet-0b8c68ea0a9784758",
+        "subnet-01a2aa195678f8411",
+    ),
+    security_group_ids=("sg-0c0ed6b927c5113dc",),
+    instance_role=(
+        "arn:aws:iam::007122174918:instance-profile/rtrrl-ecs-instance-role"
+    ),
 )
 
 
@@ -162,7 +168,7 @@ def test_profiles_are_exact_and_immutable() -> None:
 
 
 def test_validate_returns_exact_profile_and_resource_arns(fake_batch: FakeBatch) -> None:
-    validated = validate_test_profile(fake_batch, "g6x", NETWORK_SETTINGS)
+    validated = validate_test_profile(fake_batch, "g6x")
 
     assert validated.profile is TEST_PROFILES["g6x"]
     assert validated.queue_arn.endswith("/rtrrl-gpu-g6x-queue")
@@ -175,7 +181,24 @@ def test_validate_returns_exact_profile_and_resource_arns(fake_batch: FakeBatch)
     ("field", "value"),
     [
         ("subnets", ["subnet-wrong"]),
+        (
+            "subnets",
+            [
+                NETWORK_SETTINGS.subnets[0],
+                NETWORK_SETTINGS.subnets[0],
+                *NETWORK_SETTINGS.subnets[1:],
+            ],
+        ),
+        ("subnets", [*NETWORK_SETTINGS.subnets, 7]),
         ("securityGroupIds", ["sg-wrong"]),
+        (
+            "securityGroupIds",
+            [
+                NETWORK_SETTINGS.security_group_ids[0],
+                NETWORK_SETTINGS.security_group_ids[0],
+            ],
+        ),
+        ("securityGroupIds", [*NETWORK_SETTINGS.security_group_ids, None]),
         ("instanceRole", "arn:aws:iam::123456789012:instance-profile/wrong"),
     ],
 )
@@ -187,11 +210,32 @@ def test_every_profile_network_drift_fails_closed(
     compute_resources[field] = value
 
     with pytest.raises(ProfileDriftError, match=field):
-        validate_test_profile(fake_batch, name, NETWORK_SETTINGS)
+        validate_test_profile(fake_batch, name)
 
     assert fake_batch.update_calls == []
     assert fake_batch.create_compute_environment_calls == []
     assert fake_batch.create_job_queue_calls == []
+
+
+@pytest.mark.parametrize("field", ["subnets", "securityGroupIds"])
+def test_network_list_order_is_not_profile_drift(
+    fake_batch: FakeBatch, field: str
+) -> None:
+    settings = AwsNetworkSettings(
+        subnets=("subnet-a", "subnet-b"),
+        security_group_ids=("sg-a", "sg-b"),
+        instance_role=NETWORK_SETTINGS.instance_role,
+    )
+    compute_resources = fake_batch.compute_environments["c7am"]["computeResources"]
+    assert isinstance(compute_resources, dict)
+    compute_resources["subnets"] = list(settings.subnets)
+    compute_resources["securityGroupIds"] = list(settings.security_group_ids)
+    compute_resources[field] = list(reversed(compute_resources[field]))
+
+    validated = validate_test_profile(fake_batch, "c7am", settings=settings)
+
+    assert validated.profile is TEST_PROFILES["c7am"]
+    assert fake_batch.update_calls == []
 
 
 @pytest.mark.parametrize(
@@ -225,7 +269,7 @@ def test_every_existing_profile_drift_fails_closed(
         fake_batch.job_queues["c7am"][field] = value
 
     with pytest.raises(ProfileDriftError, match=field):
-        validate_test_profile(fake_batch, "c7am", NETWORK_SETTINGS)
+        validate_test_profile(fake_batch, "c7am")
 
     assert fake_batch.update_calls == []
     assert fake_batch.create_compute_environment_calls == []
@@ -237,7 +281,7 @@ def test_nonzero_desired_vcpus_is_not_profile_drift(fake_batch: FakeBatch) -> No
     assert isinstance(compute_resources, dict)
     compute_resources["desiredvCpus"] = 4
 
-    validated = validate_test_profile(fake_batch, "c7am", NETWORK_SETTINGS)
+    validated = validate_test_profile(fake_batch, "c7am")
 
     assert validated.profile is TEST_PROFILES["c7am"]
     assert fake_batch.update_calls == []
@@ -249,7 +293,7 @@ def test_queue_binding_drift_fails_closed(fake_batch: FakeBatch) -> None:
     ]
 
     with pytest.raises(ProfileDriftError, match="computeEnvironmentOrder"):
-        validate_test_profile(fake_batch, "c7am", NETWORK_SETTINGS)
+        validate_test_profile(fake_batch, "c7am")
 
     assert fake_batch.update_calls == []
 
@@ -264,14 +308,14 @@ def test_missing_existing_profile_resource_fails_closed(
         del fake_batch.job_queues["g6x"]
 
     with pytest.raises(ProfileDriftError, match="missing"):
-        validate_test_profile(fake_batch, "g6x", NETWORK_SETTINGS)
+        validate_test_profile(fake_batch, "g6x")
 
     assert fake_batch.update_calls == []
 
 
 def test_unknown_profile_is_rejected(fake_batch: FakeBatch) -> None:
     with pytest.raises(ValueError, match="unknown test profile"):
-        validate_test_profile(fake_batch, "cpu", NETWORK_SETTINGS)
+        validate_test_profile(fake_batch, "cpu")
 
 
 def test_existing_c7ax_is_validated_and_never_mutated(fake_batch: FakeBatch) -> None:
@@ -307,9 +351,9 @@ def test_missing_c7ax_resources_are_created_exactly() -> None:
                 "maxvCpus": 16,
                 "desiredvCpus": 0,
                 "instanceTypes": ["c7a.xlarge"],
-                "subnets": ["subnet-a", "subnet-b"],
-                "securityGroupIds": ["sg-a"],
-                "instanceRole": "arn:aws:iam::123456789012:instance-profile/batch",
+                "subnets": list(NETWORK_SETTINGS.subnets),
+                "securityGroupIds": list(NETWORK_SETTINGS.security_group_ids),
+                "instanceRole": NETWORK_SETTINGS.instance_role,
             },
         }
     ]
