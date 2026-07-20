@@ -1,0 +1,19 @@
+[project]
+name = "training-sdk"
+version = "0.1.0"
+requires-python = ">=3.12,<3.13"
+dependencies = [
+    "aim==3.28.*",
+    "numpy>=2",
+    "rerun-sdk>=0.34,<0.35",
+]
+
+[dependency-groups]
+dev = [
+    "pytest",
+    "ruff",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"

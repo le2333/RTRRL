@@ -3,7 +3,7 @@ name = "rtrrl"
 version = "0.1.0"
 description = ""
 readme = "README.md"
-requires-python = ">=3.10"
+requires-python = ">=3.12,<3.13"
 dependencies = [
     # Pin JAX to the version the authors used. JAX 0.6+ removed the self-alias
     # `jax.jax` and changed array types, breaking the upstream code unmodified
@@ -28,10 +28,14 @@ dependencies = [
     "wandb>=0.18,<0.20",
     "setuptools>=80.0.0,<81",
     "rerun-sdk>=0.34.1",
+    "training-sdk",
 ]
 
 [tool.uv]
 package = false
+
+[tool.uv.sources]
+training-sdk = { path = "../training-sdk" }
 
 [tool.poe.tasks]
 install_jax_cuda12 = "uv pip install \"jax[cuda12]==0.5.0\""

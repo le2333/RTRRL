@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from .bootstrap import RUN_CONTEXT_ENV, bootstrap_from_environment
 from .context import JsonValue, RunContext
 from .run import NullRerun, TrainingRun
 from .spool import (
@@ -37,8 +38,10 @@ __all__ = [
     "MetricEvent",
     "NullRerun",
     "RunContext",
+    "RUN_CONTEXT_ENV",
     "SpoolCorruptionError",
     "TrainingRun",
+    "bootstrap_from_environment",
     "current_run",
     "maybe_current_run",
     "set_current_run",

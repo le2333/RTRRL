@@ -45,11 +45,16 @@ class TrainingRun:
         aim: AimSink,
         rerun: RerunSink,
         spool: Spool,
+        *,
+        context_path: Path | None = None,
     ) -> None:
         self.context = context
         self.aim = aim
         self.rerun = rerun
         self.spool = spool
+        self._context_path = (
+            None if context_path is None else Path(context_path).resolve()
+        )
         self._last_env_steps: int | None = None
         self._last_metric_env_steps: int | None = None
         self._summary_sequence = max(
@@ -67,6 +72,10 @@ class TrainingRun:
         if interval <= 0:
             raise ValueError("logging.aim_every_env_steps must be positive")
         self._aim_every_env_steps = interval
+
+    @property
+    def context_path(self) -> Path | None:
+        return self._context_path
 
     def start(self) -> None:
         try:

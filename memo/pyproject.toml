@@ -40,6 +40,7 @@ dependencies = [
     # Required by logging_util.py (Aim/W&B bridge reused from streaming-rtrrl).
     "dacite>=1.8",
     "plotly>=5.24",
+    "training-sdk",
 ]
 
 [project.urls]
@@ -124,3 +125,4 @@ pobax   = { git = "https://github.com/taodav/pobax" }
 popjym  = { git = "https://github.com/EdanToledo/popjym.git", extra = "popjym" }
 performax = { git = "https://github.com/noahfarr/performax.git" }
 lox       = { git = "https://github.com/huterguier/lox", rev = "dev" }
+training-sdk = { path = "../training-sdk" }
