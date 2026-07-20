@@ -138,6 +138,48 @@ def _capture_arrays(seed: int) -> tuple[dict[str, np.ndarray], dict[str, str]]:
     done = jnp.array([False])
     td_error = reward + jnp.float32(0.99) * (1 - done) * next_value.squeeze() - value.squeeze()
 
+    # Capture an independently initialized strict head with feedback alignment.
+    # Keeping this separate preserves the original end-to-end fixture leaves while
+    # exposing every parameter and cotangent needed to replay the head in Memorax.
+    head_key = jax.random.fold_in(root_key, 4)
+    head_sample_key = jax.random.fold_in(root_key, 5)
+    head_model = RNNActorCritic(
+        a_dim=2,
+        discrete=False,
+        obs_dim=4,
+        batch_shape=(1,),
+        hidden_size=2,
+        rnn_model=None,
+        f_align=True,
+        pass_obs=False,
+        mlp_actor=False,
+        layer_norm=False,
+    )
+    _, head_variables = head_model.init_with_output(head_key, None, hidden)
+
+    def raw_heads(module, head_input):
+        return module.td.actor(head_input), module.td.critic(head_input)
+
+    def apply_raw_heads(variables, head_input):
+        return head_model.apply(variables, head_input, method=raw_heads)
+
+    (head_actor_output, head_value), head_pullback = jax.vjp(
+        apply_raw_heads, head_variables, hidden
+    )
+    head_distribution = head_model.apply(
+        head_variables, hidden, method=head_model.action_dist
+    )
+    head_sampled_action = head_distribution.sample(seed=head_sample_key)
+    head_log_prob = head_distribution.log_prob(head_sampled_action)
+    head_entropy = head_distribution.entropy()
+    actor_cotangent = jnp.array(
+        [[0.25, -0.5, 0.75, -1.25]], dtype=jnp.float32
+    )
+    value_cotangent = jnp.array([[0.625]], dtype=jnp.float32)
+    head_variables_vjp, head_input_vjp = head_pullback(
+        (actor_cotangent, value_cotangent)
+    )
+
     # Exercise the exact oracle helpers imported by this standalone capture.
     toy_trace = init_trace({"weight": jnp.ones((2,), dtype=jnp.float32)})
     toy_trace = trace_update(
@@ -150,9 +192,49 @@ def _capture_arrays(seed: int) -> tuple[dict[str, np.ndarray], dict[str, str]]:
 
     arrays = {
         "heads/input": np.asarray(hidden),
-        "heads/actor_loc": np.asarray(distribution.loc),
-        "heads/actor_scale": np.asarray(distribution.scale),
-        "heads/value": np.asarray(value),
+        "heads/actor_output": np.asarray(head_actor_output),
+        "heads/actor_loc": np.asarray(head_distribution.loc),
+        "heads/actor_scale": np.asarray(head_distribution.scale),
+        "heads/value": np.asarray(head_value),
+        "heads/sample_key": np.asarray(head_sample_key),
+        "heads/sampled_action": np.asarray(head_sampled_action),
+        "heads/log_prob": np.asarray(head_log_prob),
+        "heads/entropy": np.asarray(head_entropy),
+        "heads/log_prob_mean": np.asarray(head_log_prob.mean()),
+        "heads/entropy_mean": np.asarray(head_entropy.mean()),
+        "heads/params/actor/kernel": np.asarray(
+            head_variables["params"]["td"]["actor"]["kernel"]
+        ),
+        "heads/params/critic/kernel": np.asarray(
+            head_variables["params"]["td"]["critic"]["kernel"]
+        ),
+        "heads/params/critic/bias": np.asarray(
+            head_variables["params"]["td"]["critic"]["bias"]
+        ),
+        "heads/falign/actor/B": np.asarray(
+            head_variables["falign"]["td"]["actor"]["B"]
+        ),
+        "heads/falign/critic/B": np.asarray(
+            head_variables["falign"]["td"]["critic"]["B"]
+        ),
+        "heads/vjp/cotangent/actor": np.asarray(actor_cotangent),
+        "heads/vjp/cotangent/value": np.asarray(value_cotangent),
+        "heads/vjp/input": np.asarray(head_input_vjp),
+        "heads/vjp/params/actor/kernel": np.asarray(
+            head_variables_vjp["params"]["td"]["actor"]["kernel"]
+        ),
+        "heads/vjp/params/critic/kernel": np.asarray(
+            head_variables_vjp["params"]["td"]["critic"]["kernel"]
+        ),
+        "heads/vjp/params/critic/bias": np.asarray(
+            head_variables_vjp["params"]["td"]["critic"]["bias"]
+        ),
+        "heads/vjp/falign/actor/B": np.asarray(
+            head_variables_vjp["falign"]["td"]["actor"]["B"]
+        ),
+        "heads/vjp/falign/critic/B": np.asarray(
+            head_variables_vjp["falign"]["td"]["critic"]["B"]
+        ),
         "lru/input": np.asarray(lru_input),
         "lru/carry_before": np.asarray(lru_carry_before[0]),
         "lru/carry_after": np.asarray(lru_carry_after_1[0]),
@@ -220,6 +302,16 @@ def main(
             "batch_size": 1,
         },
         "transitions": "deterministic-explicit-mock",
+        "head_vjp": {
+            "function": "(actor_raw, value) = strict_linear_heads(heads/input)",
+            "cotangent_order": ["actor_raw", "value"],
+            "cotangent_leaves": [
+                "heads/vjp/cotangent/actor",
+                "heads/vjp/cotangent/value",
+            ],
+            "input_vjp_leaf": "heads/vjp/input",
+            "variable_collections": ["params", "falign"],
+        },
         "leaf_paths": leaf_paths,
         "leaves": {
             path: {

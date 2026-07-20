@@ -9,15 +9,51 @@
     "input_size": 4
   },
   "dtype_policy": "float32-complex64",
+  "head_vjp": {
+    "cotangent_leaves": [
+      "heads/vjp/cotangent/actor",
+      "heads/vjp/cotangent/value"
+    ],
+    "cotangent_order": [
+      "actor_raw",
+      "value"
+    ],
+    "function": "(actor_raw, value) = strict_linear_heads(heads/input)",
+    "input_vjp_leaf": "heads/vjp/input",
+    "variable_collections": [
+      "params",
+      "falign"
+    ]
+  },
   "jax": "0.4.38",
   "jaxlib": "0.4.38",
   "leaf_paths": [
     "credit/after_step_1",
     "credit/after_step_2",
     "heads/actor_loc",
+    "heads/actor_output",
     "heads/actor_scale",
+    "heads/entropy",
+    "heads/entropy_mean",
+    "heads/falign/actor/B",
+    "heads/falign/critic/B",
     "heads/input",
+    "heads/log_prob",
+    "heads/log_prob_mean",
+    "heads/params/actor/kernel",
+    "heads/params/critic/bias",
+    "heads/params/critic/kernel",
+    "heads/sample_key",
+    "heads/sampled_action",
     "heads/value",
+    "heads/vjp/cotangent/actor",
+    "heads/vjp/cotangent/value",
+    "heads/vjp/falign/actor/B",
+    "heads/vjp/falign/critic/B",
+    "heads/vjp/input",
+    "heads/vjp/params/actor/kernel",
+    "heads/vjp/params/critic/bias",
+    "heads/vjp/params/critic/kernel",
     "init/action",
     "init/value",
     "lru/carry_after",
@@ -46,6 +82,13 @@
         2
       ]
     },
+    "heads/actor_output": {
+      "dtype": "float32",
+      "shape": [
+        1,
+        4
+      ]
+    },
     "heads/actor_scale": {
       "dtype": "float32",
       "shape": [
@@ -53,7 +96,76 @@
         2
       ]
     },
+    "heads/entropy": {
+      "dtype": "float32",
+      "shape": [
+        1,
+        2
+      ]
+    },
+    "heads/entropy_mean": {
+      "dtype": "float32",
+      "shape": []
+    },
+    "heads/falign/actor/B": {
+      "dtype": "float32",
+      "shape": [
+        2,
+        4
+      ]
+    },
+    "heads/falign/critic/B": {
+      "dtype": "float32",
+      "shape": [
+        2,
+        1
+      ]
+    },
     "heads/input": {
+      "dtype": "float32",
+      "shape": [
+        1,
+        2
+      ]
+    },
+    "heads/log_prob": {
+      "dtype": "float32",
+      "shape": [
+        1,
+        2
+      ]
+    },
+    "heads/log_prob_mean": {
+      "dtype": "float32",
+      "shape": []
+    },
+    "heads/params/actor/kernel": {
+      "dtype": "float32",
+      "shape": [
+        2,
+        4
+      ]
+    },
+    "heads/params/critic/bias": {
+      "dtype": "float32",
+      "shape": [
+        1
+      ]
+    },
+    "heads/params/critic/kernel": {
+      "dtype": "float32",
+      "shape": [
+        2,
+        1
+      ]
+    },
+    "heads/sample_key": {
+      "dtype": "uint32",
+      "shape": [
+        2
+      ]
+    },
+    "heads/sampled_action": {
       "dtype": "float32",
       "shape": [
         1,
@@ -64,6 +176,61 @@
       "dtype": "float32",
       "shape": [
         1,
+        1
+      ]
+    },
+    "heads/vjp/cotangent/actor": {
+      "dtype": "float32",
+      "shape": [
+        1,
+        4
+      ]
+    },
+    "heads/vjp/cotangent/value": {
+      "dtype": "float32",
+      "shape": [
+        1,
+        1
+      ]
+    },
+    "heads/vjp/falign/actor/B": {
+      "dtype": "float32",
+      "shape": [
+        2,
+        4
+      ]
+    },
+    "heads/vjp/falign/critic/B": {
+      "dtype": "float32",
+      "shape": [
+        2,
+        1
+      ]
+    },
+    "heads/vjp/input": {
+      "dtype": "float32",
+      "shape": [
+        1,
+        2
+      ]
+    },
+    "heads/vjp/params/actor/kernel": {
+      "dtype": "float32",
+      "shape": [
+        2,
+        4
+      ]
+    },
+    "heads/vjp/params/critic/bias": {
+      "dtype": "float32",
+      "shape": [
+        1
+      ]
+    },
+    "heads/vjp/params/critic/kernel": {
+      "dtype": "float32",
+      "shape": [
+        2,
         1
       ]
     },

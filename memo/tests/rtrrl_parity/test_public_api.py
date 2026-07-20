@@ -40,12 +40,34 @@ def test_oracle_manifest_pins_source_and_runtime():
 
 
 def test_oracle_fixture_has_required_sections():
-    arrays, _ = load_oracle()
-    required = {
+    arrays, manifest = load_oracle()
+    required_heads = {
         "heads/input",
+        "heads/actor_output",
         "heads/actor_loc",
         "heads/actor_scale",
         "heads/value",
+        "heads/sample_key",
+        "heads/sampled_action",
+        "heads/log_prob",
+        "heads/entropy",
+        "heads/log_prob_mean",
+        "heads/entropy_mean",
+        "heads/params/actor/kernel",
+        "heads/params/critic/kernel",
+        "heads/params/critic/bias",
+        "heads/falign/actor/B",
+        "heads/falign/critic/B",
+        "heads/vjp/cotangent/actor",
+        "heads/vjp/cotangent/value",
+        "heads/vjp/input",
+        "heads/vjp/params/actor/kernel",
+        "heads/vjp/params/critic/kernel",
+        "heads/vjp/params/critic/bias",
+        "heads/vjp/falign/actor/B",
+        "heads/vjp/falign/critic/B",
+    }
+    required_other = {
         "lru/input",
         "lru/carry_before",
         "lru/carry_after",
@@ -56,7 +78,18 @@ def test_oracle_fixture_has_required_sections():
         "init/value",
         "step/td_error",
     }
-    assert required <= arrays.keys()
+    assert {path for path in arrays if path.startswith("heads/")} == required_heads
+    assert required_other <= arrays.keys()
+    assert manifest["head_vjp"] == {
+        "function": "(actor_raw, value) = strict_linear_heads(heads/input)",
+        "cotangent_order": ["actor_raw", "value"],
+        "cotangent_leaves": [
+            "heads/vjp/cotangent/actor",
+            "heads/vjp/cotangent/value",
+        ],
+        "input_vjp_leaf": "heads/vjp/input",
+        "variable_collections": ["params", "falign"],
+    }
 
 
 def test_oracle_fixture_matches_all_manifest_leaf_metadata():

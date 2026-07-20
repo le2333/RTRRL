@@ -19,45 +19,46 @@ from .assertions import assert_tree_close, flatten_with_paths
 from .oracle_capture import load_oracle
 
 
-def _explicit_oracle_variables():
+def _oracle_variables(arrays):
     return freeze(
         {
             "params": {
                 "actor": {
-                    "kernel": jnp.array(
-                        [
-                            [0.0, 0.0, 0.0, 0.0],
-                            [0.6186411, 0.581442, -0.35133776, -0.5162917],
-                        ],
-                        dtype=jnp.float32,
-                    )
+                    "kernel": jnp.asarray(arrays["heads/params/actor/kernel"])
                 },
                 "critic": {
-                    "kernel": jnp.zeros((2, 1), dtype=jnp.float32),
-                    "bias": jnp.array([2.234071], dtype=jnp.float32),
+                    "kernel": jnp.asarray(arrays["heads/params/critic/kernel"]),
+                    "bias": jnp.asarray(arrays["heads/params/critic/bias"]),
                 },
-            }
+            },
+            "falign": {
+                "actor": {"B": jnp.asarray(arrays["heads/falign/actor/B"])},
+                "critic": {"B": jnp.asarray(arrays["heads/falign/critic/B"])},
+            },
         }
     )
 
 
 def test_strict_parameter_paths_shapes_dtypes_and_initializer():
     arrays, _ = load_oracle()
-    model = RTRRLTDHead(action_dim=2, discrete=False)
+    model = RTRRLTDHead(action_dim=2, discrete=False, f_align=True)
     variables = model.init(
         jax.random.PRNGKey(0), jnp.asarray(arrays["heads/input"])
     )
     leaves = flatten_with_paths(variables)
+    oracle_leaves = flatten_with_paths(_oracle_variables(arrays))
 
     assert sorted(leaves) == [
+        "falign/actor/B",
+        "falign/critic/B",
         "params/actor/kernel",
         "params/critic/bias",
         "params/critic/kernel",
     ]
-    assert leaves["params/actor/kernel"].shape == (2, 4)
-    assert leaves["params/critic/kernel"].shape == (2, 1)
-    assert leaves["params/critic/bias"].shape == (1,)
-    assert {leaf.dtype for leaf in leaves.values()} == {jnp.dtype(jnp.float32)}
+    assert leaves.keys() == oracle_leaves.keys()
+    for path in leaves:
+        assert leaves[path].shape == oracle_leaves[path].shape, path
+        assert leaves[path].dtype == oracle_leaves[path].dtype, path
 
     key = jax.random.PRNGKey(11)
     shape = (2, 4)
@@ -72,46 +73,41 @@ def test_fixture_forward_distribution_metrics_and_sample():
     arrays, _ = load_oracle()
     inputs = jnp.asarray(arrays["heads/input"])
     actor_output, value = RTRRLTDHead(
-        action_dim=2, discrete=False
-    ).apply(_explicit_oracle_variables(), inputs)
+        action_dim=2, discrete=False, f_align=True
+    ).apply(_oracle_variables(arrays), inputs)
     distribution = make_action_distribution(actor_output, discrete=False)
-    action = jnp.asarray(arrays["init/action"])
+    action = jnp.asarray(arrays["heads/sampled_action"])
 
     assert isinstance(distribution, distrax.Normal)
     assert distribution.log_prob(action).shape == action.shape
     with jax.threefry_partitionable(False):
-        action_key = jax.random.split(jax.random.PRNGKey(7), 3)[2]
-        sampled_action = distribution.sample(seed=action_key)
+        sampled_action = distribution.sample(
+            seed=jnp.asarray(arrays["heads/sample_key"])
+        )
     assert_tree_close(
         {
+            "actor_output": actor_output,
             "loc": distribution.loc,
             "scale": distribution.scale,
             "value": value,
-            "sample": sampled_action,
+            "sampled_action": sampled_action,
             "log_prob": distribution.log_prob(action),
             "entropy": distribution.entropy(),
+            "log_prob_mean": distribution.log_prob(action).mean(),
+            "entropy_mean": distribution.entropy().mean(),
         },
         {
+            "actor_output": arrays["heads/actor_output"],
             "loc": arrays["heads/actor_loc"],
             "scale": arrays["heads/actor_scale"],
             "value": arrays["heads/value"],
-            "sample": arrays["init/action"],
-            "log_prob": np.array([[-0.9792221, -0.40963465]], dtype=np.float32),
-            "entropy": np.array([[0.64159447, 0.452748]], dtype=np.float32),
+            "sampled_action": arrays["heads/sampled_action"],
+            "log_prob": arrays["heads/log_prob"],
+            "entropy": arrays["heads/entropy"],
+            "log_prob_mean": arrays["heads/log_prob_mean"],
+            "entropy_mean": arrays["heads/entropy_mean"],
         },
-        (2e-6, 2e-7),
-    )
-    np.testing.assert_allclose(
-        distribution.log_prob(action).mean(),
-        np.float32(-0.6944284),
-        rtol=2e-6,
-        atol=2e-7,
-    )
-    np.testing.assert_allclose(
-        distribution.entropy().mean(),
-        np.float32(0.54717124),
-        rtol=2e-6,
-        atol=2e-7,
+        "exact",
     )
 
 
@@ -129,26 +125,73 @@ def test_discrete_distribution_is_categorical():
     )
 
 
-def test_fadense_vjp_uses_feedback_matrix_without_changing_forward():
+def test_fixture_nontrivial_vjp_matches_complete_head_cotangent_tree():
     arrays, _ = load_oracle()
-    layer = FADense(features=2, f_align=True, use_bias=False)
-    variables = freeze(
+    model = RTRRLTDHead(action_dim=2, discrete=False, f_align=True)
+    variables = _oracle_variables(arrays)
+    inputs = jnp.asarray(arrays["heads/input"])
+    cotangent = (
+        jnp.asarray(arrays["heads/vjp/cotangent/actor"]),
+        jnp.asarray(arrays["heads/vjp/cotangent/value"]),
+    )
+    assert np.count_nonzero(np.asarray(cotangent[0])) == cotangent[0].size
+    assert np.count_nonzero(np.asarray(cotangent[1])) == cotangent[1].size
+    assert np.any(arrays["heads/vjp/input"] != 0)
+    assert np.any(arrays["heads/vjp/params/actor/kernel"] != 0)
+    assert np.any(arrays["heads/vjp/params/critic/kernel"] != 0)
+    assert np.any(arrays["heads/vjp/params/critic/bias"] != 0)
+    np.testing.assert_array_equal(
+        arrays["heads/vjp/falign/actor/B"],
+        np.zeros_like(arrays["heads/vjp/falign/actor/B"]),
+    )
+    np.testing.assert_array_equal(
+        arrays["heads/vjp/falign/critic/B"],
+        np.zeros_like(arrays["heads/vjp/falign/critic/B"]),
+    )
+
+    raw_output, pullback = jax.vjp(lambda v, x: model.apply(v, x), variables, inputs)
+    output = cast(tuple[jax.Array, jax.Array], raw_output)
+    variables_vjp, input_vjp = pullback(cotangent)
+    expected_variables_vjp = freeze(
         {
             "params": {
-                "kernel": jnp.array([[1.0, 2.0], [3.0, 4.0]], dtype=jnp.float32)
+                "actor": {
+                    "kernel": jnp.asarray(
+                        arrays["heads/vjp/params/actor/kernel"]
+                    )
+                },
+                "critic": {
+                    "kernel": jnp.asarray(
+                        arrays["heads/vjp/params/critic/kernel"]
+                    ),
+                    "bias": jnp.asarray(arrays["heads/vjp/params/critic/bias"]),
+                },
             },
             "falign": {
-                "B": jnp.array([[5.0, 6.0], [7.0, 8.0]], dtype=jnp.float32)
+                "actor": {
+                    "B": jnp.asarray(arrays["heads/vjp/falign/actor/B"])
+                },
+                "critic": {
+                    "B": jnp.asarray(arrays["heads/vjp/falign/critic/B"])
+                },
             },
         }
     )
-    inputs = jnp.asarray(arrays["heads/input"])
-
-    raw_output, pullback = jax.vjp(lambda x: layer.apply(variables, x), inputs)
-    output = cast(jax.Array, raw_output)
-    (input_vjp,) = pullback(jnp.ones_like(output))
-
-    np.testing.assert_array_equal(
-        output, jnp.array([[4.534738, 5.9250712]], jnp.float32)
+    assert_tree_close(
+        {"actor": output[0], "value": output[1]},
+        {
+            "actor": arrays["heads/actor_output"],
+            "value": arrays["heads/value"],
+        },
+        "exact",
     )
-    np.testing.assert_array_equal(input_vjp, jnp.array([[11.0, 15.0]], jnp.float32))
+    assert_tree_close(
+        variables_vjp,
+        expected_variables_vjp,
+        "exact",
+    )
+    assert_tree_close(
+        {"input": input_vjp},
+        {"input": arrays["heads/vjp/input"]},
+        "exact",
+    )
