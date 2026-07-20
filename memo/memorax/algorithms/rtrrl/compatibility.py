@@ -196,13 +196,20 @@ class RTRRLComponentConfig:
     entropy_rate: float = 1e-5
     average_reward_rate: float | None = None
     trace_mode: str = "accumulate"
-    optimizer_name: str = "adam"
-    actor_critic_learning_rate: float = 1e-4
-    recurrent_learning_rate: float = 1e-4
+    optimizer_params_td: LegacyOptimizerConfig = field(
+        default_factory=LegacyOptimizerConfig
+    )
+    optimizer_params_rnn: LegacyOptimizerConfig = field(
+        default_factory=lambda: LegacyOptimizerConfig(gradient_clip=1.0)
+    )
     update_period: float = 1.0
     normalize_observation: bool = False
     normalize_reward: bool = False
     debug_max_steps: int = 3
+
+    def __post_init__(self) -> None:
+        if not 0 <= self.debug_max_steps <= 3:
+            raise ValueError("debug_max_steps must be between 0 and 3")
 
 
 _NO_OP_FIELDS = {
@@ -403,9 +410,8 @@ def to_component_config(legacy: LegacyRTRRLConfig) -> RTRRLComponentConfig:
         "entropy_rate": legacy.entropy_rate,
         "average_reward_rate": legacy.eta,
         "trace_mode": legacy.trace_mode,
-        "optimizer_name": legacy.optimizer_params_td.opt_name,
-        "actor_critic_learning_rate": legacy.optimizer_params_td.learning_rate,
-        "recurrent_learning_rate": legacy.optimizer_params_rnn.learning_rate,
+        "optimizer_params_td": legacy.optimizer_params_td,
+        "optimizer_params_rnn": legacy.optimizer_params_rnn,
         "update_period": legacy.update_period,
         "normalize_observation": legacy.normalize_obs,
         "normalize_reward": legacy.normalize_reward,

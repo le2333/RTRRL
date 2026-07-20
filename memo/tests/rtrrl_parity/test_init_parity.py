@@ -8,7 +8,10 @@ import jax
 import jax.numpy as jnp
 import numpy as np
 
-from memorax.algorithms.rtrrl.compatibility import RTRRLComponentConfig
+from memorax.algorithms.rtrrl.compatibility import (
+    LegacyOptimizerConfig,
+    RTRRLComponentConfig,
+)
 from memorax.algorithms.rtrrl.heads import RTRRLTDHead
 from memorax.algorithms.rtrrl.lru import AAAI25LRU
 from memorax.algorithms.rtrrl.state_machine import make_init_fn
@@ -23,6 +26,8 @@ class _EnvironmentState:
     obs: jax.Array
     reward: jax.Array
     done: jax.Array
+    phase: jax.Array
+    last_action: jax.Array
 
 
 class _DeterministicEnvironment:
@@ -34,6 +39,8 @@ class _DeterministicEnvironment:
             obs=jnp.array([[0.25]], dtype=jnp.float32),
             reward=jnp.array([-0.5], dtype=jnp.float32),
             done=jnp.array([False]),
+            phase=jnp.array(0, dtype=jnp.int32),
+            last_action=jnp.zeros((1, 2), dtype=jnp.float32),
         )
 
 
@@ -54,7 +61,12 @@ def _assert_flat_tree_matches_fixture(tree, arrays, prefix, *, atol=0.0):
         expected_value = expected[path]
         assert value.shape == expected_value.shape, path
         assert value.dtype == expected_value.dtype, path
-        np.testing.assert_allclose(value, expected_value, rtol=0.0, atol=atol)
+        if value.dtype.kind in "fc":
+            np.testing.assert_allclose(
+                value, expected_value, rtol=0.0, atol=atol
+            )
+        else:
+            np.testing.assert_array_equal(value, expected_value, err_msg=path)
 
 
 def _strict_setup():
@@ -68,9 +80,11 @@ def _strict_setup():
         hidden_dim=2,
         num_envs=1,
         meta_rl=True,
-        optimizer_name="adam",
-        actor_critic_learning_rate=1e-3,
-        recurrent_learning_rate=1e-3,
+        optimizer_params_td=LegacyOptimizerConfig(learning_rate=1e-3),
+        optimizer_params_rnn=LegacyOptimizerConfig(
+            learning_rate=1e-3,
+            gradient_clip=None,
+        ),
     )
     components = RTRRLComponents(
         recurrent=AAAI25LRU(
@@ -88,24 +102,24 @@ def test_historical_key_split_parameters_and_optimizer_state_match_oracle():
     components, config, environment = _strict_setup()
 
     state, keys = make_init_fn(components, config, environment)(
-        jnp.asarray(arrays["state_machine/keys/root"])
+        jnp.asarray(arrays["state_machine/init/keys/root"])
     )
 
     np.testing.assert_array_equal(
-        keys.step, arrays["state_machine/keys/step"]
+        keys.step, arrays["state_machine/init/keys/step"]
     )
     np.testing.assert_array_equal(
-        keys.outer, arrays["state_machine/keys/outer"]
+        keys.outer, arrays["state_machine/init/keys/outer"]
     )
     _assert_flat_tree_matches_fixture(
         state.parameters,
         arrays,
-        "state_machine/init/parameters",
+        "state_machine/init/state/parameters",
     )
     _assert_flat_tree_matches_fixture(
         state.optimizer_state,
         arrays,
-        "state_machine/init/optimizer_state",
+        "state_machine/init/state/optimizer_state",
     )
 
 
@@ -114,34 +128,81 @@ def test_historical_pre_sample_advanced_state_traces_and_statistics_match_oracle
     components, config, environment = _strict_setup()
 
     state, _ = make_init_fn(components, config, environment)(
-        jnp.asarray(arrays["state_machine/keys/root"])
+        jnp.asarray(arrays["state_machine/init/keys/root"])
     )
 
     np.testing.assert_array_equal(
-        state.action, arrays["state_machine/init/action"]
+        state.action, arrays["state_machine/init/state/action"]
     )
     np.testing.assert_array_equal(
-        state.value, arrays["state_machine/init/value"]
+        state.value, arrays["state_machine/init/state/value"]
     )
     np.testing.assert_array_equal(
-        state.model_input, arrays["state_machine/init/model_input"]
+        state.model_input, arrays["state_machine/init/state/model_input"]
     )
     _assert_flat_tree_matches_fixture(
         state.recurrent_state,
         arrays,
-        "state_machine/init/recurrent_state",
+        "state_machine/init/state/recurrent_state",
     )
     _assert_flat_tree_matches_fixture(
         state.traces,
         arrays,
-        "state_machine/init/traces",
+        "state_machine/init/state/traces",
     )
     np.testing.assert_array_equal(
-        state.emphasis, arrays["state_machine/init/emphasis"]
+        state.emphasis, arrays["state_machine/init/state/emphasis"]
     )
     np.testing.assert_array_equal(
         state.average_reward,
-        arrays["state_machine/init/average_reward"],
+        arrays["state_machine/init/state/average_reward"],
     )
     assert state.observation_statistics is None
     assert state.reward_statistics is None
+
+
+def _canonical_state_tree(state):
+    environment = state.environment_state
+    return {
+        "parameters": state.parameters,
+        "slow_parameters": state.slow_parameters,
+        "optimizer_state": state.optimizer_state,
+        "environment_state": {
+            "obs": environment.obs,
+            "reward": environment.reward,
+            "done": environment.done,
+            "phase": environment.phase,
+            "last_action": environment.last_action,
+        },
+        "action": state.action,
+        "recurrent_state": state.recurrent_state,
+        "traces": state.traces,
+        "value": state.value,
+        "average_reward": state.average_reward,
+        "emphasis": state.emphasis,
+        "observation_statistics": np.asarray("<none>"),
+        "reward_statistics": np.asarray("<none>"),
+        "model_input": state.model_input,
+        "initial_recurrent_state": state.initial_recurrent_state,
+        "step_count": state.step_count,
+    }
+
+
+def test_complete_initialized_state_and_every_split_key_match_oracle():
+    arrays, _ = load_oracle()
+    components, config, environment = _strict_setup()
+
+    state, keys = make_init_fn(components, config, environment)(
+        jnp.asarray(arrays["state_machine/init/keys/root"])
+    )
+
+    _assert_flat_tree_matches_fixture(
+        _canonical_state_tree(state),
+        arrays,
+        "state_machine/init/state",
+    )
+    for name in ("model", "step", "carry", "environment", "outer"):
+        np.testing.assert_array_equal(
+            getattr(keys, name),
+            arrays[f"state_machine/init/keys/{name}"],
+        )

@@ -220,3 +220,169 @@ checks, IDE diagnostics, and diff checks.
 - Running statistics are `None`, exactly matching this pinned fixture with both
   normalization flags disabled. Normalized strict parity requires a separately
   captured fixture before enabling those branches.
+
+## Review-Blocker Correction
+
+### Corrected Oracle Independence
+
+The original Task 8 state-machine fixture was rejected because its capture
+function independently reassembled the online equations. That implementation
+has been removed. The replacement in `oracle_complete_path.py` executes the
+actual nested `step_fn` body from pinned `RTRRL-AAAI25/rtrrl.py`.
+
+Identity and control flow are guarded as follows:
+
+- the clean oracle checkout is still required at commit
+  `4301943c349171d828d0fcf3e40944c286451415`;
+- the exact `rtrrl.py` bytes must have SHA-256
+  `082914b2dbe95481e30c738945b58f7948d4065eb917ef1554f8127227ad0edf`;
+- six exact, single-occurrence source anchors are checked before execution;
+- the transformation removes only the nested `step_fn` `@jax.jit` decorator,
+  inserts read-only local-variable callbacks at initialization, key split,
+  pre-optimizer, pre-trace, and final-carry boundaries, and leaves every
+  original statement and return unchanged;
+- only `jax.lax.scan` is replaced by a Python eager driver, so the same nested
+  function receives the same carry and step values;
+- the production mock environment is substituted through the existing
+  `make_env` seam; no update, trace, gradient, TD, optimizer, or phase equation
+  exists in the corrected capture path.
+
+The source instrumentation mode, source hash, and exact transformations are
+stored in the manifest and asserted by `test_public_api.py`.
+
+### Corrected Fixture Provenance
+
+The corrected fixture was generated only on authorized Batch:
+
+- successful generation job:
+  `f07bc5be-a3c4-451d-b87d-ee75fde4ed5c`;
+- queue/job definition: `rtrrl-cpu2-queue`, `rtrrl-cpu-job:14`;
+- resources: 4 vCPU, 8192 MiB;
+- clean source commit:
+  `4301943c349171d828d0fcf3e40944c286451415`;
+- oracle runtime: Python 3.12, JAX/JAXLIB 0.4.38, Flax 0.10.2;
+- NPZ SHA-256:
+  `9fe7b0b278fc9d163299ea2a07a10c367fb34ef1ce366c216fed6ead5f4535e7`;
+- manifest SHA-256:
+  `a1b7cde140898378d45ebb4ea32ccddcf630b89660a47416cfda8c6893ae98cd`;
+- NPZ size: 370.8 KiB;
+- manifest size: 221.0 KiB.
+
+The generation job executes three one-environment transitions and one real
+two-environment transition through the pinned complete body. It also invokes
+the pinned `optimizers.make_optimizer` on five nondefault update inputs.
+
+### Corrected TDD Evidence
+
+The correction began with focused RED tests:
+
+```text
+4 failed
+- missing complete grouped optimizer config
+- invalid debug bounds accepted
+- missing complete-path fixture provenance
+```
+
+The nondefault optimizer characterization was separately observed RED because
+the old fixture had no `optimizer_characterization` leaves. Full-state and
+two-environment tests were then observed RED against the corrected fixture
+until the generic comparator represented and exactly compared `None` leaves.
+
+GREEN evidence:
+
+```text
+Batch f7967e3c-68f8-4a77-a7a1-d163362534b4
+9 passed
+```
+
+This focused job covers all initialization and eager state-machine tests,
+including the complete one- and two-environment calls.
+
+### Complete State and Observable Coverage
+
+Initialization and every transition now compare one canonical full-state tree.
+The comparator requires identical paths, shapes, dtypes, and values for:
+
+- parameters and slow parameters;
+- full optimizer state;
+- every environment-state field (`obs`, `reward`, `done`, `phase`,
+  `last_action`);
+- persisted action, value, recurrent state, initial recurrent state, and
+  traces;
+- average reward, emphasis, model input, and step count;
+- observation and reward statistics, represented by an exact string sentinel
+  when the pinned value is `None`.
+
+Because the expected state is a complete prefixed fixture tree, any future
+persisted field—array or `None`—changes the path set and fails the test.
+Initialization also compares every exposed split key (`root`, `model`, `step`,
+`carry`, `environment`, and `outer`). Each step compares input and output keys.
+
+The debug fixture separately compares environment action, model input, sampled
+next action, target, delta, value, actor loss, entropy, full TD/direct
+gradients, incoming/carried traces, mean directions, optimizer updates, and
+the complete resulting state.
+
+### Real Two-Environment Integration
+
+The corrected two-environment test constructs a two-row environment state and
+calls production `make_init_fn` and `make_step_fn`. The pinned complete path and
+production path both receive heterogeneous observations, rewards, terminal
+masks, previous values, and deltas. The test compares the entire returned state
+and all gradient, trace, update-direction, and key leaves against the oracle.
+It additionally asserts a leading axis of size two on every gradient and trace
+leaf, proving that Task 6 credit is vmapped per unbatched environment and that
+the reduction occurs only after heterogeneous per-environment deltas are
+applied.
+
+### Optimizer Fidelity
+
+`RTRRLComponentConfig` now stores the canonical frozen
+`LegacyOptimizerConfig` separately for TD and recurrent groups. Conversion
+preserves optimizer name, learning rate, optimizer kwargs (including moments
+and epsilon), schedule type/kwargs, weight decay, gradient clipping, and
+multistep accumulation.
+
+The production transform follows pinned `make_optimizer` ordering:
+
+```text
+weight decay -> global-norm clipping -> optimizer -> optional MultiSteps
+```
+
+Maximum-direction signs and schedule values are preserved. The oracle-backed
+characterization uses nondefault Adam moments/epsilon, exponential staircase
+decay, clipping, weight decay, and two-step accumulation, and compares every
+update, parameter, and optimizer-state leaf over five calls. A separate pinned
+`optax.incremental_update` fixture verifies post-update fast/previous-slow
+argument order.
+
+### Stable Debug and Closure Contracts
+
+`RTRRLComponentConfig` rejects `debug_max_steps` outside `[0, 3]`. A debug
+closure always returns `DebugStepMetrics`; once its bound is exhausted it raises
+before key splitting, environment stepping, or any numerical calculation.
+Production closures continue to return only scalar/event metrics.
+
+Closure tests now assert exact nonlocal names, explicit `(state, key)`
+signatures, absence of captured JAX arrays/state/keys, object identity for only
+the permitted static component/config/environment values, and byte-identical
+results from repeated calls with the same explicit state and key. This rules
+out retained mutable training state and hidden RNG progression.
+
+### Corrected Full Verification
+
+Final authorized job `11d95d07-eb8e-40be-85d5-716ced87fd83` used 4 vCPU and
+8192 MiB:
+
+```text
+87 passed, 5 skipped
+ruff: All checks passed!
+pyright: 0 errors, 0 warnings, 0 informations
+compileall: exit 0
+```
+
+Its test scope is all of `tests/rtrrl_parity`; static scope includes every
+changed production, capture, and test file. The five skips are the pre-existing
+opt-in Task 6 finite-difference cases. Local execution remained limited to
+configuration/provenance RED checks, the small optimizer characterization,
+ruff, pyright, compileall, and diff checks—no full RL environment was run.

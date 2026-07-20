@@ -6,6 +6,8 @@ import pytest
 import yaml
 
 from memorax.algorithms.rtrrl.compatibility import (
+    LegacyOptimizerConfig,
+    RTRRLComponentConfig,
     UnsupportedRTRRLBranch,
     normalize_legacy_config,
     to_component_config,
@@ -63,6 +65,61 @@ def test_nested_environment_and_optimizer_fields_survive_and_numeric_strings_coe
     assert config.optimizer_params_rnn.learning_rate == pytest.approx(2e-6)
     assert config.optimizer_params_rnn.gradient_clip == pytest.approx(1.0)
     assert isinstance(config.optimizer_params_td.learning_rate, float)
+
+
+def test_component_config_preserves_complete_grouped_optimizer_settings():
+    legacy = normalize_legacy_config(
+        {
+            "optimizer_params_td": {
+                "opt_name": "adam",
+                "learning_rate": "3e-4",
+                "kwargs": {"b1": 0.81, "b2": 0.92, "eps": 2e-6},
+                "decay_type": "cosine",
+                "lr_kwargs": {"decay_steps": 9, "alpha": 0.2},
+                "weight_decay": "0.03",
+                "gradient_clip": "0.7",
+                "multi_step": 2,
+            },
+            "optimizer_params_rnn": {
+                "opt_name": "adam",
+                "learning_rate": "4e-5",
+                "kwargs": {"b1": 0.71, "b2": 0.82, "eps": 3e-5},
+                "decay_type": "exponential",
+                "lr_kwargs": {
+                    "transition_steps": 3,
+                    "decay_rate": 0.5,
+                    "staircase": True,
+                },
+                "weight_decay": "0.04",
+                "gradient_clip": "0.6",
+                "multi_step": 3,
+            },
+        }
+    )
+
+    effective = to_component_config(legacy)
+
+    assert effective.optimizer_params_td == legacy.optimizer_params_td
+    assert effective.optimizer_params_rnn == legacy.optimizer_params_rnn
+
+
+@pytest.mark.parametrize("limit", [-1, 4])
+def test_component_config_rejects_debug_bounds_above_three(limit):
+    with pytest.raises(ValueError, match="debug_max_steps"):
+        RTRRLComponentConfig(
+            profile="aaai25_strict_lru",
+            backbone="aaai25_lru",
+            trace_timing="incoming",
+            logprob_reduction="mean",
+            debug_max_steps=limit,
+        )
+
+
+def test_legacy_optimizer_config_remains_the_canonical_nested_type():
+    effective = to_component_config(normalize_legacy_config({}))
+
+    assert isinstance(effective.optimizer_params_td, LegacyOptimizerConfig)
+    assert isinstance(effective.optimizer_params_rnn, LegacyOptimizerConfig)
 
 
 def test_explicit_lru_is_supported():

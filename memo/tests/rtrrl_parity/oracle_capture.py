@@ -15,6 +15,17 @@ from typing import Any
 
 import numpy as np
 
+try:
+    from .oracle_complete_path import (
+        SOURCE_SHA256 as STATE_MACHINE_SOURCE_SHA256,
+        capture_complete_state_machine,
+    )
+except ImportError:
+    from oracle_complete_path import (  # pyright: ignore[reportMissingImports]
+        SOURCE_SHA256 as STATE_MACHINE_SOURCE_SHA256,
+        capture_complete_state_machine,
+    )
+
 GOLDEN_DIR = Path(__file__).with_name("golden")
 ARCHIVE_NAME = "aaai25_lru.npz"
 MANIFEST_NAME = "manifest.json"
@@ -106,439 +117,16 @@ def _store_tree(
 
 def _capture_historical_state_machine(
     *,
-    root_key: Any,
     rtrrl: Any,
-    traces: Any,
     optimizers: Any,
-    jax: Any,
-    jnp: Any,
+    seed: int,
 ) -> dict[str, np.ndarray]:
-    """Capture the actual pinned initialization and three eager transitions."""
+    """Execute the mechanically instrumented pinned complete training path."""
 
-    import optax
-
-    key, key_model, key_step, key_init, key_env, outer_key = jax.random.split(
-        root_key, 6
-    )
-    del key
-    observation = jnp.array([[0.25]], dtype=jnp.float32)
-    initial_reward = jnp.array([-0.5], dtype=jnp.float32)
-    initial_done = jnp.array([False])
-    batch_shape = observation.shape[:-1]
-    initial_input = jnp.concatenate(
-        [
-            observation,
-            jnp.zeros(batch_shape + (2,), dtype=jnp.float32),
-            initial_reward.reshape(batch_shape + (-1,)),
-        ],
-        axis=-1,
-    )
-    model = rtrrl.RNNActorCritic(
-        a_dim=2,
-        discrete=False,
-        obs_dim=1,
-        batch_shape=(1,),
-        hidden_size=2,
-        rnn_model="lru",
-        gradient_mode="rtrl",
-        f_align=False,
-        pass_obs=False,
-        mlp_actor=False,
-        layer_norm=False,
-    )
-    initial_carry = model.initialize_carry(key_init, initial_input.shape)
-    (recurrent_state, (action, previous_value, hidden)), parameters = (
-        model.init_with_output(
-            key_model,
-            initial_carry,
-            initial_input,
-            key=key_model,
-        )
-    )
-    initial_action = action.reshape((*batch_shape, -1))
-    trace_keys = ["td"]
-    recurrent_keys = [
-        name for name in parameters["params"] if "rnn" in name
-    ]
-    trace_keys += recurrent_keys
-    zero_traces = {
-        name: value
-        for name, value in traces.init_trace(parameters, batch_shape)[
-            "params"
-        ].items()
-        if name in trace_keys
-    }
-    optimizer_config = optimizers.OptimizerConfig(
-        opt_name="adam",
-        learning_rate=1e-3,
-        gradient_clip=None,
-    )
-    optimizer = optax.multi_transform(
-        {
-            "rnn": optimizers.make_optimizer(
-                direction="max", config=optimizer_config
-            ),
-            "td": optimizers.make_optimizer(
-                direction="max", config=optimizer_config
-            ),
-        },
-        {
-            "td": "td",
-            **{name: "rnn" for name in recurrent_keys},
-        },
-    )
-    optimizer_state = optimizer.init(parameters["params"])
-    slow_parameters = parameters
-    average_reward = jnp.array([0.0], dtype=jnp.float32)
-    emphasis = jnp.ones(batch_shape, dtype=jnp.float32)
-
-    arrays: dict[str, np.ndarray] = {
-        "state_machine/keys/root": np.asarray(root_key),
-        "state_machine/keys/model": np.asarray(key_model),
-        "state_machine/keys/step": np.asarray(key_step),
-        "state_machine/keys/init": np.asarray(key_init),
-        "state_machine/keys/env": np.asarray(key_env),
-        "state_machine/keys/outer": np.asarray(outer_key),
-        "state_machine/init/environment/observation": np.asarray(observation),
-        "state_machine/init/environment/reward": np.asarray(initial_reward),
-        "state_machine/init/environment/done": np.asarray(initial_done),
-        "state_machine/init/model_input": np.asarray(initial_input),
-        "state_machine/init/action": np.asarray(initial_action),
-        "state_machine/init/value": np.asarray(previous_value),
-        "state_machine/init/hidden": np.asarray(hidden),
-        "state_machine/init/average_reward": np.asarray(average_reward),
-        "state_machine/init/emphasis": np.asarray(emphasis),
-    }
-    _store_tree(
-        arrays, "state_machine/init/parameters", parameters, jax
-    )
-    _store_tree(
-        arrays,
-        "state_machine/init/optimizer_state",
-        optimizer_state,
-        jax,
-    )
-    _store_tree(
-        arrays,
-        "state_machine/init/recurrent_state",
-        recurrent_state,
-        jax,
-    )
-    _store_tree(
-        arrays, "state_machine/init/traces", zero_traces, jax
-    )
-
-    for step_index in range(3):
-        incoming_traces = zero_traces
-        persisted_action = initial_action
-        input_step_key = key_step
-        key_step, action_key, dropout_key = jax.random.split(key_step, 3)
-        del dropout_key
-        next_observation = jnp.array(
-            [[0.1 + 0.05 * step_index]], dtype=jnp.float32
-        )
-        reward = jnp.array(
-            [0.625 - 0.125 * step_index], dtype=jnp.float32
-        )
-        done = jnp.array([step_index == 1])
-        recurrent_state = jax.tree.map(
-            lambda reset, current: jax.vmap(jnp.where)(
-                done, reset, current
-            ),
-            initial_carry,
-            recurrent_state,
-        )
-        reset_action, reset_reward = jax.tree.map(
-            lambda value: jax.vmap(jnp.where)(
-                done, jnp.zeros_like(value), value
-            ),
-            (persisted_action, reward),
-        )
-        model_input = jnp.concatenate(
-            [
-                next_observation,
-                reset_action,
-                reset_reward.reshape(batch_shape + (-1,)),
-            ],
-            axis=-1,
-        )
-
-        def gradients_for_environment(carry: Any, inputs: Any):
-            def recurrent_step(model_parameters: Any):
-                return model.apply(
-                    model_parameters,
-                    carry,
-                    inputs,
-                    training=True,
-                    method=model.rnn_step,
-                )
-
-            current_hidden, recurrent_pullback, next_recurrent_state = (
-                jax.vjp(recurrent_step, slow_parameters, has_aux=True)
-            )
-
-            def td_loss(model_parameters: Any, head_input: Any):
-                value = model.apply(
-                    model_parameters,
-                    head_input,
-                    inputs,
-                    method=model.value,
-                )
-                distribution = model.apply(
-                    model_parameters,
-                    head_input,
-                    inputs,
-                    method=model.action_dist,
-                )
-                sampled_action = distribution.sample(seed=action_key)
-                actor_loss = distribution.log_prob(sampled_action)
-                loss = actor_loss.mean() + value.mean()
-                return loss, (
-                    sampled_action,
-                    distribution,
-                    value,
-                    actor_loss.mean(),
-                )
-
-            (
-                (next_gradients, hidden_gradient),
-                (
-                    sampled_action,
-                    distribution,
-                    value,
-                    actor_loss,
-                ),
-            ) = jax.grad(
-                td_loss, argnums=(0, 1), has_aux=True
-            )(slow_parameters, current_hidden)
-            recurrent_gradients = recurrent_pullback(hidden_gradient)[0]
-            next_gradients = jax.tree.map(
-                lambda left, right: left + right,
-                recurrent_gradients,
-                next_gradients,
-            )
-
-            def direct_loss(model_parameters: Any, head_input: Any):
-                direct_distribution = model.apply(
-                    model_parameters,
-                    head_input,
-                    inputs,
-                    method=model.action_dist,
-                )
-                entropy = direct_distribution.entropy().mean()
-                return entropy * 1e-5, entropy
-
-            (
-                (direct_gradient, hidden_direct_gradient),
-                entropy,
-            ) = jax.grad(
-                direct_loss, argnums=(0, 1), has_aux=True
-            )(slow_parameters, current_hidden)
-            recurrent_direct_gradient = recurrent_pullback(
-                hidden_direct_gradient
-            )[0]
-            direct_gradients = jax.tree.map(
-                lambda left, right: left + right,
-                direct_gradient,
-                recurrent_direct_gradient,
-            )
-            return (
-                next_recurrent_state,
-                direct_gradients,
-                sampled_action,
-                value,
-                next_gradients,
-                actor_loss,
-                entropy,
-                distribution.loc,
-                distribution.scale,
-            )
-
-        (
-            recurrent_state,
-            direct_gradients,
-            next_action,
-            next_value,
-            next_gradients,
-            actor_loss,
-            entropy,
-            action_loc,
-            action_scale,
-        ) = jax.vmap(gradients_for_environment)(
-            recurrent_state, model_input
-        )
-        value_target = reward + 0.99 * next_value.squeeze() * (1 - done)
-        delta = value_target - average_reward - previous_value.squeeze()
-        traced_updates = {
-            "params": {
-                "td": {
-                    "critic": traces.compute_updates(
-                        incoming_traces["td"]["critic"], d=delta
-                    ),
-                    "actor": traces.compute_updates(
-                        incoming_traces["td"]["actor"], d=delta
-                    ),
-                },
-                "rnn": traces.compute_updates(
-                    incoming_traces["rnn"], d=delta
-                ),
-            }
-        }
-        combined_updates = {
-            "params": jax.tree.map(
-                lambda direct, traced: direct + traced,
-                direct_gradients["params"],
-                traced_updates["params"],
-            )
-        }
-        mean_updates = jax.tree.map(
-            lambda value: jnp.mean(value, axis=0), combined_updates
-        )
-        optimizer_updates, optimizer_state = optimizer.update(
-            mean_updates["params"],
-            optimizer_state,
-            parameters["params"],
-        )
-        parameters = {
-            **parameters,
-            "params": optax.apply_updates(
-                parameters["params"], optimizer_updates
-            ),
-        }
-        slow_parameters = parameters
-        emphasis = 0.99 * emphasis * (1 - done) + done
-        reset_traces = jax.tree.map(
-            lambda zero, current: jax.vmap(jnp.where)(
-                done, zero, current
-            ),
-            {
-                name: value
-                for name, value in traces.init_trace(
-                    parameters, batch_shape
-                )["params"].items()
-                if name in trace_keys
-            },
-            incoming_traces,
-        )
-
-        def update_environment_traces(
-            environment_gradients: Any,
-            environment_traces: Any,
-            environment_emphasis: Any,
-        ):
-            return {
-                "td": {
-                    "actor": traces.trace_update(
-                        environment_gradients["params"]["td"]["actor"],
-                        environment_traces["td"]["actor"],
-                        gamma_lambda=0.99 * 0.9,
-                        _I=environment_emphasis,
-                    ),
-                    "critic": traces.trace_update(
-                        environment_gradients["params"]["td"]["critic"],
-                        environment_traces["td"]["critic"],
-                        gamma_lambda=0.99 * 0.9,
-                        _I=environment_emphasis,
-                    ),
-                },
-                "rnn": traces.trace_update(
-                    environment_gradients["params"]["rnn"],
-                    environment_traces["rnn"],
-                    gamma_lambda=0.99 * 0.9,
-                    _I=environment_emphasis,
-                ),
-            }
-
-        zero_traces = jax.vmap(update_environment_traces)(
-            next_gradients,
-            reset_traces,
-            emphasis,
-        )
-        prefix = f"state_machine/step_{step_index + 1}"
-        arrays.update(
-            {
-                f"{prefix}/key_in": np.asarray(input_step_key),
-                f"{prefix}/key_out": np.asarray(key_step),
-                f"{prefix}/action_key": np.asarray(action_key),
-                f"{prefix}/environment_action": np.asarray(
-                    persisted_action
-                ),
-                f"{prefix}/environment/observation": np.asarray(
-                    next_observation
-                ),
-                f"{prefix}/environment/reward": np.asarray(reward),
-                f"{prefix}/environment/done": np.asarray(done),
-                f"{prefix}/model_input": np.asarray(model_input),
-                f"{prefix}/sampled_next_action": np.asarray(
-                    next_action.reshape((*batch_shape, -1))
-                ),
-                f"{prefix}/action_loc": np.asarray(action_loc),
-                f"{prefix}/action_scale": np.asarray(action_scale),
-                f"{prefix}/value_target": np.asarray(value_target),
-                f"{prefix}/td_error": np.asarray(delta),
-                f"{prefix}/value": np.asarray(next_value),
-                f"{prefix}/actor_loss": np.asarray(actor_loss),
-                f"{prefix}/entropy": np.asarray(entropy),
-                f"{prefix}/average_reward": np.asarray(average_reward),
-                f"{prefix}/emphasis": np.asarray(emphasis),
-            }
-        )
-        _store_tree(
-            arrays, f"{prefix}/gradients", next_gradients, jax
-        )
-        _store_tree(
-            arrays, f"{prefix}/direct_gradients", direct_gradients, jax
-        )
-        _store_tree(
-            arrays, f"{prefix}/incoming_traces", incoming_traces, jax
-        )
-        _store_tree(
-            arrays, f"{prefix}/carried_traces", zero_traces, jax
-        )
-        _store_tree(
-            arrays, f"{prefix}/mean_directions", mean_updates, jax
-        )
-        _store_tree(
-            arrays,
-            f"{prefix}/optimizer_updates",
-            optimizer_updates,
-            jax,
-        )
-        _store_tree(
-            arrays, f"{prefix}/parameters", parameters, jax
-        )
-        _store_tree(
-            arrays, f"{prefix}/slow_parameters", slow_parameters, jax
-        )
-        _store_tree(
-            arrays,
-            f"{prefix}/optimizer_state",
-            optimizer_state,
-            jax,
-        )
-        _store_tree(
-            arrays,
-            f"{prefix}/recurrent_state",
-            recurrent_state,
-            jax,
-        )
-        initial_action = next_action.reshape((*batch_shape, -1))
-        previous_value = next_value
-
-    two_reward = jnp.array([0.25, -0.5], dtype=jnp.float32)
-    two_value = jnp.array([0.75, -1.25], dtype=jnp.float32)
-    two_next_value = jnp.array([1.5, 0.5], dtype=jnp.float32)
-    two_done = jnp.array([False, True])
-    two_delta = (
-        two_reward + 0.99 * two_next_value * (1 - two_done) - two_value
-    )
-    two_trace = jnp.array([[1.0, -2.0], [3.0, 4.0]], dtype=jnp.float32)
-    arrays["state_machine/two_env/delta"] = np.asarray(two_delta)
-    arrays["state_machine/two_env/direction"] = np.asarray(
-        jnp.mean(
-            (two_delta[:, None].T * two_trace.T).T,
-            axis=0,
-        )
+    arrays, _ = capture_complete_state_machine(
+        oracle_module=rtrrl,
+        optimizers=optimizers,
+        seed=seed,
     )
     return arrays
 
@@ -914,12 +502,9 @@ def _capture_arrays(seed: int) -> tuple[dict[str, np.ndarray], dict[str, str]]:
     }
     arrays.update(
         _capture_historical_state_machine(
-            root_key=root_key,
             rtrrl=rtrrl,
-            traces=traces,
             optimizers=optimizers,
-            jax=jax,
-            jnp=jnp,
+            seed=seed,
         )
     )
     versions = {
@@ -1040,6 +625,13 @@ def main(
             ),
         },
         "state_machine": {
+            "capture_mode": "instrumented-pinned-train-rtrrl-step-fn",
+            "source_sha256": STATE_MACHINE_SOURCE_SHA256,
+            "instrumentation": [
+                "remove only the nested step_fn jax.jit decorator",
+                "insert observation hooks without changing its statements or returns",
+                "replace only lax.scan with an eager test driver",
+            ],
             "key_split": [
                 "unused",
                 "model",

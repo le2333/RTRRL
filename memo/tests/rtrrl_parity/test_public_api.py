@@ -37,6 +37,17 @@ def test_oracle_manifest_pins_source_and_runtime():
     assert manifest["seed"] == 7
     assert manifest["dtype_policy"] == "float32-complex64"
     assert sorted(arrays) == manifest["leaf_paths"]
+    assert manifest["state_machine"]["capture_mode"] == (
+        "instrumented-pinned-train-rtrrl-step-fn"
+    )
+    assert manifest["state_machine"]["source_sha256"] == (
+        "082914b2dbe95481e30c738945b58f7948d4065eb917ef1554f8127227ad0edf"
+    )
+    assert manifest["state_machine"]["instrumentation"] == [
+        "remove only the nested step_fn jax.jit decorator",
+        "insert observation hooks without changing its statements or returns",
+        "replace only lax.scan with an eager test driver",
+    ]
 
 
 def test_oracle_fixture_has_required_sections():
@@ -140,12 +151,13 @@ def test_oracle_fixture_has_required_sections():
         "init/action",
         "init/value",
         "step/td_error",
-        "state_machine/init/action",
-        "state_machine/init/value",
+        "state_machine/init/state/action",
+        "state_machine/init/state/value",
         "state_machine/step_1/td_error",
-        "state_machine/step_2/environment/done",
+        "state_machine/step_2/state/environment_state/done",
         "state_machine/step_3/model_input",
-        "state_machine/two_env/direction",
+        "state_machine/two_env/step_1/td_error",
+        "optimizer_characterization/slow_target/result",
     }
     assert {path for path in arrays if path.startswith("heads/")} == required_heads
     assert required_other <= arrays.keys()

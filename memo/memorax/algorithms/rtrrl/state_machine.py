@@ -12,7 +12,7 @@ import jax
 import jax.numpy as jnp
 import optax
 
-from .compatibility import RTRRLComponentConfig
+from .compatibility import LegacyOptimizerConfig, RTRRLComponentConfig
 from .heads import RTRRLTDHead, make_action_distribution
 from .lru import (
     AAAI25LRU,
@@ -62,25 +62,69 @@ class _HistoricalInitializer(nn.Module):
         return hidden, actor, value
 
 
+def _make_maximizing_group(
+    config: LegacyOptimizerConfig,
+) -> optax.GradientTransformation:
+    learning_rate: Any = -config.learning_rate
+    if config.decay_type == "cosine_warmup":
+        learning_rate = optax.warmup_cosine_decay_schedule(
+            learning_rate * config.lr_kwargs.get("initial_multiplier", 0.0),
+            peak_value=learning_rate,
+            end_value=learning_rate
+            * config.lr_kwargs.get("end_multiplier", 0.01),
+            decay_steps=config.lr_kwargs.get("decay_steps", 1e6),
+            warmup_steps=config.lr_kwargs.get("warmup_steps", 1e4),
+        )
+    elif config.decay_type == "cosine":
+        learning_rate = optax.cosine_decay_schedule(
+            learning_rate,
+            decay_steps=config.lr_kwargs.get("decay_steps", 1e6),
+            alpha=config.lr_kwargs.get(
+                "alpha", learning_rate * 0.01
+            ),
+        )
+    elif config.decay_type == "exponential":
+        learning_rate = optax.exponential_decay(
+            learning_rate,
+            config.lr_kwargs["transition_steps"],
+            config.lr_kwargs["decay_rate"],
+            config.lr_kwargs.get("warmup_steps", 0),
+            config.lr_kwargs.get("staircase", False),
+            config.lr_kwargs.get("end_value"),
+        )
+    elif config.decay_type is not None:
+        raise ValueError(f"Decay type {config.decay_type} unknown.")
+
+    @optax.inject_hyperparams
+    def make_group(learning_rate) -> optax.GradientTransformation:
+        optimizer = optax.chain(
+            optax.add_decayed_weights(config.weight_decay),
+            (
+                optax.clip_by_global_norm(config.gradient_clip)
+                if config.gradient_clip
+                else optax.identity()
+            ),
+            getattr(optax, config.opt_name)(
+                learning_rate, **dict(config.kwargs)
+            ),
+        )
+        if config.multi_step:
+            optimizer = optax.MultiSteps(
+                optimizer, every_k_schedule=config.multi_step
+            )
+        return cast(optax.GradientTransformation, optimizer)
+
+    return make_group(learning_rate=learning_rate)
+
+
 def _make_maximizing_optimizer(
     config: RTRRLComponentConfig,
 ) -> optax.GradientTransformation:
-    @optax.inject_hyperparams
-    def make_group(learning_rate):
-        return optax.chain(
-            optax.add_decayed_weights(0.0),
-            optax.identity(),
-            getattr(optax, config.optimizer_name)(learning_rate),
-        )
 
     return optax.multi_transform(
         {
-            "rnn": make_group(
-                learning_rate=-config.recurrent_learning_rate
-            ),
-            "td": make_group(
-                learning_rate=-config.actor_critic_learning_rate
-            ),
+            "rnn": _make_maximizing_group(config.optimizer_params_rnn),
+            "td": _make_maximizing_group(config.optimizer_params_td),
         },
         {"rnn": "rnn", "td": "td"},
     )
@@ -336,6 +380,10 @@ def make_step_fn(
     optimizer = _make_maximizing_optimizer(config)
 
     def step(state: RTRRLState, key):
+        if debug and int(state.step_count) >= config.debug_max_steps:
+            raise ValueError(
+                "debug step bound exhausted before transition calculation"
+            )
         with jax.threefry_partitionable(False):
             next_key, action_key, _ = jax.random.split(key, 3)
         environment_action = state.action
@@ -500,7 +548,7 @@ def make_step_fn(
             lambda_critic=config.lambda_critic,
             lambda_rnn=config.lambda_recurrent,
             trace_mode=config.trace_mode,
-            critic_learning_rate=config.actor_critic_learning_rate,
+            critic_learning_rate=config.optimizer_params_td.learning_rate,
             emphasis=emphasis_state.emphasis,
             terminated=done,
             timing=config.trace_timing,
@@ -511,7 +559,7 @@ def make_step_fn(
             delta=delta,
             recurrent_scale=config.recurrent_scale,
             trace_mode=config.trace_mode,
-            critic_learning_rate=config.actor_critic_learning_rate,
+            critic_learning_rate=config.optimizer_params_td.learning_rate,
             critic_value_difference=(
                 next_value.squeeze() - state.value.squeeze()
             ),
@@ -569,7 +617,7 @@ def make_step_fn(
             entropy_mean=jnp.mean(entropy),
             actor_loss_mean=jnp.mean(actor_loss),
         )
-        if not debug or int(state.step_count) >= config.debug_max_steps:
+        if not debug:
             return next_state, next_key, train_metrics
         debug_metrics = DebugStepMetrics(
             train=train_metrics,
