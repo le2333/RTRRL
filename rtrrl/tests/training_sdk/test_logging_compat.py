@@ -111,6 +111,53 @@ def test_facility_aim_logger_delegates_metrics_and_caches_latest_finite_scalars(
     ]
 
 
+def test_facility_log_uses_canonical_native_env_steps_when_step_is_none():
+    training_run = RecordingTrainingRun()
+    logger = AimLogger("ignored", training_run=training_run)
+    metrics = {"train/env_steps": 20, "eval/reward": 1.0}
+
+    logger.log(metrics)
+
+    assert training_run.calls == [("log_metrics", 20, metrics)]
+
+
+def test_facility_log_without_native_env_steps_fails_before_call_or_cache():
+    training_run = RecordingTrainingRun()
+    logger = AimLogger("ignored", training_run=training_run)
+
+    with pytest.raises(
+        ValueError,
+        match="facility logging requires explicit native env_steps",
+    ):
+        logger.log({"eval/reward": 1.0})
+
+    assert training_run.calls == []
+    assert logger._final_metrics == {}
+
+
+def test_facility_log_rejects_conflicting_native_env_steps():
+    training_run = RecordingTrainingRun()
+    logger = AimLogger("ignored", training_run=training_run)
+
+    with pytest.raises(ValueError, match="conflicts"):
+        logger.log({"train/env_steps": 21, "eval/reward": 1.0}, step=20)
+
+    assert training_run.calls == []
+    assert logger._final_metrics == {}
+
+
+@pytest.mark.parametrize("env_steps", [True, 20.0, "20"])
+def test_facility_log_rejects_non_integer_canonical_env_steps(env_steps):
+    training_run = RecordingTrainingRun()
+    logger = AimLogger("ignored", training_run=training_run)
+
+    with pytest.raises(ValueError, match="train/env_steps.*integer"):
+        logger.log({"train/env_steps": env_steps, "eval/reward": 1.0})
+
+    assert training_run.calls == []
+    assert logger._final_metrics == {}
+
+
 def test_facility_aim_logger_propagates_missing_objective_error():
     training_run = RecordingTrainingRun()
     logger = AimLogger("ignored", training_run=training_run)
@@ -234,9 +281,13 @@ def test_legacy_aim_logger_preserves_run_setup_and_episode_noops(monkeypatch):
     assert created[0]["hparams"] == {"seed": 7}
     assert created[0].name == "legacy-name abc123"
     logger.log({"eval/reward": 2.0}, step=4)
+    logger.log({"eval/reward": 2.5})
     logger["summary"] = 3
     logger.finalize()
-    assert created[0].tracked == [("eval/reward", 2.0, 4)]
+    assert created[0].tracked == [
+        ("eval/reward", 2.0, 4),
+        ("eval/reward", 2.5, None),
+    ]
     assert logger["summary"] == 3.0
     assert created[0].finished == [False]
     assert logger.log_episode_summary(

@@ -166,7 +166,29 @@ class AimLogger(DummyLogger):
     def log(self, metrics, step=None):
         """Loop over scalars and track them with aim."""
         if self.training_run is not None:
-            self.training_run.log_metrics(step, metrics)
+            canonical_env_steps = metrics.get("train/env_steps")
+            if "train/env_steps" in metrics and type(canonical_env_steps) is not int:
+                raise ValueError(
+                    "canonical train/env_steps metric must be an integer"
+                )
+            if step is None:
+                if "train/env_steps" not in metrics:
+                    raise ValueError(
+                        "facility logging requires explicit native env_steps "
+                        "via step or the train/env_steps metric"
+                    )
+                env_steps = canonical_env_steps
+            else:
+                env_steps = step
+                if (
+                    "train/env_steps" in metrics
+                    and canonical_env_steps != env_steps
+                ):
+                    raise ValueError(
+                        "explicit step conflicts with train/env_steps metric"
+                    )
+
+            self.training_run.log_metrics(env_steps, metrics)
             self._final_metrics.update(
                 {
                     key: value
