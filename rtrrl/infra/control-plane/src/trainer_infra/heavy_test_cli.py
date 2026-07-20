@@ -9,11 +9,11 @@ from typing import Sequence
 import boto3
 from botocore.exceptions import BotoCoreError, ClientError
 
+from trainer_infra.batch_topology import ExecutionPurpose, expected_topology
 from trainer_infra.heavy_tests import (
     AggregateJobFailure,
     HeavyTestRunner,
     PartialSubmissionError,
-    TEST_PROFILES,
 )
 
 
@@ -29,6 +29,7 @@ def _runner() -> HeavyTestRunner:
     return HeavyTestRunner(
         boto3.client("batch", region_name="eu-north-1"),
         boto3.client("logs", region_name="eu-north-1"),
+        boto3.client("sts", region_name="eu-north-1"),
     )
 
 
@@ -39,7 +40,9 @@ def _parser() -> argparse.ArgumentParser:
     subparsers = parser.add_subparsers(dest="command", required=True)
 
     submit = subparsers.add_parser("submit", help="submit one Batch job per test file")
-    submit.add_argument("--profile", required=True, choices=tuple(TEST_PROFILES))
+    submit.add_argument(
+        "--profile", required=True, choices=tuple(expected_topology().profiles)
+    )
     submit.add_argument("--image", required=True, help="immutable IMAGE@sha256:DIGEST")
     submit.add_argument("tests", nargs="+", metavar="TEST_FILE")
 
@@ -58,6 +61,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                 profile=args.profile,
                 image=args.image,
                 tests=args.tests,
+                purpose=ExecutionPurpose.DEV,
             ):
                 _print_json(asdict(job))
             return 0

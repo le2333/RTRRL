@@ -10,38 +10,17 @@ import re
 import shlex
 import tempfile
 import time
-from types import MappingProxyType
 from typing import Any, Callable, Mapping, Sequence
 
-
-class ProfileDriftError(RuntimeError):
-    """Raised when an AWS Batch resource does not match its fixed profile."""
-
-
-@dataclass(frozen=True)
-class HeavyTestProfile:
-    queue: str
-    compute_environment: str
-    instance_type: str
-    max_vcpus: int
-    vcpus: int
-    memory_mib: int
-    gpus: int
-    gpu_model: str | None = None
-
-
-@dataclass(frozen=True)
-class ValidatedTestProfile:
-    profile: HeavyTestProfile
-    queue_arn: str
-    compute_environment_arn: str
-
-
-@dataclass(frozen=True)
-class AwsNetworkSettings:
-    subnets: tuple[str, ...]
-    security_group_ids: tuple[str, ...]
-    instance_role: str
+from trainer_infra.batch_topology import (
+    ACCOUNT_ID,
+    REGION,
+    BatchTopologyValidator,
+    ExecutionPurpose,
+    ResourceProfile,
+    expected_topology,
+    queue_for,
+)
 
 
 @dataclass(frozen=True)
@@ -54,6 +33,7 @@ class ResourceRequirement:
 class SubmittedTestJob:
     job_id: str
     test_file: str
+    purpose: ExecutionPurpose
     profile: str
     queue_name: str
     queue_arn: str
@@ -77,6 +57,7 @@ class JobEvidence:
     exit_code: int | None = None
     jax_gpu_lines: tuple[str, ...] = ()
     evidence_errors: tuple[str, ...] = ()
+    purpose: ExecutionPurpose | None = None
     profile: str | None = None
     queue_name: str | None = None
     queue_arn: str | None = None
@@ -88,6 +69,7 @@ class JobEvidence:
 
 @dataclass(frozen=True)
 class _JobIdentity:
+    purpose: ExecutionPurpose
     profile: str
     queue_name: str
     queue_arn: str
@@ -129,65 +111,6 @@ class PartialSubmissionError(RuntimeError):
         )
 
 
-DEFAULT_AWS_NETWORK_SETTINGS = AwsNetworkSettings(
-    subnets=(
-        "subnet-08127d1c5d4de6ac2",
-        "subnet-0b8c68ea0a9784758",
-        "subnet-01a2aa195678f8411",
-    ),
-    security_group_ids=("sg-0c0ed6b927c5113dc",),
-    instance_role=(
-        "arn:aws:iam::007122174918:instance-profile/rtrrl-ecs-instance-role"
-    ),
-)
-
-
-TEST_PROFILES: Mapping[str, HeavyTestProfile] = MappingProxyType(
-    {
-        "c7am": HeavyTestProfile(
-            queue="rtrrl-cpu-c7am-queue",
-            compute_environment="rtrrl-cpu-c7am-ce",
-            instance_type="c7a.medium",
-            max_vcpus=16,
-            vcpus=1,
-            memory_mib=1600,
-            gpus=0,
-        ),
-        "c7ax": HeavyTestProfile(
-            queue="rtrrl-cpu-c7ax-queue",
-            compute_environment="rtrrl-cpu-c7ax-ce",
-            instance_type="c7a.xlarge",
-            max_vcpus=16,
-            vcpus=4,
-            memory_mib=7168,
-            gpus=0,
-        ),
-        "g6x": HeavyTestProfile(
-            queue="rtrrl-gpu-g6x-queue",
-            compute_environment="rtrrl-gpu-g6x-ce",
-            instance_type="g6.xlarge",
-            max_vcpus=32,
-            vcpus=4,
-            memory_mib=12000,
-            gpus=1,
-            gpu_model="NVIDIA L4",
-        ),
-    }
-)
-
-_COMPUTE_RESOURCE_FIELDS: Mapping[str, object] = MappingProxyType(
-    {
-        "type": "EC2",
-        "minvCpus": 0,
-    }
-)
-_QUEUE_FIELDS: Mapping[str, object] = MappingProxyType(
-    {
-        "state": "ENABLED",
-        "status": "VALID",
-        "priority": 1,
-    }
-)
 _IMAGE_COMPONENT = r"[a-z0-9]+(?:[._-][a-z0-9]+)*"
 _REGISTRY_LABEL = r"[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?"
 _REGISTRY = rf"(?:localhost|{_REGISTRY_LABEL}(?:\.{_REGISTRY_LABEL})*)(?::[0-9]+)?"
@@ -196,11 +119,13 @@ _DIGEST_IMAGE_RE = re.compile(
     r"@sha256:[0-9a-f]{64}"
 )
 _JOB_NAME_RE = re.compile(
-    r"trainer-heavy-test-(c7am|c7ax|g6x)-[A-Za-z0-9_-]+-[0-9a-f]{12}"
+    r"trainer-heavy-test-(dev|run)-(c7am|c7al|c7ax|g6x)-"
+    r"[A-Za-z0-9_-]+-[0-9a-f]{12}"
 )
 _JOB_DEFINITION_ARN_RE = re.compile(
-    r"arn:aws:batch:eu-north-1:([0-9]{12}):job-definition/"
-    r"(trainer-heavy-test-(c7am|c7ax|g6x)-([0-9a-f]{64})):([1-9][0-9]*)"
+    rf"arn:aws:batch:{REGION}:({ACCOUNT_ID}):job-definition/"
+    r"(trainer-heavy-test-(dev|run)-(c7am|c7al|c7ax|g6x)-"
+    r"([0-9a-f]{64})):([1-9][0-9]*)"
 )
 _TERMINAL_JOB_STATES = frozenset({"SUCCEEDED", "FAILED"})
 _LOG_GROUP = "/aws/batch/job"
@@ -218,187 +143,14 @@ _EMPTY_CONTAINER_DEFAULTS = (
 )
 
 
-def _require_field(resource: Mapping[str, Any], field: str, expected: object) -> None:
-    actual = resource.get(field)
-    if actual != expected:
-        raise ProfileDriftError(f"{field}: expected {expected!r}, got {actual!r}")
-
-
-def _require_nonempty_string(resource: Mapping[str, Any], field: str) -> str:
-    value = resource.get(field)
-    if not isinstance(value, str) or not value:
-        raise ProfileDriftError(
-            f"{field}: expected non-empty string, got {value!r}"
-        )
-    return value
-
-
-def _require_string_set(
-    resource: Mapping[str, Any], field: str, expected: tuple[str, ...]
-) -> None:
-    actual = resource.get(field)
-    if not isinstance(actual, list) or any(type(value) is not str for value in actual):
-        raise ProfileDriftError(
-            f"{field}: expected a list of strings, got {actual!r}"
-        )
-    if len(actual) != len(set(actual)):
-        raise ProfileDriftError(
-            f"{field}: duplicate values are not allowed: {actual!r}"
-        )
-    if len(expected) != len(set(expected)):
-        raise ProfileDriftError(
-            f"{field}: duplicate expected values are not allowed: {expected!r}"
-        )
-    if set(actual) != set(expected):
-        raise ProfileDriftError(
-            f"{field}: expected elements {expected!r}, got {actual!r}"
-        )
-
-
-def _describe_compute_environment(
-    batch: Any, profile: HeavyTestProfile
-) -> Mapping[str, Any] | None:
-    response = batch.describe_compute_environments(
-        computeEnvironments=[profile.compute_environment]
-    )
-    environments = response.get("computeEnvironments", [])
-    return environments[0] if environments else None
-
-
-def _describe_job_queue(batch: Any, profile: HeavyTestProfile) -> Mapping[str, Any] | None:
-    response = batch.describe_job_queues(jobQueues=[profile.queue])
-    queues = response.get("jobQueues", [])
-    return queues[0] if queues else None
-
-
-def _validate_compute_environment(
-    environment: Mapping[str, Any] | None,
-    profile: HeavyTestProfile,
-    settings: AwsNetworkSettings,
-) -> str:
-    if environment is None:
-        raise ProfileDriftError(
-            f"missing compute environment {profile.compute_environment!r}"
-        )
-
-    _require_field(
-        environment, "computeEnvironmentName", profile.compute_environment
-    )
-    _require_field(environment, "type", "MANAGED")
-    _require_field(environment, "state", "ENABLED")
-    _require_field(environment, "status", "VALID")
-    resources = environment.get("computeResources")
-    if not isinstance(resources, Mapping):
-        raise ProfileDriftError(
-            f"computeResources: expected mapping, got {resources!r}"
-        )
-    for field, expected in _COMPUTE_RESOURCE_FIELDS.items():
-        _require_field(resources, field, expected)
-    _require_field(resources, "maxvCpus", profile.max_vcpus)
-    _require_field(resources, "instanceTypes", [profile.instance_type])
-    _require_string_set(resources, "subnets", settings.subnets)
-    _require_string_set(
-        resources, "securityGroupIds", settings.security_group_ids
-    )
-    _require_field(resources, "instanceRole", settings.instance_role)
-
-    return _require_nonempty_string(environment, "computeEnvironmentArn")
-
-
-def _validate_job_queue(
-    queue: Mapping[str, Any] | None,
-    profile: HeavyTestProfile,
-    compute_environment_arn: str,
-) -> str:
-    if queue is None:
-        raise ProfileDriftError(f"missing job queue {profile.queue!r}")
-
-    _require_field(queue, "jobQueueName", profile.queue)
-    for field, expected in _QUEUE_FIELDS.items():
-        _require_field(queue, field, expected)
-    _require_field(
-        queue,
-        "computeEnvironmentOrder",
-        [{"order": 1, "computeEnvironment": compute_environment_arn}],
-    )
-
-    return _require_nonempty_string(queue, "jobQueueArn")
-
-
-def _get_profile(name: str) -> HeavyTestProfile:
+def _get_profile(name: str) -> ResourceProfile:
     try:
-        return TEST_PROFILES[name]
+        return expected_topology().profiles[name]
     except KeyError as error:
-        expected = ", ".join(TEST_PROFILES)
+        expected = ", ".join(expected_topology().profiles)
         raise ValueError(
             f"unknown test profile {name!r}; expected one of: {expected}"
         ) from error
-
-
-def validate_test_profile(
-    batch: Any,
-    name: str,
-    *,
-    settings: AwsNetworkSettings = DEFAULT_AWS_NETWORK_SETTINGS,
-) -> ValidatedTestProfile:
-    profile = _get_profile(name)
-    compute_environment_arn = _validate_compute_environment(
-        _describe_compute_environment(batch, profile), profile, settings
-    )
-    queue_arn = _validate_job_queue(
-        _describe_job_queue(batch, profile),
-        profile,
-        compute_environment_arn,
-    )
-    return ValidatedTestProfile(
-        profile=profile,
-        queue_arn=queue_arn,
-        compute_environment_arn=compute_environment_arn,
-    )
-
-
-def create_c7ax_if_missing(batch: Any, settings: AwsNetworkSettings) -> None:
-    profile = TEST_PROFILES["c7ax"]
-    environment = _describe_compute_environment(batch, profile)
-    if environment is None:
-        response = batch.create_compute_environment(
-            computeEnvironmentName=profile.compute_environment,
-            type="MANAGED",
-            state="ENABLED",
-            computeResources={
-                "type": "EC2",
-                "minvCpus": 0,
-                "maxvCpus": profile.max_vcpus,
-                "desiredvCpus": 0,
-                "instanceTypes": [profile.instance_type],
-                "subnets": list(settings.subnets),
-                "securityGroupIds": list(settings.security_group_ids),
-                "instanceRole": settings.instance_role,
-            },
-        )
-        compute_environment_arn = _require_nonempty_string(
-            response, "computeEnvironmentArn"
-        )
-    else:
-        compute_environment_arn = _validate_compute_environment(
-            environment, profile, settings
-        )
-
-    queue = _describe_job_queue(batch, profile)
-    if queue is None:
-        batch.create_job_queue(
-            jobQueueName=profile.queue,
-            state="ENABLED",
-            priority=1,
-            computeEnvironmentOrder=[
-                {
-                    "order": 1,
-                    "computeEnvironment": compute_environment_arn,
-                }
-            ],
-        )
-    else:
-        _validate_job_queue(queue, profile, compute_environment_arn)
 
 
 def _validate_digest_image(image: str) -> None:
@@ -441,18 +193,15 @@ def _validate_test_path(test_file: str, repository_root: Path) -> str:
     return path.as_posix()
 
 
-def _resource_requirements(profile: HeavyTestProfile) -> list[dict[str, str]]:
-    requirements = [
-        {"type": "VCPU", "value": str(profile.vcpus)},
-        {"type": "MEMORY", "value": str(profile.memory_mib)},
+def _resource_requirements(profile: ResourceProfile) -> list[dict[str, str]]:
+    return [
+        {"type": requirement_type, "value": value}
+        for requirement_type, value in profile.resource_requirements
     ]
-    if profile.gpus:
-        requirements.append({"type": "GPU", "value": str(profile.gpus)})
-    return requirements
 
 
 def _typed_resource_requirements(
-    profile: HeavyTestProfile,
+    profile: ResourceProfile,
 ) -> tuple[ResourceRequirement, ...]:
     return _normalize_resource_requirements(_resource_requirements(profile))
 
@@ -481,7 +230,7 @@ def _normalize_resource_requirements(
 
 
 def _container_properties(
-    profile: HeavyTestProfile, image: str
+    profile: ResourceProfile, image: str
 ) -> dict[str, object]:
     return {
         "image": image,
@@ -491,9 +240,11 @@ def _container_properties(
     }
 
 
-def _definition_name(profile_name: str, image: str) -> str:
+def _definition_name(
+    purpose: ExecutionPurpose, profile_name: str, image: str
+) -> str:
     digest = image.rsplit("@sha256:", 1)[1]
-    return f"trainer-heavy-test-{profile_name}-{digest}"
+    return f"trainer-heavy-test-{purpose.value}-{profile_name}-{digest}"
 
 
 def _definition_matches(
@@ -568,8 +319,9 @@ class HeavyTestRunner:
         self,
         batch: Any,
         logs: Any,
+        sts: Any,
         *,
-        repository_root: Path = _DEFAULT_REPOSITORY_ROOT,
+        repository_root: Path | None = None,
         definition_lock_dir: Path = _DEFAULT_DEFINITION_LOCK_DIR,
         sleep: Callable[[float], None] = time.sleep,
         monotonic: Callable[[], float] = time.monotonic,
@@ -580,7 +332,9 @@ class HeavyTestRunner:
     ) -> None:
         self._batch = batch
         self._logs = logs
-        self._repository_root = repository_root.resolve(strict=True)
+        self._topology_validator = BatchTopologyValidator(batch, sts)
+        root = _DEFAULT_REPOSITORY_ROOT if repository_root is None else repository_root
+        self._repository_root = root.resolve(strict=True)
         self._definition_lock_dir = definition_lock_dir
         self._sleep = sleep
         self._monotonic = monotonic
@@ -599,9 +353,13 @@ class HeavyTestRunner:
         return timeout_seconds
 
     def _get_or_register_definition(
-        self, profile_name: str, profile: HeavyTestProfile, image: str
+        self,
+        purpose: ExecutionPurpose,
+        profile_name: str,
+        profile: ResourceProfile,
+        image: str,
     ) -> tuple[str, int]:
-        name = _definition_name(profile_name, image)
+        name = _definition_name(purpose, profile_name, image)
         container = _container_properties(profile, image)
         self._definition_lock_dir.mkdir(parents=True, exist_ok=True)
         lock_path = self._definition_lock_dir / f"{name}.lock"
@@ -660,17 +418,27 @@ class HeavyTestRunner:
         ]
 
     def submit(
-        self, *, profile: str, image: str, tests: Sequence[str]
+        self,
+        *,
+        profile: str,
+        image: str,
+        tests: Sequence[str],
+        purpose: ExecutionPurpose = ExecutionPurpose.DEV,
+        name_prefix: str = "trainer-heavy-test",
     ) -> tuple[SubmittedTestJob, ...]:
+        purpose = ExecutionPurpose(purpose)
         _validate_digest_image(image)
         test_files = tuple(
             _validate_test_path(test_file, self._repository_root) for test_file in tests
         )
         if not test_files:
             raise ValueError("at least one memo/tests file is required")
-        validated = validate_test_profile(self._batch, profile)
+        profile_spec = _get_profile(profile)
+        queue_spec = queue_for(purpose, profile)
+        topology = self._topology_validator.validate()
+        queue_arn = topology.queue_arns[f"{purpose.value}-{profile}"]
         definition_arn, definition_revision = self._get_or_register_definition(
-            profile, validated.profile, image
+            purpose, profile, profile_spec, image
         )
 
         submitted = []
@@ -683,14 +451,14 @@ class HeavyTestRunner:
                     f"{test_file}"
                 ).encode()
             ).hexdigest()[:12]
-            prefix = f"trainer-heavy-test-{profile}-"
+            prefix = f"{name_prefix}-{purpose.value}-{profile}-"
             suffix = f"-{unique}"
             stem = stem[: 128 - len(prefix) - len(suffix)]
             job_name = f"{prefix}{stem}{suffix}"
             try:
                 response = self._batch.submit_job(
                     jobName=job_name,
-                    jobQueue=validated.queue_arn,
+                    jobQueue=queue_arn,
                     jobDefinition=definition_arn,
                     containerOverrides={"command": ["bash", "-c", command]},
                 )
@@ -707,14 +475,15 @@ class HeavyTestRunner:
                 SubmittedTestJob(
                     job_id=job_id,
                     test_file=test_file,
+                    purpose=purpose,
                     profile=profile,
-                    queue_name=validated.profile.queue,
-                    queue_arn=validated.queue_arn,
+                    queue_name=queue_spec.name,
+                    queue_arn=queue_arn,
                     image=image,
                     job_definition_arn=definition_arn,
                     job_definition_revision=definition_revision,
                     resource_requirements=_typed_resource_requirements(
-                        validated.profile
+                        profile_spec
                     ),
                     command_text=command,
                 )
@@ -851,53 +620,21 @@ class HeavyTestRunner:
             raise RuntimeError(
                 f"jobName is not a trainer-heavy-test job: {job_name!r}"
             )
-        profile_name = job_name_match.group(1)
+        purpose = ExecutionPurpose(job_name_match.group(1))
+        profile_name = job_name_match.group(2)
         profile = _get_profile(profile_name)
+        queue = queue_for(purpose, profile_name)
 
         queue_reference = job.get("jobQueue")
         if not isinstance(queue_reference, str):
             raise RuntimeError("jobQueue is missing")
-        queues: list[Mapping[str, Any]] = []
-        queue_token: str | None = None
-        while True:
-            queue_arguments: dict[str, object] = {
-                "jobQueues": [queue_reference],
-            }
-            if queue_token is not None:
-                queue_arguments["nextToken"] = queue_token
-            queue_response = self._batch.describe_job_queues(**queue_arguments)
-            queues.extend(
-                item
-                for item in queue_response.get("jobQueues", [])
-                if isinstance(item, Mapping)
-            )
-            next_queue_token = queue_response.get("nextToken")
-            if not isinstance(next_queue_token, str) or not next_queue_token:
-                break
-            queue_token = next_queue_token
-        matching_queues = [
-            item for item in queues if item.get("jobQueueName") == profile.queue
-        ]
-        if len(matching_queues) != 1:
-            raise RuntimeError(
-                f"jobQueue does not resolve uniquely to {profile.queue!r}"
-            )
-        queue_arn = matching_queues[0].get("jobQueueArn")
-        if not isinstance(queue_arn, str) or not queue_arn:
-            raise RuntimeError("job queue ARN is missing")
-        queue_arn_match = re.fullmatch(
-            r"arn:aws:batch:eu-north-1:([0-9]{12}):job-queue/"
-            + re.escape(profile.queue),
-            queue_arn,
+        queue_arn = (
+            f"arn:aws:batch:{REGION}:{ACCOUNT_ID}:job-queue/{queue.name}"
         )
-        if queue_arn_match is None:
-            raise RuntimeError(
-                f"jobQueue ARN is not the exact eu-north-1 profile ARN: {queue_arn!r}"
-            )
-        if queue_reference not in {profile.queue, queue_arn}:
+        if queue_reference not in {queue.name, queue_arn}:
             raise RuntimeError(
                 f"jobQueue reference {queue_reference!r} does not match "
-                f"{profile.queue!r} / {queue_arn!r}"
+                f"{queue.name!r} / {queue_arn!r}"
             )
 
         definition_reference = job.get("jobDefinition")
@@ -911,12 +648,17 @@ class HeavyTestRunner:
         (
             definition_account,
             definition_name,
+            definition_purpose,
             definition_profile,
             image_digest,
             revision_text,
         ) = definition_match.groups()
-        if definition_account != queue_arn_match.group(1):
-            raise RuntimeError("jobDefinition and jobQueue AWS accounts do not match")
+        if definition_account != ACCOUNT_ID:
+            raise RuntimeError("jobDefinition AWS account does not match topology")
+        if definition_purpose != purpose.value:
+            raise RuntimeError(
+                "jobDefinition purpose does not match the jobName purpose"
+            )
         if definition_profile != profile_name:
             raise RuntimeError(
                 "jobDefinition profile does not match the jobName profile"
@@ -989,8 +731,9 @@ class HeavyTestRunner:
                 "job container resourceRequirements do not match the profile"
             )
         return _JobIdentity(
+            purpose=purpose,
             profile=profile_name,
-            queue_name=profile.queue,
+            queue_name=queue.name,
             queue_arn=queue_arn,
             job_definition_arn=definition_reference,
             job_definition_revision=definition_revision,
@@ -1122,6 +865,7 @@ class HeavyTestRunner:
             else None,
             jax_gpu_lines=jax_gpu_lines,
             evidence_errors=tuple(errors),
+            purpose=identity.purpose if identity is not None else None,
             profile=identity.profile if identity is not None else None,
             queue_name=identity.queue_name if identity is not None else None,
             queue_arn=identity.queue_arn if identity is not None else None,
@@ -1145,6 +889,7 @@ class HeavyTestRunner:
     ) -> tuple[JobEvidence, ...]:
         if not job_ids:
             raise ValueError("at least one job ID is required")
+        self._topology_validator.validate()
         effective_timeout = (
             self._wait_timeout_seconds
             if timeout_seconds is None

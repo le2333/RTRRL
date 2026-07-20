@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Build an isolated heavy-test overlay from the current memo and training-sdk trees.
-# Usage: build-image.sh --profile c7am|c7ax|g6x [--gpu-rebase-from IMAGE@DIGEST]
+# Usage: build-image.sh --profile c7am|c7al|c7ax|g6x [--gpu-rebase-from IMAGE@DIGEST]
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -282,10 +282,10 @@ main() {
   done
 
   case "${profile}" in
-    c7am|c7ax) base_tag="memorax-rtrl-cpu" ;;
+    c7am|c7al|c7ax) base_tag="memorax-rtrl-cpu" ;;
     g6x)       base_tag="memorax-rtrl-gpu" ;;
     *)
-      echo "ERROR: --profile must be one of c7am, c7ax, or g6x" >&2
+      echo "ERROR: profile must be one of: c7am, c7al, c7ax, g6x" >&2
       return 2
       ;;
   esac
