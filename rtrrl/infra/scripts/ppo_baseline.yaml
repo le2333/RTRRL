@@ -1,0 +1,52 @@
+name: ppo_baseline
+argv: [python, ppo_baseline.py, --config_path, "{config_path}"]
+sdk_protocol_version: "1"
+defaults:
+  environment:
+    env_name: brax-halfcheetah
+    backend: spring
+    observation_mode: P
+    max_episode_steps: 1000
+  training_budget:
+    env_steps: 5000000
+  logging:
+    aim_every_env_steps: 10000
+    rerun_every_episodes: 100
+objective:
+  metric: eval/episode_reward
+  direction: maximize
+  reduction: last
+fields:
+  seed:
+    path: seed
+    type: int
+    default: 0
+    constraints: {ge: 0}
+  learning_rate:
+    path: ppo_overrides.learning_rate
+    type: float
+    default: 0.0003
+    searchable: true
+    constraints: {gt: 0}
+    default_search:
+      min: 0.00001
+      max: 0.01
+      scale: log
+  num_envs:
+    path: ppo_overrides.num_envs
+    type: int
+    default: 2048
+    searchable: true
+    constraints: {gt: 0}
+    default_search:
+      values: [1024, 2048, 4096]
+  entropy_cost:
+    path: ppo_overrides.entropy_cost
+    type: float
+    default: 0.01
+    searchable: true
+    constraints: {ge: 0}
+    default_search:
+      min: 0.0001
+      max: 0.1
+      scale: log

@@ -30,6 +30,9 @@ RUN uv pip install --python /opt/venv "jax[cuda12]==0.5.0"
 # ---- runtime -----------------------------------------------------------------
 FROM python:3.12-slim AS runtime
 
+ARG TRAINER_SCRIPT_CATALOG
+LABEL org.rtrrl.trainer.scripts.v1="${TRAINER_SCRIPT_CATALOG}"
+
 # AWS CLI v2 for S3 checkpoint sync from the container (uses the Batch job role).
 RUN apt-get update \
     && apt-get install -y --no-install-recommends curl unzip ca-certificates \
@@ -51,6 +54,7 @@ ENV PATH="/opt/venv/bin:${PATH}" \
 WORKDIR /app
 
 COPY . /app
+COPY infra/scripts /opt/trainer/scripts
 
 COPY infra/docker/entrypoint.sh /usr/local/bin/entrypoint.sh
 RUN chmod +x /usr/local/bin/entrypoint.sh
