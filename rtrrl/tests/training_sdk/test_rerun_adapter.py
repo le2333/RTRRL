@@ -7,9 +7,13 @@ import warnings
 import numpy as np
 import pytest
 import training_sdk
+import training_sdk.rerun_adapter as rerun_adapter_module
 
 from training_sdk import Episode, MemorySpool, RunContext, TrainingRun
-from training_sdk.rerun_adapter import RerunAdapter
+from training_sdk.rerun_adapter import (
+    ArtifactPublishIndeterminate,
+    RerunAdapter,
+)
 
 
 def make_context(tmp_path, **overrides):
@@ -275,7 +279,97 @@ def test_successful_publish_fsyncs_target_directory(tmp_path, monkeypatch):
     target = adapter.log_episode(complete_episode())
 
     assert target is not None
-    assert fsynced_paths == [target.parent]
+    assert fsynced_paths == [target.parent, target.parent]
+
+
+def test_commit_fsync_failure_rolls_back_target(tmp_path, monkeypatch):
+    fsync_calls = 0
+
+    def failing_commit_fsync(path):
+        nonlocal fsync_calls
+        fsync_calls += 1
+        if fsync_calls == 1:
+            raise OSError("commit fsync failed")
+
+    monkeypatch.setattr(
+        rerun_adapter_module, "_fsync_directory", failing_commit_fsync
+    )
+    adapter = RerunAdapter(
+        make_context(tmp_path), root=tmp_path, factory=FakeFactory()
+    )
+
+    with pytest.raises(OSError, match="commit fsync failed"):
+        adapter.log_episode(complete_episode())
+
+    artifact_dir = tmp_path / "hopper" / "dual-0012"
+    assert fsync_calls == 2
+    assert list(artifact_dir.iterdir()) == []
+
+
+def test_failed_rollback_fsync_reports_indeterminate_state(tmp_path, monkeypatch):
+    fsync_calls = 0
+
+    def failing_fsync(path):
+        nonlocal fsync_calls
+        fsync_calls += 1
+        message = "commit fsync failed" if fsync_calls == 1 else "rollback failed"
+        raise OSError(message)
+
+    monkeypatch.setattr(rerun_adapter_module, "_fsync_directory", failing_fsync)
+    adapter = RerunAdapter(
+        make_context(tmp_path), root=tmp_path, factory=FakeFactory()
+    )
+
+    with pytest.raises(ArtifactPublishIndeterminate, match="rollback"):
+        adapter.log_episode(complete_episode())
+
+    assert fsync_calls == 2
+
+
+def test_committed_target_survives_temporary_cleanup_failure(
+    tmp_path, monkeypatch
+):
+    real_unlink = Path.unlink
+
+    def failing_temporary_unlink(path, *args, **kwargs):
+        if path.name.startswith(".episode-"):
+            raise OSError("temporary cleanup failed")
+        return real_unlink(path, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "unlink", failing_temporary_unlink)
+    adapter = RerunAdapter(
+        make_context(tmp_path), root=tmp_path, factory=FakeFactory()
+    )
+
+    target = adapter.log_episode(complete_episode())
+
+    assert target is not None
+    assert target.read_bytes() == b"fake rrd"
+    assert len(list(target.parent.glob(".episode-*.tmp"))) == 1
+
+
+def test_committed_target_survives_cleanup_fsync_failure(tmp_path, monkeypatch):
+    fsync_calls = 0
+
+    def failing_cleanup_fsync(path):
+        nonlocal fsync_calls
+        fsync_calls += 1
+        if fsync_calls == 2:
+            raise OSError("cleanup fsync failed")
+
+    monkeypatch.setattr(
+        rerun_adapter_module, "_fsync_directory", failing_cleanup_fsync
+    )
+    adapter = RerunAdapter(
+        make_context(tmp_path), root=tmp_path, factory=FakeFactory()
+    )
+
+    target = adapter.log_episode(complete_episode())
+
+    assert target is not None
+    assert target.read_bytes() == b"fake rrd"
+    assert fsync_calls == 2
+    assert list(target.parent.iterdir()) == [target]
 
 
 def test_training_run_returns_delegated_episode_path(tmp_path):

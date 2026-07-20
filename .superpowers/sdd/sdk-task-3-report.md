@@ -109,3 +109,55 @@ in the final task response.
 - Directory fsync occurs only after the temporary hard link is removed, making
   the final target directory state durable.
 - No unresolved concerns found.
+
+## Review Follow-up: Explicit Artifact Commit Point
+
+The second Task 3 review found that temporary-link cleanup happened before the
+only parent-directory fsync. This made cleanup errors look like publication
+failures even though the complete target already existed, and a commit fsync
+failure left the target without a defined rollback.
+
+### RED / GREEN
+
+- RED: the success-path test observed only one parent fsync rather than a
+  commit fsync followed by cleanup fsync.
+- RED: a commit fsync failure left the target present and did not fsync a
+  rollback.
+- RED: a failed rollback surfaced as an ordinary `OSError`, providing no
+  indication that the on-disk state was uncertain.
+- RED: temporary unlink failure propagated after the target hard link existed;
+  cleanup-fsync failure was not exercised because no second fsync existed.
+- GREEN: `_publish_no_replace` now defines successful parent fsync immediately
+  after `os.link` as the artifact commit point.
+- GREEN: a pre-commit fsync failure unlinks this publication's target, fsyncs
+  the rollback, and re-raises the original failure. If rollback unlink/fsync
+  fails, `ArtifactPublishIndeterminate` reports both failures and the uncertain
+  state.
+- GREEN: after the commit point, temporary unlink and cleanup-directory fsync
+  are best-effort. Either may fail without deleting the committed target or
+  turning a successful publication into a reported failure.
+
+### Commit-point Verification
+
+- SDK Task 1-3: `98 passed` with
+  `PYTHONPATH=. uv run --with pytest pytest tests/training_sdk -v`.
+- Ruff: `uvx ruff check training_sdk tests/training_sdk` passed.
+- Lock: `uv lock --check` passed.
+- Patch hygiene: `git diff --check` passed.
+- IDE diagnostics: no errors in the changed source or test.
+
+### Commit-point Commit
+
+This follow-up is included in a separate review-fix commit; its hash is reported
+in the final task response.
+
+### Commit-point Self-review
+
+- `EEXIST` still fails at the atomic link and never enters rollback, so another
+  writer's target is untouched.
+- Before commit, successful rollback leaves neither a visible target nor a
+  temporary file.
+- After commit, the complete durable target is never removed. A failed
+  temporary cleanup may leave only the hidden `.episode-*.tmp` orphan.
+- No overwrite-capable publish fallback or logging infrastructure was added.
+- No unresolved concerns found.

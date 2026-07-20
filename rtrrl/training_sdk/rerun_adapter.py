@@ -27,6 +27,10 @@ class Recording(Protocol):
 RecordingFactory = Callable[[Path], Recording]
 
 
+class ArtifactPublishIndeterminate(RuntimeError):
+    """The artifact may be present after a failed publish rollback."""
+
+
 def _safe_component(value: str) -> str:
     if not isinstance(value, str):
         raise TypeError("artifact path components must be strings")
@@ -61,6 +65,32 @@ def _fsync_directory(path: Path) -> None:
         os.fsync(directory_fd)
     finally:
         os.close(directory_fd)
+
+
+def _publish_no_replace(temporary_path: Path, target: Path) -> None:
+    os.link(temporary_path, target)
+    try:
+        _fsync_directory(target.parent)
+    except OSError as publish_error:
+        try:
+            target.unlink()
+            _fsync_directory(target.parent)
+        except OSError as rollback_error:
+            raise ArtifactPublishIndeterminate(
+                f"artifact publish state is indeterminate for {target}: "
+                f"publish failed with {publish_error!r}; "
+                f"rollback failed with {rollback_error!r}"
+            ) from rollback_error
+        raise
+
+    try:
+        temporary_path.unlink()
+    except OSError:
+        return
+    try:
+        _fsync_directory(target.parent)
+    except OSError:
+        return
 
 
 class _RerunRecording:
@@ -188,13 +218,14 @@ class RerunAdapter:
             recording.flush()
             recording.close()
             recording = None
-            os.link(temporary_path, target)
-            temporary_path.unlink()
+            _publish_no_replace(temporary_path, target)
             temporary_path = None
-            _fsync_directory(target.parent)
             return target
         finally:
             if recording is not None:
                 recording.close()
             if temporary_path is not None:
-                temporary_path.unlink(missing_ok=True)
+                try:
+                    temporary_path.unlink(missing_ok=True)
+                except OSError:
+                    pass
