@@ -30,6 +30,26 @@
   "leaf_paths": [
     "credit/after_step_1",
     "credit/after_step_2",
+    "credit/step_1/B_sensitivity",
+    "credit/step_1/cotangent",
+    "credit/step_1/gamma_sensitivity",
+    "credit/step_1/grad/B_img",
+    "credit/step_1/grad/B_real",
+    "credit/step_1/grad/gamma_log",
+    "credit/step_1/grad/nu_log",
+    "credit/step_1/grad/theta_log",
+    "credit/step_1/hidden_cotangent",
+    "credit/step_1/lambda_sensitivity",
+    "credit/step_2/B_sensitivity",
+    "credit/step_2/cotangent",
+    "credit/step_2/gamma_sensitivity",
+    "credit/step_2/grad/B_img",
+    "credit/step_2/grad/B_real",
+    "credit/step_2/grad/gamma_log",
+    "credit/step_2/grad/nu_log",
+    "credit/step_2/grad/theta_log",
+    "credit/step_2/hidden_cotangent",
+    "credit/step_2/lambda_sensitivity",
     "heads/actor_loc",
     "heads/actor_output",
     "heads/actor_scale",
@@ -100,6 +120,128 @@
       "dtype": "complex64",
       "shape": [
         12
+      ]
+    },
+    "credit/step_1/B_sensitivity": {
+      "dtype": "complex64",
+      "shape": [
+        2,
+        4
+      ]
+    },
+    "credit/step_1/cotangent": {
+      "dtype": "float32",
+      "shape": [
+        2
+      ]
+    },
+    "credit/step_1/gamma_sensitivity": {
+      "dtype": "complex64",
+      "shape": [
+        2
+      ]
+    },
+    "credit/step_1/grad/B_img": {
+      "dtype": "float32",
+      "shape": [
+        2,
+        4
+      ]
+    },
+    "credit/step_1/grad/B_real": {
+      "dtype": "float32",
+      "shape": [
+        2,
+        4
+      ]
+    },
+    "credit/step_1/grad/gamma_log": {
+      "dtype": "float32",
+      "shape": [
+        2
+      ]
+    },
+    "credit/step_1/grad/nu_log": {
+      "dtype": "float32",
+      "shape": [
+        2
+      ]
+    },
+    "credit/step_1/grad/theta_log": {
+      "dtype": "float32",
+      "shape": [
+        2
+      ]
+    },
+    "credit/step_1/hidden_cotangent": {
+      "dtype": "complex64",
+      "shape": []
+    },
+    "credit/step_1/lambda_sensitivity": {
+      "dtype": "complex64",
+      "shape": [
+        2
+      ]
+    },
+    "credit/step_2/B_sensitivity": {
+      "dtype": "complex64",
+      "shape": [
+        2,
+        4
+      ]
+    },
+    "credit/step_2/cotangent": {
+      "dtype": "float32",
+      "shape": [
+        2
+      ]
+    },
+    "credit/step_2/gamma_sensitivity": {
+      "dtype": "complex64",
+      "shape": [
+        2
+      ]
+    },
+    "credit/step_2/grad/B_img": {
+      "dtype": "float32",
+      "shape": [
+        2,
+        4
+      ]
+    },
+    "credit/step_2/grad/B_real": {
+      "dtype": "float32",
+      "shape": [
+        2,
+        4
+      ]
+    },
+    "credit/step_2/grad/gamma_log": {
+      "dtype": "float32",
+      "shape": [
+        2
+      ]
+    },
+    "credit/step_2/grad/nu_log": {
+      "dtype": "float32",
+      "shape": [
+        2
+      ]
+    },
+    "credit/step_2/grad/theta_log": {
+      "dtype": "float32",
+      "shape": [
+        2
+      ]
+    },
+    "credit/step_2/hidden_cotangent": {
+      "dtype": "complex64",
+      "shape": []
+    },
+    "credit/step_2/lambda_sensitivity": {
+      "dtype": "complex64",
+      "shape": [
+        2
       ]
     },
     "heads/actor_loc": {
@@ -486,6 +628,26 @@
         1
       ]
     }
+  },
+  "lru_credit": {
+    "B_img_rule": "negative-imaginary-complex-B-contraction",
+    "cotangents": [
+      "credit/step_1/cotangent",
+      "credit/step_2/cotangent"
+    ],
+    "force_trace_layout": "pinned force_trace_compute returns a flat four-tuple; capture repacks it to the initializer's nested carry before step two",
+    "gradient_leaves": [
+      "nu_log",
+      "theta_log",
+      "gamma_log",
+      "B_real",
+      "B_img"
+    ],
+    "state_layout": [
+      "lambda_sensitivity",
+      "gamma_sensitivity",
+      "B_sensitivity"
+    ]
   },
   "lru_forward": {
     "activation": "silu",

@@ -101,6 +101,26 @@ def test_oracle_fixture_has_required_sections():
         "lru/unbatched/output",
         "credit/after_step_1",
         "credit/after_step_2",
+        "credit/step_1/lambda_sensitivity",
+        "credit/step_1/gamma_sensitivity",
+        "credit/step_1/B_sensitivity",
+        "credit/step_1/cotangent",
+        "credit/step_1/hidden_cotangent",
+        "credit/step_1/grad/nu_log",
+        "credit/step_1/grad/theta_log",
+        "credit/step_1/grad/gamma_log",
+        "credit/step_1/grad/B_real",
+        "credit/step_1/grad/B_img",
+        "credit/step_2/lambda_sensitivity",
+        "credit/step_2/gamma_sensitivity",
+        "credit/step_2/B_sensitivity",
+        "credit/step_2/cotangent",
+        "credit/step_2/hidden_cotangent",
+        "credit/step_2/grad/nu_log",
+        "credit/step_2/grad/theta_log",
+        "credit/step_2/grad/gamma_log",
+        "credit/step_2/grad/B_real",
+        "credit/step_2/grad/B_img",
         "init/action",
         "init/value",
         "step/td_error",
@@ -121,6 +141,29 @@ def test_oracle_fixture_has_required_sections():
         "one-step output ignores the previous hidden state for both boolean "
         "reset values"
     )
+    assert manifest["lru_credit"] == {
+        "state_layout": [
+            "lambda_sensitivity",
+            "gamma_sensitivity",
+            "B_sensitivity",
+        ],
+        "gradient_leaves": [
+            "nu_log",
+            "theta_log",
+            "gamma_log",
+            "B_real",
+            "B_img",
+        ],
+        "cotangents": [
+            "credit/step_1/cotangent",
+            "credit/step_2/cotangent",
+        ],
+        "B_img_rule": "negative-imaginary-complex-B-contraction",
+        "force_trace_layout": (
+            "pinned force_trace_compute returns a flat four-tuple; capture "
+            "repacks it to the initializer's nested carry before step two"
+        ),
+    }
 
 
 def test_oracle_fixture_matches_all_manifest_leaf_metadata():

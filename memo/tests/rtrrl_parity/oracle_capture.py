@@ -76,6 +76,12 @@ def _credit_vector(carry: Any, jax: Any) -> np.ndarray:
     )
 
 
+def _repack_forced_credit_carry(carry: Any) -> tuple[Any, tuple[Any, Any, Any]]:
+    """Restore the pinned initializer layout after force_trace_compute flattens it."""
+    hidden, lambda_sensitivity, gamma_sensitivity, B_sensitivity = carry
+    return hidden, (lambda_sensitivity, gamma_sensitivity, B_sensitivity)
+
+
 def _capture_arrays(seed: int) -> tuple[dict[str, np.ndarray], dict[str, str]]:
     import jax
     import jax.numpy as jnp
@@ -149,6 +155,63 @@ def _capture_arrays(seed: int) -> tuple[dict[str, np.ndarray], dict[str, str]]:
     lru_unbatched_preactivation = (
         lru_unbatched_projection + lru_unbatched_skip
     )
+    lru_unbatched_input_2 = lru_input_2[0]
+    credit_carry_after_1_flat, _ = lru.apply(
+        lru_variables,
+        lru_unbatched_carry_before,
+        lru_unbatched_input,
+        force_trace_compute=True,
+    )
+    credit_carry_after_1 = _repack_forced_credit_carry(credit_carry_after_1_flat)
+    credit_carry_after_2_flat, _ = lru.apply(
+        lru_variables,
+        credit_carry_after_1,
+        lru_unbatched_input_2,
+        force_trace_compute=True,
+    )
+    credit_carry_after_2 = _repack_forced_credit_carry(credit_carry_after_2_flat)
+    credit_cotangent_1 = jnp.array([0.625, -0.375], dtype=jnp.float32)
+    credit_cotangent_2 = jnp.array([-0.25, 0.75], dtype=jnp.float32)
+
+    def apply_lru_output(variables, carry, inputs):
+        return lru.apply(variables, carry, inputs)[1]
+
+    _, credit_pullback_1 = jax.vjp(
+        apply_lru_output,
+        lru_variables,
+        lru_unbatched_carry_before,
+        lru_unbatched_input,
+    )
+    credit_variables_grad_1, _, _ = credit_pullback_1(credit_cotangent_1)
+    _, credit_pullback_2 = jax.vjp(
+        apply_lru_output,
+        lru_variables,
+        credit_carry_after_1,
+        lru_unbatched_input_2,
+    )
+    credit_variables_grad_2, _, _ = credit_pullback_2(credit_cotangent_2)
+    credit_cell_grad_1 = credit_variables_grad_1["params"]["OnlineLRUCell_0"][
+        "LRUCell_0"
+    ]
+    credit_cell_grad_2 = credit_variables_grad_2["params"]["OnlineLRUCell_0"][
+        "LRUCell_0"
+    ]
+
+    def lru_readout(hidden, inputs):
+        preactivation = (hidden @ lru_C.transpose()).real
+        preactivation = preactivation + inputs @ lru_params["D"].transpose()
+        return jax.nn.silu(preactivation)
+
+    _, hidden_pullback_1 = jax.vjp(
+        lambda hidden: lru_readout(hidden, lru_unbatched_input),
+        credit_carry_after_1[0],
+    )
+    credit_hidden_cotangent_1 = hidden_pullback_1(credit_cotangent_1)[0][0]
+    _, hidden_pullback_2 = jax.vjp(
+        lambda hidden: lru_readout(hidden, lru_unbatched_input_2),
+        credit_carry_after_2[0],
+    )
+    credit_hidden_cotangent_2 = hidden_pullback_2(credit_cotangent_2)[0][0]
 
     model = RNNActorCritic(
         a_dim=2,
@@ -306,8 +369,38 @@ def _capture_arrays(seed: int) -> tuple[dict[str, np.ndarray], dict[str, str]]:
             lru_unbatched_preactivation
         ),
         "lru/unbatched/output": np.asarray(lru_unbatched_output),
-        "credit/after_step_1": _credit_vector(lru_carry_after_1, jax),
-        "credit/after_step_2": _credit_vector(lru_carry_after_2, jax),
+        "credit/after_step_1": _credit_vector(credit_carry_after_1, jax),
+        "credit/after_step_2": _credit_vector(credit_carry_after_2, jax),
+        "credit/step_1/lambda_sensitivity": np.asarray(
+            credit_carry_after_1[1][0]
+        ),
+        "credit/step_1/gamma_sensitivity": np.asarray(
+            credit_carry_after_1[1][1]
+        ),
+        "credit/step_1/B_sensitivity": np.asarray(credit_carry_after_1[1][2]),
+        "credit/step_1/cotangent": np.asarray(credit_cotangent_1),
+        "credit/step_1/hidden_cotangent": np.asarray(
+            credit_hidden_cotangent_1
+        ),
+        "credit/step_2/lambda_sensitivity": np.asarray(
+            credit_carry_after_2[1][0]
+        ),
+        "credit/step_2/gamma_sensitivity": np.asarray(
+            credit_carry_after_2[1][1]
+        ),
+        "credit/step_2/B_sensitivity": np.asarray(credit_carry_after_2[1][2]),
+        "credit/step_2/cotangent": np.asarray(credit_cotangent_2),
+        "credit/step_2/hidden_cotangent": np.asarray(
+            credit_hidden_cotangent_2
+        ),
+        **{
+            f"credit/step_1/grad/{name}": np.asarray(credit_cell_grad_1[name])
+            for name in ("nu_log", "theta_log", "gamma_log", "B_real", "B_img")
+        },
+        **{
+            f"credit/step_2/grad/{name}": np.asarray(credit_cell_grad_2[name])
+            for name in ("nu_log", "theta_log", "gamma_log", "B_real", "B_img")
+        },
         "init/action": np.asarray(initial_action),
         "init/value": np.asarray(value),
         "step/td_error": np.asarray(td_error),
@@ -394,6 +487,29 @@ def main(
             "reset": (
                 "one-step output ignores the previous hidden state for both "
                 "boolean reset values"
+            ),
+        },
+        "lru_credit": {
+            "state_layout": [
+                "lambda_sensitivity",
+                "gamma_sensitivity",
+                "B_sensitivity",
+            ],
+            "gradient_leaves": [
+                "nu_log",
+                "theta_log",
+                "gamma_log",
+                "B_real",
+                "B_img",
+            ],
+            "cotangents": [
+                "credit/step_1/cotangent",
+                "credit/step_2/cotangent",
+            ],
+            "B_img_rule": "negative-imaginary-complex-B-contraction",
+            "force_trace_layout": (
+                "pinned force_trace_compute returns a flat four-tuple; capture "
+                "repacks it to the initializer's nested carry before step two"
             ),
         },
         "leaf_paths": leaf_paths,

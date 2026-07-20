@@ -134,6 +134,15 @@ class LRUCarry:
     hidden: Array
 
 
+@struct.dataclass
+class LRUCreditState:
+    """Compact AAAI25 sensitivities for lambda, gamma, and complex B."""
+
+    lambda_sensitivity: Array
+    gamma_sensitivity: Array
+    B_sensitivity: Array
+
+
 @dataclass(frozen=True)
 class AAAI25LRU:
     """The strict one-step AAAI25 LRU with explicit parameters and carry."""
@@ -223,16 +232,179 @@ class AAAI25LRU:
         )
         return next_carry, output
 
+    def _update_credit(
+        self,
+        params: Mapping[str, Array],
+        credit_state: LRUCreditState,
+        carry: LRUCarry,
+        inputs: Array,
+    ) -> LRUCreditState:
+        lam = self.complex_lambda(params)
+        B = params["B_real"] + 1j * params["B_img"]
+        gamma = jnp.exp(params["gamma_log"])
+        return LRUCreditState(
+            lambda_sensitivity=(
+                lam * credit_state.lambda_sensitivity + carry.hidden
+            ),
+            gamma_sensitivity=(
+                lam * credit_state.gamma_sensitivity
+                + jnp.einsum("hi,...i->...h", B, inputs)
+            ),
+            B_sensitivity=(
+                lam[:, None] * credit_state.B_sensitivity
+                + jnp.einsum("h,...i->...hi", gamma, inputs)
+            ),
+        )
+
     def credit(
         self,
-        params: Any,
-        credit_state: Any,
-        carry: Any,
-        inputs: Any,
-        cotangent: Any,
-    ) -> Any:
-        del params, credit_state, carry, inputs, cotangent
-        raise NotImplementedError("online LRU credit is implemented in Task 6")
+        params: Mapping[str, Array],
+        credit_state: LRUCreditState,
+        carry: LRUCarry,
+        inputs: Array,
+        cotangent: Array,
+    ) -> tuple[LRUCreditState, dict[str, Array]]:
+        next_credit = self._update_credit(params, credit_state, carry, inputs)
+        next_carry, _ = self.forward(params, carry, inputs, reset=False)
+
+        def output_from_hidden(hidden: Array) -> Array:
+            hidden_carry = LRUCarry(hidden=hidden)
+            _, _, preactivation = self.readout_parts(
+                params, hidden_carry, inputs
+            )
+            return (
+                getattr(jax.nn, self.activation)(preactivation)
+                if self.activation is not None
+                else preactivation
+            )
+
+        _, hidden_pullback = jax.vjp(output_from_hidden, next_carry.hidden)
+        hidden_cotangent = hidden_pullback(cotangent)[0][0]
+
+        lambda_cotangent = (
+            hidden_cotangent * next_credit.lambda_sensitivity
+        )
+        while lambda_cotangent.ndim > 1:
+            lambda_cotangent = lambda_cotangent.sum(axis=0)
+        _, lambda_pullback = jax.vjp(
+            lambda nu_log, theta_log: jnp.exp(
+                -jnp.exp(nu_log) + 1j * jnp.exp(theta_log)
+            ),
+            params["nu_log"],
+            params["theta_log"],
+        )
+        nu_log_grad, theta_log_grad = lambda_pullback(lambda_cotangent)
+
+        gamma_contraction = (
+            hidden_cotangent * next_credit.gamma_sensitivity
+        ).real
+        while gamma_contraction.ndim > 1:
+            gamma_contraction = gamma_contraction.sum(axis=0)
+        gamma_log_grad = gamma_contraction * jnp.exp(params["gamma_log"])
+
+        B_contraction = hidden_cotangent * next_credit.B_sensitivity
+        while B_contraction.ndim > 2:
+            B_contraction = B_contraction.sum(axis=0)
+        gradients = {
+            "nu_log": nu_log_grad,
+            "theta_log": theta_log_grad,
+            "gamma_log": gamma_log_grad,
+            "B_real": B_contraction.real,
+            "B_img": -B_contraction.imag,
+        }
+        return next_credit, gradients
+
+    def forward_with_credit(
+        self,
+        params: Mapping[str, Array],
+        credit_state: LRUCreditState,
+        carry: LRUCarry,
+        inputs: Array,
+        reset: Array | bool,
+    ) -> tuple[LRUCreditState, LRUCarry, Array]:
+        """Run the verified forward under the compact online-credit VJP."""
+        return _forward_with_credit(
+            self, params, credit_state, carry, inputs, reset
+        )
 
 
-__all__ = ["AAAI25LRU", "LRUCarry"]
+@partial(jax.custom_vjp, nondiff_argnums=(0,))
+def _forward_with_credit(
+    component: AAAI25LRU,
+    params: Mapping[str, Array],
+    credit_state: LRUCreditState,
+    carry: LRUCarry,
+    inputs: Array,
+    reset: Array | bool,
+) -> tuple[LRUCreditState, LRUCarry, Array]:
+    next_carry, output = component.forward(params, carry, inputs, reset)
+    next_credit = component._update_credit(params, credit_state, carry, inputs)
+    return next_credit, next_carry, output
+
+
+def _forward_with_credit_fwd(
+    component: AAAI25LRU,
+    params: Mapping[str, Array],
+    credit_state: LRUCreditState,
+    carry: LRUCarry,
+    inputs: Array,
+    reset: Array | bool,
+) -> tuple[
+    tuple[LRUCreditState, LRUCarry, Array],
+    tuple[Mapping[str, Array], LRUCreditState, LRUCarry, Array, Array | bool],
+]:
+    next_carry, output = component.forward(params, carry, inputs, reset)
+    next_credit = component._update_credit(
+        params, credit_state, carry, inputs
+    )
+    result = (next_credit, next_carry, output)
+    return result, (params, credit_state, carry, inputs, reset)
+
+
+def _forward_with_credit_bwd(
+    component: AAAI25LRU,
+    residual: tuple[
+        Mapping[str, Array], LRUCreditState, LRUCarry, Array, Array | bool
+    ],
+    output_cotangent: tuple[LRUCreditState, LRUCarry, Array],
+) -> tuple[Any, LRUCreditState, LRUCarry, Array, None]:
+    params, credit_state, carry, inputs, reset = residual
+    _, carry_cotangent, value_cotangent = output_cotangent
+
+    def ordinary_forward(
+        ordinary_params: Mapping[str, Array],
+        ordinary_carry: LRUCarry,
+        ordinary_inputs: Array,
+    ) -> tuple[LRUCarry, Array]:
+        return component.forward(
+            ordinary_params, ordinary_carry, ordinary_inputs, reset
+        )
+
+    _, ordinary_pullback = jax.vjp(ordinary_forward, params, carry, inputs)
+    params_cotangent, carry_input_cotangent, inputs_cotangent = (
+        ordinary_pullback((carry_cotangent, value_cotangent))
+    )
+    _, recurrent_cotangent = component.credit(
+        params, credit_state, carry, inputs, value_cotangent
+    )
+    params_cotangent = {
+        **params_cotangent,
+        **recurrent_cotangent,
+    }
+    credit_input_cotangent = jax.tree.map(jnp.zeros_like, credit_state)
+    return (
+        params_cotangent,
+        credit_input_cotangent,
+        carry_input_cotangent,
+        inputs_cotangent,
+        None,
+    )
+
+
+_forward_with_credit.defvjp(
+    _forward_with_credit_fwd,
+    _forward_with_credit_bwd,
+)
+
+
+__all__ = ["AAAI25LRU", "LRUCarry", "LRUCreditState"]
