@@ -37,6 +37,7 @@ from memorax.algorithms import (
 )
 from memorax.algorithms.rtrrl.compatibility import normalize_legacy_config
 from memorax.algorithms.rtrrl.compatibility import to_component_config
+from memorax.algorithms.rtrrl.components import select_memorax_components
 from memorax.algorithms.rtrrl.heads import RTRRLTDHead
 from memorax.algorithms.rtrrl.lru import AAAI25LRU
 from memorax.algorithms.rtrrl.program import (
@@ -340,74 +341,15 @@ def build_rtrrl_agent(cfg: Any, env, env_params):
             num_envs=cfg.num_envs,
             runtime_config=cfg,
             render_evaluation=_make_rtrrl_renderer(env),
+            effective_config=component_config,
         )
 
-    use_encoder = getattr(cfg, "use_encoder", True)
-    if use_encoder:
-        feat = cfg.encoder_dim
-        observation_extractor = nn.Sequential((nn.Dense(feat), nn.relu))
-        action_extractor = (
-            nn.Sequential((nn.Dense(feat), nn.relu)) if cfg.meta_rl else None
-        )
-        reward_extractor = (
-            nn.Sequential((nn.Dense(feat), nn.relu)) if cfg.meta_rl else None
-        )
-        in_dim = feat * (3 if cfg.meta_rl else 1)
-        lru_output_dim = None  # coupled to features (legacy behaviour)
-    else:
-        # Identity front-end: raw [obs, (action), (reward)] fed straight to the LRU.
-        observation_extractor = _identity
-        action_extractor = _identity if cfg.meta_rl else None
-        reward_extractor = _identity if cfg.meta_rl else None
-        obs_dim = env.observation_space(env_params).shape[0]
-        act_dim = action_space.shape[0]
-        in_dim = obs_dim + (act_dim + 1 if cfg.meta_rl else 0)
-        # Decoupled read-out width (through C); default to hidden_dim like the
-        # original d_output=d_hidden=32.
-        lru_output_dim = getattr(cfg, "lru_output_dim", None) or cfg.hidden_dim
-
-    feature_extractor = FeatureExtractor(
-        observation_extractor=observation_extractor,
-        action_extractor=action_extractor,
-        reward_extractor=reward_extractor,
+    selected = select_memorax_components(
+        cfg,
+        observation_dim=env.observation_space(env_params).shape[0],
+        action_dim=action_space.shape[0],
+        topology="shared",
     )
-
-    # Recurrent backbone: "lru" (Memoroid, linear SSM, the RTRL-HOP-533 baseline)
-    # or "rtu" (RNN, complex rotation-decay + tanh => bounded state, gain tied to
-    # nu_log with NO free gamma). RTU structurally lacks both divergence drivers
-    # (unbounded state + self-aligned free gain), so it's the backbone-stability
-    # probe. Both expose the same local_jacobian RTRL interface.
-    backbone = getattr(cfg, "backbone", "lru")
-    if backbone == "rtu":
-        torso = RNN(
-            cell=RTUCell(config=RTUConfig(features=in_dim, hidden_dim=cfg.hidden_dim))
-        )
-    elif backbone == "lru":
-        torso = Memoroid(
-            cell=LRUCell(
-                config=LRUConfig(
-                    features=in_dim,
-                    hidden_dim=cfg.hidden_dim,
-                    output_dim=lru_output_dim,
-                )
-            )
-        )
-    else:
-        raise ValueError(f"backbone '{backbone}' not supported; use 'lru' or 'rtu'.")
-
-    # Diagnostic/faithfulness switches default off (identical to the repro
-    # baseline); rtrrl_hopper's config may toggle them for ablations.
-    actor_head = heads.Gaussian(
-        action_dim=action_space.shape[0], bound=getattr(cfg, "bound_actor", False)
-    )
-    critic_head = heads.VNetwork()
-
-    # Optional auxiliary self-prediction head (predict next obs + reward): an
-    # external fixed-scale target that anchors the representation scale.
-    pred_head = None
-    if getattr(cfg, "pred_obs", False):
-        obs_dim = env.observation_space(env_params).shape[0]
-        pred_head = heads.Regressor(out_dim=obs_dim + 1)
 
     rtrrl_cfg = RTRRLConfig(
         num_envs=cfg.num_envs,
@@ -445,15 +387,17 @@ def build_rtrrl_agent(cfg: Any, env, env_params):
         rtrrl_cfg,
         env,
         env_params,
-        feature_extractor,
-        torso,
-        actor_head,
-        critic_head,
-        pred_head=pred_head,
+        selected.feature_extractor,
+        selected.recurrent,
+        selected.actor_head,
+        selected.critic_head,
+        pred_head=selected.prediction_head,
+        activation=selected.activation,
         program_normalization=legacy_normalization_config(env, cfg),
         strip_environment_normalization=True,
+        effective_config=selected.effective_config,
     )
-    return parts.as_legacy_program()
+    return parts
 
 
 def build_independent_rtrrl_agent(cfg: ExperimentConfig, env, env_params):
@@ -465,58 +409,13 @@ def build_independent_rtrrl_agent(cfg: ExperimentConfig, env, env_params):
     if isinstance(action_space, Discrete):
         raise ValueError("Independent RTRRL currently targets continuous-action envs.")
 
-    use_encoder = getattr(cfg, "use_encoder", True)
-    if use_encoder:
-        feat = cfg.encoder_dim
-
-        def make_feature_extractor():
-            return FeatureExtractor(
-                observation_extractor=nn.Sequential((nn.Dense(feat), nn.relu)),
-                action_extractor=(
-                    nn.Sequential((nn.Dense(feat), nn.relu)) if cfg.meta_rl else None
-                ),
-                reward_extractor=(
-                    nn.Sequential((nn.Dense(feat), nn.relu)) if cfg.meta_rl else None
-                ),
-            )
-
-        in_dim = feat * (3 if cfg.meta_rl else 1)
-        lru_output_dim = None
-    else:
-        # Construct two distinct module objects even though these front-ends have
-        # no trainable leaves.
-        def make_feature_extractor():
-            return FeatureExtractor(
-                observation_extractor=_identity,
-                action_extractor=_identity if cfg.meta_rl else None,
-                reward_extractor=_identity if cfg.meta_rl else None,
-            )
-
-        obs_dim = env.observation_space(env_params).shape[0]
-        act_dim = action_space.shape[0]
-        in_dim = obs_dim + (act_dim + 1 if cfg.meta_rl else 0)
-        lru_output_dim = getattr(cfg, "lru_output_dim", None) or cfg.hidden_dim
-
-    backbone = getattr(cfg, "backbone", "lru")
-
-    def make_torso():
-        if backbone == "rtu":
-            return RNN(
-                cell=RTUCell(
-                    config=RTUConfig(features=in_dim, hidden_dim=cfg.hidden_dim)
-                )
-            )
-        if backbone == "lru":
-            return Memoroid(
-                cell=LRUCell(
-                    config=LRUConfig(
-                        features=in_dim,
-                        hidden_dim=cfg.hidden_dim,
-                        output_dim=lru_output_dim,
-                    )
-                )
-            )
-        raise ValueError(f"backbone '{backbone}' not supported; use 'lru' or 'rtu'.")
+    selection_args = {
+        "observation_dim": env.observation_space(env_params).shape[0],
+        "action_dim": action_space.shape[0],
+        "topology": "independent",
+    }
+    actor_selection = select_memorax_components(cfg, **selection_args)
+    critic_selection = select_memorax_components(cfg, **selection_args)
 
     independent_cfg = IndependentRTRRLConfig(
         num_envs=cfg.num_envs,
@@ -545,19 +444,24 @@ def build_independent_rtrrl_agent(cfg: ExperimentConfig, env, env_params):
             else 1.0
         ),
     )
-    return IndependentRTRRL(
+    parts = IndependentRTRRL(
         independent_cfg,
         env,
         env_params,
-        make_feature_extractor(),
-        make_torso(),
-        heads.Gaussian(
-            action_dim=action_space.shape[0],
-            bound=getattr(cfg, "bound_actor", False),
-        ),
-        make_feature_extractor(),
-        make_torso(),
-        heads.VNetwork(),
+        actor_selection.feature_extractor,
+        actor_selection.recurrent,
+        actor_selection.actor_head,
+        critic_selection.feature_extractor,
+        critic_selection.recurrent,
+        critic_selection.critic_head,
+    )
+    return RTRRL.from_program(
+        parts.as_program(),
+        profile="memo_experimental",
+        num_envs=cfg.num_envs,
+        runtime_config=cfg,
+        effective_config=actor_selection.effective_config,
+        compatibility_parts=parts,
     )
 
 

@@ -170,6 +170,7 @@ class LegacyRTRRLConfig:
     logprob_reduction: str = "sum"
 
     warning_records: tuple[LegacyConfigWarning, ...] = ()
+    explicit_fields: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -180,6 +181,13 @@ class RTRRLComponentConfig:
     backbone: str
     trace_timing: str
     logprob_reduction: str
+    recurrent_component: str = "aaai25_lru"
+    feature_component: str = "raw"
+    actor_component: str = "unbounded_gaussian"
+    action_clipping: str = "none"
+    input_gain: str = "trainable"
+    prediction_component: str = "none"
+    topology: str = "shared"
     experimental_overrides: tuple[tuple[str, str], ...] = ()
     observation_dim: int = 1
     action_dim: int = 1
@@ -348,6 +356,8 @@ def _normalize_environment(raw: Any):
 def normalize_legacy_config(raw: Any) -> LegacyRTRRLConfig:
     """Validate and freeze a supported historical RTRRL configuration."""
 
+    if isinstance(raw, LegacyRTRRLConfig):
+        return raw
     values = _raw_mapping(raw)
     _unknown_fields(values, LegacyRTRRLConfig)
     explicit = set(values)
@@ -391,6 +401,7 @@ def normalize_legacy_config(raw: Any) -> LegacyRTRRLConfig:
         for path in _NO_OP_FIELDS
         if path in explicit
     )
+    values["explicit_fields"] = tuple(sorted(explicit))
     return LegacyRTRRLConfig(**values)
 
 
@@ -419,11 +430,39 @@ def to_component_config(legacy: LegacyRTRRLConfig) -> RTRRLComponentConfig:
         "action_magnitude_factor": legacy.act_magnitude_factor,
     }
     if legacy.profile == "aaai25_strict_lru":
+        incompatible = {
+            "backbone": legacy.backbone != "lru",
+            "bound_actor": legacy.bound_actor,
+            "act_clip": legacy.act_clip != 0.0,
+            "freeze_gamma": legacy.freeze_gamma,
+            "pred_obs": legacy.pred_obs,
+            "logprob_reduction": legacy.logprob_reduction != "mean",
+            "update_trace_before_td": not legacy.update_trace_before_td,
+            "rtrrl_topology": legacy.rtrrl_topology != "shared",
+            "use_encoder": legacy.use_encoder,
+        }
+        conflicts = tuple(
+            name
+            for name, differs in incompatible.items()
+            if differs and name in legacy.explicit_fields
+        )
+        if conflicts:
+            raise ValueError(
+                "strict profile cannot be combined with experimental branch "
+                f"flags: {', '.join(conflicts)}"
+            )
         return RTRRLComponentConfig(
             profile=legacy.profile,
             backbone="aaai25_lru",
             trace_timing="incoming",
             logprob_reduction="mean",
+            recurrent_component="aaai25_lru",
+            feature_component="raw",
+            actor_component="unbounded_gaussian",
+            action_clipping="none",
+            input_gain="trainable",
+            prediction_component="none",
+            topology="shared",
             **numerical,
         )
     if legacy.profile == "memo_experimental":
@@ -438,6 +477,23 @@ def to_component_config(legacy: LegacyRTRRLConfig) -> RTRRLComponentConfig:
             backbone=legacy.backbone,
             trace_timing=trace_timing,
             logprob_reduction=legacy.logprob_reduction,
+            recurrent_component=(
+                "memorax_rnn_rtu"
+                if legacy.backbone == "rtu"
+                else "memorax_memoroid_lru"
+            ),
+            feature_component="encoder" if legacy.use_encoder else "raw",
+            actor_component=(
+                "bounded_gaussian"
+                if legacy.bound_actor
+                else "unbounded_gaussian"
+            ),
+            action_clipping="env" if legacy.act_clip else "none",
+            input_gain="frozen" if legacy.freeze_gamma else "trainable",
+            prediction_component=(
+                "observation_reward" if legacy.pred_obs else "none"
+            ),
+            topology=legacy.rtrrl_topology,
             experimental_overrides=overrides,
             **numerical,
         )

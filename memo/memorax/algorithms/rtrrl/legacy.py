@@ -20,6 +20,18 @@ from memorax.utils.typing import (
 from .types import RTRRLState
 
 
+@dataclass(frozen=True)
+class _MemoraxParts:
+    env: Any
+    env_params: Any
+    feature_extractor: Any
+    torso: Any
+    actor_head: Any
+    critic_head: Any
+    pred_head: Any
+    activation: Any
+
+
 def _tree_norm(tree) -> Array:
     """L2 norm over all leaves of a possibly complex pytree."""
 
@@ -84,6 +96,8 @@ class RTRRL:
     activation: Callable = jax.nn.silu
     program_normalization: Any = None
     strip_environment_normalization: bool = False
+    effective_config: Any = None
+    compatibility_parts: Any = None
     _delegate: Any = field(default=None, init=False, repr=False)
     program: Any = field(default=None, init=False, repr=False)
     profile: str = field(default="memo_experimental", init=False)
@@ -100,9 +114,10 @@ class RTRRL:
         from memorax.online_ac import (
             LegacyProgram,
             MetaProgramConfig,
-            build_meta_program,
+            NormalizationConfig,
             legacy_env_adapter,
         )
+        from memorax.online_ac.meta import make_meta_program
 
         config = MetaProgramConfig.from_legacy_parts(
             self,
@@ -113,11 +128,26 @@ class RTRRL:
             self.env_params,
             strip_normalization=self.strip_environment_normalization,
         )
-        self._delegate = LegacyProgram(
-            build_meta_program(config, adapter),
-            config,
+        parts = _MemoraxParts(
+            env=adapter.build_context["env"],
+            env_params=adapter.env_params,
+            feature_extractor=self.feature_extractor,
+            torso=self.torso,
+            actor_head=self.actor_head,
+            critic_head=self.critic_head,
+            pred_head=self.pred_head,
+            activation=self.activation,
         )
-        self.program = self._delegate.program
+        self.program = make_meta_program(
+            parts,
+            config.static_config,
+            normalization_config=(
+                config.normalization or NormalizationConfig()
+            ),
+            reset_on_start=config.evaluation.reset_on_start,
+            update_during_eval=config.evaluation.update_during_eval,
+        )
+        self._delegate = LegacyProgram(self.program, config)
         self.num_envs = self.cfg.num_envs
         self.runtime_config = self.cfg
 
@@ -130,11 +160,13 @@ class RTRRL:
         num_envs: int,
         runtime_config: Any = None,
         render_evaluation: Any = None,
+        effective_config: Any = None,
+        compatibility_parts: Any = None,
     ):
         """Construct the public strict façade around one closed program."""
 
-        if profile != "aaai25_strict_lru":
-            raise ValueError("from_program is reserved for the strict profile")
+        if profile not in {"aaai25_strict_lru", "memo_experimental"}:
+            raise ValueError(f"unsupported RTRRL profile: {profile!r}")
         instance = cls.__new__(cls)
         instance.__dict__.update(
             cfg=runtime_config,
@@ -154,34 +186,41 @@ class RTRRL:
             num_envs=num_envs,
             runtime_config=runtime_config,
             render_evaluation=render_evaluation,
+            effective_config=effective_config,
+            compatibility_parts=compatibility_parts,
         )
         return instance
 
     def as_legacy_program(self):
         """Return the one program façade selected during construction."""
 
-        return self if self.profile == "aaai25_strict_lru" else self._delegate
+        return self
+
+    def __getattr__(self, name):
+        parts = self.__dict__.get("compatibility_parts")
+        if parts is not None:
+            return getattr(parts, name)
+        delegate = self.__dict__.get("_delegate")
+        if delegate is not None:
+            return getattr(delegate, name)
+        raise AttributeError(name)
 
     def init(self, key):
-        if self.profile == "aaai25_strict_lru":
-            return self.program.init_fn(key)
-        return self._delegate.init(key)
+        return self.program.init_fn(key)
 
     def warmup(self, key, state, num_steps):
-        if self.profile == "aaai25_strict_lru":
-            del key, num_steps
-            return state
-        return self._delegate.warmup(key, state, num_steps)
+        del key, num_steps
+        return state
 
     def train(self, key, state, num_steps):
-        if self.profile == "aaai25_strict_lru":
-            return self.program.train_epoch_fn(key, state, num_steps)[0]
-        return self._delegate.train(key, state, num_steps)
+        if self._delegate is not None:
+            return self._delegate.train(key, state, num_steps)
+        return self.program.train_epoch_fn(key, state, num_steps)[0]
 
     def evaluate(self, key, state, num_steps):
-        if self.profile == "aaai25_strict_lru":
-            return self.program.evaluate_fn(key, state, num_steps)[0]
-        return self._delegate.evaluate(key, state, num_steps)
+        if self._delegate is not None:
+            return self._delegate.evaluate(key, state, num_steps)
+        return self.program.evaluate_fn(key, state, num_steps)[0]
 
     def evaluate_summary(self, key, state, num_steps):
         """Return delegated state and stable evaluation information."""
@@ -191,6 +230,8 @@ class RTRRL:
     def _update_step(self, state, key):
         """Compatibility shim; the update itself remains owned by the program."""
 
+        if self.compatibility_parts is not None:
+            return self.compatibility_parts._update_step(state, key)
         if self.profile == "aaai25_strict_lru":
             next_state, _ = self.program.train_epoch_fn(key, state, 1)
             return next_state, None

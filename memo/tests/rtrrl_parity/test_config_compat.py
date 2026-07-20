@@ -166,7 +166,7 @@ def test_normalized_configuration_is_frozen():
         config.gamma = 0.1  # pyright: ignore[reportAttributeAccessIssue]
 
 
-def test_strict_profile_resolves_frozen_numerical_choices():
+def test_strict_profile_rejects_experimental_branch_flags():
     legacy = normalize_legacy_config(
         {
             "profile": "aaai25_strict_lru",
@@ -176,12 +176,8 @@ def test_strict_profile_resolves_frozen_numerical_choices():
         }
     )
 
-    effective = to_component_config(legacy)
-
-    assert effective.backbone == "aaai25_lru"
-    assert effective.trace_timing == "incoming"
-    assert effective.logprob_reduction == "mean"
-    assert not effective.experimental_overrides
+    with pytest.raises(ValueError, match="strict profile.*experimental"):
+        to_component_config(legacy)
 
 
 def test_experimental_profile_records_effective_overrides():

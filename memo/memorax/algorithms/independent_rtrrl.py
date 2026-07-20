@@ -17,6 +17,7 @@ import optax
 from flax import core, struct
 
 from memorax.networks.sequence_models.memoroid import Memoroid
+from memorax.online_ac.types import AgentProgram, EvalSummary
 from memorax.utils import Timestep, Transition
 from memorax.utils.axes import add_time_axis, remove_feature_axis, remove_time_axis
 from memorax.utils.typing import (
@@ -58,7 +59,7 @@ class IndependentRTRRLState:
     critic_carry: Carry
     actor_sensitivity: Any
     critic_sensitivity: Any
-    I: Array
+    I: Array  # noqa: E741 - retained legacy emphasis-state name
 
 
 @dataclass
@@ -695,3 +696,20 @@ class IndependentRTRRL:
             partial(self._step, policy=self._deterministic_action), state, keys
         )
         return state
+
+    def as_program(self) -> AgentProgram:
+        """Expose the fixed independent state schema through the common program."""
+
+        def train_epoch_fn(key, state, num_steps):
+            return self.train(key, state, num_steps), None
+
+        def evaluate_fn(key, state, num_steps):
+            return self.evaluate(key, state, num_steps), EvalSummary()
+
+        return AgentProgram(
+            init_fn=self.init,
+            train_epoch_fn=train_epoch_fn,
+            evaluate_fn=evaluate_fn,
+            state_schema=IndependentRTRRLState,
+            metric_schema=type(None),
+        )

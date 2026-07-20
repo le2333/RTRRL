@@ -13,6 +13,7 @@ from base.experiment import (  # noqa: E402
     build_independent_rtrrl_agent,
     build_rtrrl_agent,
 )
+from memorax.algorithms.rtrrl import RTRRL
 
 
 class TinyContinuousEnv:
@@ -100,6 +101,10 @@ def test_init_has_independent_parameter_state_and_rng():
     agent = make_agent()
     state = agent.init(jax.random.key(0))
 
+    assert isinstance(agent, RTRRL)
+    assert agent.profile == "memo_experimental"
+    assert agent.effective_config.topology == "independent"
+    assert agent.program.state_schema.__name__ == "IndependentRTRRLState"
     assert agent.actor_feature_extractor is not agent.critic_feature_extractor
     assert agent.actor_torso is not agent.critic_torso
     assert agent.actor_optimizer is not agent.critic_optimizer
@@ -256,6 +261,8 @@ def test_pred_obs_is_rejected_explicitly():
 def test_shared_legacy_agent_still_initializes_and_updates():
     env = TinyContinuousEnv()
     agent = build_rtrrl_agent(config(), env, None)
+    assert isinstance(agent, RTRRL)
+    assert agent.effective_config.topology == "shared"
     state = agent.init(jax.random.key(13))
     next_state, _ = agent._update_step(state, jax.random.key(14))
     assert next_state.update_step == state.update_step + 1

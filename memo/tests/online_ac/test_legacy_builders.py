@@ -17,7 +17,7 @@ sys.path.insert(0, str(PROJECT_ROOT / "experiments" / "base"))
 from conftest import TinyContinuousEnv, TinyDiscreteEnv
 from golden import assert_tree_allclose
 
-from memorax.algorithms import IndependentRTRRL
+from memorax.algorithms import RTRRL
 from memorax.online_ac import (
     EvalSummary,
     ExactRTRLConfig,
@@ -325,7 +325,7 @@ def test_rtrrl_legacy_builder_translates_every_field_and_runs_one_step():
     cfg = _rtrrl_config()
     agent = build_rtrrl_agent(cfg, env, env.default_params)
 
-    assert isinstance(agent, LegacyProgram)
+    assert isinstance(agent, RTRRL)
     translated = agent.program_config
     assert isinstance(translated, MetaProgramConfig)
     assert translated.static_config == RTRRLConfig(
@@ -503,7 +503,8 @@ def test_independent_rtrrl_builder_and_export_remain_constructible():
         env,
         env.default_params,
     )
-    assert isinstance(agent, IndependentRTRRL)
+    assert isinstance(agent, RTRRL)
+    assert agent.effective_config.topology == "independent"
 
 
 def test_meta_facade_restores_fixed_training_and_evaluation_logs():
