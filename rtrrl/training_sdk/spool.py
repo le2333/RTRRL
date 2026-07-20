@@ -35,6 +35,8 @@ def _thaw(value: Any) -> Any:
 
 
 def _validated_metrics(metrics: Mapping[str, int | float]) -> dict[str, int | float]:
+    if len(metrics) != 1:
+        raise ValueError("each MetricEvent must contain exactly one metric")
     result: dict[str, int | float] = {}
     for name, value in metrics.items():
         if not isinstance(name, str) or not name:
@@ -47,6 +49,15 @@ def _validated_metrics(metrics: Mapping[str, int | float]) -> dict[str, int | fl
             raise ValueError(f"metric {name!r} must be finite")
         result[name] = value
     return result
+
+
+def _fsync_directory(path: Path) -> None:
+    flags = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0)
+    descriptor = os.open(path, flags)
+    try:
+        os.fsync(descriptor)
+    finally:
+        os.close(descriptor)
 
 
 @dataclass(frozen=True)
@@ -81,6 +92,14 @@ class MetricEvent:
     @property
     def metrics(self) -> dict[str, int | float]:
         return dict(cast(Mapping[str, int | float], self.data["metrics"]))
+
+    @property
+    def metric_name(self) -> str:
+        return next(iter(self.metrics))
+
+    @property
+    def metric_value(self) -> int | float:
+        return self.metrics[self.metric_name]
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -120,18 +139,19 @@ class MetricEvent:
         env_steps: int,
         episode_return: int | float,
         episode_length: int,
-    ) -> MetricEvent:
-        return cls(
-            event_id=str(uuid4()),
-            kind="episode_summary",
-            env_steps=env_steps,
-            data={
-                "metrics": {
-                    "train/episode_return": episode_return,
-                    "train/episode_length": episode_length,
-                    "train/env_steps": env_steps,
-                }
-            },
+    ) -> tuple[MetricEvent, ...]:
+        return tuple(
+            cls(
+                event_id=str(uuid4()),
+                kind="episode_summary",
+                env_steps=env_steps,
+                data={"metrics": {name: value}},
+            )
+            for name, value in (
+                ("train/episode_return", episode_return),
+                ("train/episode_length", episode_length),
+                ("train/env_steps", env_steps),
+            )
         )
 
     @classmethod
@@ -141,6 +161,7 @@ class MetricEvent:
         env_steps: int,
         metrics: Mapping[str, int | float],
         objective_metric: str,
+        finalized: bool = True,
     ) -> MetricEvent:
         if not isinstance(objective_metric, str) or not objective_metric:
             raise ValueError("objective_metric must be a non-empty string")
@@ -151,7 +172,7 @@ class MetricEvent:
             data={
                 "metrics": dict(metrics),
                 "objective_metric": objective_metric,
-                "finalized": True,
+                "finalized": finalized,
             },
         )
 
@@ -216,12 +237,23 @@ class EventSpool:
         raise ValueError(f"unknown spool record type {record_type!r}")
 
     def _append_record(self, record: Mapping[str, Any]) -> None:
+        missing_directories: list[Path] = []
+        candidate = self.path.parent
+        while not candidate.exists():
+            missing_directories.append(candidate)
+            candidate = candidate.parent
         self.path.parent.mkdir(parents=True, exist_ok=True)
+        for directory in reversed(missing_directories):
+            _fsync_directory(directory.parent)
+
+        creating_spool = not self.path.exists()
         with self.path.open("a", encoding="utf-8") as spool_file:
             spool_file.write(json.dumps(record, allow_nan=False, separators=(",", ":")))
             spool_file.write("\n")
             spool_file.flush()
             os.fsync(spool_file.fileno())
+        if creating_spool:
+            _fsync_directory(self.path.parent)
 
     def append(self, event: MetricEvent) -> None:
         if event.event_id in self._events_by_id:
@@ -243,7 +275,7 @@ class EventSpool:
             try:
                 sink.send(event)
             except AimUnavailable:
-                continue
+                break
             self.mark_sent(event.event_id)
 
 
@@ -279,5 +311,5 @@ class MemorySpool:
             try:
                 sink.send(event)
             except AimUnavailable:
-                continue
+                break
             self.mark_sent(event.event_id)

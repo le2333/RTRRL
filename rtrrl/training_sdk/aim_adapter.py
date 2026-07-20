@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 from typing import Any, Callable
 
 from .context import RunContext
@@ -16,7 +17,6 @@ class AimAdapter:
         availability_errors: tuple[type[BaseException], ...] = (
             ConnectionError,
             TimeoutError,
-            OSError,
         ),
         **run_options: Any,
     ) -> None:
@@ -32,9 +32,13 @@ class AimAdapter:
 
     def start(self, context: RunContext) -> None:
         self._context = context
+        run_hash = hashlib.sha256(context.run_id.encode("utf-8")).hexdigest()[:24]
         try:
             run = self._run_factory(
-                experiment=context.experiment_name, **self._run_options
+                experiment=context.experiment_name,
+                run_hash=run_hash,
+                force_resume=True,
+                **self._run_options,
             )
             run.name = context.run_name
             run["hparams"] = context.hparams
@@ -52,9 +56,12 @@ class AimAdapter:
         try:
             if self._run.get(marker, False):
                 return
-            for name, value in event.metrics.items():
-                self._run.track(value, name=name, step=event.env_steps)
-            if event.kind == "final":
+            self._run.track(
+                event.metric_value,
+                name=event.metric_name,
+                step=event.env_steps,
+            )
+            if event.kind == "final" and event.data["finalized"]:
                 self._run["sdk/objective_metric"] = event.data["objective_metric"]
                 self._run["sdk/finalized"] = True
             self._run[marker] = True

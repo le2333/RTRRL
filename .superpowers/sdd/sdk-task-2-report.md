@@ -46,3 +46,47 @@
   metrics 有限时产生 final event；Aim 先记录 metrics，再写 objective 和
   finalized marker。
 - 未实现 Rerun 或脚本迁移；仅提供 `NullRerun`，留待 Task 3 替换。
+
+## Review Fix RED
+
+- 新增评审回归测试后定向运行：`14 failed, 25 passed`。
+- 失败分别覆盖稳定 Aim run identity、跨 adapter replay overwrite、单 event
+  单 track、非临时 OSError 传播、backend-neutral exports、失败即停止 replay
+  和首次目录项 fsync。
+
+## Review Fix GREEN
+
+- Task 1+2 SDK 测试：`62 passed`。
+- Ruff：`All checks passed!`
+- `git diff --check`：通过。
+
+## Review Fix Files
+
+- `rtrrl/training_sdk/__init__.py`
+- `rtrrl/training_sdk/aim_adapter.py`
+- `rtrrl/training_sdk/run.py`
+- `rtrrl/training_sdk/spool.py`
+- `rtrrl/tests/training_sdk/test_aim_adapter.py`
+- `rtrrl/tests/training_sdk/test_spool.py`
+- `.superpowers/sdd/sdk-task-2-report.md`
+
+## Review Fix Commit
+
+- 本节所在的 Task 2 review fix 提交（最终回复提供提交哈希）。
+- Subject: `fix(sdk): make Aim replay process-safe`
+
+## Review Fix Self-review
+
+- `run_id` 经 SHA-256 稳定派生为 24 字符小写十六进制 Aim `run_hash`，并始终
+  以 `force_resume=True` 恢复同一 run。
+- 每个 `MetricEvent` 强制只含一个 metric；一般 metrics、episode summary
+  和 final metrics 在 SDK 边界拆分。Aim 仅以稳定 name 和显式 env step
+  track，不使用 event-specific context。
+- event ID marker 继续用于审计和快速跳过；模拟 track 后 marker 前故障时，
+  新 adapter 恢复同一 backend，replay overwrite 同一 sequence point。
+- 默认仅 `ConnectionError`/`TimeoutError` 转换为 `AimUnavailable`；权限、
+  普通 `OSError` 和其他异常保持原样，仍支持显式注入临时异常类型。
+- replay 遇到首个 `AimUnavailable` 立即停止，保留后续事件和 final 顺序。
+- 首次创建父目录时 fsync 其目录项，首次创建 spool 时 fsync spool 父目录；
+  helper 通过 monkeypatch 测试，无平台相关 mock 细节。
+- 公共包不再导出 Aim backend 类型；内部 adapter/spool 继续共享异常类型。

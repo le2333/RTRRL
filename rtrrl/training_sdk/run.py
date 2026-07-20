@@ -72,24 +72,32 @@ class TrainingRun:
         self._last_env_steps = env_steps
 
     def _emit(self, event: MetricEvent) -> None:
-        self.spool.append(event)
-        try:
-            self.aim.send(event)
-        except AimUnavailable:
-            return
-        self.spool.mark_sent(event.event_id)
+        self._emit_many((event,))
+
+    def _emit_many(self, events: tuple[MetricEvent, ...]) -> None:
+        for event in events:
+            self.spool.append(event)
+        for event in events:
+            try:
+                self.aim.send(event)
+            except AimUnavailable:
+                break
+            self.spool.mark_sent(event.event_id)
 
     def log_metrics(
         self, env_steps: int, metrics: Mapping[str, int | float]
     ) -> None:
-        event = MetricEvent.metrics_event(env_steps, metrics)
+        events = tuple(
+            MetricEvent.metrics_event(env_steps, {name: value})
+            for name, value in metrics.items()
+        )
         self._validate_env_steps(env_steps)
         if (
             self._last_metric_env_steps is not None
             and env_steps - self._last_metric_env_steps < self._aim_every_env_steps
         ):
             return
-        self._emit(event)
+        self._emit_many(events)
         self._last_metric_env_steps = env_steps
 
     def log_episode_summary(
@@ -103,13 +111,13 @@ class TrainingRun:
             raise TypeError("episode_length must be an integer")
         if episode_length < 0:
             raise ValueError("episode_length must be non-negative")
-        event = MetricEvent.episode_summary(
+        events = MetricEvent.episode_summary(
             env_steps=env_steps,
             episode_return=episode_return,
             episode_length=episode_length,
         )
         self._validate_env_steps(env_steps)
-        self._emit(event)
+        self._emit_many(events)
 
     def log_episode(self, episode: Episode) -> None:
         self.rerun.log_episode(episode)
@@ -127,12 +135,22 @@ class TrainingRun:
             raise ValueError(
                 f"final_metrics must contain objective metric {objective_metric!r}"
             )
+        ordered_metrics = [
+            (name, value)
+            for name, value in final_metrics.items()
+            if name != objective_metric
+        ]
+        ordered_metrics.append((objective_metric, final_metrics[objective_metric]))
         try:
-            event = MetricEvent.final(
-                env_steps=self._last_env_steps or 0,
-                metrics=final_metrics,
-                objective_metric=objective_metric,
+            events = tuple(
+                MetricEvent.final(
+                    env_steps=self._last_env_steps or 0,
+                    metrics={name: value},
+                    objective_metric=objective_metric,
+                    finalized=name == objective_metric,
+                )
+                for name, value in ordered_metrics
             )
         except (TypeError, ValueError) as exc:
             raise type(exc)(f"invalid final_metrics: {exc}") from exc
-        self._emit(event)
+        self._emit_many(events)

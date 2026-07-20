@@ -1,13 +1,14 @@
 import json
 
 import pytest
+import training_sdk.spool as spool_module
 
 from training_sdk import (
-    AimUnavailable,
     EventSpool,
     MetricEvent,
     SpoolCorruptionError,
 )
+from training_sdk.spool import AimUnavailable
 
 
 class IdempotentSink:
@@ -98,6 +99,47 @@ def test_spool_replays_only_unsent_events_after_temporary_outage(tmp_path):
     EventSpool(path).replay(sink)
     EventSpool(path).replay(sink)
     assert sink.event_ids == [event.event_id]
+
+
+def test_spool_stops_replay_at_first_unavailable_event(tmp_path):
+    path = tmp_path / "events.jsonl"
+    events = [
+        MetricEvent.metrics_event(10, {"train/loss": 2.0}),
+        MetricEvent.metrics_event(20, {"eval/reward": 3.0}),
+        MetricEvent.final(
+            env_steps=20,
+            metrics={"eval/reward": 3.0},
+            objective_metric="eval/reward",
+        ),
+    ]
+    spool = EventSpool(path)
+    for event in events:
+        spool.append(event)
+    sink = IdempotentSink(unavailable_calls=1)
+
+    spool.replay(sink)
+
+    assert sink.calls == 1
+    assert EventSpool(path).unsent_events == tuple(events)
+
+
+def test_first_spool_creation_fsyncs_new_directory_entries(tmp_path, monkeypatch):
+    fsynced_directories = []
+    monkeypatch.setattr(
+        spool_module,
+        "_fsync_directory",
+        lambda path: fsynced_directories.append(path),
+        raising=False,
+    )
+    parent = tmp_path / "new-parent"
+    spool = EventSpool(parent / "events.jsonl")
+
+    spool.append(MetricEvent.metrics_event(1, {"train/loss": 1.0}))
+    first_append_calls = list(fsynced_directories)
+    spool.append(MetricEvent.metrics_event(2, {"train/loss": 0.5}))
+
+    assert first_append_calls == [tmp_path, parent]
+    assert fsynced_directories == first_append_calls
 
 
 def test_spool_corruption_is_reported_explicitly(tmp_path):

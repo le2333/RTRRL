@@ -1,16 +1,18 @@
 from pathlib import Path
 
 import pytest
+import training_sdk
 
 from training_sdk import (
-    AimAdapter,
-    AimUnavailable,
+    EventSpool,
     MemorySpool,
     MetricEvent,
     NullRerun,
     RunContext,
     TrainingRun,
 )
+from training_sdk.aim_adapter import AimAdapter
+from training_sdk.spool import AimUnavailable
 
 
 def make_context(tmp_path, **overrides):
@@ -61,7 +63,7 @@ class FakeAim:
             return
         self.event_ids.append(event.event_id)
         self.events.append(event)
-        self.metric_names.extend(event.metrics)
+        self.metric_names.append(event.metric_name)
 
 
 def make_training_run(tmp_path, *, context=None, aim=None, spool=None):
@@ -99,6 +101,18 @@ def test_general_metrics_use_native_env_step_throttle(tmp_path):
     assert [event.env_steps for event in run.aim.events] == [100, 110]
 
 
+def test_each_spooled_event_maps_to_one_aim_track(tmp_path):
+    run = make_training_run(tmp_path)
+
+    run.log_metrics(100, {"train/loss": 3.0, "train/entropy": 0.5})
+
+    assert [(event.metric_name, event.metric_value) for event in run.aim.events] == [
+        ("train/loss", 3.0),
+        ("train/entropy", 0.5),
+    ]
+    assert all(len(event.metrics) == 1 for event in run.spool.events)
+
+
 def test_throttle_does_not_hide_invalid_metrics_or_advance_steps(tmp_path):
     run = make_training_run(tmp_path)
     run.log_metrics(100, {"train/loss": 3.0})
@@ -126,11 +140,12 @@ def test_episode_summary_is_never_throttled_and_has_mandatory_metrics(tmp_path):
         "train/episode_length",
         "train/env_steps",
     ] * 2
-    assert run.aim.events[0].metrics == {
-        "train/episode_return": 2.5,
-        "train/episode_length": 10,
-        "train/env_steps": 10,
-    }
+    assert [(event.metric_name, event.metric_value) for event in run.aim.events[:3]] == [
+        ("train/episode_return", 2.5),
+        ("train/episode_length", 10),
+        ("train/env_steps", 10),
+    ]
+    assert all(len(event.metrics) == 1 for event in run.aim.events)
 
 
 def test_env_steps_may_repeat_but_must_not_decrease(tmp_path):
@@ -203,14 +218,15 @@ def test_finish_emits_descriptor_objective_and_finalized_marker(tmp_path):
 
     run.finish({"eval/reward": 4.0, "eval/length": 20.0})
 
+    assert [(event.metric_name, event.metric_value) for event in run.aim.events] == [
+        ("eval/length", 20.0),
+        ("eval/reward", 4.0),
+    ]
     event = run.aim.events[-1]
     assert event.kind == "final"
-    assert event.metrics == {
-        "eval/reward": 4.0,
-        "eval/length": 20.0,
-    }
     assert event.data["objective_metric"] == "eval/reward"
     assert event.data["finalized"] is True
+    assert all(len(item.metrics) == 1 for item in run.aim.events)
 
 
 def test_finish_without_descriptor_objective_is_a_noop(tmp_path):
@@ -223,13 +239,20 @@ def test_finish_without_descriptor_objective_is_a_noop(tmp_path):
 
 
 class FakeAimRun:
-    def __init__(self, *, experiment):
+    def __init__(self, *, experiment, run_hash, force_resume):
         self.experiment = experiment
+        self.run_hash = run_hash
+        self.force_resume = force_resume
         self.name = None
         self.values = {}
         self.tracked = []
+        self.points = {}
+        self.fail_event_marker_once = False
 
     def __setitem__(self, key, value):
+        if key.startswith("sdk/event_ids/") and self.fail_event_marker_once:
+            self.fail_event_marker_once = False
+            raise ConnectionError("crash after track")
         self.values[key] = value
 
     def get(self, key, default=None):
@@ -237,34 +260,77 @@ class FakeAimRun:
 
     def track(self, value, *, name, step):
         self.tracked.append((name, value, step))
+        self.points[(name, step)] = value
 
 
-def test_real_aim_adapter_maps_start_and_is_idempotent_by_event_id(tmp_path):
-    created = []
+def test_real_aim_adapter_resumes_stable_run_identity(tmp_path):
+    runs = {}
+    calls = []
 
     def factory(**kwargs):
-        run = FakeAimRun(**kwargs)
-        created.append(run)
-        return run
+        calls.append(kwargs)
+        return runs.setdefault(kwargs["run_hash"], FakeAimRun(**kwargs))
 
     context = make_context(tmp_path)
-    adapter = AimAdapter(run_factory=factory)
-    adapter.start(context)
+    first = AimAdapter(run_factory=factory)
+    second = AimAdapter(run_factory=factory)
+    first.start(context)
+    second.start(context)
     event = MetricEvent.metrics_event(12, {"eval/reward": 4.0})
 
-    adapter.send(event)
-    adapter.send(event)
+    first.send(event)
+    second.send(event)
 
-    backend = created[0]
+    assert calls[0]["run_hash"] == calls[1]["run_hash"]
+    assert len(calls[0]["run_hash"]) == 24
+    assert calls[0]["run_hash"].isalnum()
+    assert calls[0]["force_resume"] is True
+    backend = runs[calls[0]["run_hash"]]
     assert backend.experiment == context.experiment_name
     assert backend.name == context.run_name
     assert backend.values["hparams"] == context.hparams
     assert backend.tracked == [("eval/reward", 4.0, 12)]
 
 
+def test_cross_adapter_replay_overwrites_same_aim_sequence_point(tmp_path):
+    runs = {}
+
+    def factory(**kwargs):
+        return runs.setdefault(kwargs["run_hash"], FakeAimRun(**kwargs))
+
+    context = make_context(tmp_path)
+    first = AimAdapter(run_factory=factory)
+    first.start(context)
+    event = MetricEvent.metrics_event(12, {"eval/reward": 4.0})
+    spool_path = tmp_path / "events.jsonl"
+    spool = EventSpool(spool_path)
+    spool.append(event)
+    backend = next(iter(runs.values()))
+    backend.fail_event_marker_once = True
+
+    spool.replay(first)
+    assert EventSpool(spool_path).unsent_events == (event,)
+
+    second = AimAdapter(run_factory=factory)
+    second.start(context)
+    EventSpool(spool_path).replay(second)
+    EventSpool(spool_path).replay(second)
+
+    assert backend.tracked == [
+        ("eval/reward", 4.0, 12),
+        ("eval/reward", 4.0, 12),
+    ]
+    assert backend.points == {("eval/reward", 12): 4.0}
+    assert backend.values[f"sdk/event_ids/{event.event_id}"] is True
+
+
 def test_real_aim_adapter_marks_finalized_only_after_metrics(tmp_path):
     context = make_context(tmp_path)
-    backend = FakeAimRun(experiment=context.experiment_name)
+    backend = FakeAimRun(
+        experiment=context.experiment_name,
+        run_hash="a" * 24,
+        force_resume=True,
+    )
     adapter = AimAdapter(run_factory=lambda **_: backend)
     adapter.start(context)
     event = MetricEvent.final(
@@ -278,3 +344,46 @@ def test_real_aim_adapter_marks_finalized_only_after_metrics(tmp_path):
     assert backend.tracked == [("eval/reward", 4.0, 50)]
     assert backend.values["sdk/objective_metric"] == "eval/reward"
     assert backend.values["sdk/finalized"] is True
+
+
+@pytest.mark.parametrize("error_type", [ConnectionError, TimeoutError])
+def test_aim_adapter_converts_only_default_transient_errors(tmp_path, error_type):
+    def factory(**_):
+        raise error_type("temporary")
+
+    adapter = AimAdapter(run_factory=factory)
+
+    with pytest.raises(AimUnavailable):
+        adapter.start(make_context(tmp_path))
+
+
+@pytest.mark.parametrize("error", [PermissionError("denied"), OSError("bad data")])
+def test_aim_adapter_preserves_non_transient_os_errors(tmp_path, error):
+    def factory(**_):
+        raise error
+
+    adapter = AimAdapter(run_factory=factory)
+
+    with pytest.raises(type(error), match=str(error)):
+        adapter.start(make_context(tmp_path))
+
+
+def test_aim_adapter_converts_injected_transient_error(tmp_path):
+    class TemporaryBackendError(Exception):
+        pass
+
+    def factory(**_):
+        raise TemporaryBackendError("temporary")
+
+    adapter = AimAdapter(
+        run_factory=factory,
+        availability_errors=(TemporaryBackendError,),
+    )
+
+    with pytest.raises(AimUnavailable):
+        adapter.start(make_context(tmp_path))
+
+
+def test_public_sdk_does_not_export_aim_backend_types():
+    assert not hasattr(training_sdk, "AimAdapter")
+    assert not hasattr(training_sdk, "AimUnavailable")

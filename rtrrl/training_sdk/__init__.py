@@ -1,10 +1,8 @@
 from __future__ import annotations
 
-from .aim_adapter import AimAdapter
 from .context import JsonValue, RunContext
 from .run import NullRerun, TrainingRun
 from .spool import (
-    AimUnavailable,
     EventSpool,
     MemorySpool,
     MetricEvent,
@@ -28,8 +26,6 @@ def current_run() -> TrainingRun:
 
 
 __all__ = [
-    "AimAdapter",
-    "AimUnavailable",
     "Episode",
     "EventSpool",
     "JsonValue",
