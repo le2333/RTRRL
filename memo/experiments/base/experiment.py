@@ -686,6 +686,8 @@ def _log_historical_rtrrl_epoch(
     log_norms: bool,
     evaluation_summary=None,
     render_evaluation=None,
+    render_start: int = 0,
+    render_steps: int | None = None,
 ):
     """Preserve historical logger cadence, step, best-eval, and video semantics."""
 
@@ -712,7 +714,16 @@ def _log_historical_rtrrl_epoch(
                 )
             )
             if render_evaluation is not None:
-                video_frames = render_evaluation(info["environment_state"])
+                render_end = (
+                    None
+                    if render_steps is None
+                    else render_start + render_steps
+                )
+                render_states = jax.tree.map(
+                    lambda value: value[render_start:render_end],
+                    info["environment_state"],
+                )
+                video_frames = render_evaluation(render_states)
     if eval_reward is not None:
         metrics["eval/rewards"] = eval_reward
         if video_frames is not None:
@@ -818,6 +829,8 @@ def _train_strict_rtrrl_loop(agent: RTRRL, cfg, logger):
                 render_evaluation=(
                     agent.render_evaluation if should_render else None
                 ),
+                render_start=getattr(runtime_config, "render_start", 0),
+                render_steps=getattr(runtime_config, "render_steps", None),
             )
             if logger["best_eval_reward"] > previous_best:
                 steps_since_best = 0

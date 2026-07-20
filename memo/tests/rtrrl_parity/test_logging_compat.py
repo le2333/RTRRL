@@ -190,6 +190,8 @@ def test_logger_uses_epoch_scan_steps_not_batched_metric_steps():
         log_norms=True,
         evaluation_summary=evaluation,
         render_evaluation=render_evaluation,
+        render_start=1,
+        render_steps=5,
     )
 
     assert len(logger.calls) == 1
@@ -202,6 +204,7 @@ def test_logger_uses_epoch_scan_steps_not_batched_metric_steps():
     assert len(logger.videos) == 1
     assert logger.videos[0][0] == "env/video"
     assert len(rendered_states) == 1
+    assert jax.tree.leaves(rendered_states[0])[0].shape[0] == 2
 
     _log_historical_rtrrl_epoch(
         logger,
@@ -218,6 +221,89 @@ def test_logger_uses_epoch_scan_steps_not_batched_metric_steps():
     assert second_step == 18
     assert set(second_metrics) == {"eval/rewards"}
     assert "eval/best_eval_reward" not in second_metrics
+
+
+def test_video_render_slice_honors_exact_configured_window():
+    logger = _RecordingLogger()
+    components, config, _ = _strict_setup()
+    program = build_rtrrl_program(config, components, _ThreeStepEnvironment())
+    state = program.init_fn(jax.random.key(59))
+    _, evaluation = program.evaluate_fn(jax.random.key(61), state, 3)
+    rendered_states = []
+
+    _log_historical_rtrrl_epoch(
+        logger,
+        _synthetic_summary(),
+        epoch_index=0,
+        steps_per_epoch=3,
+        log_every=1,
+        log_td_lr=False,
+        log_rnn_lr=False,
+        log_norms=False,
+        evaluation_summary=evaluation,
+        render_evaluation=lambda states: (
+            rendered_states.append(states)
+            or np.zeros((1, 2, 2, 3), dtype=np.uint8)
+        ),
+        render_start=1,
+        render_steps=1,
+    )
+
+    leaves = jax.tree.leaves(rendered_states[0])
+    assert leaves
+    assert all(leaf.shape[0] == 1 for leaf in leaves)
+
+
+def test_normalized_evaluation_logs_original_episode_return():
+    import experiment
+    from conftest import TinyContinuousEnv
+    from memorax.environments.wrappers import (
+        NormalizeRewardWrapper,
+        RecordEpisodeStatistics,
+    )
+
+    env = NormalizeRewardWrapper(
+        RecordEpisodeStatistics(TinyContinuousEnv())
+    )
+    cfg = SimpleNamespace(
+        profile="aaai25_strict_lru",
+        num_envs=1,
+        hidden_dim=3,
+        meta_rl=True,
+        use_encoder=False,
+        normalize_obs=False,
+        normalize_reward=True,
+    )
+    agent = experiment.build_rtrrl_agent(cfg, env, env.default_params)
+    state = agent.init(jax.random.key(67))
+    _, evaluation = agent.evaluate_summary(jax.random.key(71), state, 3)
+    logger = _RecordingLogger()
+
+    _log_historical_rtrrl_epoch(
+        logger,
+        _synthetic_summary(),
+        epoch_index=0,
+        steps_per_epoch=3,
+        log_every=1,
+        log_td_lr=False,
+        log_rnn_lr=False,
+        log_norms=False,
+        evaluation_summary=evaluation,
+    )
+
+    normalized_total = float(jnp.sum(evaluation.info["reward"]))
+    original_return = float(
+        jnp.max(evaluation.info["returned_episode_returns"])
+    )
+    assert "environment_info" in evaluation.info
+    assert normalized_total != original_return
+    np.testing.assert_allclose(original_return, 3.3, rtol=0, atol=1e-6)
+    np.testing.assert_allclose(
+        logger.calls[0][0]["eval/rewards"],
+        original_return,
+        rtol=0,
+        atol=1e-6,
+    )
 
 
 def test_enabled_action_magnitude_has_real_step_source():
@@ -247,6 +333,8 @@ def test_real_strict_train_loop_emits_historical_program_metrics(monkeypatch):
             log_norms=True,
             env_params=SimpleNamespace(render=True),
             render_every_evals=10,
+            render_start=1,
+            render_steps=1,
         ),
         render_evaluation=lambda states: (
             renderer_calls.append(states)
@@ -285,4 +373,5 @@ def test_real_strict_train_loop_emits_historical_program_metrics(monkeypatch):
     assert any(key.startswith("norms/") for key in metrics)
     assert int(metrics["steps"]) == 3
     assert len(renderer_calls) == 1
+    assert jax.tree.leaves(renderer_calls[0])[0].shape[0] == 1
     assert logger.videos[0][0] == "env/video"

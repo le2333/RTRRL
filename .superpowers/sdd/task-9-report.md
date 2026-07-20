@@ -243,3 +243,53 @@ Final authorized Batch job `41e06b40-6846-48cc-ba1a-da484a89f911`:
 The only intentional remaining compatibility boundary is
 `profile="memo_experimental"` for Task 10 branches. It is explicit and cannot be
 selected by the public strict façade.
+
+## Final Review Correction (Authoritative)
+
+This section is the authoritative evidence for the remaining Task 9 findings
+and supersedes any earlier statements about warmup, evaluation return sources,
+or render slicing.
+
+- Strict `RTRRL.warmup` is an exact historical no-op: it returns the identical
+  state object and does not call any program function, split a key, step an
+  environment, or update parameters.
+- The legacy state-only `evaluate(key, state, num_steps) -> state` lifecycle
+  signature remains intact for callers and `lox.spool`. Public
+  `evaluate_summary(key, state, num_steps) -> (state, EvalSummary)` exposes the
+  delegated stable evaluation result without discarding it.
+- The fixed legacy-environment adapter now carries stable episode information:
+  availability, completion mask, unnormalized returned episode reward, and
+  episode length. Evaluation events preserve this mapping as
+  `environment_info` and prefer original `RecordEpisodeStatistics` returns over
+  sums reconstructed from normalized rewards.
+- A deterministic normalized-reward regression proves that normalized rewards
+  sum to a different value while `eval/rewards` uses the original episode return
+  `3.3`.
+- Rendering now slices the retained evaluation history exactly as
+  `[render_start : render_start + render_steps]` before the renderer sees it.
+  Tests cover an exact one-state window and a requested five-state window over a
+  shorter three-state history, which correctly yields the available two states.
+  The production strict train loop passes both normalized legacy config values
+  through this evaluate-to-render path.
+- Strict versus `memo_experimental` routing, scalar-only training epoch output,
+  fixed-shape JIT behavior, callback exclusion, historical logging cadence, and
+  cumulative steps remain unchanged.
+
+TDD evidence:
+
+- RED job `aa4b03e5-6ac4-4fb7-ba7d-80a222a8c90d` failed all five intended
+  contracts: no-op warmup, public summary access, exact render slicing,
+  original normalized-environment returns, and production render-window wiring.
+- Focused GREEN job `a4662384-93f4-4ab1-bcc3-30ad5790b898` passed all 17
+  program/logging contract tests.
+
+Final authorized Batch job `ec9f313d-c8ad-408a-9090-bb906d151a1d`:
+
+- queue/definition: `rtrrl-cpu2-queue` / `rtrrl-cpu-job:14`;
+- resources: 4 vCPU, 8192 MiB;
+- runtime: Python 3.12, JAX/JAXLIB 0.10.0, Flax 0.12.7, CPU;
+- complete `tests/rtrrl_parity`: 107 passed, 5 pre-existing opt-in skips;
+- profile-relevant real RTRRL builders: 5 passed, 12 deselected;
+- ruff: all selected production, contract, and builder files passed;
+- pyright: strict `memorax/algorithms/rtrrl` package, 0 errors/warnings;
+- compileall and local `git diff --check`: passed.

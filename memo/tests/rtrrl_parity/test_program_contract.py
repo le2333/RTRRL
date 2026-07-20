@@ -170,6 +170,52 @@ def test_strict_update_step_executes_one_vector_transition_for_multiple_envs():
     assert calls == [1]
 
 
+def test_strict_warmup_is_an_exact_noop():
+    calls = []
+    program = AgentProgram(
+        init_fn=lambda key: jnp.asarray(0),
+        train_epoch_fn=lambda key, state, steps: (
+            calls.append((key, steps)) or state + 1,
+            None,
+        ),
+        evaluate_fn=lambda key, state, steps: (state, EvalSummary()),
+        state_schema=RTRRLState,
+        metric_schema=program_module.RTRRLEpochSummary,
+    )
+    agent = RTRRL.from_program(
+        program,
+        profile="aaai25_strict_lru",
+        num_envs=4,
+    )
+    state = {"marker": jnp.asarray(9)}
+
+    returned = agent.warmup(jax.random.key(5), state, 100)
+
+    assert returned is state
+    assert calls == []
+
+
+def test_strict_facade_preserves_state_only_evaluate_and_exposes_summary():
+    components, config, _ = _strict_setup()
+    program = build_rtrrl_program(config, components, _ThreeStepEnvironment())
+    agent = RTRRL.from_program(
+        program,
+        profile="aaai25_strict_lru",
+        num_envs=1,
+    )
+    state = agent.init(jax.random.key(37))
+
+    lifecycle_state = agent.evaluate(jax.random.key(41), state, 2)
+    summary_state, summary = agent.evaluate_summary(
+        jax.random.key(41), state, 2
+    )
+
+    assert lifecycle_state is state
+    assert summary_state is state
+    assert isinstance(summary, EvalSummary)
+    assert "environment_state" in summary.info
+
+
 def test_strict_builder_owns_normalization_without_host_callbacks():
     import experiment
     from conftest import TinyContinuousEnv

@@ -46,6 +46,7 @@ class RTRRLEnvironmentState:
     reward_m2: Any
     reward_count: Any
     discounted_return: Any
+    environment_info: Any
 
 
 class LegacyRTRRLEnvironmentAdapter:
@@ -109,13 +110,27 @@ class LegacyRTRRLEnvironmentAdapter:
             discounted_return=jnp.zeros(
                 (self.num_envs,), dtype=jnp.float32
             ),
+            environment_info={
+                "episode_info_available": jnp.zeros(
+                    (self.num_envs,), dtype=jnp.bool_
+                ),
+                "returned_episode": jnp.zeros(
+                    (self.num_envs,), dtype=jnp.bool_
+                ),
+                "returned_episode_returns": jnp.zeros(
+                    (self.num_envs,), dtype=jnp.float32
+                ),
+                "returned_episode_lengths": jnp.zeros(
+                    (self.num_envs,), dtype=jnp.int32
+                ),
+            },
         )
 
     def step(self, state: RTRRLEnvironmentState, action):
         split_keys = jax.vmap(lambda key: jax.random.split(key, 2))(state.keys)
         next_keys = split_keys[:, 0]
         environment_keys = split_keys[:, 1]
-        observation, inner_state, reward, done, _ = jax.vmap(
+        observation, inner_state, reward, done, info = jax.vmap(
             self.env.step, in_axes=(0, 0, 0, None)
         )(
             environment_keys,
@@ -158,6 +173,35 @@ class LegacyRTRRLEnvironmentAdapter:
                 reward_m2 / reward_count + self.eps
             )
         discounted_return = discounted_return * (1 - done)
+        episode_info_available = (
+            "returned_episode" in info
+            and "returned_episode_returns" in info
+        )
+        environment_info = {
+            "episode_info_available": jnp.full(
+                (self.num_envs,),
+                episode_info_available,
+                dtype=jnp.bool_,
+            ),
+            "returned_episode": jnp.asarray(
+                info.get("returned_episode", done),
+                dtype=jnp.bool_,
+            ),
+            "returned_episode_returns": jnp.asarray(
+                info.get(
+                    "returned_episode_returns",
+                    jnp.zeros_like(reward),
+                ),
+                dtype=jnp.float32,
+            ),
+            "returned_episode_lengths": jnp.asarray(
+                info.get(
+                    "returned_episode_lengths",
+                    jnp.zeros((self.num_envs,), dtype=jnp.int32),
+                ),
+                dtype=jnp.int32,
+            ),
+        }
         return RTRRLEnvironmentState(
             obs=observation,
             reward=reward,
@@ -171,6 +215,7 @@ class LegacyRTRRLEnvironmentAdapter:
             reward_m2=reward_m2,
             reward_count=reward_count,
             discounted_return=discounted_return,
+            environment_info=environment_info,
         )
 
 
@@ -398,6 +443,30 @@ def _make_evaluate_fn(
                 episode_return,
                 jnp.zeros_like(episode_return),
             )
+            environment_info = getattr(
+                next_environment,
+                "environment_info",
+                {
+                    "episode_info_available": jnp.zeros_like(
+                        returned_episode
+                    ),
+                    "returned_episode": returned_episode,
+                    "returned_episode_returns": returned_episode_returns,
+                },
+            )
+            original_available = environment_info[
+                "episode_info_available"
+            ]
+            returned_episode = jnp.where(
+                original_available,
+                environment_info["returned_episode"],
+                returned_episode,
+            )
+            returned_episode_returns = jnp.where(
+                original_available,
+                environment_info["returned_episode_returns"],
+                returned_episode_returns,
+            )
             next_return = jnp.where(
                 returned_episode,
                 jnp.zeros_like(episode_return),
@@ -408,6 +477,7 @@ def _make_evaluate_fn(
                 "done": next_environment.done,
                 "returned_episode": returned_episode,
                 "returned_episode_returns": returned_episode_returns,
+                "environment_info": environment_info,
                 "environment_state": next_environment,
                 "action_decision": decision,
             }

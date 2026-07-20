@@ -169,7 +169,8 @@ class RTRRL:
 
     def warmup(self, key, state, num_steps):
         if self.profile == "aaai25_strict_lru":
-            return self.program.train_epoch_fn(key, state, num_steps)[0]
+            del key, num_steps
+            return state
         return self._delegate.warmup(key, state, num_steps)
 
     def train(self, key, state, num_steps):
@@ -181,6 +182,11 @@ class RTRRL:
         if self.profile == "aaai25_strict_lru":
             return self.program.evaluate_fn(key, state, num_steps)[0]
         return self._delegate.evaluate(key, state, num_steps)
+
+    def evaluate_summary(self, key, state, num_steps):
+        """Return delegated state and stable evaluation information."""
+
+        return self.program.evaluate_fn(key, state, num_steps)
 
     def _update_step(self, state, key):
         """Compatibility shim; the update itself remains owned by the program."""
