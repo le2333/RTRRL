@@ -185,6 +185,96 @@ def test_direct_legacy_config_optimizer_sources_are_canonicalized():
         )
 
 
+@pytest.mark.parametrize(
+    ("profile", "raw_clip", "expected_clip"),
+    (
+        ("aaai25_strict_lru", {"rnn_grad_clip": 0.11}, 0.11),
+        (
+            "aaai25_strict_lru",
+            {"optimizer_params_rnn": {"gradient_clip": 0.12}},
+            0.12,
+        ),
+        ("memo_experimental", {"rnn_grad_clip": 0.21}, 0.21),
+        (
+            "memo_experimental",
+            {"optimizer_params_rnn": {"gradient_clip": 0.22}},
+            0.22,
+        ),
+    ),
+)
+def test_final_rnn_gradient_clip_matches_report_and_component_construction(
+    profile, raw_clip, expected_clip
+):
+    config = normalize_legacy_config({"profile": profile, **raw_clip})
+    effective = to_component_config(config)
+    described = describe_legacy_build(config)["effective"]
+
+    assert config.rnn_grad_clip == pytest.approx(expected_clip)
+    assert effective.optimizer_params_rnn.gradient_clip == pytest.approx(
+        expected_clip
+    )
+    assert described["rnn_gradient_clip"] == pytest.approx(expected_clip)
+
+
+def test_conflicting_rnn_gradient_clip_sources_name_both_paths():
+    with pytest.raises(
+        ValueError,
+        match=(
+            r"rnn_grad_clip.*"
+            r"optimizer_params_rnn\.gradient_clip"
+        ),
+    ):
+        normalize_legacy_config(
+            {
+                "rnn_grad_clip": 0.31,
+                "optimizer_params_rnn": {"gradient_clip": 0.32},
+            }
+        )
+
+
+def test_equal_rnn_gradient_clip_sources_are_accepted():
+    config = normalize_legacy_config(
+        {
+            "rnn_grad_clip": 0.33,
+            "optimizer_params_rnn": {"gradient_clip": 0.33},
+        }
+    )
+
+    assert config.rnn_grad_clip == pytest.approx(0.33)
+    assert config.optimizer_params_rnn.gradient_clip == pytest.approx(0.33)
+
+
+def test_direct_legacy_config_rnn_gradient_clip_is_canonicalized():
+    top_only = normalize_legacy_config(
+        LegacyRTRRLConfig(rnn_grad_clip=0.41)
+    )
+    nested_only = normalize_legacy_config(
+        LegacyRTRRLConfig(
+            optimizer_params_rnn=LegacyOptimizerConfig(
+                gradient_clip=0.42
+            )
+        )
+    )
+
+    assert top_only.optimizer_params_rnn.gradient_clip == pytest.approx(0.41)
+    assert nested_only.rnn_grad_clip == pytest.approx(0.42)
+    with pytest.raises(
+        ValueError,
+        match=(
+            r"rnn_grad_clip.*"
+            r"optimizer_params_rnn\.gradient_clip"
+        ),
+    ):
+        normalize_legacy_config(
+            LegacyRTRRLConfig(
+                rnn_grad_clip=0.43,
+                optimizer_params_rnn=LegacyOptimizerConfig(
+                    gradient_clip=0.44
+                ),
+            )
+        )
+
+
 def test_component_config_preserves_complete_grouped_optimizer_settings():
     legacy = normalize_legacy_config(
         {

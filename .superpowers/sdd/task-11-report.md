@@ -320,3 +320,62 @@ component config.
 
 No complete RL environment ran locally. The only warning was the pre-existing
 TensorFlow Probability/JAX deprecation warning.
+
+## Final Gradient-Clip Alias Correction
+
+### Honest RED Evidence
+
+The focused pre-implementation command selected nine outcomes. Six failed for
+the missing behavior and three nested-only/equal controls passed:
+
+- strict and experimental top-level `rnn_grad_clip` changed compatibility
+  metadata while final `optimizer_params_rnn.gradient_clip` remained `1.0`;
+- conflicting mapping sources did not fail;
+- direct `LegacyRTRRLConfig` top-only input did not update the nested
+  optimizer;
+- mutable `RTRRLParams` top-only input did not update its nested optimizer;
+- conflicting mutable inputs did not fail.
+
+The RED command exited 1 and peaked at 47,996 KiB RSS.
+
+### Canonical Resolution
+
+`rnn_grad_clip` and `optimizer_params_rnn.gradient_clip` now use the same
+source-resolution contract as learning rates:
+
+- only the top-level alias explicit: propagate it into the canonical nested
+  optimizer;
+- only the dotted nested value explicit: copy it into the top-level
+  compatibility alias;
+- both explicit and equal: accept;
+- both explicit and unequal: raise `InvalidRTRRLConfig` naming
+  `rnn_grad_clip` and `optimizer_params_rnn.gradient_clip`.
+
+The mapping path tracks whether the dotted `gradient_clip` key itself was
+present. Direct `LegacyRTRRLConfig` objects infer explicitness from
+`explicit_fields` when available and otherwise from non-default values.
+Mutable historical `RTRRLParams` receives equivalent nested-only, top-only,
+equal, and conflict behavior; its implicit nested default does not masquerade
+as an explicit value when a dynamically supplied top-level alias is present.
+
+`describe_legacy_build` now reports
+`effective.optimizer_params_rnn.gradient_clip`, which is the final value used
+by state-machine optimizer construction.
+
+### Verification
+
+- Focused gradient-clip GREEN: nine passed, peak RSS 45,128 KiB.
+- Local complete config/entrypoint suite: 110 passed, peak RSS 463,240 KiB.
+- Repository audit: 697 discovered and accepted; all unsupported, unknown,
+  deprecated no-op, and invalid counts are zero.
+- Local ruff, pyright (0 errors/0 warnings), compileall, `git diff --check`,
+  and IDE diagnostics passed.
+- Authorized 8,192-MiB Batch
+  `b17f36c5-f316-427e-b74a-a1a225e07339` succeeded with exit 0.
+- Batch relevant parity/builders: 234 passed and five intentional authorized
+  directional finite-difference skips, plus the separately selected RTRRL
+  combined-normalization builder case passed; peak RSS 3,890,084 KiB.
+- Batch ruff and compileall passed; pyright reported 0 errors and 0 warnings.
+
+No complete RL environment ran locally. The only test warning remains the
+pre-existing TensorFlow Probability/JAX deprecation warning.

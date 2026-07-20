@@ -461,7 +461,35 @@ def _canonicalize_mapping_rate(
     )
 
 
-def _canonicalize_existing_rates(
+def _canonicalize_mapping_gradient_clip(
+    values: dict[str, Any],
+    explicit: set[str],
+    raw_nested: Any,
+) -> None:
+    optimizer = values["optimizer_params_rnn"]
+    top_explicit = "rnn_grad_clip" in explicit
+    nested_explicit = "optimizer_params_rnn" in explicit and (
+        not isinstance(raw_nested, Mapping)
+        or "gradient_clip" in raw_nested
+    )
+    top_clip = values.get("rnn_grad_clip", optimizer.gradient_clip)
+    nested_clip = optimizer.gradient_clip
+    if top_explicit and nested_explicit and top_clip != nested_clip:
+        raise InvalidRTRRLConfig(
+            "conflicting optimizer gradient clips: "
+            f"rnn_grad_clip={top_clip!r} != "
+            "optimizer_params_rnn.gradient_clip="
+            f"{nested_clip!r}"
+        )
+    canonical_clip = top_clip if top_explicit else nested_clip
+    values["rnn_grad_clip"] = canonical_clip
+    values["optimizer_params_rnn"] = replace(
+        optimizer,
+        gradient_clip=canonical_clip,
+    )
+
+
+def _canonicalize_existing_optimizer_aliases(
     config: LegacyRTRRLConfig,
 ) -> LegacyRTRRLConfig:
     defaults = LegacyRTRRLConfig.__dataclass_fields__
@@ -500,6 +528,32 @@ def _canonicalize_existing_rates(
             optimizer,
             learning_rate=canonical_rate,
         )
+    optimizer = replacements["optimizer_params_rnn"]
+    top_clip = config.rnn_grad_clip
+    nested_clip = optimizer.gradient_clip
+    default_top_clip = defaults["rnn_grad_clip"].default
+    default_nested_clip = (
+        defaults["optimizer_params_rnn"].default_factory().gradient_clip
+    )
+    if explicit:
+        top_explicit = "rnn_grad_clip" in explicit
+        nested_explicit = "optimizer_params_rnn" in explicit
+    else:
+        top_explicit = top_clip != default_top_clip
+        nested_explicit = nested_clip != default_nested_clip
+    if top_explicit and nested_explicit and top_clip != nested_clip:
+        raise InvalidRTRRLConfig(
+            "conflicting optimizer gradient clips: "
+            f"rnn_grad_clip={top_clip!r} != "
+            "optimizer_params_rnn.gradient_clip="
+            f"{nested_clip!r}"
+        )
+    canonical_clip = top_clip if top_explicit else nested_clip
+    replacements["rnn_grad_clip"] = canonical_clip
+    replacements["optimizer_params_rnn"] = replace(
+        optimizer,
+        gradient_clip=canonical_clip,
+    )
     return replace(config, **replacements)
 
 
@@ -547,7 +601,7 @@ def normalize_legacy_config(raw: Any) -> LegacyRTRRLConfig:
     """Validate and freeze a supported historical RTRRL configuration."""
 
     if isinstance(raw, LegacyRTRRLConfig):
-        return _canonicalize_existing_rates(
+        return _canonicalize_existing_optimizer_aliases(
             _validate_strict_value_immutability(raw)
         )
     values = _raw_mapping(raw)
@@ -595,9 +649,11 @@ def normalize_legacy_config(raw: Any) -> LegacyRTRRLConfig:
         top_field="rnn_lr",
         nested_field="optimizer_params_rnn",
     )
-    if "rnn_grad_clip" not in explicit:
-        clip = values["optimizer_params_rnn"].gradient_clip
-        values["rnn_grad_clip"] = 1.0 if clip is None else clip
+    _canonicalize_mapping_gradient_clip(
+        values,
+        explicit,
+        raw_rnn_optimizer,
+    )
     if "num_envs" not in explicit and values["env_params"].batch_size is not None:
         values["num_envs"] = values["env_params"].batch_size
     if "hidden_dim" not in explicit and "hidden_size" in explicit:

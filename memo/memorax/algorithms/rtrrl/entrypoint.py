@@ -17,6 +17,7 @@ import yaml
 
 from .compatibility import (
     InvalidRTRRLConfig,
+    LegacyRTRRLConfig,
     UnknownRTRRLField,
     UnsupportedRTRRLBranch,
     normalize_legacy_config,
@@ -184,7 +185,15 @@ def load_legacy_mapping(
 def normalize_legacy_invocation(raw: Any):
     """Normalize legacy budget aliases before the frozen Memorax schema."""
 
+    if isinstance(raw, LegacyRTRRLConfig):
+        return normalize_legacy_config(raw)
     values = dict(raw) if isinstance(raw, Mapping) else dict(vars(raw))
+    if not isinstance(raw, Mapping) and "rnn_grad_clip" in values:
+        optimizer = values.get("optimizer_params_rnn")
+        if getattr(optimizer, "gradient_clip", None) == 1.0:
+            optimizer_values = dict(vars(optimizer))
+            optimizer_values.pop("gradient_clip", None)
+            values["optimizer_params_rnn"] = optimizer_values
     environment = values.get("env_params")
     environment_num_envs = (
         environment.get("batch_size")
@@ -228,7 +237,9 @@ def describe_legacy_build(config) -> dict[str, Any]:
             "rnn_learning_rate": (
                 effective.optimizer_params_rnn.learning_rate
             ),
-            "rnn_gradient_clip": config.rnn_grad_clip,
+            "rnn_gradient_clip": (
+                effective.optimizer_params_rnn.gradient_clip
+            ),
             "environment": {
                 "env_name": config.env_params.env_name,
                 "mode": config.mode,

@@ -452,6 +452,76 @@ def test_direct_rtrrl_params_nested_optimizer_rates_become_canonical():
     assert config.optimizer_params_rnn.learning_rate == pytest.approx(0.072)
 
 
+def test_direct_rtrrl_params_rnn_gradient_clip_is_canonicalized():
+    module = _load_legacy_entrypoint_module()
+    nested_only = module.RTRRLParams()
+    nested_only.optimizer_params_rnn = module.OptimizerConfig(
+        learning_rate=1e-4,
+        gradient_clip=0.51,
+    )
+    top_only = module.RTRRLParams()
+    top_only.rnn_grad_clip = 0.52
+    equal_sources = module.RTRRLParams()
+    equal_sources.rnn_grad_clip = 0.53
+    equal_sources.optimizer_params_rnn = module.OptimizerConfig(
+        learning_rate=1e-4,
+        gradient_clip=0.53,
+    )
+
+    nested_config = compatibility_entrypoint.normalize_legacy_invocation(
+        nested_only
+    )
+    top_config = compatibility_entrypoint.normalize_legacy_invocation(
+        top_only
+    )
+    equal_config = compatibility_entrypoint.normalize_legacy_invocation(
+        equal_sources
+    )
+
+    assert nested_config.rnn_grad_clip == pytest.approx(0.51)
+    assert nested_config.optimizer_params_rnn.gradient_clip == pytest.approx(
+        0.51
+    )
+    assert top_config.rnn_grad_clip == pytest.approx(0.52)
+    assert top_config.optimizer_params_rnn.gradient_clip == pytest.approx(
+        0.52
+    )
+    assert equal_config.rnn_grad_clip == pytest.approx(0.53)
+    assert equal_config.optimizer_params_rnn.gradient_clip == pytest.approx(
+        0.53
+    )
+
+
+def test_direct_rtrrl_params_conflicting_rnn_gradient_clips_fail():
+    module = _load_legacy_entrypoint_module()
+    params = module.RTRRLParams()
+    params.rnn_grad_clip = 0.54
+    params.optimizer_params_rnn = module.OptimizerConfig(
+        learning_rate=1e-4,
+        gradient_clip=0.55,
+    )
+
+    with pytest.raises(
+        ValueError,
+        match=(
+            r"rnn_grad_clip.*"
+            r"optimizer_params_rnn\.gradient_clip"
+        ),
+    ):
+        compatibility_entrypoint.normalize_legacy_invocation(params)
+
+
+def test_normalize_invocation_preserves_direct_legacy_config_sources():
+    config = compatibility_entrypoint.normalize_legacy_invocation(
+        compatibility_entrypoint.LegacyRTRRLConfig(
+            rnn_grad_clip=0.56
+        )
+    )
+
+    assert config.rnn_grad_clip == pytest.approx(0.56)
+    assert config.optimizer_params_rnn.gradient_clip == pytest.approx(0.56)
+
+
 def test_rtrrl_fixed_parse_then_assignment_remains_executable(monkeypatch):
     module = _load_legacy_entrypoint_module()
     observed = {}
