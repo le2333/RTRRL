@@ -1,55 +1,11 @@
-"""Memorax: A unified JAX/Flax framework for memory-augmented reinforcement learning."""
+"""Memorax: a unified framework for memory-augmented reinforcement learning."""
+
+from importlib import import_module
+
 
 __version__ = "1.0.1"
 
-from memorax.algorithms import (
-    DQN,
-    MAPPO,
-    PPO,
-    PQN,
-    R2D2,
-    SAC,
-    StreamAC,
-    StreamACConfig,
-    StreamACState,
-    DQNConfig,
-    DQNState,
-    GradientPPO,
-    GradientPPOConfig,
-    GradientPPOState,
-    MAPPOConfig,
-    MAPPOState,
-    PPOConfig,
-    PPOState,
-    PQNConfig,
-    PQNState,
-    R2D2Config,
-    R2D2State,
-    SACConfig,
-    SACState,
-)
-from memorax.environments import make
-from memorax.loggers import (
-    CheckpointLogger,
-    DashboardLogger,
-    FileLogger,
-    Logger,
-    MultiLogger,
-    TensorBoardLogger,
-    WandbLogger,
-)
-from memorax.networks import (
-    FeatureExtractor,
-    Network,
-    SequenceModel,
-    SequenceModelWrapper,
-)
-
-__all__ = [
-    "__version__",
-    "StreamAC",
-    "StreamACConfig",
-    "StreamACState",
+_ALGORITHM_EXPORTS = {
     "DQN",
     "DQNConfig",
     "DQNState",
@@ -71,16 +27,46 @@ __all__ = [
     "SAC",
     "SACConfig",
     "SACState",
-    "make",
-    "Network",
+    "StreamAC",
+    "StreamACConfig",
+    "StreamACState",
+}
+_NETWORK_EXPORTS = {
     "FeatureExtractor",
+    "Network",
     "SequenceModel",
     "SequenceModelWrapper",
-    "Logger",
-    "MultiLogger",
+}
+_LOGGER_EXPORTS = {
     "CheckpointLogger",
     "DashboardLogger",
     "FileLogger",
+    "Logger",
+    "MultiLogger",
     "TensorBoardLogger",
     "WandbLogger",
+}
+
+__all__ = [
+    "__version__",
+    *_ALGORITHM_EXPORTS,
+    "make",
+    *_NETWORK_EXPORTS,
+    *_LOGGER_EXPORTS,
 ]
+
+
+def __getattr__(name):
+    if name in _ALGORITHM_EXPORTS:
+        module = import_module("memorax.algorithms")
+    elif name in _NETWORK_EXPORTS:
+        module = import_module("memorax.networks")
+    elif name in _LOGGER_EXPORTS:
+        module = import_module("memorax.loggers")
+    elif name == "make":
+        module = import_module("memorax.environments")
+    else:
+        raise AttributeError(name)
+    value = getattr(module, name)
+    globals()[name] = value
+    return value

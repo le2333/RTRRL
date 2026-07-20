@@ -14,7 +14,7 @@ hidden 32, spring backend, single-env streaming (num_envs=1).
 
 import os
 import sys
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 
 _HERE = os.path.dirname(os.path.abspath(__file__))
 _EXP = os.path.dirname(_HERE)
@@ -33,10 +33,12 @@ from base.experiment import (
 )
 from memorax.environments import environment
 from memorax.environments.wrappers import (
+    MaskObservationWrapper,
     NormalizeObservationWrapper,
     NormalizeRewardWrapper,
     RecordEpisodeStatistics,
 )
+from logging_util import DummyLogger, with_logger
 
 ALGORITHM = "rtrrl"
 ENVIRONMENT = "hopper"
@@ -140,6 +142,36 @@ def make_env(cfg: RTRRLHopperConfig):
     return env, env_params
 
 
+def make_legacy_env(cfg):
+    """Construct a Memorax environment from the frozen historical schema."""
+
+    legacy_env = cfg.env_params
+    env_name = legacy_env.env_name.removeprefix("brax-")
+    init_kwargs = dict(legacy_env.init_kwargs)
+    backend = init_kwargs.pop("backend", cfg.backend)
+    env, env_params = environment.make(
+        f"brax::{env_name}",
+        mode=cfg.mode,
+        backend=backend,
+        **init_kwargs,
+    )
+    if legacy_env.obs_mask is not None and not isinstance(
+        legacy_env.obs_mask, str
+    ):
+        env = MaskObservationWrapper(env, mask=legacy_env.obs_mask)
+    env = RecordEpisodeStatistics(env)
+    if cfg.normalize_obs:
+        env = NormalizeObservationWrapper(env)
+    if cfg.normalize_reward:
+        env = NormalizeRewardWrapper(env)
+    if hasattr(env_params, "max_steps_in_episode"):
+        env_params = replace(
+            env_params,
+            max_steps_in_episode=legacy_env.max_ep_length,
+        )
+    return env, env_params
+
+
 def train(cfg: RTRRLHopperConfig, logger):
     env, env_params = make_env(cfg)
     if cfg.rtrrl_topology == "shared":
@@ -152,6 +184,41 @@ def train(cfg: RTRRLHopperConfig, logger):
             "use 'shared' or 'independent'."
         )
     train_loop(agent, cfg, logger)
+
+
+def train_legacy(cfg, logger=None):
+    """Delegate old configuration construction and lifecycle to Memorax."""
+
+    logger = logger or DummyLogger()
+    env, env_params = make_legacy_env(cfg)
+    if cfg.rtrrl_topology == "shared":
+        agent = build_rtrrl_agent(cfg, env, env_params)
+    elif cfg.rtrrl_topology == "independent":
+        agent = build_independent_rtrrl_agent(cfg, env, env_params)
+    else:
+        raise ValueError(
+            f"rtrrl_topology '{cfg.rtrrl_topology}' not supported; "
+            "use 'shared' or 'independent'."
+        )
+    return train_loop(agent, cfg, logger)
+
+
+def run_legacy_experiment(cfg):
+    """Preserve old project/run naming while using Memorax end to end."""
+
+    def wrapped(hparams, logger=DummyLogger()):
+        return train_legacy(hparams, logger)
+
+    run_name = cfg.run_name or cfg.env_params.env_name
+    with_logger(
+        wrapped,
+        cfg,
+        logger_name=cfg.logging,
+        project_name="RTRRL",
+        aim_repo=cfg.log_repo,
+        run_name=run_name,
+        hparams_type=type(cfg),
+    )
 
 
 if __name__ == "__main__":

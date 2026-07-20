@@ -38,6 +38,7 @@ from memorax.algorithms import (
 from memorax.algorithms.rtrrl.compatibility import normalize_legacy_config
 from memorax.algorithms.rtrrl.compatibility import to_component_config
 from memorax.algorithms.rtrrl.components import select_memorax_components
+from memorax.algorithms.rtrrl.entrypoint import historical_rtrrl_metrics
 from memorax.algorithms.rtrrl.heads import RTRRLTDHead
 from memorax.algorithms.rtrrl.lru import AAAI25LRU
 from memorax.algorithms.rtrrl.program import (
@@ -561,30 +562,12 @@ def _historical_rtrrl_metrics(
 ):
     """Translate a closed-program summary to the pinned AAAI25 metric schema."""
 
-    metrics = {
-        "steps": summary.steps,
-        "mean_reward": summary.mean_reward,
-        "num_episodes": summary.num_episodes,
-        "mean_delta": summary.mean_delta,
-        "mean_r_bar": summary.mean_r_bar,
-        "mean_v": summary.mean_v,
-        "total_td_loss": summary.total_td_loss,
-        "actor_loss": summary.actor_loss,
-        "critic_loss": summary.critic_loss,
-        "entropy": summary.entropy,
-        "v_targ": summary.v_targ,
-    }
-    if summary.magnitude_loss is not None:
-        metrics["magnitude_loss"] = summary.magnitude_loss
-    if log_td_lr:
-        metrics["lr/td"] = summary.learning_rate_td
-    if log_rnn_lr:
-        metrics["lr/rnn"] = summary.learning_rate_rnn
-    if log_norms:
-        metrics.update(
-            {f"norms/{key}": value for key, value in summary.norms.items()}
-        )
-    return metrics
+    return historical_rtrrl_metrics(
+        summary,
+        log_td_lr=log_td_lr,
+        log_rnn_lr=log_rnn_lr,
+        log_norms=log_norms,
+    )
 
 
 def _log_historical_rtrrl_epoch(
@@ -766,12 +749,16 @@ def train_loop(agent, cfg: ExperimentConfig, logger=DummyLogger()):
     """
     pprint(cfg, width=1)
 
-    cfg.seed = cfg.seed or int(np.random.randint(1e6))
+    seed = cfg.seed or int(np.random.randint(1_000_000))
     logger.log_params(asdict(cfg))
     if isinstance(agent, RTRRL) and agent.profile == "aaai25_strict_lru":
-        return _train_strict_rtrrl_loop(agent, cfg, logger)
+        return _train_strict_rtrrl_loop(
+            agent,
+            replace(cfg, seed=seed) if hasattr(cfg, "__dataclass_fields__") else cfg,
+            logger,
+        )
 
-    key = jax.random.key(cfg.seed)
+    key = jax.random.key(seed)
     # lox.spool wraps train/evaluate so their internal lox.log calls are
     # returned as a `logs` dict instead of being emitted to a lox sink.
     #
