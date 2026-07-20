@@ -33,10 +33,12 @@ def catalog_data(name: str = "rtrrl") -> dict[str, Any]:
                 "sdk_protocol_version": "1",
                 "defaults": {
                     "environment": {
-                        "env_name": "hopper",
-                        "backend": "brax",
-                        "observation_mode": "P",
-                        "max_episode_steps": 1000,
+                        "name": "brax-hopper",
+                        "options": {
+                            "backend": "brax",
+                            "observation_mode": "P",
+                            "max_episode_steps": 1000,
+                        },
                     },
                     "training_budget": {"env_steps": 1000},
                     "logging": {
@@ -49,6 +51,7 @@ def catalog_data(name: str = "rtrrl") -> dict[str, Any]:
                     "direction": "maximize",
                     "reduction": "last",
                 },
+                "environments": ["brax-hopper"],
                 "fields": {
                     "seed": {
                         "path": "seed",
@@ -286,7 +289,7 @@ def test_repository_descriptors_form_a_real_complete_catalog() -> None:
     assert set(catalog.scripts) == {"rtrrl", "ppo_baseline", "sac_baseline"}
     for name, descriptor in catalog.scripts.items():
         assert descriptor.name == name
-        assert descriptor.argv[:2] == ["python", f"{name}.py"]
+        assert descriptor.argv[:2] == ("python", f"{name}.py")
         assert descriptor.fields
         assert descriptor.defaults.training_budget.env_steps > 0
         assert descriptor.objective.metric

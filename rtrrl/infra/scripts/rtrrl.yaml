@@ -3,10 +3,11 @@ argv: [python, rtrrl.py, --config_path, "{config_path}"]
 sdk_protocol_version: "1"
 defaults:
   environment:
-    env_name: brax-hopper
-    backend: spring
-    observation_mode: P
-    max_episode_steps: 1000
+    name: brax-hopper
+    options:
+      backend: spring
+      observation_mode: P
+      max_episode_steps: 1000
   training_budget:
     env_steps: 2000000
   logging:
@@ -16,6 +17,7 @@ objective:
   metric: eval/rewards
   direction: maximize
   reduction: last
+environments: [brax-hopper]
 fields:
   seed:
     path: seed

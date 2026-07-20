@@ -1,14 +1,28 @@
 from __future__ import annotations
 
+import json
 import math
 from dataclasses import dataclass
 from enum import Enum
 from types import MappingProxyType
 from typing import Any, Literal, Mapping, TypeAlias
 
-from pydantic import BaseModel, ConfigDict, NonNegativeInt, PositiveInt, model_validator
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    NonNegativeInt,
+    PositiveInt,
+    field_validator,
+    model_validator,
+)
+from typing_extensions import TypeAliasType
 
 JsonScalar: TypeAlias = str | int | float | bool | None
+JsonValue = TypeAliasType(
+    "JsonValue",
+    JsonScalar | list["JsonValue"] | dict[str, "JsonValue"],
+)
 
 
 def _immutable(*_args: Any, **_kwargs: Any) -> None:
@@ -47,6 +61,34 @@ def freeze_json(value: Any) -> Any:
     if isinstance(value, list):
         return FrozenList(freeze_json(item) for item in value)
     return value
+
+
+def thaw_json(value: Any) -> Any:
+    if isinstance(value, Mapping):
+        return {key: thaw_json(item) for key, item in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [thaw_json(item) for item in value]
+    return value
+
+
+def _require_json_value(value: Any) -> None:
+    if value is None or type(value) in (str, int, bool):
+        return
+    if type(value) is float:
+        if not math.isfinite(value):
+            raise ValueError("JSON float values must be finite")
+        return
+    if type(value) is list:
+        for item in value:
+            _require_json_value(item)
+        return
+    if type(value) is dict:
+        for key, item in value.items():
+            if type(key) is not str:
+                raise TypeError("JSON object keys must be strings")
+            _require_json_value(item)
+        return
+    raise TypeError(f"unsupported JSON value: {type(value).__name__}")
 
 
 class ContractModel(BaseModel):
@@ -112,10 +154,24 @@ class ExperimentIdentity(ContractModel):
 
 
 class EnvironmentSpec(ContractModel):
-    env_name: str
-    backend: str
-    observation_mode: str
-    max_episode_steps: PositiveInt
+    name: str
+    options: dict[str, JsonValue] = Field(default_factory=dict)
+
+    @field_validator("options", mode="before")
+    @classmethod
+    def require_finite_json(cls, value: Any) -> Any:
+        _require_json_value(value)
+        json.dumps(value, allow_nan=False)
+        return value
+
+    @model_validator(mode="after")
+    def require_name(self) -> EnvironmentSpec:
+        if not self.name:
+            raise ValueError("environment name must not be empty")
+        return self
+
+    def model_post_init(self, __context: Any) -> None:
+        object.__setattr__(self, "options", freeze_json(dict(self.options)))
 
 
 class TrainingBudgetSpec(ContractModel):
@@ -182,6 +238,28 @@ class FieldDescriptor(ContractModel):
     searchable: bool = False
     constraints: FieldConstraints = FieldConstraints()
     default_search: ParameterDomain | None = None
+    choices: tuple[JsonScalar, ...] | None = None
+
+    @model_validator(mode="after")
+    def validate_choices(self) -> FieldDescriptor:
+        if self.choices is None:
+            return self
+        if not self.choices:
+            raise ValueError("choices must not be empty")
+        for index, value in enumerate(self.choices):
+            if isinstance(value, float) and not math.isfinite(value):
+                raise ValueError("choices must contain only finite values")
+            if any(value == previous for previous in self.choices[:index]):
+                raise ValueError("duplicate choice values are not allowed")
+        if not any(self.default == choice for choice in self.choices):
+            raise ValueError("default must be one of choices")
+        if isinstance(self.default_search, ContinuousDomain):
+            raise ValueError("fields with choices require a discrete default search domain")
+        if isinstance(self.default_search, DiscreteDomain):
+            for value in self.default_search.values:
+                if not any(value == choice for choice in self.choices):
+                    raise ValueError("default_search values must be one of choices")
+        return self
 
 
 class DescriptorDefaults(ContractModel):
@@ -198,11 +276,23 @@ class ObjectiveSpec(ContractModel):
 
 class ScriptDescriptor(ContractModel):
     name: str
-    argv: list[str]
+    argv: tuple[str, ...]
     sdk_protocol_version: str
     defaults: DescriptorDefaults
     objective: ObjectiveSpec
+    environments: tuple[str, ...]
     fields: dict[str, FieldDescriptor]
+
+    @model_validator(mode="after")
+    def require_unique_environments(self) -> ScriptDescriptor:
+        if not self.environments:
+            raise ValueError("environments must not be empty")
+        for index, environment in enumerate(self.environments):
+            if not environment:
+                raise ValueError("environment names must not be empty")
+            if environment in self.environments[:index]:
+                raise ValueError(f"duplicate environment '{environment}' is not allowed")
+        return self
 
 
 class ScriptCatalog(ContractModel):

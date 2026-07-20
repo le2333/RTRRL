@@ -62,17 +62,23 @@ scripts:
     sdk_protocol_version: "1"
     defaults:
       environment:
-        env_name: hopper
-        backend: spring
-        observation_mode: P
-        max_episode_steps: 1000
+        name: brax-hopper
+        options:
+          backend: spring
+          observation_mode: P
+          max_episode_steps: 1000
       training_budget: {env_steps: 2000000}
       logging: {aim_every_env_steps: 10000, rerun_every_episodes: 100}
     objective: {metric: reward, direction: maximize, reduction: last}
+    environments: [brax-hopper]
     fields: {}
 """,
         encoding="utf-8",
     )
 
     assert load_experiment(experiment_path).experiment.name == "hopper"
-    assert load_script_catalog(catalog_path).scripts["rtrrl"].argv == ["python", "-m", "train"]
+    assert load_script_catalog(catalog_path).scripts["rtrrl"].argv == (
+        "python",
+        "-m",
+        "train",
+    )

@@ -1,10 +1,12 @@
 import json
+from pathlib import Path
 
 import pytest
 
 from trainer_infra.models import (
     ContinuousSearch,
     DiscreteSearch,
+    EnvironmentSpec,
     ExperimentSpec,
     ScriptCatalog,
 )
@@ -14,66 +16,135 @@ IMAGE = "repo/image@sha256:" + "a" * 64
 OVERRIDE_IMAGE = "repo/image@sha256:" + "b" * 64
 
 
-@pytest.fixture
-def catalog() -> ScriptCatalog:
-    return ScriptCatalog.model_validate(
-        {
-            "protocol_version": "1",
-            "scripts": {
-                "rtrrl": {
-                    "name": "rtrrl",
-                    "argv": ["python", "-m", "train"],
-                    "sdk_protocol_version": "1",
-                    "defaults": {
-                        "environment": {
-                            "env_name": "hopper",
+def test_environment_is_generic_and_immutable() -> None:
+    spec = EnvironmentSpec(
+        name="memory_chain",
+        options={"length": 75, "nested": {"observe": ["query"]}},
+    )
+
+    with pytest.raises(TypeError):
+        spec.options["nested"]["observe"][0] = "answer"
+
+
+@pytest.mark.parametrize("value", [float("nan"), float("inf"), Path("x"), {1, 2}])
+def test_environment_options_reject_non_json_values(value: object) -> None:
+    with pytest.raises((TypeError, ValueError), match="JSON|finite"):
+        EnvironmentSpec(name="memory_chain", options={"bad": value})
+
+
+def catalog_data() -> dict[str, object]:
+    return {
+        "protocol_version": "1",
+        "scripts": {
+            "rtrrl": {
+                "name": "rtrrl",
+                "argv": ["python", "-m", "train"],
+                "sdk_protocol_version": "1",
+                "defaults": {
+                    "environment": {
+                        "name": "brax-hopper",
+                        "options": {
                             "backend": "spring",
                             "observation_mode": "P",
                             "max_episode_steps": 1000,
                         },
-                        "training_budget": {"env_steps": 2_000_000},
-                        "logging": {
-                            "aim_every_env_steps": 10_000,
-                            "rerun_every_episodes": 100,
+                    },
+                    "training_budget": {"env_steps": 2_000_000},
+                    "logging": {
+                        "aim_every_env_steps": 10_000,
+                        "rerun_every_episodes": 100,
+                    },
+                },
+                "objective": {
+                    "metric": "reward",
+                    "direction": "maximize",
+                    "reduction": "last",
+                },
+                "environments": ["brax-hopper"],
+                "fields": {
+                    "seed": {
+                        "path": "seed",
+                        "type": "int",
+                        "default": 0,
+                        "searchable": False,
+                        "constraints": {"ge": 0},
+                    },
+                    "topology": {
+                        "path": "topology",
+                        "type": "str",
+                        "default": "shared",
+                        "searchable": True,
+                        "default_search": {"values": ["shared", "dual"]},
+                        "choices": ["shared", "dual"],
+                    },
+                    "learning_rate": {
+                        "path": "optimizer.learning_rate",
+                        "type": "float",
+                        "default": 0.001,
+                        "searchable": True,
+                        "constraints": {"gt": 0},
+                        "default_search": {
+                            "min": 1e-5,
+                            "max": 1e-2,
+                            "scale": "log",
                         },
                     },
-                    "objective": {
-                        "metric": "reward",
-                        "direction": "maximize",
-                        "reduction": "last",
-                    },
-                    "fields": {
-                        "seed": {
-                            "path": "seed",
-                            "type": "int",
-                            "default": 0,
-                            "searchable": False,
-                            "constraints": {"ge": 0},
-                        },
-                        "topology": {
-                            "path": "topology",
-                            "type": "str",
-                            "default": "shared",
-                            "searchable": True,
-                            "default_search": {"values": ["shared", "dual"]},
-                        },
-                        "learning_rate": {
-                            "path": "optimizer.learning_rate",
-                            "type": "float",
-                            "default": 0.001,
-                            "searchable": True,
-                            "constraints": {"gt": 0},
-                            "default_search": {
-                                "min": 1e-5,
-                                "max": 1e-2,
-                                "scale": "log",
-                            },
-                        },
-                    },
-                }
-            },
-        }
-    )
+                },
+            }
+        },
+    }
+
+
+@pytest.fixture
+def catalog() -> ScriptCatalog:
+    return ScriptCatalog.model_validate(catalog_data())
+
+
+@pytest.mark.parametrize("environments", [[], ["brax-hopper", "brax-hopper"]])
+def test_descriptor_requires_non_empty_unique_environments(
+    environments: list[str],
+) -> None:
+    data = catalog_data()
+    data["scripts"]["rtrrl"]["environments"] = environments  # type: ignore[index]
+
+    with pytest.raises(ValueError, match="environments.*empty|duplicate environment"):
+        ScriptCatalog.model_validate(data)
+
+
+@pytest.mark.parametrize(
+    "choices",
+    [
+        (float("nan"),),
+        (float("inf"),),
+        (True, 1),
+        (1, 1.0),
+        ("shared", "shared"),
+    ],
+)
+def test_field_choices_are_finite_and_unique(choices: tuple[object, ...]) -> None:
+    data = catalog_data()
+    data["scripts"]["rtrrl"]["fields"]["topology"]["choices"] = choices  # type: ignore[index]
+
+    with pytest.raises(ValueError, match="choices.*finite|duplicate choice"):
+        ScriptCatalog.model_validate(data)
+
+
+@pytest.mark.parametrize(
+    ("field_key", "value"),
+    [
+        ("default", "unsupported"),
+        ("default_search", {"values": ["shared", "unsupported"]}),
+    ],
+)
+def test_descriptor_choice_restrictions_cover_defaults_and_default_search(
+    field_key: str,
+    value: object,
+) -> None:
+    data = catalog_data()
+    data["scripts"]["rtrrl"]["fields"]["topology"][field_key] = value  # type: ignore[index]
+
+    with pytest.raises(ValueError, match="topology|choice|choices"):
+        ScriptCatalog.model_validate(data)
 
 
 def resolve_one_group(
@@ -130,8 +201,32 @@ def test_group_is_independent_and_defaults_are_resolved(catalog: ScriptCatalog) 
     assert [group.name for group in resolved.groups] == ["shared", "dual"]
     assert resolved.groups[0].study_key != resolved.groups[1].study_key
     assert resolved.groups[0].parameters["seed"].fixed_value == 7
-    assert resolved.groups[0].environment.env_name == "hopper"
+    assert resolved.groups[0].environment.name == "brax-hopper"
+    assert resolved.groups[0].environment.options["backend"] == "spring"
     assert resolved.groups[0].image == IMAGE
+
+
+def test_descriptor_rejects_unlisted_environment(catalog: ScriptCatalog) -> None:
+    spec = ExperimentSpec.model_validate(
+        {
+            "experiment": {"name": "hopper"},
+            "defaults": {
+                "image": IMAGE,
+                "resources": {"profile": "gpu"},
+                "hpo": {"total_trials": 1, "configs_per_batch": 1},
+                "execution": {"runs_per_job": 1},
+            },
+            "groups": {
+                "shared": {
+                    "script": "rtrrl",
+                    "environment": {"name": "unknown", "options": {}},
+                }
+            },
+        }
+    )
+
+    with pytest.raises(ValueError, match="rtrrl.*unknown"):
+        resolve_experiment(spec, {IMAGE: catalog})
 
 
 def test_scan_unfixed_uses_default_search(catalog: ScriptCatalog) -> None:
@@ -177,6 +272,21 @@ def test_singleton_domain_is_fixed_and_not_searchable(catalog: ScriptCatalog) ->
 
     assert group.parameters["learning_rate"].fixed_value == 0.25
     assert "learning_rate" not in group.searchable_parameters()
+
+
+@pytest.mark.parametrize(
+    "parameters",
+    [
+        {"topology": {"values": ["unsupported"]}},
+        {"topology": {"values": ["shared", "unsupported"]}},
+    ],
+)
+def test_choice_restrictions_cover_fixed_and_search_domains(
+    catalog: ScriptCatalog,
+    parameters: dict[str, object],
+) -> None:
+    with pytest.raises(ValueError, match="topology.*shared.*dual"):
+        resolve_one_group(catalog, policy="explicit_scan", parameters=parameters)
 
 
 @pytest.mark.parametrize(

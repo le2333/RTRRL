@@ -38,10 +38,13 @@ def make_group(name: str = "shared") -> ResolvedGroup:
         sdk_protocol_version="1",
         objective=ObjectiveSpec(metric="reward", direction="maximize", reduction="last"),
         environment=EnvironmentSpec(
-            env_name="hopper",
-            backend="spring",
-            observation_mode="P",
-            max_episode_steps=1000,
+            name="brax-hopper",
+            options={
+                "backend": "spring",
+                "observation_mode": "P",
+                "max_episode_steps": 1000,
+                "nested": {"observe": ["query"]},
+            },
         ),
         training_budget=TrainingBudgetSpec(env_steps=100),
         logging=LoggingSpec(aim_every_env_steps=10, rerun_every_episodes=2),
@@ -166,6 +169,17 @@ def test_materialized_run_is_an_immutable_complete_snapshot() -> None:
         "seed": 7,
         "topology": "dual",
     }
+    expected_environment = {
+        "name": "brax-hopper",
+        "options": {
+            "backend": "spring",
+            "observation_mode": "P",
+            "max_episode_steps": 1000,
+            "nested": {"observe": ["query"]},
+        },
+    }
+    assert yaml.safe_load(run.config_yaml)["environment"] == expected_environment
+    assert json.loads(run.run_json)["context"]["environment"] == expected_environment
     assert json.loads(run.run_json)["context"]["run_number"] == 1
     assert run.config_sha256 == hashlib.sha256(run.config_yaml.encode()).hexdigest()
     assert run.run_sha256 == hashlib.sha256(run.run_json.encode()).hexdigest()
@@ -210,6 +224,19 @@ def test_canonical_serialization_and_hashes_ignore_mapping_input_order() -> None
         reordered_group,
         "metadata",
         MappingProxyType({"owner": {"name": "research"}, "labels": ["baseline"]}),
+    )
+    object.__setattr__(
+        reordered_group,
+        "environment",
+        EnvironmentSpec(
+            name="brax-hopper",
+            options={
+                "nested": {"observe": ["query"]},
+                "max_episode_steps": 1000,
+                "observation_mode": "P",
+                "backend": "spring",
+            },
+        ),
     )
     second = materialize_run(
         reordered_group,

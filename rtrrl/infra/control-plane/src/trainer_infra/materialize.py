@@ -5,7 +5,13 @@ from typing import Mapping
 from optuna.trial import Trial
 
 from trainer_infra.identities import canonical_json, canonical_yaml, sha256_text
-from trainer_infra.models import ConcreteRun, JsonScalar, ResolvedGroup, freeze_json
+from trainer_infra.models import (
+    ConcreteRun,
+    JsonScalar,
+    ResolvedGroup,
+    freeze_json,
+    thaw_json,
+)
 
 
 def materialize_run(
@@ -33,8 +39,12 @@ def materialize_run(
     run_name = f"{group.name}-{run_number:04d}"
     run_id = f"{group.study_key}:{run_number:04d}"
 
+    environment = {
+        "name": group.environment.name,
+        "options": thaw_json(group.environment.options),
+    }
     config = {
-        "environment": group.environment.model_dump(mode="json"),
+        "environment": environment,
         "logging": group.logging.model_dump(mode="json"),
         "parameters": final,
         "training_budget": group.training_budget.model_dump(mode="json"),
@@ -44,6 +54,7 @@ def materialize_run(
 
     experiment_id = group.study_key.rsplit(":", 1)[0]
     context = {
+        "environment": environment,
         "experiment_id": experiment_id,
         "group": group.name,
         "run_id": run_id,

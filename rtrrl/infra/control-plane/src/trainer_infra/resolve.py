@@ -82,6 +82,13 @@ def _validate_value(
         raise ValueError(
             f"group '{group_name}' field '{field_name}' violates declared constraints"
         )
+    if descriptor.choices is not None and not any(
+        value == choice for choice in descriptor.choices
+    ):
+        raise ValueError(
+            f"group '{group_name}' field '{field_name}' must be one of "
+            f"{list(descriptor.choices)!r}"
+        )
 
 
 def _to_search(
@@ -241,6 +248,11 @@ def resolve_experiment(
             configuration = ResolvedConfiguration.model_validate(merged)
         except ValueError as error:
             raise ValueError(f"group '{group_name}' has invalid configuration: {error}") from error
+        if configuration.environment.name not in descriptor.environments:
+            raise ValueError(
+                f"group '{group_name}' script '{descriptor.name}' does not support "
+                f"environment '{configuration.environment.name}'"
+            )
 
         metadata = merge_mapping(experiment_metadata, group.metadata)
         metadata = merge_mapping(metadata, override_metadata)

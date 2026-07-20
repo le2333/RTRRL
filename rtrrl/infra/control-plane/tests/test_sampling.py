@@ -72,10 +72,12 @@ def make_group(
         sdk_protocol_version="1",
         objective=ObjectiveSpec(metric="reward", direction="maximize", reduction="last"),
         environment=EnvironmentSpec(
-            env_name="hopper",
-            backend="spring",
-            observation_mode="P",
-            max_episode_steps=1000,
+            name="brax-hopper",
+            options={
+                "backend": "spring",
+                "observation_mode": "P",
+                "max_episode_steps": 1000,
+            },
         ),
         training_budget=TrainingBudgetSpec(env_steps=100),
         logging=LoggingSpec(aim_every_env_steps=10, rerun_every_episodes=2),
