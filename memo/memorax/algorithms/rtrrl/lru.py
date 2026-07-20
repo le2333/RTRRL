@@ -256,6 +256,41 @@ class AAAI25LRU:
             ),
         )
 
+    def _validate_credit_path(
+        self,
+        credit_state: LRUCreditState,
+        carry: LRUCarry,
+        inputs: Array,
+        cotangent: Array | None = None,
+    ) -> None:
+        expected_shapes = {
+            "credit_state.lambda_sensitivity": (self.hidden_dim,),
+            "credit_state.gamma_sensitivity": (self.hidden_dim,),
+            "credit_state.B_sensitivity": (self.hidden_dim, self.input_dim),
+            "carry.hidden": (self.hidden_dim,),
+            "inputs": (self.input_dim,),
+        }
+        actual_shapes = {
+            "credit_state.lambda_sensitivity": credit_state.lambda_sensitivity.shape,
+            "credit_state.gamma_sensitivity": credit_state.gamma_sensitivity.shape,
+            "credit_state.B_sensitivity": credit_state.B_sensitivity.shape,
+            "carry.hidden": carry.hidden.shape,
+            "inputs": inputs.shape,
+        }
+        if cotangent is not None:
+            expected_shapes["cotangent"] = (self.output_dim,)
+            actual_shapes["cotangent"] = cotangent.shape
+        mismatches = [
+            f"{name}={actual_shapes[name]} (expected {expected})"
+            for name, expected in expected_shapes.items()
+            if actual_shapes[name] != expected
+        ]
+        if mismatches:
+            raise ValueError(
+                "online LRU credit requires unbatched pinned shapes; "
+                + ", ".join(mismatches)
+            )
+
     def credit(
         self,
         params: Mapping[str, Array],
@@ -264,6 +299,7 @@ class AAAI25LRU:
         inputs: Array,
         cotangent: Array,
     ) -> tuple[LRUCreditState, dict[str, Array]]:
+        self._validate_credit_path(credit_state, carry, inputs, cotangent)
         next_credit = self._update_credit(params, credit_state, carry, inputs)
         next_carry, _ = self.forward(params, carry, inputs, reset=False)
 
@@ -323,6 +359,7 @@ class AAAI25LRU:
         reset: Array | bool,
     ) -> tuple[LRUCreditState, LRUCarry, Array]:
         """Run the verified forward under the compact online-credit VJP."""
+        self._validate_credit_path(credit_state, carry, inputs)
         return _forward_with_credit(
             self, params, credit_state, carry, inputs, reset
         )

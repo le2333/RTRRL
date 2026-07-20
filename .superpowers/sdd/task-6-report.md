@@ -156,3 +156,114 @@ $ git diff --check
   upstream structural defect.
 - The custom VJP emits JAX's complex-to-real cotangent warning in the pinned
   0.4.38 runtime. Values and gradients remain finite and oracle-exact.
+
+## Review Follow-Up: Explicit Credit Boundary and Full Custom VJP
+
+### RED
+
+Shape-contract and compiled-backward tests were added before production
+changes. The local shape-only RED produced two failures:
+
+```text
+test_batched_credit_is_rejected_before_calculation
+  expected "credit requires unbatched"
+  got a later incompatible-broadcast failure
+
+test_batched_custom_vjp_is_rejected_before_calculation
+  failed: DID NOT RAISE ValueError
+```
+
+The complete pre-fix review suite then ran on AWS Batch:
+
+- Job: `fb5cdb84-3346-45be-9211-b64859067a4a`
+- Resources: 4 vCPU, 8192 MiB on `c7a.2xlarge`
+- Runtime: Python 3.12, JAX/JAXLIB 0.4.38, Flax 0.10.2, CPU
+- Result: three expected failures
+
+The two boundary failures matched the local RED. The new compiled custom-VJP
+test also demonstrated that exact eager-versus-JIT output equality was too
+strict due a small float32 compiled-rounding difference (`2.38418579e-07`);
+its final contract uses the same narrow measured numerical policy as other
+compiled paths.
+
+### Explicit Unbatched Contract
+
+Both `credit` and `forward_with_credit` now validate, before recurrence,
+forward, or VJP work:
+
+- lambda and gamma sensitivity shapes `(hidden_dim,)`;
+- B sensitivity shape `(hidden_dim, input_dim)`;
+- carry shape `(hidden_dim,)`;
+- input shape `(input_dim,)`; and
+- credit cotangent shape `(output_dim,)`.
+
+Any batched or otherwise mismatched leaf raises `ValueError` beginning with
+`online LRU credit requires unbatched pinned shapes` and reports every
+mismatched leaf. The verified `forward` method is unchanged and remains
+batched/unbatched.
+
+### Oracle Extension
+
+The fixture was regenerated in the clean pinned runtime to capture, after each
+step, the ordinary custom-VJP outputs that AAAI25 defines:
+
+- `C_real`, `C_img`, and `D` gradients;
+- input gradient; and
+- hidden, lambda-sensitivity, gamma-sensitivity, and B-sensitivity carry
+  gradients.
+
+Final review capture:
+
+- AWS Batch job: `9488ff92-5fab-4f23-8e69-046fe94578f9`
+- Status: `SUCCEEDED`
+- Source commit: `4301943c349171d828d0fcf3e40944c286451415`
+- Runtime: Python 3.12.13, JAX/JAXLIB 0.4.38, Flax 0.10.2, CPU
+- Resources: 4 vCPU, 8192 MiB on `c7a.2xlarge`
+- NPZ size: 28372 bytes
+- Manifest size: 15079 bytes
+- NPZ SHA-256:
+  `dc4a21d037ac42f966a90cffcec342df09c477d7a694a0665d7025d11096ed29`
+
+The compiled wrapper is compared both to these actual pinned leaves and to an
+independent `jax.vjp(AAAI25LRU.forward)` pullback. The latter is the correct
+merge-boundary invariant because the pinned backward first obtains the
+ordinary VJP, then overwrites only the five recurrent parameter leaves. Thus
+`C_real`, `C_img`, `D`, input, and carry must remain the ordinary forward VJP.
+
+### Compiled Backward GREEN
+
+Focused review GREEN:
+
+- AWS Batch job: `594fc8a8-2179-449d-974f-8177dc61fd38`
+- Status: `SUCCEEDED`
+- Resources: 4 vCPU, 8192 MiB on `c7a.2xlarge`
+- Runtime: Python 3.12, JAX/JAXLIB 0.4.38, Flax 0.10.2, CPU
+- Result: `13 passed`
+
+The test runs `jax.vjp(forward_with_credit)` inside `jax.jit`, supplies the
+nontrivial second-step cotangent, and validates the full parameter dictionary,
+`LRUCreditState`, `LRUCarry`, input gradient, and float0 reset gradient.
+
+```text
+ordinary params vs pinned oracle max abs   2.98023224e-08
+ordinary params vs standard VJP max abs    2.98023224e-08
+carry vs standard VJP max abs               0
+input vs pinned/standard VJP max abs         2.38418579e-07
+recurrent gradients vs pinned oracle max abs 0
+```
+
+Full RTRRL parity GREEN:
+
+- AWS Batch job: `4827734a-6b9b-4409-8082-ff664ede4ffa`
+- Status: `SUCCEEDED`
+- Resources: 4 vCPU, 8192 MiB on `c7a.2xlarge`
+- Result: `56 passed`
+
+Fresh static checks:
+
+```text
+ruff: all checks passed
+pyright: 0 errors, 0 warnings, 0 informations
+compileall: exit 0
+git diff --check: exit 0
+```

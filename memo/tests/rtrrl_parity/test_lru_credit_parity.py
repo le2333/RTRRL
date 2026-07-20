@@ -56,6 +56,26 @@ def _oracle_recurrent_gradients(arrays, step: int) -> dict[str, jax.Array]:
     }
 
 
+def _oracle_ordinary_gradients(arrays, step: int) -> dict[str, jax.Array]:
+    return {
+        name: jnp.asarray(arrays[f"credit/step_{step}/grad/{name}"])
+        for name in ("C_real", "C_img", "D")
+    }
+
+
+def _oracle_state_gradient(arrays, step: int):
+    prefix = f"credit/step_{step}/carry_gradient"
+    return lru_module.LRUCreditState(
+        lambda_sensitivity=jnp.asarray(
+            arrays[f"{prefix}/lambda_sensitivity"]
+        ),
+        gamma_sensitivity=jnp.asarray(
+            arrays[f"{prefix}/gamma_sensitivity"]
+        ),
+        B_sensitivity=jnp.asarray(arrays[f"{prefix}/B_sensitivity"]),
+    )
+
+
 def _max_abs_difference(actual, expected) -> float:
     differences = [
         np.max(np.abs(np.asarray(left) - np.asarray(right)), initial=0.0)
@@ -64,6 +84,34 @@ def _max_abs_difference(actual, expected) -> float:
         )
     ]
     return float(max(differences, default=0.0))
+
+
+def test_batched_credit_is_rejected_before_calculation():
+    arrays, _ = load_oracle()
+    component = AAAI25LRU(input_dim=4, hidden_dim=2, output_dim=2)
+
+    with pytest.raises(ValueError, match="credit requires unbatched"):
+        component.credit(
+            _oracle_params(arrays),
+            _zero_credit((1,)),
+            LRUCarry(hidden=jnp.asarray(arrays["lru/carry_before"])),
+            jnp.asarray(arrays["lru/input"]),
+            jnp.asarray(arrays["credit/step_1/cotangent"])[None, :],
+        )
+
+
+def test_batched_custom_vjp_is_rejected_before_calculation():
+    arrays, _ = load_oracle()
+    component = AAAI25LRU(input_dim=4, hidden_dim=2, output_dim=2)
+
+    with pytest.raises(ValueError, match="credit requires unbatched"):
+        component.forward_with_credit(
+            _oracle_params(arrays),
+            _zero_credit((1,)),
+            LRUCarry(hidden=jnp.asarray(arrays["lru/carry_before"])),
+            jnp.asarray(arrays["lru/input"]),
+            jnp.array(False),
+        )
 
 
 def test_two_step_credit_states_and_recurrent_gradients_match_oracle():
@@ -160,6 +208,129 @@ def test_custom_vjp_preserves_forward_values_and_uses_online_credit():
         {name: params_grad[name] for name in _oracle_recurrent_gradients(arrays, 2)},
         _oracle_recurrent_gradients(arrays, 2),
         (2e-6, 2e-7),
+    )
+
+
+def test_jitted_custom_vjp_backward_preserves_ordinary_cotangents():
+    arrays, _ = load_oracle()
+    component = AAAI25LRU(input_dim=4, hidden_dim=2, output_dim=2)
+    params = _oracle_params(arrays)
+    state = _oracle_credit_state(arrays, 1)
+    carry = LRUCarry(hidden=jnp.asarray(arrays["lru/unbatched/carry_after"]))
+    inputs = jnp.asarray(arrays["lru/next/input"])[0]
+    output_cotangent = jnp.asarray(arrays["credit/step_2/cotangent"])
+
+    def ordinary_forward(ordinary_params, ordinary_carry, ordinary_inputs):
+        return component.forward(
+            ordinary_params,
+            ordinary_carry,
+            ordinary_inputs,
+            reset=jnp.array(False),
+        )
+
+    ordinary_output, ordinary_pullback = jax.vjp(
+        ordinary_forward, params, carry, inputs
+    )
+    zero_carry = jax.tree.map(jnp.zeros_like, ordinary_output[0])
+    expected_params, expected_carry, expected_inputs = ordinary_pullback(
+        (zero_carry, output_cotangent)
+    )
+
+    @jax.jit
+    def compiled_backward(compiled_params, compiled_state, compiled_carry, x, dy):
+        primal, pullback = jax.vjp(
+            component.forward_with_credit,
+            compiled_params,
+            compiled_state,
+            compiled_carry,
+            x,
+            jnp.array(False),
+        )
+        next_state, next_carry, _ = primal
+        cotangents = (
+            jax.tree.map(jnp.zeros_like, next_state),
+            jax.tree.map(jnp.zeros_like, next_carry),
+            dy,
+        )
+        return primal, pullback(cotangents)
+
+    (next_state, next_carry, output), gradients = compiled_backward(
+        params, state, carry, inputs, output_cotangent
+    )
+    (
+        params_gradient,
+        state_gradient,
+        carry_gradient,
+        input_gradient,
+        reset_gradient,
+    ) = gradients
+
+    assert isinstance(next_state, lru_module.LRUCreditState)
+    assert isinstance(next_carry, LRUCarry)
+    assert isinstance(state_gradient, lru_module.LRUCreditState)
+    assert isinstance(carry_gradient, LRUCarry)
+    assert set(params_gradient) == set(params)
+    assert reset_gradient.dtype == jax.dtypes.float0
+    assert_tree_close(
+        (next_carry, output),
+        component.forward(params, carry, inputs, reset=False),
+        (2e-6, 2e-7),
+    )
+    assert_tree_close(
+        {
+            name: params_gradient[name]
+            for name in ("nu_log", "theta_log", "gamma_log", "B_real", "B_img")
+        },
+        _oracle_recurrent_gradients(arrays, 2),
+        (2e-6, 2e-7),
+    )
+    ordinary_params_gradient = {
+        name: params_gradient[name] for name in ("C_real", "C_img", "D")
+    }
+    oracle_ordinary_gradient = _oracle_ordinary_gradients(arrays, 2)
+    standard_ordinary_gradient = {
+        name: expected_params[name] for name in ("C_real", "C_img", "D")
+    }
+    assert_tree_close(
+        ordinary_params_gradient, oracle_ordinary_gradient, (2e-6, 2e-7)
+    )
+    assert_tree_close(
+        ordinary_params_gradient,
+        standard_ordinary_gradient,
+        (2e-6, 2e-7),
+    )
+    assert_tree_close(
+        carry_gradient,
+        LRUCarry(
+            hidden=jnp.asarray(
+                arrays["credit/step_2/carry_gradient/hidden"]
+            )
+        ),
+        "exact",
+    )
+    assert_tree_close(carry_gradient, expected_carry, "exact")
+    assert_tree_close(
+        input_gradient,
+        jnp.asarray(arrays["credit/step_2/input_gradient"]),
+        (2e-6, 2e-7),
+    )
+    assert_tree_close(input_gradient, expected_inputs, (2e-6, 2e-7))
+    assert_tree_close(
+        state_gradient,
+        _oracle_state_gradient(arrays, 2),
+        "exact",
+    )
+    assert_tree_close(
+        state_gradient,
+        jax.tree.map(jnp.zeros_like, state_gradient),
+        "exact",
+    )
+    print(
+        "CUSTOM_VJP_JIT_MAX "
+        f"ordinary_oracle={_max_abs_difference(ordinary_params_gradient, oracle_ordinary_gradient):.9g} "
+        f"ordinary_standard={_max_abs_difference(ordinary_params_gradient, standard_ordinary_gradient):.9g} "
+        f"carry={_max_abs_difference(carry_gradient, expected_carry):.9g} "
+        f"input={_max_abs_difference(input_gradient, expected_inputs):.9g}"
     )
 
 

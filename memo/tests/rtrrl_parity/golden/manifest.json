@@ -31,24 +31,40 @@
     "credit/after_step_1",
     "credit/after_step_2",
     "credit/step_1/B_sensitivity",
+    "credit/step_1/carry_gradient/B_sensitivity",
+    "credit/step_1/carry_gradient/gamma_sensitivity",
+    "credit/step_1/carry_gradient/hidden",
+    "credit/step_1/carry_gradient/lambda_sensitivity",
     "credit/step_1/cotangent",
     "credit/step_1/gamma_sensitivity",
     "credit/step_1/grad/B_img",
     "credit/step_1/grad/B_real",
+    "credit/step_1/grad/C_img",
+    "credit/step_1/grad/C_real",
+    "credit/step_1/grad/D",
     "credit/step_1/grad/gamma_log",
     "credit/step_1/grad/nu_log",
     "credit/step_1/grad/theta_log",
     "credit/step_1/hidden_cotangent",
+    "credit/step_1/input_gradient",
     "credit/step_1/lambda_sensitivity",
     "credit/step_2/B_sensitivity",
+    "credit/step_2/carry_gradient/B_sensitivity",
+    "credit/step_2/carry_gradient/gamma_sensitivity",
+    "credit/step_2/carry_gradient/hidden",
+    "credit/step_2/carry_gradient/lambda_sensitivity",
     "credit/step_2/cotangent",
     "credit/step_2/gamma_sensitivity",
     "credit/step_2/grad/B_img",
     "credit/step_2/grad/B_real",
+    "credit/step_2/grad/C_img",
+    "credit/step_2/grad/C_real",
+    "credit/step_2/grad/D",
     "credit/step_2/grad/gamma_log",
     "credit/step_2/grad/nu_log",
     "credit/step_2/grad/theta_log",
     "credit/step_2/hidden_cotangent",
+    "credit/step_2/input_gradient",
     "credit/step_2/lambda_sensitivity",
     "heads/actor_loc",
     "heads/actor_output",
@@ -129,6 +145,31 @@
         4
       ]
     },
+    "credit/step_1/carry_gradient/B_sensitivity": {
+      "dtype": "complex64",
+      "shape": [
+        2,
+        4
+      ]
+    },
+    "credit/step_1/carry_gradient/gamma_sensitivity": {
+      "dtype": "complex64",
+      "shape": [
+        2
+      ]
+    },
+    "credit/step_1/carry_gradient/hidden": {
+      "dtype": "complex64",
+      "shape": [
+        2
+      ]
+    },
+    "credit/step_1/carry_gradient/lambda_sensitivity": {
+      "dtype": "complex64",
+      "shape": [
+        2
+      ]
+    },
     "credit/step_1/cotangent": {
       "dtype": "float32",
       "shape": [
@@ -149,6 +190,27 @@
       ]
     },
     "credit/step_1/grad/B_real": {
+      "dtype": "float32",
+      "shape": [
+        2,
+        4
+      ]
+    },
+    "credit/step_1/grad/C_img": {
+      "dtype": "float32",
+      "shape": [
+        2,
+        2
+      ]
+    },
+    "credit/step_1/grad/C_real": {
+      "dtype": "float32",
+      "shape": [
+        2,
+        2
+      ]
+    },
+    "credit/step_1/grad/D": {
       "dtype": "float32",
       "shape": [
         2,
@@ -177,6 +239,12 @@
       "dtype": "complex64",
       "shape": []
     },
+    "credit/step_1/input_gradient": {
+      "dtype": "float32",
+      "shape": [
+        4
+      ]
+    },
     "credit/step_1/lambda_sensitivity": {
       "dtype": "complex64",
       "shape": [
@@ -188,6 +256,31 @@
       "shape": [
         2,
         4
+      ]
+    },
+    "credit/step_2/carry_gradient/B_sensitivity": {
+      "dtype": "complex64",
+      "shape": [
+        2,
+        4
+      ]
+    },
+    "credit/step_2/carry_gradient/gamma_sensitivity": {
+      "dtype": "complex64",
+      "shape": [
+        2
+      ]
+    },
+    "credit/step_2/carry_gradient/hidden": {
+      "dtype": "complex64",
+      "shape": [
+        2
+      ]
+    },
+    "credit/step_2/carry_gradient/lambda_sensitivity": {
+      "dtype": "complex64",
+      "shape": [
+        2
       ]
     },
     "credit/step_2/cotangent": {
@@ -216,6 +309,27 @@
         4
       ]
     },
+    "credit/step_2/grad/C_img": {
+      "dtype": "float32",
+      "shape": [
+        2,
+        2
+      ]
+    },
+    "credit/step_2/grad/C_real": {
+      "dtype": "float32",
+      "shape": [
+        2,
+        2
+      ]
+    },
+    "credit/step_2/grad/D": {
+      "dtype": "float32",
+      "shape": [
+        2,
+        4
+      ]
+    },
     "credit/step_2/grad/gamma_log": {
       "dtype": "float32",
       "shape": [
@@ -237,6 +351,12 @@
     "credit/step_2/hidden_cotangent": {
       "dtype": "complex64",
       "shape": []
+    },
+    "credit/step_2/input_gradient": {
+      "dtype": "float32",
+      "shape": [
+        4
+      ]
     },
     "credit/step_2/lambda_sensitivity": {
       "dtype": "complex64",
@@ -641,7 +761,17 @@
       "theta_log",
       "gamma_log",
       "B_real",
-      "B_img"
+      "B_img",
+      "C_real",
+      "C_img",
+      "D"
+    ],
+    "ordinary_cotangents": [
+      "input_gradient",
+      "carry_gradient/hidden",
+      "carry_gradient/lambda_sensitivity",
+      "carry_gradient/gamma_sensitivity",
+      "carry_gradient/B_sensitivity"
     ],
     "state_layout": [
       "lambda_sensitivity",

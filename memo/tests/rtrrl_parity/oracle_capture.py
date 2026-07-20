@@ -182,14 +182,22 @@ def _capture_arrays(seed: int) -> tuple[dict[str, np.ndarray], dict[str, str]]:
         lru_unbatched_carry_before,
         lru_unbatched_input,
     )
-    credit_variables_grad_1, _, _ = credit_pullback_1(credit_cotangent_1)
+    (
+        credit_variables_grad_1,
+        credit_carry_grad_1,
+        credit_input_grad_1,
+    ) = credit_pullback_1(credit_cotangent_1)
     _, credit_pullback_2 = jax.vjp(
         apply_lru_output,
         lru_variables,
         credit_carry_after_1,
         lru_unbatched_input_2,
     )
-    credit_variables_grad_2, _, _ = credit_pullback_2(credit_cotangent_2)
+    (
+        credit_variables_grad_2,
+        credit_carry_grad_2,
+        credit_input_grad_2,
+    ) = credit_pullback_2(credit_cotangent_2)
     credit_cell_grad_1 = credit_variables_grad_1["params"]["OnlineLRUCell_0"][
         "LRUCell_0"
     ]
@@ -398,9 +406,47 @@ def _capture_arrays(seed: int) -> tuple[dict[str, np.ndarray], dict[str, str]]:
             for name in ("nu_log", "theta_log", "gamma_log", "B_real", "B_img")
         },
         **{
+            f"credit/step_1/grad/{name}": np.asarray(
+                credit_variables_grad_1["params"][name]
+            )
+            for name in ("C_real", "C_img", "D")
+        },
+        "credit/step_1/input_gradient": np.asarray(credit_input_grad_1),
+        "credit/step_1/carry_gradient/hidden": np.asarray(
+            credit_carry_grad_1[0]
+        ),
+        "credit/step_1/carry_gradient/lambda_sensitivity": np.asarray(
+            credit_carry_grad_1[1][0]
+        ),
+        "credit/step_1/carry_gradient/gamma_sensitivity": np.asarray(
+            credit_carry_grad_1[1][1]
+        ),
+        "credit/step_1/carry_gradient/B_sensitivity": np.asarray(
+            credit_carry_grad_1[1][2]
+        ),
+        **{
             f"credit/step_2/grad/{name}": np.asarray(credit_cell_grad_2[name])
             for name in ("nu_log", "theta_log", "gamma_log", "B_real", "B_img")
         },
+        **{
+            f"credit/step_2/grad/{name}": np.asarray(
+                credit_variables_grad_2["params"][name]
+            )
+            for name in ("C_real", "C_img", "D")
+        },
+        "credit/step_2/input_gradient": np.asarray(credit_input_grad_2),
+        "credit/step_2/carry_gradient/hidden": np.asarray(
+            credit_carry_grad_2[0]
+        ),
+        "credit/step_2/carry_gradient/lambda_sensitivity": np.asarray(
+            credit_carry_grad_2[1][0]
+        ),
+        "credit/step_2/carry_gradient/gamma_sensitivity": np.asarray(
+            credit_carry_grad_2[1][1]
+        ),
+        "credit/step_2/carry_gradient/B_sensitivity": np.asarray(
+            credit_carry_grad_2[1][2]
+        ),
         "init/action": np.asarray(initial_action),
         "init/value": np.asarray(value),
         "step/td_error": np.asarray(td_error),
@@ -501,6 +547,16 @@ def main(
                 "gamma_log",
                 "B_real",
                 "B_img",
+                "C_real",
+                "C_img",
+                "D",
+            ],
+            "ordinary_cotangents": [
+                "input_gradient",
+                "carry_gradient/hidden",
+                "carry_gradient/lambda_sensitivity",
+                "carry_gradient/gamma_sensitivity",
+                "carry_gradient/B_sensitivity",
             ],
             "cotangents": [
                 "credit/step_1/cotangent",
