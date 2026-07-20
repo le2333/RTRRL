@@ -1,5 +1,6 @@
 import json
 import os
+import runpy
 import subprocess
 import sys
 from pathlib import Path
@@ -10,6 +11,22 @@ import pytest
 from .assertions import assert_tree_close, flatten_with_paths
 from . import oracle_capture
 from .oracle_capture import SOURCE_COMMIT, load_oracle
+
+
+def test_rtrrl_public_exports_remain_stable():
+    from memorax.algorithms import RTRRL, RTRRLConfig, RTRRLState
+    from memorax.algorithms.rtrrl import _find_leaf, _tree_norm
+
+    online_ac_conftest = Path(__file__).parents[1] / "online_ac" / "conftest.py"
+    build_rtrrl_agent = runpy.run_path(str(online_ac_conftest))["build_rtrrl_agent"]
+    agent = build_rtrrl_agent(fresh_trace=True)
+
+    assert RTRRL.__name__ == "RTRRL"
+    assert RTRRLConfig.__name__ == "RTRRLConfig"
+    assert RTRRLState.__name__ == "RTRRLState"
+    assert callable(_find_leaf)
+    assert callable(_tree_norm)
+    assert isinstance(agent, RTRRL)
 
 
 def test_oracle_manifest_pins_source_and_runtime():
