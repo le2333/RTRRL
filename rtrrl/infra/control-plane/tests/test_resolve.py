@@ -32,6 +32,21 @@ def test_environment_options_reject_non_json_values(value: object) -> None:
         EnvironmentSpec(name="memory_chain", options={"bad": value})
 
 
+@pytest.mark.parametrize(
+    ("options", "path"),
+    [
+        ({"nested": {"bad": float("nan")}}, r"options\.nested\.bad"),
+        ({"nested": [{"bad": Path("x")}]}, r"options\.nested\[0\]\.bad"),
+    ],
+)
+def test_environment_option_errors_include_nested_path(
+    options: dict[str, object],
+    path: str,
+) -> None:
+    with pytest.raises((TypeError, ValueError), match=path):
+        EnvironmentSpec(name="memory_chain", options=options)
+
+
 def catalog_data() -> dict[str, object]:
     return {
         "protocol_version": "1",
@@ -287,6 +302,24 @@ def test_choice_restrictions_cover_fixed_and_search_domains(
 ) -> None:
     with pytest.raises(ValueError, match="topology.*shared.*dual"):
         resolve_one_group(catalog, policy="explicit_scan", parameters=parameters)
+
+
+def test_choices_reject_continuous_experiment_domain(catalog: ScriptCatalog) -> None:
+    data = catalog.model_dump()
+    learning_rate = data["scripts"]["rtrrl"]["fields"]["learning_rate"]
+    learning_rate["choices"] = [0.001, 0.01]
+    learning_rate["default_search"] = {"values": [0.001, 0.01]}
+    restricted_catalog = ScriptCatalog.model_validate(data)
+
+    with pytest.raises(
+        ValueError,
+        match=r"group 'shared'.*field 'learning_rate'.*choices.*discrete.*singleton",
+    ):
+        resolve_one_group(
+            restricted_catalog,
+            policy="explicit_scan",
+            parameters={"learning_rate": {"min": 0.001, "max": 0.01}},
+        )
 
 
 @pytest.mark.parametrize(

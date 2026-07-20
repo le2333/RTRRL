@@ -110,6 +110,11 @@ def _to_search(
             )
         return DiscreteSearch(tuple(domain.values))
 
+    if descriptor.choices is not None:
+        raise ValueError(
+            f"group '{group_name}' field '{field_name}' has choices and only accepts "
+            "a discrete domain or singleton value"
+        )
     if descriptor.type not in ("int", "float"):
         raise ValueError(
             f"group '{group_name}' field '{field_name}' cannot use a continuous domain"

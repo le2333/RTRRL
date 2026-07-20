@@ -71,24 +71,24 @@ def thaw_json(value: Any) -> Any:
     return value
 
 
-def _require_json_value(value: Any) -> None:
+def _require_json_value(value: Any, path: str) -> None:
     if value is None or type(value) in (str, int, bool):
         return
     if type(value) is float:
         if not math.isfinite(value):
-            raise ValueError("JSON float values must be finite")
+            raise ValueError(f"{path}: JSON float values must be finite")
         return
     if type(value) is list:
-        for item in value:
-            _require_json_value(item)
+        for index, item in enumerate(value):
+            _require_json_value(item, f"{path}[{index}]")
         return
     if type(value) is dict:
         for key, item in value.items():
             if type(key) is not str:
-                raise TypeError("JSON object keys must be strings")
-            _require_json_value(item)
+                raise TypeError(f"{path}: JSON object keys must be strings")
+            _require_json_value(item, f"{path}.{key}")
         return
-    raise TypeError(f"unsupported JSON value: {type(value).__name__}")
+    raise TypeError(f"{path}: unsupported JSON value: {type(value).__name__}")
 
 
 class ContractModel(BaseModel):
@@ -160,7 +160,7 @@ class EnvironmentSpec(ContractModel):
     @field_validator("options", mode="before")
     @classmethod
     def require_finite_json(cls, value: Any) -> Any:
-        _require_json_value(value)
+        _require_json_value(value, "options")
         json.dumps(value, allow_nan=False)
         return value
 
