@@ -8,10 +8,12 @@ This specification replaces the fixed single-CPU/single-GPU queue topology in
 job-definition revisions, observability, S3 exchange, and experiment semantics
 remain unchanged.
 
-The migration creates four purpose-specific queues while reusing four validated
-compute environments. Development tests and formal experiments share the same
-elastic capacity pools but use different queues and scheduling priorities.
-Fractional G6f instances are explicitly outside this version.
+The migration creates eight purpose-and-profile-specific queues while reusing
+four validated compute environments. Development tests and formal experiments
+share the same elastic capacity pools but use different queues and scheduling
+priorities. Each CPU queue binds exactly one environment so a selected profile
+guarantees its EC2 instance type. Fractional G6f instances are explicitly
+outside this version.
 
 ## Region and Account
 
@@ -50,19 +52,24 @@ reserved for or preempted by another queue.
 
 ## Job Queues
 
-The migration creates exactly four queues:
+The migration creates exactly eight queues:
 
-| Queue | Priority | Ordered compute environments |
+| Queue | Priority | Compute environment |
 | --- | ---: | --- |
-| `dev-cpu-queue` | 10 | c7am, c7al, c7ax |
-| `run-cpu-queue` | 100 | c7am, c7al, c7ax |
+| `dev-cpu-c7am-queue` | 10 | c7am |
+| `dev-cpu-c7al-queue` | 10 | c7al |
+| `dev-cpu-c7ax-queue` | 10 | c7ax |
+| `run-cpu-c7am-queue` | 100 | c7am |
+| `run-cpu-c7al-queue` | 100 | c7al |
+| `run-cpu-c7ax-queue` | 100 | c7ax |
 | `dev-gpu-queue` | 10 | g6x |
 | `run-gpu-queue` | 100 | g6x |
 
-The complete compute-environment ARNs are stored and validated. CPU order is
-smallest to largest so a fitting smaller instance is preferred. A job that
-cannot fit the vCPU or memory of a smaller instance remains eligible for the
-next environment.
+The complete compute-environment ARNs are stored and validated. Queue
+separation is required because AWS Batch jobs can request vCPU and memory but
+cannot select one compute environment from a multi-environment queue. Binding
+one environment per queue prevents a c7am request from falling back to c7al or
+c7ax and makes the resource profile an exact instance-type contract.
 
 Queue priority applies only while jobs are waiting to be scheduled. A pending
 run job is preferred over a pending dev job when they compete for a shared
@@ -82,10 +89,12 @@ The facility exposes four resource profiles:
 
 Users select a resource profile, not an AWS queue name.
 
-- `trainer-heavy-test` routes `c7am`, `c7al`, and `c7ax` to
-  `dev-cpu-queue`, and `g6x` to `dev-gpu-queue`.
-- Formal `trainerctl run` routes CPU profiles to `run-cpu-queue` and `g6x`
-  to `run-gpu-queue`.
+- `trainer-heavy-test` routes c7am/c7al/c7ax to
+  `dev-cpu-c7am-queue`/`dev-cpu-c7al-queue`/`dev-cpu-c7ax-queue`
+  respectively, and g6x to `dev-gpu-queue`.
+- Formal `trainerctl run` routes c7am/c7al/c7ax to
+  `run-cpu-c7am-queue`/`run-cpu-c7al-queue`/`run-cpu-c7ax-queue`
+  respectively, and g6x to `run-gpu-queue`.
 
 Queue identity is not part of an AWS Batch job definition. A job-definition
 revision remains keyed by image digest, resource profile, worker protocol,
@@ -112,8 +121,8 @@ experiment submission:
 1. Capture a read-only inventory of queues, compute environments, bindings, and
    all nonterminal job IDs.
 2. Validate the four retained compute environments exactly.
-3. Create each missing dev/run queue with its approved priority and complete
-   ordered environment list.
+3. Create each missing dev/run profile queue with its approved priority and
+   single exact environment binding.
 4. If a same-named queue exists, reuse it only when every field matches;
    otherwise stop without updating it.
 5. Register digest-bound smoke job definitions and run the acceptance matrix.
@@ -129,10 +138,14 @@ routing and does not delete pre-existing resources.
 Use a unique, test-labelled image tag resolved to a digest and submit eight
 independent jobs:
 
-| Queue | Profiles |
+| Queue | Profile |
 | --- | --- |
-| `dev-cpu-queue` | c7am, c7al, c7ax |
-| `run-cpu-queue` | c7am, c7al, c7ax |
+| `dev-cpu-c7am-queue` | c7am |
+| `dev-cpu-c7al-queue` | c7al |
+| `dev-cpu-c7ax-queue` | c7ax |
+| `run-cpu-c7am-queue` | c7am |
+| `run-cpu-c7al-queue` | c7al |
+| `run-cpu-c7ax-queue` | c7ax |
 | `dev-gpu-queue` | g6x |
 | `run-gpu-queue` | g6x |
 
@@ -150,8 +163,9 @@ Smoke jobs do not create Aim runs or write formal experiment S3 prefixes.
 
 Successful acceptance additionally requires:
 
-- all four queues are `VALID` and `ENABLED`;
-- queue priorities and complete environment order match this specification;
+- all eight queues are `VALID` and `ENABLED`;
+- queue priorities and single exact environment bindings match this
+  specification;
 - all four retained environments remain `VALID` and `ENABLED`;
 - run priority is represented in AWS configuration without claiming
   preemption;
@@ -207,9 +221,9 @@ permissions.
 
 Unit and fake-AWS tests cover:
 
-- exact four-queue topology and priorities;
+- exact eight-queue topology and priorities;
 - both queues sharing each approved environment;
-- CPU environment order;
+- every queue having one exact environment binding;
 - profile-to-dev/run routing;
 - c7al profile support in both runner and controller;
 - exact region/account/network/role/AMI/capacity validation;
