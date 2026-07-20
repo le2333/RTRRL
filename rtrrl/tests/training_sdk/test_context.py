@@ -56,6 +56,16 @@ def test_context_rejects_run_number_above_four_digits(tmp_path):
         RunContext.from_path(write_context(tmp_path, run_number=10_000))
 
 
+def test_context_rejects_float_run_number(tmp_path):
+    with pytest.raises(TypeError, match="run_number"):
+        RunContext.from_path(write_context(tmp_path, run_number=1.5))
+
+
+def test_context_rejects_bool_run_number(tmp_path):
+    with pytest.raises(TypeError, match="run_number"):
+        RunContext.from_path(write_context(tmp_path, run_number=True))
+
+
 def test_context_nested_data_cannot_drift_after_construction(tmp_path):
     metadata = {"labels": ["original"], "nested": {"enabled": True}}
     loaded = RunContext.from_path(write_context(tmp_path))

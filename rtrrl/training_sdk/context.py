@@ -57,6 +57,8 @@ class RunContext:
     artifact_directory: Path
 
     def __post_init__(self) -> None:
+        if type(self.run_number) is not int:
+            raise TypeError("run_number must be an integer")
         if not 0 <= self.run_number <= 9999:
             raise ValueError("run_number must be between 0 and 9999")
         for field_name in (
