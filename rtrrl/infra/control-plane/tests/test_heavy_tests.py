@@ -179,7 +179,7 @@ class FakeBatch:
         stream: str = "stream/job",
     ) -> None:
         digest = IMAGE.rsplit("@sha256:", 1)[1]
-        definition_name = f"{prefix}-{purpose.value}-{profile}-{digest}"
+        definition_name = f"{prefix}-{profile}-{digest}"
         definition_arn = (
             f"arn:aws:batch:{REGION}:{ACCOUNT_ID}:"
             f"job-definition/{definition_name}:1"
@@ -327,7 +327,7 @@ def test_account_and_region_are_validated_before_submit() -> None:
     assert batch.register_job_definition_calls == []
 
 
-def test_one_exact_pytest_file_per_job_and_purpose_in_identity(
+def test_one_exact_pytest_file_per_job_and_purpose_in_job_identity(
     services: tuple[FakeBatch, FakeSts, HeavyTestRunner],
 ) -> None:
     batch, _, runner = services
@@ -350,7 +350,10 @@ def test_one_exact_pytest_file_per_job_and_purpose_in_identity(
         for call in batch.submit_job_calls
     )
     assert str(batch.register_job_definition_calls[0]["jobDefinitionName"]).startswith(
-        "trainer-heavy-test-run-c7al-"
+        "trainer-heavy-test-c7al-"
+    )
+    assert "-run-" not in str(
+        batch.register_job_definition_calls[0]["jobDefinitionName"]
     )
     assert all(
         len(str(call["jobName"])) <= 128 for call in batch.submit_job_calls
@@ -399,7 +402,7 @@ def test_trainer_smoke_prefix_round_trips_through_wait() -> None:
         "trainer-smoke-dev-c7al-"
     )
     assert str(batch.register_job_definition_calls[0]["jobDefinitionName"]).startswith(
-        "trainer-smoke-dev-c7al-"
+        "trainer-smoke-c7al-"
     )
     assert len(str(batch.submit_job_calls[0]["jobName"])) <= 128
     assert len(str(batch.register_job_definition_calls[0]["jobDefinitionName"])) <= 128
@@ -414,6 +417,35 @@ def test_trainer_smoke_prefix_round_trips_through_wait() -> None:
     evidence = runner.wait(["smoke"])
     assert evidence[0].kind == "smoke"
     assert evidence[0].name_prefix == "trainer-smoke"
+
+
+def test_dev_and_run_reuse_purpose_neutral_definition_revision() -> None:
+    batch = FakeBatch()
+    runner = HeavyTestRunner(batch, FakeLogs(), FakeSts(), sleep=lambda _: None)
+    dev = runner.submit(
+        purpose=ExecutionPurpose.DEV,
+        profile="c7al",
+        image=IMAGE,
+        tests=["memo/tests/online_ac/test_eval_trace.py"],
+        name_prefix="trainer-smoke",
+    )[0]
+    run = runner.submit(
+        purpose=ExecutionPurpose.RUN,
+        profile="c7al",
+        image=IMAGE,
+        tests=["memo/tests/online_ac/test_eval_trace.py"],
+        name_prefix="trainer-smoke",
+    )[0]
+
+    assert dev.job_definition_arn == run.job_definition_arn
+    assert dev.job_definition_revision == run.job_definition_revision
+    assert len(batch.register_job_definition_calls) == 1
+    assert str(batch.submit_job_calls[0]["jobName"]).startswith(
+        "trainer-smoke-dev-c7al-"
+    )
+    assert str(batch.submit_job_calls[1]["jobName"]).startswith(
+        "trainer-smoke-run-c7al-"
+    )
 
 
 @pytest.mark.parametrize(
@@ -468,7 +500,6 @@ def test_wait_rejects_old_job_name_without_purpose() -> None:
 @pytest.mark.parametrize(
     ("drift", "message"),
     [
-        ("purpose", "purpose"),
         ("profile", "profile"),
         ("prefix", "kind/prefix"),
         ("queue", "jobQueue"),
@@ -492,10 +523,7 @@ def test_deterministic_identity_drift_fails_without_sleep(
     definition = batch.job_definitions[0]
     definition_container = definition["containerProperties"]
     assert isinstance(definition_container, dict)
-    if drift == "purpose":
-        job["jobName"] = f"trainer-heavy-test-run-c7ax-test-{'b' * 12}"
-        job["jobQueue"] = batch.queues["run-c7ax"]["jobQueueArn"]
-    elif drift == "profile":
+    if drift == "profile":
         job["jobName"] = f"trainer-heavy-test-dev-c7al-test-{'b' * 12}"
         job["jobQueue"] = batch.queues["dev-c7al"]["jobQueueArn"]
     elif drift == "prefix":

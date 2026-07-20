@@ -16,6 +16,7 @@ from trainer_infra.batch_admin import (
     deploy_queues,
     inventory,
 )
+from trainer_infra.batch_smoke import SmokeServices, run_smoke
 from trainer_infra.batch_topology import REGION
 
 
@@ -27,7 +28,7 @@ def _json_default(value: object) -> str:
 
 def _print_json(value: object, *, error: bool = False) -> None:
     print(
-        json.dumps(value, default=_json_default, sort_keys=True),
+        json.dumps(value, allow_nan=False, default=_json_default, sort_keys=True),
         file=sys.stderr if error else sys.stdout,
     )
 
@@ -36,6 +37,16 @@ def _services() -> BatchAdminServices:
     return BatchAdminServices(
         batch=boto3.client("batch", region_name=REGION),
         sts=boto3.client("sts", region_name=REGION),
+    )
+
+
+def _smoke_services() -> SmokeServices:
+    return SmokeServices(
+        batch=boto3.client("batch", region_name=REGION),
+        logs=boto3.client("logs", region_name=REGION),
+        sts=boto3.client("sts", region_name=REGION),
+        ecs=boto3.client("ecs", region_name=REGION),
+        ec2=boto3.client("ec2", region_name=REGION),
     )
 
 
@@ -53,17 +64,41 @@ def _parser() -> argparse.ArgumentParser:
         action="store_true",
         help="create missing queues after exact validation",
     )
+    smoke = subparsers.add_parser(
+        "smoke", help="plan the fixed eight-job shared-queue smoke matrix"
+    )
+    smoke.add_argument("--cpu-image", required=True)
+    smoke.add_argument("--gpu-image", required=True)
+    smoke.add_argument(
+        "--execute",
+        action="store_true",
+        help="submit the fixed matrix and write its evidence report",
+    )
     return parser
 
 
 def main(argv: Sequence[str] | None = None) -> int:
     args = _parser().parse_args(argv)
     try:
-        services = _services()
-        if args.command == "inventory":
-            result = inventory(services)
+        if args.command == "smoke":
+            result = run_smoke(
+                _smoke_services(),
+                cpu_image=args.cpu_image,
+                gpu_image=args.gpu_image,
+                execute=args.execute,
+            )
+            if args.execute and not result.passed:
+                _print_json(
+                    {"error": "smoke_failed", "report": asdict(result)},
+                    error=True,
+                )
+                return 1
         else:
-            result = deploy_queues(services, execute=args.execute)
+            services = _services()
+            if args.command == "inventory":
+                result = inventory(services)
+            else:
+                result = deploy_queues(services, execute=args.execute)
     except DeploymentError as error:
         _print_json(
             {

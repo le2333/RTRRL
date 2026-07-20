@@ -155,7 +155,7 @@ _JOB_NAME_RE = re.compile(
 )
 _JOB_DEFINITION_ARN_RE = re.compile(
     rf"arn:aws:batch:{REGION}:({ACCOUNT_ID}):job-definition/"
-    r"((trainer-(heavy-test|smoke))-(dev|run)-(c7am|c7al|c7ax|g6x)-"
+    r"((trainer-(heavy-test|smoke))-(c7am|c7al|c7ax|g6x)-"
     r"([0-9a-f]{64})):([1-9][0-9]*)"
 )
 _TERMINAL_JOB_STATES = frozenset({"SUCCEEDED", "FAILED"})
@@ -291,12 +291,11 @@ def _container_properties(
 
 def _definition_name(
     name_prefix: str,
-    purpose: ExecutionPurpose,
     profile_name: str,
     image: str,
 ) -> str:
     digest = image.rsplit("@sha256:", 1)[1]
-    name = f"{name_prefix}-{purpose.value}-{profile_name}-{digest}"
+    name = f"{name_prefix}-{profile_name}-{digest}"
     _validate_aws_batch_name(name, field="job definition name")
     return name
 
@@ -342,7 +341,12 @@ def _job_definition_identity(
     return arn, revision
 
 
-def _command_text(profile_name: str, test_file: str) -> str:
+def _command_text(
+    profile_name: str,
+    test_file: str,
+    purpose: ExecutionPurpose,
+    name_prefix: str,
+) -> str:
     pytest_command = " ".join(
         (
             "/usr/bin/time -v env",
@@ -353,17 +357,25 @@ def _command_text(profile_name: str, test_file: str) -> str:
             "-q",
         )
     )
-    if profile_name != "g6x":
-        return pytest_command
-
-    probe = (
-        "python -c 'import jax; print(jax.devices())'"
-        " && gpu_info=\"$(nvidia-smi --query-gpu=name,memory.total"
-        " --format=csv,noheader)\""
-        " && printf '%s\\n' \"$gpu_info\""
-        " && printf '%s\\n' \"$gpu_info\" | grep -F 'NVIDIA L4' >/dev/null"
-    )
-    return f"{probe} && {pytest_command}"
+    probes: list[str] = []
+    if name_prefix == "trainer-smoke":
+        probes.extend(
+            (
+                f"printf '%s\\n' trainer_smoke_profile={profile_name}",
+                f"printf '%s\\n' trainer_smoke_purpose={purpose.value}",
+                "python -c 'import jax; print(f\"JAX devices: {jax.devices()}\")'",
+            )
+        )
+    elif profile_name == "g6x":
+        probes.append("python -c 'import jax; print(jax.devices())'")
+    if profile_name == "g6x":
+        probes.append(
+            "gpu_info=\"$(nvidia-smi --query-gpu=name,memory.total"
+            " --format=csv,noheader)\""
+            " && printf '%s\\n' \"$gpu_info\""
+            " && printf '%s\\n' \"$gpu_info\" | grep -F 'NVIDIA L4' >/dev/null"
+        )
+    return " && ".join((*probes, pytest_command))
 
 
 class HeavyTestRunner:
@@ -409,12 +421,11 @@ class HeavyTestRunner:
     def _get_or_register_definition(
         self,
         name_prefix: str,
-        purpose: ExecutionPurpose,
         profile_name: str,
         profile: ResourceProfile,
         image: str,
     ) -> tuple[str, int]:
-        name = _definition_name(name_prefix, purpose, profile_name, image)
+        name = _definition_name(name_prefix, profile_name, image)
         container = _container_properties(profile, image)
         self._definition_lock_dir.mkdir(parents=True, exist_ok=True)
         lock_path = self._definition_lock_dir / f"{name}.lock"
@@ -494,12 +505,12 @@ class HeavyTestRunner:
         topology = self._topology_validator.validate()
         queue_arn = topology.queue_arns[f"{purpose.value}-{profile}"]
         definition_arn, definition_revision = self._get_or_register_definition(
-            name_prefix, purpose, profile, profile_spec, image
+            name_prefix, profile, profile_spec, image
         )
 
         submitted = []
         for test_file in test_files:
-            command = _command_text(profile, test_file)
+            command = _command_text(profile, test_file, purpose, name_prefix)
             stem = re.sub(r"[^A-Za-z0-9_-]+", "-", PurePosixPath(test_file).stem)
             unique = hashlib.sha256(
                 (
@@ -712,7 +723,6 @@ class HeavyTestRunner:
             definition_name,
             definition_prefix,
             definition_kind,
-            definition_purpose,
             definition_profile,
             image_digest,
             revision_text,
@@ -722,10 +732,6 @@ class HeavyTestRunner:
         if definition_prefix != name_prefix or definition_kind != kind:
             raise RuntimeError(
                 "jobDefinition kind/prefix does not match the jobName kind/prefix"
-            )
-        if definition_purpose != purpose.value:
-            raise RuntimeError(
-                "jobDefinition purpose does not match the jobName purpose"
             )
         if definition_profile != profile_name:
             raise RuntimeError(

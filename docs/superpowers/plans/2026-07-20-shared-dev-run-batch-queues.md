@@ -469,7 +469,10 @@ class SubmittedTestJob:
     command_text: str
 ```
 
-Job and definition names include purpose:
+Job names include purpose, while job-definition identity is purpose-neutral and
+binds kind/profile/digest/resources. This lets the dev/run pair for one profile
+reuse the same exact digest-bound definition ARN/revision; `wait()` verifies
+purpose from the job name together with the exact queue:
 
 ```python
 def job_name(purpose: ExecutionPurpose, profile: str, stem: str, suffix: str) -> str:
@@ -479,6 +482,10 @@ def job_name(purpose: ExecutionPurpose, profile: str, stem: str, suffix: str) ->
         suffix=suffix,
         maximum=128,
     )
+
+
+def definition_name(kind: str, profile: str, digest: str) -> str:
+    return f"trainer-{kind}-{profile}-{digest}"
 ```
 
 `wait()` parses purpose and profile, then validates the exact queue, complete
