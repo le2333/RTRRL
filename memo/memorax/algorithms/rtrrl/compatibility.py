@@ -181,6 +181,28 @@ class RTRRLComponentConfig:
     trace_timing: str
     logprob_reduction: str
     experimental_overrides: tuple[tuple[str, str], ...] = ()
+    observation_dim: int = 1
+    action_dim: int = 1
+    hidden_dim: int = 32
+    num_envs: int = 1
+    discrete: bool = False
+    meta_rl: bool = True
+    gamma: float = 0.99
+    lambda_actor: float = 0.9
+    lambda_critic: float = 0.9
+    lambda_recurrent: float = 0.9
+    actor_scale: float = 1.0
+    recurrent_scale: float = 1.0
+    entropy_rate: float = 1e-5
+    average_reward_rate: float | None = None
+    trace_mode: str = "accumulate"
+    optimizer_name: str = "adam"
+    actor_critic_learning_rate: float = 1e-4
+    recurrent_learning_rate: float = 1e-4
+    update_period: float = 1.0
+    normalize_observation: bool = False
+    normalize_reward: bool = False
+    debug_max_steps: int = 3
 
 
 _NO_OP_FIELDS = {
@@ -367,12 +389,34 @@ def normalize_legacy_config(raw: Any) -> LegacyRTRRLConfig:
 def to_component_config(legacy: LegacyRTRRLConfig) -> RTRRLComponentConfig:
     """Resolve static component choices without constructing training code."""
 
+    numerical = {
+        "action_dim": 1,
+        "hidden_dim": legacy.hidden_dim,
+        "num_envs": legacy.num_envs,
+        "meta_rl": legacy.meta_rl,
+        "gamma": legacy.gamma,
+        "lambda_actor": legacy.lambda_pi,
+        "lambda_critic": legacy.lambda_v,
+        "lambda_recurrent": legacy.lambda_rnn,
+        "actor_scale": legacy.eta_pi,
+        "recurrent_scale": legacy.eta_f,
+        "entropy_rate": legacy.entropy_rate,
+        "average_reward_rate": legacy.eta,
+        "trace_mode": legacy.trace_mode,
+        "optimizer_name": legacy.optimizer_params_td.opt_name,
+        "actor_critic_learning_rate": legacy.optimizer_params_td.learning_rate,
+        "recurrent_learning_rate": legacy.optimizer_params_rnn.learning_rate,
+        "update_period": legacy.update_period,
+        "normalize_observation": legacy.normalize_obs,
+        "normalize_reward": legacy.normalize_reward,
+    }
     if legacy.profile == "aaai25_strict_lru":
         return RTRRLComponentConfig(
             profile=legacy.profile,
             backbone="aaai25_lru",
             trace_timing="incoming",
             logprob_reduction="mean",
+            **numerical,
         )
     if legacy.profile == "memo_experimental":
         trace_timing = "fresh" if legacy.update_trace_before_td else "incoming"
@@ -387,5 +431,6 @@ def to_component_config(legacy: LegacyRTRRLConfig) -> RTRRLComponentConfig:
             trace_timing=trace_timing,
             logprob_reduction=legacy.logprob_reduction,
             experimental_overrides=overrides,
+            **numerical,
         )
     raise ValueError(f"unknown RTRRL component profile: {legacy.profile!r}")

@@ -140,6 +140,12 @@ def test_oracle_fixture_has_required_sections():
         "init/action",
         "init/value",
         "step/td_error",
+        "state_machine/init/action",
+        "state_machine/init/value",
+        "state_machine/step_1/td_error",
+        "state_machine/step_2/environment/done",
+        "state_machine/step_3/model_input",
+        "state_machine/two_env/direction",
     }
     assert {path for path in arrays if path.startswith("heads/")} == required_heads
     assert required_other <= arrays.keys()

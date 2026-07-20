@@ -123,6 +123,491 @@
     "lru/unbatched/preactivation",
     "lru/unbatched/projection",
     "lru/unbatched/skip",
+    "state_machine/init/action",
+    "state_machine/init/average_reward",
+    "state_machine/init/emphasis",
+    "state_machine/init/environment/done",
+    "state_machine/init/environment/observation",
+    "state_machine/init/environment/reward",
+    "state_machine/init/hidden",
+    "state_machine/init/model_input",
+    "state_machine/init/optimizer_state/inner_states/rnn/inner_state/count",
+    "state_machine/init/optimizer_state/inner_states/rnn/inner_state/hyperparams/learning_rate",
+    "state_machine/init/optimizer_state/inner_states/rnn/inner_state/inner_state/2/0/count",
+    "state_machine/init/optimizer_state/inner_states/rnn/inner_state/inner_state/2/0/mu/rnn/C_img",
+    "state_machine/init/optimizer_state/inner_states/rnn/inner_state/inner_state/2/0/mu/rnn/C_real",
+    "state_machine/init/optimizer_state/inner_states/rnn/inner_state/inner_state/2/0/mu/rnn/D",
+    "state_machine/init/optimizer_state/inner_states/rnn/inner_state/inner_state/2/0/mu/rnn/OnlineLRUCell_0/LRUCell_0/B_img",
+    "state_machine/init/optimizer_state/inner_states/rnn/inner_state/inner_state/2/0/mu/rnn/OnlineLRUCell_0/LRUCell_0/B_real",
+    "state_machine/init/optimizer_state/inner_states/rnn/inner_state/inner_state/2/0/mu/rnn/OnlineLRUCell_0/LRUCell_0/gamma_log",
+    "state_machine/init/optimizer_state/inner_states/rnn/inner_state/inner_state/2/0/mu/rnn/OnlineLRUCell_0/LRUCell_0/nu_log",
+    "state_machine/init/optimizer_state/inner_states/rnn/inner_state/inner_state/2/0/mu/rnn/OnlineLRUCell_0/LRUCell_0/theta_log",
+    "state_machine/init/optimizer_state/inner_states/rnn/inner_state/inner_state/2/0/nu/rnn/C_img",
+    "state_machine/init/optimizer_state/inner_states/rnn/inner_state/inner_state/2/0/nu/rnn/C_real",
+    "state_machine/init/optimizer_state/inner_states/rnn/inner_state/inner_state/2/0/nu/rnn/D",
+    "state_machine/init/optimizer_state/inner_states/rnn/inner_state/inner_state/2/0/nu/rnn/OnlineLRUCell_0/LRUCell_0/B_img",
+    "state_machine/init/optimizer_state/inner_states/rnn/inner_state/inner_state/2/0/nu/rnn/OnlineLRUCell_0/LRUCell_0/B_real",
+    "state_machine/init/optimizer_state/inner_states/rnn/inner_state/inner_state/2/0/nu/rnn/OnlineLRUCell_0/LRUCell_0/gamma_log",
+    "state_machine/init/optimizer_state/inner_states/rnn/inner_state/inner_state/2/0/nu/rnn/OnlineLRUCell_0/LRUCell_0/nu_log",
+    "state_machine/init/optimizer_state/inner_states/rnn/inner_state/inner_state/2/0/nu/rnn/OnlineLRUCell_0/LRUCell_0/theta_log",
+    "state_machine/init/optimizer_state/inner_states/td/inner_state/count",
+    "state_machine/init/optimizer_state/inner_states/td/inner_state/hyperparams/learning_rate",
+    "state_machine/init/optimizer_state/inner_states/td/inner_state/inner_state/2/0/count",
+    "state_machine/init/optimizer_state/inner_states/td/inner_state/inner_state/2/0/mu/td/actor/kernel",
+    "state_machine/init/optimizer_state/inner_states/td/inner_state/inner_state/2/0/mu/td/critic/bias",
+    "state_machine/init/optimizer_state/inner_states/td/inner_state/inner_state/2/0/mu/td/critic/kernel",
+    "state_machine/init/optimizer_state/inner_states/td/inner_state/inner_state/2/0/nu/td/actor/kernel",
+    "state_machine/init/optimizer_state/inner_states/td/inner_state/inner_state/2/0/nu/td/critic/bias",
+    "state_machine/init/optimizer_state/inner_states/td/inner_state/inner_state/2/0/nu/td/critic/kernel",
+    "state_machine/init/parameters/params/rnn/C_img",
+    "state_machine/init/parameters/params/rnn/C_real",
+    "state_machine/init/parameters/params/rnn/D",
+    "state_machine/init/parameters/params/rnn/OnlineLRUCell_0/LRUCell_0/B_img",
+    "state_machine/init/parameters/params/rnn/OnlineLRUCell_0/LRUCell_0/B_real",
+    "state_machine/init/parameters/params/rnn/OnlineLRUCell_0/LRUCell_0/gamma_log",
+    "state_machine/init/parameters/params/rnn/OnlineLRUCell_0/LRUCell_0/nu_log",
+    "state_machine/init/parameters/params/rnn/OnlineLRUCell_0/LRUCell_0/theta_log",
+    "state_machine/init/parameters/params/td/actor/kernel",
+    "state_machine/init/parameters/params/td/critic/bias",
+    "state_machine/init/parameters/params/td/critic/kernel",
+    "state_machine/init/recurrent_state/0",
+    "state_machine/init/recurrent_state/1/0",
+    "state_machine/init/recurrent_state/1/1",
+    "state_machine/init/recurrent_state/1/2",
+    "state_machine/init/traces/rnn/C_img",
+    "state_machine/init/traces/rnn/C_real",
+    "state_machine/init/traces/rnn/D",
+    "state_machine/init/traces/rnn/OnlineLRUCell_0/LRUCell_0/B_img",
+    "state_machine/init/traces/rnn/OnlineLRUCell_0/LRUCell_0/B_real",
+    "state_machine/init/traces/rnn/OnlineLRUCell_0/LRUCell_0/gamma_log",
+    "state_machine/init/traces/rnn/OnlineLRUCell_0/LRUCell_0/nu_log",
+    "state_machine/init/traces/rnn/OnlineLRUCell_0/LRUCell_0/theta_log",
+    "state_machine/init/traces/td/actor/kernel",
+    "state_machine/init/traces/td/critic/bias",
+    "state_machine/init/traces/td/critic/kernel",
+    "state_machine/init/value",
+    "state_machine/keys/env",
+    "state_machine/keys/init",
+    "state_machine/keys/model",
+    "state_machine/keys/outer",
+    "state_machine/keys/root",
+    "state_machine/keys/step",
+    "state_machine/step_1/action_key",
+    "state_machine/step_1/action_loc",
+    "state_machine/step_1/action_scale",
+    "state_machine/step_1/actor_loss",
+    "state_machine/step_1/average_reward",
+    "state_machine/step_1/carried_traces/rnn/C_img",
+    "state_machine/step_1/carried_traces/rnn/C_real",
+    "state_machine/step_1/carried_traces/rnn/D",
+    "state_machine/step_1/carried_traces/rnn/OnlineLRUCell_0/LRUCell_0/B_img",
+    "state_machine/step_1/carried_traces/rnn/OnlineLRUCell_0/LRUCell_0/B_real",
+    "state_machine/step_1/carried_traces/rnn/OnlineLRUCell_0/LRUCell_0/gamma_log",
+    "state_machine/step_1/carried_traces/rnn/OnlineLRUCell_0/LRUCell_0/nu_log",
+    "state_machine/step_1/carried_traces/rnn/OnlineLRUCell_0/LRUCell_0/theta_log",
+    "state_machine/step_1/carried_traces/td/actor/kernel",
+    "state_machine/step_1/carried_traces/td/critic/bias",
+    "state_machine/step_1/carried_traces/td/critic/kernel",
+    "state_machine/step_1/direct_gradients/params/rnn/C_img",
+    "state_machine/step_1/direct_gradients/params/rnn/C_real",
+    "state_machine/step_1/direct_gradients/params/rnn/D",
+    "state_machine/step_1/direct_gradients/params/rnn/OnlineLRUCell_0/LRUCell_0/B_img",
+    "state_machine/step_1/direct_gradients/params/rnn/OnlineLRUCell_0/LRUCell_0/B_real",
+    "state_machine/step_1/direct_gradients/params/rnn/OnlineLRUCell_0/LRUCell_0/gamma_log",
+    "state_machine/step_1/direct_gradients/params/rnn/OnlineLRUCell_0/LRUCell_0/nu_log",
+    "state_machine/step_1/direct_gradients/params/rnn/OnlineLRUCell_0/LRUCell_0/theta_log",
+    "state_machine/step_1/direct_gradients/params/td/actor/kernel",
+    "state_machine/step_1/direct_gradients/params/td/critic/bias",
+    "state_machine/step_1/direct_gradients/params/td/critic/kernel",
+    "state_machine/step_1/emphasis",
+    "state_machine/step_1/entropy",
+    "state_machine/step_1/environment/done",
+    "state_machine/step_1/environment/observation",
+    "state_machine/step_1/environment/reward",
+    "state_machine/step_1/environment_action",
+    "state_machine/step_1/gradients/params/rnn/C_img",
+    "state_machine/step_1/gradients/params/rnn/C_real",
+    "state_machine/step_1/gradients/params/rnn/D",
+    "state_machine/step_1/gradients/params/rnn/OnlineLRUCell_0/LRUCell_0/B_img",
+    "state_machine/step_1/gradients/params/rnn/OnlineLRUCell_0/LRUCell_0/B_real",
+    "state_machine/step_1/gradients/params/rnn/OnlineLRUCell_0/LRUCell_0/gamma_log",
+    "state_machine/step_1/gradients/params/rnn/OnlineLRUCell_0/LRUCell_0/nu_log",
+    "state_machine/step_1/gradients/params/rnn/OnlineLRUCell_0/LRUCell_0/theta_log",
+    "state_machine/step_1/gradients/params/td/actor/kernel",
+    "state_machine/step_1/gradients/params/td/critic/bias",
+    "state_machine/step_1/gradients/params/td/critic/kernel",
+    "state_machine/step_1/incoming_traces/rnn/C_img",
+    "state_machine/step_1/incoming_traces/rnn/C_real",
+    "state_machine/step_1/incoming_traces/rnn/D",
+    "state_machine/step_1/incoming_traces/rnn/OnlineLRUCell_0/LRUCell_0/B_img",
+    "state_machine/step_1/incoming_traces/rnn/OnlineLRUCell_0/LRUCell_0/B_real",
+    "state_machine/step_1/incoming_traces/rnn/OnlineLRUCell_0/LRUCell_0/gamma_log",
+    "state_machine/step_1/incoming_traces/rnn/OnlineLRUCell_0/LRUCell_0/nu_log",
+    "state_machine/step_1/incoming_traces/rnn/OnlineLRUCell_0/LRUCell_0/theta_log",
+    "state_machine/step_1/incoming_traces/td/actor/kernel",
+    "state_machine/step_1/incoming_traces/td/critic/bias",
+    "state_machine/step_1/incoming_traces/td/critic/kernel",
+    "state_machine/step_1/key_in",
+    "state_machine/step_1/key_out",
+    "state_machine/step_1/mean_directions/params/rnn/C_img",
+    "state_machine/step_1/mean_directions/params/rnn/C_real",
+    "state_machine/step_1/mean_directions/params/rnn/D",
+    "state_machine/step_1/mean_directions/params/rnn/OnlineLRUCell_0/LRUCell_0/B_img",
+    "state_machine/step_1/mean_directions/params/rnn/OnlineLRUCell_0/LRUCell_0/B_real",
+    "state_machine/step_1/mean_directions/params/rnn/OnlineLRUCell_0/LRUCell_0/gamma_log",
+    "state_machine/step_1/mean_directions/params/rnn/OnlineLRUCell_0/LRUCell_0/nu_log",
+    "state_machine/step_1/mean_directions/params/rnn/OnlineLRUCell_0/LRUCell_0/theta_log",
+    "state_machine/step_1/mean_directions/params/td/actor/kernel",
+    "state_machine/step_1/mean_directions/params/td/critic/bias",
+    "state_machine/step_1/mean_directions/params/td/critic/kernel",
+    "state_machine/step_1/model_input",
+    "state_machine/step_1/optimizer_state/inner_states/rnn/inner_state/count",
+    "state_machine/step_1/optimizer_state/inner_states/rnn/inner_state/hyperparams/learning_rate",
+    "state_machine/step_1/optimizer_state/inner_states/rnn/inner_state/inner_state/2/0/count",
+    "state_machine/step_1/optimizer_state/inner_states/rnn/inner_state/inner_state/2/0/mu/rnn/C_img",
+    "state_machine/step_1/optimizer_state/inner_states/rnn/inner_state/inner_state/2/0/mu/rnn/C_real",
+    "state_machine/step_1/optimizer_state/inner_states/rnn/inner_state/inner_state/2/0/mu/rnn/D",
+    "state_machine/step_1/optimizer_state/inner_states/rnn/inner_state/inner_state/2/0/mu/rnn/OnlineLRUCell_0/LRUCell_0/B_img",
+    "state_machine/step_1/optimizer_state/inner_states/rnn/inner_state/inner_state/2/0/mu/rnn/OnlineLRUCell_0/LRUCell_0/B_real",
+    "state_machine/step_1/optimizer_state/inner_states/rnn/inner_state/inner_state/2/0/mu/rnn/OnlineLRUCell_0/LRUCell_0/gamma_log",
+    "state_machine/step_1/optimizer_state/inner_states/rnn/inner_state/inner_state/2/0/mu/rnn/OnlineLRUCell_0/LRUCell_0/nu_log",
+    "state_machine/step_1/optimizer_state/inner_states/rnn/inner_state/inner_state/2/0/mu/rnn/OnlineLRUCell_0/LRUCell_0/theta_log",
+    "state_machine/step_1/optimizer_state/inner_states/rnn/inner_state/inner_state/2/0/nu/rnn/C_img",
+    "state_machine/step_1/optimizer_state/inner_states/rnn/inner_state/inner_state/2/0/nu/rnn/C_real",
+    "state_machine/step_1/optimizer_state/inner_states/rnn/inner_state/inner_state/2/0/nu/rnn/D",
+    "state_machine/step_1/optimizer_state/inner_states/rnn/inner_state/inner_state/2/0/nu/rnn/OnlineLRUCell_0/LRUCell_0/B_img",
+    "state_machine/step_1/optimizer_state/inner_states/rnn/inner_state/inner_state/2/0/nu/rnn/OnlineLRUCell_0/LRUCell_0/B_real",
+    "state_machine/step_1/optimizer_state/inner_states/rnn/inner_state/inner_state/2/0/nu/rnn/OnlineLRUCell_0/LRUCell_0/gamma_log",
+    "state_machine/step_1/optimizer_state/inner_states/rnn/inner_state/inner_state/2/0/nu/rnn/OnlineLRUCell_0/LRUCell_0/nu_log",
+    "state_machine/step_1/optimizer_state/inner_states/rnn/inner_state/inner_state/2/0/nu/rnn/OnlineLRUCell_0/LRUCell_0/theta_log",
+    "state_machine/step_1/optimizer_state/inner_states/td/inner_state/count",
+    "state_machine/step_1/optimizer_state/inner_states/td/inner_state/hyperparams/learning_rate",
+    "state_machine/step_1/optimizer_state/inner_states/td/inner_state/inner_state/2/0/count",
+    "state_machine/step_1/optimizer_state/inner_states/td/inner_state/inner_state/2/0/mu/td/actor/kernel",
+    "state_machine/step_1/optimizer_state/inner_states/td/inner_state/inner_state/2/0/mu/td/critic/bias",
+    "state_machine/step_1/optimizer_state/inner_states/td/inner_state/inner_state/2/0/mu/td/critic/kernel",
+    "state_machine/step_1/optimizer_state/inner_states/td/inner_state/inner_state/2/0/nu/td/actor/kernel",
+    "state_machine/step_1/optimizer_state/inner_states/td/inner_state/inner_state/2/0/nu/td/critic/bias",
+    "state_machine/step_1/optimizer_state/inner_states/td/inner_state/inner_state/2/0/nu/td/critic/kernel",
+    "state_machine/step_1/optimizer_updates/rnn/C_img",
+    "state_machine/step_1/optimizer_updates/rnn/C_real",
+    "state_machine/step_1/optimizer_updates/rnn/D",
+    "state_machine/step_1/optimizer_updates/rnn/OnlineLRUCell_0/LRUCell_0/B_img",
+    "state_machine/step_1/optimizer_updates/rnn/OnlineLRUCell_0/LRUCell_0/B_real",
+    "state_machine/step_1/optimizer_updates/rnn/OnlineLRUCell_0/LRUCell_0/gamma_log",
+    "state_machine/step_1/optimizer_updates/rnn/OnlineLRUCell_0/LRUCell_0/nu_log",
+    "state_machine/step_1/optimizer_updates/rnn/OnlineLRUCell_0/LRUCell_0/theta_log",
+    "state_machine/step_1/optimizer_updates/td/actor/kernel",
+    "state_machine/step_1/optimizer_updates/td/critic/bias",
+    "state_machine/step_1/optimizer_updates/td/critic/kernel",
+    "state_machine/step_1/parameters/params/rnn/C_img",
+    "state_machine/step_1/parameters/params/rnn/C_real",
+    "state_machine/step_1/parameters/params/rnn/D",
+    "state_machine/step_1/parameters/params/rnn/OnlineLRUCell_0/LRUCell_0/B_img",
+    "state_machine/step_1/parameters/params/rnn/OnlineLRUCell_0/LRUCell_0/B_real",
+    "state_machine/step_1/parameters/params/rnn/OnlineLRUCell_0/LRUCell_0/gamma_log",
+    "state_machine/step_1/parameters/params/rnn/OnlineLRUCell_0/LRUCell_0/nu_log",
+    "state_machine/step_1/parameters/params/rnn/OnlineLRUCell_0/LRUCell_0/theta_log",
+    "state_machine/step_1/parameters/params/td/actor/kernel",
+    "state_machine/step_1/parameters/params/td/critic/bias",
+    "state_machine/step_1/parameters/params/td/critic/kernel",
+    "state_machine/step_1/recurrent_state/0",
+    "state_machine/step_1/recurrent_state/1/0",
+    "state_machine/step_1/recurrent_state/1/1",
+    "state_machine/step_1/recurrent_state/1/2",
+    "state_machine/step_1/sampled_next_action",
+    "state_machine/step_1/slow_parameters/params/rnn/C_img",
+    "state_machine/step_1/slow_parameters/params/rnn/C_real",
+    "state_machine/step_1/slow_parameters/params/rnn/D",
+    "state_machine/step_1/slow_parameters/params/rnn/OnlineLRUCell_0/LRUCell_0/B_img",
+    "state_machine/step_1/slow_parameters/params/rnn/OnlineLRUCell_0/LRUCell_0/B_real",
+    "state_machine/step_1/slow_parameters/params/rnn/OnlineLRUCell_0/LRUCell_0/gamma_log",
+    "state_machine/step_1/slow_parameters/params/rnn/OnlineLRUCell_0/LRUCell_0/nu_log",
+    "state_machine/step_1/slow_parameters/params/rnn/OnlineLRUCell_0/LRUCell_0/theta_log",
+    "state_machine/step_1/slow_parameters/params/td/actor/kernel",
+    "state_machine/step_1/slow_parameters/params/td/critic/bias",
+    "state_machine/step_1/slow_parameters/params/td/critic/kernel",
+    "state_machine/step_1/td_error",
+    "state_machine/step_1/value",
+    "state_machine/step_1/value_target",
+    "state_machine/step_2/action_key",
+    "state_machine/step_2/action_loc",
+    "state_machine/step_2/action_scale",
+    "state_machine/step_2/actor_loss",
+    "state_machine/step_2/average_reward",
+    "state_machine/step_2/carried_traces/rnn/C_img",
+    "state_machine/step_2/carried_traces/rnn/C_real",
+    "state_machine/step_2/carried_traces/rnn/D",
+    "state_machine/step_2/carried_traces/rnn/OnlineLRUCell_0/LRUCell_0/B_img",
+    "state_machine/step_2/carried_traces/rnn/OnlineLRUCell_0/LRUCell_0/B_real",
+    "state_machine/step_2/carried_traces/rnn/OnlineLRUCell_0/LRUCell_0/gamma_log",
+    "state_machine/step_2/carried_traces/rnn/OnlineLRUCell_0/LRUCell_0/nu_log",
+    "state_machine/step_2/carried_traces/rnn/OnlineLRUCell_0/LRUCell_0/theta_log",
+    "state_machine/step_2/carried_traces/td/actor/kernel",
+    "state_machine/step_2/carried_traces/td/critic/bias",
+    "state_machine/step_2/carried_traces/td/critic/kernel",
+    "state_machine/step_2/direct_gradients/params/rnn/C_img",
+    "state_machine/step_2/direct_gradients/params/rnn/C_real",
+    "state_machine/step_2/direct_gradients/params/rnn/D",
+    "state_machine/step_2/direct_gradients/params/rnn/OnlineLRUCell_0/LRUCell_0/B_img",
+    "state_machine/step_2/direct_gradients/params/rnn/OnlineLRUCell_0/LRUCell_0/B_real",
+    "state_machine/step_2/direct_gradients/params/rnn/OnlineLRUCell_0/LRUCell_0/gamma_log",
+    "state_machine/step_2/direct_gradients/params/rnn/OnlineLRUCell_0/LRUCell_0/nu_log",
+    "state_machine/step_2/direct_gradients/params/rnn/OnlineLRUCell_0/LRUCell_0/theta_log",
+    "state_machine/step_2/direct_gradients/params/td/actor/kernel",
+    "state_machine/step_2/direct_gradients/params/td/critic/bias",
+    "state_machine/step_2/direct_gradients/params/td/critic/kernel",
+    "state_machine/step_2/emphasis",
+    "state_machine/step_2/entropy",
+    "state_machine/step_2/environment/done",
+    "state_machine/step_2/environment/observation",
+    "state_machine/step_2/environment/reward",
+    "state_machine/step_2/environment_action",
+    "state_machine/step_2/gradients/params/rnn/C_img",
+    "state_machine/step_2/gradients/params/rnn/C_real",
+    "state_machine/step_2/gradients/params/rnn/D",
+    "state_machine/step_2/gradients/params/rnn/OnlineLRUCell_0/LRUCell_0/B_img",
+    "state_machine/step_2/gradients/params/rnn/OnlineLRUCell_0/LRUCell_0/B_real",
+    "state_machine/step_2/gradients/params/rnn/OnlineLRUCell_0/LRUCell_0/gamma_log",
+    "state_machine/step_2/gradients/params/rnn/OnlineLRUCell_0/LRUCell_0/nu_log",
+    "state_machine/step_2/gradients/params/rnn/OnlineLRUCell_0/LRUCell_0/theta_log",
+    "state_machine/step_2/gradients/params/td/actor/kernel",
+    "state_machine/step_2/gradients/params/td/critic/bias",
+    "state_machine/step_2/gradients/params/td/critic/kernel",
+    "state_machine/step_2/incoming_traces/rnn/C_img",
+    "state_machine/step_2/incoming_traces/rnn/C_real",
+    "state_machine/step_2/incoming_traces/rnn/D",
+    "state_machine/step_2/incoming_traces/rnn/OnlineLRUCell_0/LRUCell_0/B_img",
+    "state_machine/step_2/incoming_traces/rnn/OnlineLRUCell_0/LRUCell_0/B_real",
+    "state_machine/step_2/incoming_traces/rnn/OnlineLRUCell_0/LRUCell_0/gamma_log",
+    "state_machine/step_2/incoming_traces/rnn/OnlineLRUCell_0/LRUCell_0/nu_log",
+    "state_machine/step_2/incoming_traces/rnn/OnlineLRUCell_0/LRUCell_0/theta_log",
+    "state_machine/step_2/incoming_traces/td/actor/kernel",
+    "state_machine/step_2/incoming_traces/td/critic/bias",
+    "state_machine/step_2/incoming_traces/td/critic/kernel",
+    "state_machine/step_2/key_in",
+    "state_machine/step_2/key_out",
+    "state_machine/step_2/mean_directions/params/rnn/C_img",
+    "state_machine/step_2/mean_directions/params/rnn/C_real",
+    "state_machine/step_2/mean_directions/params/rnn/D",
+    "state_machine/step_2/mean_directions/params/rnn/OnlineLRUCell_0/LRUCell_0/B_img",
+    "state_machine/step_2/mean_directions/params/rnn/OnlineLRUCell_0/LRUCell_0/B_real",
+    "state_machine/step_2/mean_directions/params/rnn/OnlineLRUCell_0/LRUCell_0/gamma_log",
+    "state_machine/step_2/mean_directions/params/rnn/OnlineLRUCell_0/LRUCell_0/nu_log",
+    "state_machine/step_2/mean_directions/params/rnn/OnlineLRUCell_0/LRUCell_0/theta_log",
+    "state_machine/step_2/mean_directions/params/td/actor/kernel",
+    "state_machine/step_2/mean_directions/params/td/critic/bias",
+    "state_machine/step_2/mean_directions/params/td/critic/kernel",
+    "state_machine/step_2/model_input",
+    "state_machine/step_2/optimizer_state/inner_states/rnn/inner_state/count",
+    "state_machine/step_2/optimizer_state/inner_states/rnn/inner_state/hyperparams/learning_rate",
+    "state_machine/step_2/optimizer_state/inner_states/rnn/inner_state/inner_state/2/0/count",
+    "state_machine/step_2/optimizer_state/inner_states/rnn/inner_state/inner_state/2/0/mu/rnn/C_img",
+    "state_machine/step_2/optimizer_state/inner_states/rnn/inner_state/inner_state/2/0/mu/rnn/C_real",
+    "state_machine/step_2/optimizer_state/inner_states/rnn/inner_state/inner_state/2/0/mu/rnn/D",
+    "state_machine/step_2/optimizer_state/inner_states/rnn/inner_state/inner_state/2/0/mu/rnn/OnlineLRUCell_0/LRUCell_0/B_img",
+    "state_machine/step_2/optimizer_state/inner_states/rnn/inner_state/inner_state/2/0/mu/rnn/OnlineLRUCell_0/LRUCell_0/B_real",
+    "state_machine/step_2/optimizer_state/inner_states/rnn/inner_state/inner_state/2/0/mu/rnn/OnlineLRUCell_0/LRUCell_0/gamma_log",
+    "state_machine/step_2/optimizer_state/inner_states/rnn/inner_state/inner_state/2/0/mu/rnn/OnlineLRUCell_0/LRUCell_0/nu_log",
+    "state_machine/step_2/optimizer_state/inner_states/rnn/inner_state/inner_state/2/0/mu/rnn/OnlineLRUCell_0/LRUCell_0/theta_log",
+    "state_machine/step_2/optimizer_state/inner_states/rnn/inner_state/inner_state/2/0/nu/rnn/C_img",
+    "state_machine/step_2/optimizer_state/inner_states/rnn/inner_state/inner_state/2/0/nu/rnn/C_real",
+    "state_machine/step_2/optimizer_state/inner_states/rnn/inner_state/inner_state/2/0/nu/rnn/D",
+    "state_machine/step_2/optimizer_state/inner_states/rnn/inner_state/inner_state/2/0/nu/rnn/OnlineLRUCell_0/LRUCell_0/B_img",
+    "state_machine/step_2/optimizer_state/inner_states/rnn/inner_state/inner_state/2/0/nu/rnn/OnlineLRUCell_0/LRUCell_0/B_real",
+    "state_machine/step_2/optimizer_state/inner_states/rnn/inner_state/inner_state/2/0/nu/rnn/OnlineLRUCell_0/LRUCell_0/gamma_log",
+    "state_machine/step_2/optimizer_state/inner_states/rnn/inner_state/inner_state/2/0/nu/rnn/OnlineLRUCell_0/LRUCell_0/nu_log",
+    "state_machine/step_2/optimizer_state/inner_states/rnn/inner_state/inner_state/2/0/nu/rnn/OnlineLRUCell_0/LRUCell_0/theta_log",
+    "state_machine/step_2/optimizer_state/inner_states/td/inner_state/count",
+    "state_machine/step_2/optimizer_state/inner_states/td/inner_state/hyperparams/learning_rate",
+    "state_machine/step_2/optimizer_state/inner_states/td/inner_state/inner_state/2/0/count",
+    "state_machine/step_2/optimizer_state/inner_states/td/inner_state/inner_state/2/0/mu/td/actor/kernel",
+    "state_machine/step_2/optimizer_state/inner_states/td/inner_state/inner_state/2/0/mu/td/critic/bias",
+    "state_machine/step_2/optimizer_state/inner_states/td/inner_state/inner_state/2/0/mu/td/critic/kernel",
+    "state_machine/step_2/optimizer_state/inner_states/td/inner_state/inner_state/2/0/nu/td/actor/kernel",
+    "state_machine/step_2/optimizer_state/inner_states/td/inner_state/inner_state/2/0/nu/td/critic/bias",
+    "state_machine/step_2/optimizer_state/inner_states/td/inner_state/inner_state/2/0/nu/td/critic/kernel",
+    "state_machine/step_2/optimizer_updates/rnn/C_img",
+    "state_machine/step_2/optimizer_updates/rnn/C_real",
+    "state_machine/step_2/optimizer_updates/rnn/D",
+    "state_machine/step_2/optimizer_updates/rnn/OnlineLRUCell_0/LRUCell_0/B_img",
+    "state_machine/step_2/optimizer_updates/rnn/OnlineLRUCell_0/LRUCell_0/B_real",
+    "state_machine/step_2/optimizer_updates/rnn/OnlineLRUCell_0/LRUCell_0/gamma_log",
+    "state_machine/step_2/optimizer_updates/rnn/OnlineLRUCell_0/LRUCell_0/nu_log",
+    "state_machine/step_2/optimizer_updates/rnn/OnlineLRUCell_0/LRUCell_0/theta_log",
+    "state_machine/step_2/optimizer_updates/td/actor/kernel",
+    "state_machine/step_2/optimizer_updates/td/critic/bias",
+    "state_machine/step_2/optimizer_updates/td/critic/kernel",
+    "state_machine/step_2/parameters/params/rnn/C_img",
+    "state_machine/step_2/parameters/params/rnn/C_real",
+    "state_machine/step_2/parameters/params/rnn/D",
+    "state_machine/step_2/parameters/params/rnn/OnlineLRUCell_0/LRUCell_0/B_img",
+    "state_machine/step_2/parameters/params/rnn/OnlineLRUCell_0/LRUCell_0/B_real",
+    "state_machine/step_2/parameters/params/rnn/OnlineLRUCell_0/LRUCell_0/gamma_log",
+    "state_machine/step_2/parameters/params/rnn/OnlineLRUCell_0/LRUCell_0/nu_log",
+    "state_machine/step_2/parameters/params/rnn/OnlineLRUCell_0/LRUCell_0/theta_log",
+    "state_machine/step_2/parameters/params/td/actor/kernel",
+    "state_machine/step_2/parameters/params/td/critic/bias",
+    "state_machine/step_2/parameters/params/td/critic/kernel",
+    "state_machine/step_2/recurrent_state/0",
+    "state_machine/step_2/recurrent_state/1/0",
+    "state_machine/step_2/recurrent_state/1/1",
+    "state_machine/step_2/recurrent_state/1/2",
+    "state_machine/step_2/sampled_next_action",
+    "state_machine/step_2/slow_parameters/params/rnn/C_img",
+    "state_machine/step_2/slow_parameters/params/rnn/C_real",
+    "state_machine/step_2/slow_parameters/params/rnn/D",
+    "state_machine/step_2/slow_parameters/params/rnn/OnlineLRUCell_0/LRUCell_0/B_img",
+    "state_machine/step_2/slow_parameters/params/rnn/OnlineLRUCell_0/LRUCell_0/B_real",
+    "state_machine/step_2/slow_parameters/params/rnn/OnlineLRUCell_0/LRUCell_0/gamma_log",
+    "state_machine/step_2/slow_parameters/params/rnn/OnlineLRUCell_0/LRUCell_0/nu_log",
+    "state_machine/step_2/slow_parameters/params/rnn/OnlineLRUCell_0/LRUCell_0/theta_log",
+    "state_machine/step_2/slow_parameters/params/td/actor/kernel",
+    "state_machine/step_2/slow_parameters/params/td/critic/bias",
+    "state_machine/step_2/slow_parameters/params/td/critic/kernel",
+    "state_machine/step_2/td_error",
+    "state_machine/step_2/value",
+    "state_machine/step_2/value_target",
+    "state_machine/step_3/action_key",
+    "state_machine/step_3/action_loc",
+    "state_machine/step_3/action_scale",
+    "state_machine/step_3/actor_loss",
+    "state_machine/step_3/average_reward",
+    "state_machine/step_3/carried_traces/rnn/C_img",
+    "state_machine/step_3/carried_traces/rnn/C_real",
+    "state_machine/step_3/carried_traces/rnn/D",
+    "state_machine/step_3/carried_traces/rnn/OnlineLRUCell_0/LRUCell_0/B_img",
+    "state_machine/step_3/carried_traces/rnn/OnlineLRUCell_0/LRUCell_0/B_real",
+    "state_machine/step_3/carried_traces/rnn/OnlineLRUCell_0/LRUCell_0/gamma_log",
+    "state_machine/step_3/carried_traces/rnn/OnlineLRUCell_0/LRUCell_0/nu_log",
+    "state_machine/step_3/carried_traces/rnn/OnlineLRUCell_0/LRUCell_0/theta_log",
+    "state_machine/step_3/carried_traces/td/actor/kernel",
+    "state_machine/step_3/carried_traces/td/critic/bias",
+    "state_machine/step_3/carried_traces/td/critic/kernel",
+    "state_machine/step_3/direct_gradients/params/rnn/C_img",
+    "state_machine/step_3/direct_gradients/params/rnn/C_real",
+    "state_machine/step_3/direct_gradients/params/rnn/D",
+    "state_machine/step_3/direct_gradients/params/rnn/OnlineLRUCell_0/LRUCell_0/B_img",
+    "state_machine/step_3/direct_gradients/params/rnn/OnlineLRUCell_0/LRUCell_0/B_real",
+    "state_machine/step_3/direct_gradients/params/rnn/OnlineLRUCell_0/LRUCell_0/gamma_log",
+    "state_machine/step_3/direct_gradients/params/rnn/OnlineLRUCell_0/LRUCell_0/nu_log",
+    "state_machine/step_3/direct_gradients/params/rnn/OnlineLRUCell_0/LRUCell_0/theta_log",
+    "state_machine/step_3/direct_gradients/params/td/actor/kernel",
+    "state_machine/step_3/direct_gradients/params/td/critic/bias",
+    "state_machine/step_3/direct_gradients/params/td/critic/kernel",
+    "state_machine/step_3/emphasis",
+    "state_machine/step_3/entropy",
+    "state_machine/step_3/environment/done",
+    "state_machine/step_3/environment/observation",
+    "state_machine/step_3/environment/reward",
+    "state_machine/step_3/environment_action",
+    "state_machine/step_3/gradients/params/rnn/C_img",
+    "state_machine/step_3/gradients/params/rnn/C_real",
+    "state_machine/step_3/gradients/params/rnn/D",
+    "state_machine/step_3/gradients/params/rnn/OnlineLRUCell_0/LRUCell_0/B_img",
+    "state_machine/step_3/gradients/params/rnn/OnlineLRUCell_0/LRUCell_0/B_real",
+    "state_machine/step_3/gradients/params/rnn/OnlineLRUCell_0/LRUCell_0/gamma_log",
+    "state_machine/step_3/gradients/params/rnn/OnlineLRUCell_0/LRUCell_0/nu_log",
+    "state_machine/step_3/gradients/params/rnn/OnlineLRUCell_0/LRUCell_0/theta_log",
+    "state_machine/step_3/gradients/params/td/actor/kernel",
+    "state_machine/step_3/gradients/params/td/critic/bias",
+    "state_machine/step_3/gradients/params/td/critic/kernel",
+    "state_machine/step_3/incoming_traces/rnn/C_img",
+    "state_machine/step_3/incoming_traces/rnn/C_real",
+    "state_machine/step_3/incoming_traces/rnn/D",
+    "state_machine/step_3/incoming_traces/rnn/OnlineLRUCell_0/LRUCell_0/B_img",
+    "state_machine/step_3/incoming_traces/rnn/OnlineLRUCell_0/LRUCell_0/B_real",
+    "state_machine/step_3/incoming_traces/rnn/OnlineLRUCell_0/LRUCell_0/gamma_log",
+    "state_machine/step_3/incoming_traces/rnn/OnlineLRUCell_0/LRUCell_0/nu_log",
+    "state_machine/step_3/incoming_traces/rnn/OnlineLRUCell_0/LRUCell_0/theta_log",
+    "state_machine/step_3/incoming_traces/td/actor/kernel",
+    "state_machine/step_3/incoming_traces/td/critic/bias",
+    "state_machine/step_3/incoming_traces/td/critic/kernel",
+    "state_machine/step_3/key_in",
+    "state_machine/step_3/key_out",
+    "state_machine/step_3/mean_directions/params/rnn/C_img",
+    "state_machine/step_3/mean_directions/params/rnn/C_real",
+    "state_machine/step_3/mean_directions/params/rnn/D",
+    "state_machine/step_3/mean_directions/params/rnn/OnlineLRUCell_0/LRUCell_0/B_img",
+    "state_machine/step_3/mean_directions/params/rnn/OnlineLRUCell_0/LRUCell_0/B_real",
+    "state_machine/step_3/mean_directions/params/rnn/OnlineLRUCell_0/LRUCell_0/gamma_log",
+    "state_machine/step_3/mean_directions/params/rnn/OnlineLRUCell_0/LRUCell_0/nu_log",
+    "state_machine/step_3/mean_directions/params/rnn/OnlineLRUCell_0/LRUCell_0/theta_log",
+    "state_machine/step_3/mean_directions/params/td/actor/kernel",
+    "state_machine/step_3/mean_directions/params/td/critic/bias",
+    "state_machine/step_3/mean_directions/params/td/critic/kernel",
+    "state_machine/step_3/model_input",
+    "state_machine/step_3/optimizer_state/inner_states/rnn/inner_state/count",
+    "state_machine/step_3/optimizer_state/inner_states/rnn/inner_state/hyperparams/learning_rate",
+    "state_machine/step_3/optimizer_state/inner_states/rnn/inner_state/inner_state/2/0/count",
+    "state_machine/step_3/optimizer_state/inner_states/rnn/inner_state/inner_state/2/0/mu/rnn/C_img",
+    "state_machine/step_3/optimizer_state/inner_states/rnn/inner_state/inner_state/2/0/mu/rnn/C_real",
+    "state_machine/step_3/optimizer_state/inner_states/rnn/inner_state/inner_state/2/0/mu/rnn/D",
+    "state_machine/step_3/optimizer_state/inner_states/rnn/inner_state/inner_state/2/0/mu/rnn/OnlineLRUCell_0/LRUCell_0/B_img",
+    "state_machine/step_3/optimizer_state/inner_states/rnn/inner_state/inner_state/2/0/mu/rnn/OnlineLRUCell_0/LRUCell_0/B_real",
+    "state_machine/step_3/optimizer_state/inner_states/rnn/inner_state/inner_state/2/0/mu/rnn/OnlineLRUCell_0/LRUCell_0/gamma_log",
+    "state_machine/step_3/optimizer_state/inner_states/rnn/inner_state/inner_state/2/0/mu/rnn/OnlineLRUCell_0/LRUCell_0/nu_log",
+    "state_machine/step_3/optimizer_state/inner_states/rnn/inner_state/inner_state/2/0/mu/rnn/OnlineLRUCell_0/LRUCell_0/theta_log",
+    "state_machine/step_3/optimizer_state/inner_states/rnn/inner_state/inner_state/2/0/nu/rnn/C_img",
+    "state_machine/step_3/optimizer_state/inner_states/rnn/inner_state/inner_state/2/0/nu/rnn/C_real",
+    "state_machine/step_3/optimizer_state/inner_states/rnn/inner_state/inner_state/2/0/nu/rnn/D",
+    "state_machine/step_3/optimizer_state/inner_states/rnn/inner_state/inner_state/2/0/nu/rnn/OnlineLRUCell_0/LRUCell_0/B_img",
+    "state_machine/step_3/optimizer_state/inner_states/rnn/inner_state/inner_state/2/0/nu/rnn/OnlineLRUCell_0/LRUCell_0/B_real",
+    "state_machine/step_3/optimizer_state/inner_states/rnn/inner_state/inner_state/2/0/nu/rnn/OnlineLRUCell_0/LRUCell_0/gamma_log",
+    "state_machine/step_3/optimizer_state/inner_states/rnn/inner_state/inner_state/2/0/nu/rnn/OnlineLRUCell_0/LRUCell_0/nu_log",
+    "state_machine/step_3/optimizer_state/inner_states/rnn/inner_state/inner_state/2/0/nu/rnn/OnlineLRUCell_0/LRUCell_0/theta_log",
+    "state_machine/step_3/optimizer_state/inner_states/td/inner_state/count",
+    "state_machine/step_3/optimizer_state/inner_states/td/inner_state/hyperparams/learning_rate",
+    "state_machine/step_3/optimizer_state/inner_states/td/inner_state/inner_state/2/0/count",
+    "state_machine/step_3/optimizer_state/inner_states/td/inner_state/inner_state/2/0/mu/td/actor/kernel",
+    "state_machine/step_3/optimizer_state/inner_states/td/inner_state/inner_state/2/0/mu/td/critic/bias",
+    "state_machine/step_3/optimizer_state/inner_states/td/inner_state/inner_state/2/0/mu/td/critic/kernel",
+    "state_machine/step_3/optimizer_state/inner_states/td/inner_state/inner_state/2/0/nu/td/actor/kernel",
+    "state_machine/step_3/optimizer_state/inner_states/td/inner_state/inner_state/2/0/nu/td/critic/bias",
+    "state_machine/step_3/optimizer_state/inner_states/td/inner_state/inner_state/2/0/nu/td/critic/kernel",
+    "state_machine/step_3/optimizer_updates/rnn/C_img",
+    "state_machine/step_3/optimizer_updates/rnn/C_real",
+    "state_machine/step_3/optimizer_updates/rnn/D",
+    "state_machine/step_3/optimizer_updates/rnn/OnlineLRUCell_0/LRUCell_0/B_img",
+    "state_machine/step_3/optimizer_updates/rnn/OnlineLRUCell_0/LRUCell_0/B_real",
+    "state_machine/step_3/optimizer_updates/rnn/OnlineLRUCell_0/LRUCell_0/gamma_log",
+    "state_machine/step_3/optimizer_updates/rnn/OnlineLRUCell_0/LRUCell_0/nu_log",
+    "state_machine/step_3/optimizer_updates/rnn/OnlineLRUCell_0/LRUCell_0/theta_log",
+    "state_machine/step_3/optimizer_updates/td/actor/kernel",
+    "state_machine/step_3/optimizer_updates/td/critic/bias",
+    "state_machine/step_3/optimizer_updates/td/critic/kernel",
+    "state_machine/step_3/parameters/params/rnn/C_img",
+    "state_machine/step_3/parameters/params/rnn/C_real",
+    "state_machine/step_3/parameters/params/rnn/D",
+    "state_machine/step_3/parameters/params/rnn/OnlineLRUCell_0/LRUCell_0/B_img",
+    "state_machine/step_3/parameters/params/rnn/OnlineLRUCell_0/LRUCell_0/B_real",
+    "state_machine/step_3/parameters/params/rnn/OnlineLRUCell_0/LRUCell_0/gamma_log",
+    "state_machine/step_3/parameters/params/rnn/OnlineLRUCell_0/LRUCell_0/nu_log",
+    "state_machine/step_3/parameters/params/rnn/OnlineLRUCell_0/LRUCell_0/theta_log",
+    "state_machine/step_3/parameters/params/td/actor/kernel",
+    "state_machine/step_3/parameters/params/td/critic/bias",
+    "state_machine/step_3/parameters/params/td/critic/kernel",
+    "state_machine/step_3/recurrent_state/0",
+    "state_machine/step_3/recurrent_state/1/0",
+    "state_machine/step_3/recurrent_state/1/1",
+    "state_machine/step_3/recurrent_state/1/2",
+    "state_machine/step_3/sampled_next_action",
+    "state_machine/step_3/slow_parameters/params/rnn/C_img",
+    "state_machine/step_3/slow_parameters/params/rnn/C_real",
+    "state_machine/step_3/slow_parameters/params/rnn/D",
+    "state_machine/step_3/slow_parameters/params/rnn/OnlineLRUCell_0/LRUCell_0/B_img",
+    "state_machine/step_3/slow_parameters/params/rnn/OnlineLRUCell_0/LRUCell_0/B_real",
+    "state_machine/step_3/slow_parameters/params/rnn/OnlineLRUCell_0/LRUCell_0/gamma_log",
+    "state_machine/step_3/slow_parameters/params/rnn/OnlineLRUCell_0/LRUCell_0/nu_log",
+    "state_machine/step_3/slow_parameters/params/rnn/OnlineLRUCell_0/LRUCell_0/theta_log",
+    "state_machine/step_3/slow_parameters/params/td/actor/kernel",
+    "state_machine/step_3/slow_parameters/params/td/critic/bias",
+    "state_machine/step_3/slow_parameters/params/td/critic/kernel",
+    "state_machine/step_3/td_error",
+    "state_machine/step_3/value",
+    "state_machine/step_3/value_target",
+    "state_machine/two_env/delta",
+    "state_machine/two_env/direction",
     "step/td_error"
   ],
   "leaves": {
@@ -742,6 +1227,3295 @@
         2
       ]
     },
+    "state_machine/init/action": {
+      "dtype": "float32",
+      "shape": [
+        1,
+        2
+      ]
+    },
+    "state_machine/init/average_reward": {
+      "dtype": "float32",
+      "shape": [
+        1
+      ]
+    },
+    "state_machine/init/emphasis": {
+      "dtype": "float32",
+      "shape": [
+        1
+      ]
+    },
+    "state_machine/init/environment/done": {
+      "dtype": "bool",
+      "shape": [
+        1
+      ]
+    },
+    "state_machine/init/environment/observation": {
+      "dtype": "float32",
+      "shape": [
+        1,
+        1
+      ]
+    },
+    "state_machine/init/environment/reward": {
+      "dtype": "float32",
+      "shape": [
+        1
+      ]
+    },
+    "state_machine/init/hidden": {
+      "dtype": "float32",
+      "shape": [
+        1,
+        2
+      ]
+    },
+    "state_machine/init/model_input": {
+      "dtype": "float32",
+      "shape": [
+        1,
+        4
+      ]
+    },
+    "state_machine/init/optimizer_state/inner_states/rnn/inner_state/count": {
+      "dtype": "int32",
+      "shape": []
+    },
+    "state_machine/init/optimizer_state/inner_states/rnn/inner_state/hyperparams/learning_rate": {
+      "dtype": "float32",
+      "shape": []
+    },
+    "state_machine/init/optimizer_state/inner_states/rnn/inner_state/inner_state/2/0/count": {
+      "dtype": "int32",
+      "shape": []
+    },
+    "state_machine/init/optimizer_state/inner_states/rnn/inner_state/inner_state/2/0/mu/rnn/C_img": {
+      "dtype": "float32",
+      "shape": [
+        2,
+        2
+      ]
+    },
+    "state_machine/init/optimizer_state/inner_states/rnn/inner_state/inner_state/2/0/mu/rnn/C_real": {
+      "dtype": "float32",
+      "shape": [
+        2,
+        2
+      ]
+    },
+    "state_machine/init/optimizer_state/inner_states/rnn/inner_state/inner_state/2/0/mu/rnn/D": {
+      "dtype": "float32",
+      "shape": [
+        2,
+        4
+      ]
+    },
+    "state_machine/init/optimizer_state/inner_states/rnn/inner_state/inner_state/2/0/mu/rnn/OnlineLRUCell_0/LRUCell_0/B_img": {
+      "dtype": "float32",
+      "shape": [
+        2,
+        4
+      ]
+    },
+    "state_machine/init/optimizer_state/inner_states/rnn/inner_state/inner_state/2/0/mu/rnn/OnlineLRUCell_0/LRUCell_0/B_real": {
+      "dtype": "float32",
+      "shape": [
+        2,
+        4
+      ]
+    },
+    "state_machine/init/optimizer_state/inner_states/rnn/inner_state/inner_state/2/0/mu/rnn/OnlineLRUCell_0/LRUCell_0/gamma_log": {
+      "dtype": "float32",
+      "shape": [
+        2
+      ]
+    },
+    "state_machine/init/optimizer_state/inner_states/rnn/inner_state/inner_state/2/0/mu/rnn/OnlineLRUCell_0/LRUCell_0/nu_log": {
+      "dtype": "float32",
+      "shape": [
+        2
+      ]
+    },
+    "state_machine/init/optimizer_state/inner_states/rnn/inner_state/inner_state/2/0/mu/rnn/OnlineLRUCell_0/LRUCell_0/theta_log": {
+      "dtype": "float32",
+      "shape": [
+        2
+      ]
+    },
+    "state_machine/init/optimizer_state/inner_states/rnn/inner_state/inner_state/2/0/nu/rnn/C_img": {
+      "dtype": "float32",
+      "shape": [
+        2,
+        2
+      ]
+    },
+    "state_machine/init/optimizer_state/inner_states/rnn/inner_state/inner_state/2/0/nu/rnn/C_real": {
+      "dtype": "float32",
+      "shape": [
+        2,
+        2
+      ]
+    },
+    "state_machine/init/optimizer_state/inner_states/rnn/inner_state/inner_state/2/0/nu/rnn/D": {
+      "dtype": "float32",
+      "shape": [
+        2,
+        4
+      ]
+    },
+    "state_machine/init/optimizer_state/inner_states/rnn/inner_state/inner_state/2/0/nu/rnn/OnlineLRUCell_0/LRUCell_0/B_img": {
+      "dtype": "float32",
+      "shape": [
+        2,
+        4
+      ]
+    },
+    "state_machine/init/optimizer_state/inner_states/rnn/inner_state/inner_state/2/0/nu/rnn/OnlineLRUCell_0/LRUCell_0/B_real": {
+      "dtype": "float32",
+      "shape": [
+        2,
+        4
+      ]
+    },
+    "state_machine/init/optimizer_state/inner_states/rnn/inner_state/inner_state/2/0/nu/rnn/OnlineLRUCell_0/LRUCell_0/gamma_log": {
+      "dtype": "float32",
+      "shape": [
+        2
+      ]
+    },
+    "state_machine/init/optimizer_state/inner_states/rnn/inner_state/inner_state/2/0/nu/rnn/OnlineLRUCell_0/LRUCell_0/nu_log": {
+      "dtype": "float32",
+      "shape": [
+        2
+      ]
+    },
+    "state_machine/init/optimizer_state/inner_states/rnn/inner_state/inner_state/2/0/nu/rnn/OnlineLRUCell_0/LRUCell_0/theta_log": {
+      "dtype": "float32",
+      "shape": [
+        2
+      ]
+    },
+    "state_machine/init/optimizer_state/inner_states/td/inner_state/count": {
+      "dtype": "int32",
+      "shape": []
+    },
+    "state_machine/init/optimizer_state/inner_states/td/inner_state/hyperparams/learning_rate": {
+      "dtype": "float32",
+      "shape": []
+    },
+    "state_machine/init/optimizer_state/inner_states/td/inner_state/inner_state/2/0/count": {
+      "dtype": "int32",
+      "shape": []
+    },
+    "state_machine/init/optimizer_state/inner_states/td/inner_state/inner_state/2/0/mu/td/actor/kernel": {
+      "dtype": "float32",
+      "shape": [
+        2,
+        4
+      ]
+    },
+    "state_machine/init/optimizer_state/inner_states/td/inner_state/inner_state/2/0/mu/td/critic/bias": {
+      "dtype": "float32",
+      "shape": [
+        1
+      ]
+    },
+    "state_machine/init/optimizer_state/inner_states/td/inner_state/inner_state/2/0/mu/td/critic/kernel": {
+      "dtype": "float32",
+      "shape": [
+        2,
+        1
+      ]
+    },
+    "state_machine/init/optimizer_state/inner_states/td/inner_state/inner_state/2/0/nu/td/actor/kernel": {
+      "dtype": "float32",
+      "shape": [
+        2,
+        4
+      ]
+    },
+    "state_machine/init/optimizer_state/inner_states/td/inner_state/inner_state/2/0/nu/td/critic/bias": {
+      "dtype": "float32",
+      "shape": [
+        1
+      ]
+    },
+    "state_machine/init/optimizer_state/inner_states/td/inner_state/inner_state/2/0/nu/td/critic/kernel": {
+      "dtype": "float32",
+      "shape": [
+        2,
+        1
+      ]
+    },
+    "state_machine/init/parameters/params/rnn/C_img": {
+      "dtype": "float32",
+      "shape": [
+        2,
+        2
+      ]
+    },
+    "state_machine/init/parameters/params/rnn/C_real": {
+      "dtype": "float32",
+      "shape": [
+        2,
+        2
+      ]
+    },
+    "state_machine/init/parameters/params/rnn/D": {
+      "dtype": "float32",
+      "shape": [
+        2,
+        4
+      ]
+    },
+    "state_machine/init/parameters/params/rnn/OnlineLRUCell_0/LRUCell_0/B_img": {
+      "dtype": "float32",
+      "shape": [
+        2,
+        4
+      ]
+    },
+    "state_machine/init/parameters/params/rnn/OnlineLRUCell_0/LRUCell_0/B_real": {
+      "dtype": "float32",
+      "shape": [
+        2,
+        4
+      ]
+    },
+    "state_machine/init/parameters/params/rnn/OnlineLRUCell_0/LRUCell_0/gamma_log": {
+      "dtype": "float32",
+      "shape": [
+        2
+      ]
+    },
+    "state_machine/init/parameters/params/rnn/OnlineLRUCell_0/LRUCell_0/nu_log": {
+      "dtype": "float32",
+      "shape": [
+        2
+      ]
+    },
+    "state_machine/init/parameters/params/rnn/OnlineLRUCell_0/LRUCell_0/theta_log": {
+      "dtype": "float32",
+      "shape": [
+        2
+      ]
+    },
+    "state_machine/init/parameters/params/td/actor/kernel": {
+      "dtype": "float32",
+      "shape": [
+        2,
+        4
+      ]
+    },
+    "state_machine/init/parameters/params/td/critic/bias": {
+      "dtype": "float32",
+      "shape": [
+        1
+      ]
+    },
+    "state_machine/init/parameters/params/td/critic/kernel": {
+      "dtype": "float32",
+      "shape": [
+        2,
+        1
+      ]
+    },
+    "state_machine/init/recurrent_state/0": {
+      "dtype": "complex64",
+      "shape": [
+        1,
+        2
+      ]
+    },
+    "state_machine/init/recurrent_state/1/0": {
+      "dtype": "complex64",
+      "shape": [
+        1,
+        2
+      ]
+    },
+    "state_machine/init/recurrent_state/1/1": {
+      "dtype": "complex64",
+      "shape": [
+        1,
+        2
+      ]
+    },
+    "state_machine/init/recurrent_state/1/2": {
+      "dtype": "complex64",
+      "shape": [
+        1,
+        2,
+        4
+      ]
+    },
+    "state_machine/init/traces/rnn/C_img": {
+      "dtype": "float32",
+      "shape": [
+        1,
+        2,
+        2
+      ]
+    },
+    "state_machine/init/traces/rnn/C_real": {
+      "dtype": "float32",
+      "shape": [
+        1,
+        2,
+        2
+      ]
+    },
+    "state_machine/init/traces/rnn/D": {
+      "dtype": "float32",
+      "shape": [
+        1,
+        2,
+        4
+      ]
+    },
+    "state_machine/init/traces/rnn/OnlineLRUCell_0/LRUCell_0/B_img": {
+      "dtype": "float32",
+      "shape": [
+        1,
+        2,
+        4
+      ]
+    },
+    "state_machine/init/traces/rnn/OnlineLRUCell_0/LRUCell_0/B_real": {
+      "dtype": "float32",
+      "shape": [
+        1,
+        2,
+        4
+      ]
+    },
+    "state_machine/init/traces/rnn/OnlineLRUCell_0/LRUCell_0/gamma_log": {
+      "dtype": "float32",
+      "shape": [
+        1,
+        2
+      ]
+    },
+    "state_machine/init/traces/rnn/OnlineLRUCell_0/LRUCell_0/nu_log": {
+      "dtype": "float32",
+      "shape": [
+        1,
+        2
+      ]
+    },
+    "state_machine/init/traces/rnn/OnlineLRUCell_0/LRUCell_0/theta_log": {
+      "dtype": "float32",
+      "shape": [
+        1,
+        2
+      ]
+    },
+    "state_machine/init/traces/td/actor/kernel": {
+      "dtype": "float32",
+      "shape": [
+        1,
+        2,
+        4
+      ]
+    },
+    "state_machine/init/traces/td/critic/bias": {
+      "dtype": "float32",
+      "shape": [
+        1,
+        1
+      ]
+    },
+    "state_machine/init/traces/td/critic/kernel": {
+      "dtype": "float32",
+      "shape": [
+        1,
+        2,
+        1
+      ]
+    },
+    "state_machine/init/value": {
+      "dtype": "float32",
+      "shape": [
+        1,
+        1
+      ]
+    },
+    "state_machine/keys/env": {
+      "dtype": "uint32",
+      "shape": [
+        2
+      ]
+    },
+    "state_machine/keys/init": {
+      "dtype": "uint32",
+      "shape": [
+        2
+      ]
+    },
+    "state_machine/keys/model": {
+      "dtype": "uint32",
+      "shape": [
+        2
+      ]
+    },
+    "state_machine/keys/outer": {
+      "dtype": "uint32",
+      "shape": [
+        2
+      ]
+    },
+    "state_machine/keys/root": {
+      "dtype": "uint32",
+      "shape": [
+        2
+      ]
+    },
+    "state_machine/keys/step": {
+      "dtype": "uint32",
+      "shape": [
+        2
+      ]
+    },
+    "state_machine/step_1/action_key": {
+      "dtype": "uint32",
+      "shape": [
+        2
+      ]
+    },
+    "state_machine/step_1/action_loc": {
+      "dtype": "float32",
+      "shape": [
+        1,
+        2
+      ]
+    },
+    "state_machine/step_1/action_scale": {
+      "dtype": "float32",
+      "shape": [
+        1,
+        2
+      ]
+    },
+    "state_machine/step_1/actor_loss": {
+      "dtype": "float32",
+      "shape": [
+        1
+      ]
+    },
+    "state_machine/step_1/average_reward": {
+      "dtype": "float32",
+      "shape": [
+        1
+      ]
+    },
+    "state_machine/step_1/carried_traces/rnn/C_img": {
+      "dtype": "float32",
+      "shape": [
+        1,
+        2,
+        2
+      ]
+    },
+    "state_machine/step_1/carried_traces/rnn/C_real": {
+      "dtype": "float32",
+      "shape": [
+        1,
+        2,
+        2
+      ]
+    },
+    "state_machine/step_1/carried_traces/rnn/D": {
+      "dtype": "float32",
+      "shape": [
+        1,
+        2,
+        4
+      ]
+    },
+    "state_machine/step_1/carried_traces/rnn/OnlineLRUCell_0/LRUCell_0/B_img": {
+      "dtype": "float32",
+      "shape": [
+        1,
+        2,
+        4
+      ]
+    },
+    "state_machine/step_1/carried_traces/rnn/OnlineLRUCell_0/LRUCell_0/B_real": {
+      "dtype": "float32",
+      "shape": [
+        1,
+        2,
+        4
+      ]
+    },
+    "state_machine/step_1/carried_traces/rnn/OnlineLRUCell_0/LRUCell_0/gamma_log": {
+      "dtype": "float32",
+      "shape": [
+        1,
+        2
+      ]
+    },
+    "state_machine/step_1/carried_traces/rnn/OnlineLRUCell_0/LRUCell_0/nu_log": {
+      "dtype": "float32",
+      "shape": [
+        1,
+        2
+      ]
+    },
+    "state_machine/step_1/carried_traces/rnn/OnlineLRUCell_0/LRUCell_0/theta_log": {
+      "dtype": "float32",
+      "shape": [
+        1,
+        2
+      ]
+    },
+    "state_machine/step_1/carried_traces/td/actor/kernel": {
+      "dtype": "float32",
+      "shape": [
+        1,
+        2,
+        4
+      ]
+    },
+    "state_machine/step_1/carried_traces/td/critic/bias": {
+      "dtype": "float32",
+      "shape": [
+        1,
+        1
+      ]
+    },
+    "state_machine/step_1/carried_traces/td/critic/kernel": {
+      "dtype": "float32",
+      "shape": [
+        1,
+        2,
+        1
+      ]
+    },
+    "state_machine/step_1/direct_gradients/params/rnn/C_img": {
+      "dtype": "float32",
+      "shape": [
+        1,
+        2,
+        2
+      ]
+    },
+    "state_machine/step_1/direct_gradients/params/rnn/C_real": {
+      "dtype": "float32",
+      "shape": [
+        1,
+        2,
+        2
+      ]
+    },
+    "state_machine/step_1/direct_gradients/params/rnn/D": {
+      "dtype": "float32",
+      "shape": [
+        1,
+        2,
+        4
+      ]
+    },
+    "state_machine/step_1/direct_gradients/params/rnn/OnlineLRUCell_0/LRUCell_0/B_img": {
+      "dtype": "float32",
+      "shape": [
+        1,
+        2,
+        4
+      ]
+    },
+    "state_machine/step_1/direct_gradients/params/rnn/OnlineLRUCell_0/LRUCell_0/B_real": {
+      "dtype": "float32",
+      "shape": [
+        1,
+        2,
+        4
+      ]
+    },
+    "state_machine/step_1/direct_gradients/params/rnn/OnlineLRUCell_0/LRUCell_0/gamma_log": {
+      "dtype": "float32",
+      "shape": [
+        1,
+        2
+      ]
+    },
+    "state_machine/step_1/direct_gradients/params/rnn/OnlineLRUCell_0/LRUCell_0/nu_log": {
+      "dtype": "float32",
+      "shape": [
+        1,
+        2
+      ]
+    },
+    "state_machine/step_1/direct_gradients/params/rnn/OnlineLRUCell_0/LRUCell_0/theta_log": {
+      "dtype": "float32",
+      "shape": [
+        1,
+        2
+      ]
+    },
+    "state_machine/step_1/direct_gradients/params/td/actor/kernel": {
+      "dtype": "float32",
+      "shape": [
+        1,
+        2,
+        4
+      ]
+    },
+    "state_machine/step_1/direct_gradients/params/td/critic/bias": {
+      "dtype": "float32",
+      "shape": [
+        1,
+        1
+      ]
+    },
+    "state_machine/step_1/direct_gradients/params/td/critic/kernel": {
+      "dtype": "float32",
+      "shape": [
+        1,
+        2,
+        1
+      ]
+    },
+    "state_machine/step_1/emphasis": {
+      "dtype": "float32",
+      "shape": [
+        1
+      ]
+    },
+    "state_machine/step_1/entropy": {
+      "dtype": "float32",
+      "shape": [
+        1
+      ]
+    },
+    "state_machine/step_1/environment/done": {
+      "dtype": "bool",
+      "shape": [
+        1
+      ]
+    },
+    "state_machine/step_1/environment/observation": {
+      "dtype": "float32",
+      "shape": [
+        1,
+        1
+      ]
+    },
+    "state_machine/step_1/environment/reward": {
+      "dtype": "float32",
+      "shape": [
+        1
+      ]
+    },
+    "state_machine/step_1/environment_action": {
+      "dtype": "float32",
+      "shape": [
+        1,
+        2
+      ]
+    },
+    "state_machine/step_1/gradients/params/rnn/C_img": {
+      "dtype": "float32",
+      "shape": [
+        1,
+        2,
+        2
+      ]
+    },
+    "state_machine/step_1/gradients/params/rnn/C_real": {
+      "dtype": "float32",
+      "shape": [
+        1,
+        2,
+        2
+      ]
+    },
+    "state_machine/step_1/gradients/params/rnn/D": {
+      "dtype": "float32",
+      "shape": [
+        1,
+        2,
+        4
+      ]
+    },
+    "state_machine/step_1/gradients/params/rnn/OnlineLRUCell_0/LRUCell_0/B_img": {
+      "dtype": "float32",
+      "shape": [
+        1,
+        2,
+        4
+      ]
+    },
+    "state_machine/step_1/gradients/params/rnn/OnlineLRUCell_0/LRUCell_0/B_real": {
+      "dtype": "float32",
+      "shape": [
+        1,
+        2,
+        4
+      ]
+    },
+    "state_machine/step_1/gradients/params/rnn/OnlineLRUCell_0/LRUCell_0/gamma_log": {
+      "dtype": "float32",
+      "shape": [
+        1,
+        2
+      ]
+    },
+    "state_machine/step_1/gradients/params/rnn/OnlineLRUCell_0/LRUCell_0/nu_log": {
+      "dtype": "float32",
+      "shape": [
+        1,
+        2
+      ]
+    },
+    "state_machine/step_1/gradients/params/rnn/OnlineLRUCell_0/LRUCell_0/theta_log": {
+      "dtype": "float32",
+      "shape": [
+        1,
+        2
+      ]
+    },
+    "state_machine/step_1/gradients/params/td/actor/kernel": {
+      "dtype": "float32",
+      "shape": [
+        1,
+        2,
+        4
+      ]
+    },
+    "state_machine/step_1/gradients/params/td/critic/bias": {
+      "dtype": "float32",
+      "shape": [
+        1,
+        1
+      ]
+    },
+    "state_machine/step_1/gradients/params/td/critic/kernel": {
+      "dtype": "float32",
+      "shape": [
+        1,
+        2,
+        1
+      ]
+    },
+    "state_machine/step_1/incoming_traces/rnn/C_img": {
+      "dtype": "float32",
+      "shape": [
+        1,
+        2,
+        2
+      ]
+    },
+    "state_machine/step_1/incoming_traces/rnn/C_real": {
+      "dtype": "float32",
+      "shape": [
+        1,
+        2,
+        2
+      ]
+    },
+    "state_machine/step_1/incoming_traces/rnn/D": {
+      "dtype": "float32",
+      "shape": [
+        1,
+        2,
+        4
+      ]
+    },
+    "state_machine/step_1/incoming_traces/rnn/OnlineLRUCell_0/LRUCell_0/B_img": {
+      "dtype": "float32",
+      "shape": [
+        1,
+        2,
+        4
+      ]
+    },
+    "state_machine/step_1/incoming_traces/rnn/OnlineLRUCell_0/LRUCell_0/B_real": {
+      "dtype": "float32",
+      "shape": [
+        1,
+        2,
+        4
+      ]
+    },
+    "state_machine/step_1/incoming_traces/rnn/OnlineLRUCell_0/LRUCell_0/gamma_log": {
+      "dtype": "float32",
+      "shape": [
+        1,
+        2
+      ]
+    },
+    "state_machine/step_1/incoming_traces/rnn/OnlineLRUCell_0/LRUCell_0/nu_log": {
+      "dtype": "float32",
+      "shape": [
+        1,
+        2
+      ]
+    },
+    "state_machine/step_1/incoming_traces/rnn/OnlineLRUCell_0/LRUCell_0/theta_log": {
+      "dtype": "float32",
+      "shape": [
+        1,
+        2
+      ]
+    },
+    "state_machine/step_1/incoming_traces/td/actor/kernel": {
+      "dtype": "float32",
+      "shape": [
+        1,
+        2,
+        4
+      ]
+    },
+    "state_machine/step_1/incoming_traces/td/critic/bias": {
+      "dtype": "float32",
+      "shape": [
+        1,
+        1
+      ]
+    },
+    "state_machine/step_1/incoming_traces/td/critic/kernel": {
+      "dtype": "float32",
+      "shape": [
+        1,
+        2,
+        1
+      ]
+    },
+    "state_machine/step_1/key_in": {
+      "dtype": "uint32",
+      "shape": [
+        2
+      ]
+    },
+    "state_machine/step_1/key_out": {
+      "dtype": "uint32",
+      "shape": [
+        2
+      ]
+    },
+    "state_machine/step_1/mean_directions/params/rnn/C_img": {
+      "dtype": "float32",
+      "shape": [
+        2,
+        2
+      ]
+    },
+    "state_machine/step_1/mean_directions/params/rnn/C_real": {
+      "dtype": "float32",
+      "shape": [
+        2,
+        2
+      ]
+    },
+    "state_machine/step_1/mean_directions/params/rnn/D": {
+      "dtype": "float32",
+      "shape": [
+        2,
+        4
+      ]
+    },
+    "state_machine/step_1/mean_directions/params/rnn/OnlineLRUCell_0/LRUCell_0/B_img": {
+      "dtype": "float32",
+      "shape": [
+        2,
+        4
+      ]
+    },
+    "state_machine/step_1/mean_directions/params/rnn/OnlineLRUCell_0/LRUCell_0/B_real": {
+      "dtype": "float32",
+      "shape": [
+        2,
+        4
+      ]
+    },
+    "state_machine/step_1/mean_directions/params/rnn/OnlineLRUCell_0/LRUCell_0/gamma_log": {
+      "dtype": "float32",
+      "shape": [
+        2
+      ]
+    },
+    "state_machine/step_1/mean_directions/params/rnn/OnlineLRUCell_0/LRUCell_0/nu_log": {
+      "dtype": "float32",
+      "shape": [
+        2
+      ]
+    },
+    "state_machine/step_1/mean_directions/params/rnn/OnlineLRUCell_0/LRUCell_0/theta_log": {
+      "dtype": "float32",
+      "shape": [
+        2
+      ]
+    },
+    "state_machine/step_1/mean_directions/params/td/actor/kernel": {
+      "dtype": "float32",
+      "shape": [
+        2,
+        4
+      ]
+    },
+    "state_machine/step_1/mean_directions/params/td/critic/bias": {
+      "dtype": "float32",
+      "shape": [
+        1
+      ]
+    },
+    "state_machine/step_1/mean_directions/params/td/critic/kernel": {
+      "dtype": "float32",
+      "shape": [
+        2,
+        1
+      ]
+    },
+    "state_machine/step_1/model_input": {
+      "dtype": "float32",
+      "shape": [
+        1,
+        4
+      ]
+    },
+    "state_machine/step_1/optimizer_state/inner_states/rnn/inner_state/count": {
+      "dtype": "int32",
+      "shape": []
+    },
+    "state_machine/step_1/optimizer_state/inner_states/rnn/inner_state/hyperparams/learning_rate": {
+      "dtype": "float32",
+      "shape": []
+    },
+    "state_machine/step_1/optimizer_state/inner_states/rnn/inner_state/inner_state/2/0/count": {
+      "dtype": "int32",
+      "shape": []
+    },
+    "state_machine/step_1/optimizer_state/inner_states/rnn/inner_state/inner_state/2/0/mu/rnn/C_img": {
+      "dtype": "float32",
+      "shape": [
+        2,
+        2
+      ]
+    },
+    "state_machine/step_1/optimizer_state/inner_states/rnn/inner_state/inner_state/2/0/mu/rnn/C_real": {
+      "dtype": "float32",
+      "shape": [
+        2,
+        2
+      ]
+    },
+    "state_machine/step_1/optimizer_state/inner_states/rnn/inner_state/inner_state/2/0/mu/rnn/D": {
+      "dtype": "float32",
+      "shape": [
+        2,
+        4
+      ]
+    },
+    "state_machine/step_1/optimizer_state/inner_states/rnn/inner_state/inner_state/2/0/mu/rnn/OnlineLRUCell_0/LRUCell_0/B_img": {
+      "dtype": "float32",
+      "shape": [
+        2,
+        4
+      ]
+    },
+    "state_machine/step_1/optimizer_state/inner_states/rnn/inner_state/inner_state/2/0/mu/rnn/OnlineLRUCell_0/LRUCell_0/B_real": {
+      "dtype": "float32",
+      "shape": [
+        2,
+        4
+      ]
+    },
+    "state_machine/step_1/optimizer_state/inner_states/rnn/inner_state/inner_state/2/0/mu/rnn/OnlineLRUCell_0/LRUCell_0/gamma_log": {
+      "dtype": "float32",
+      "shape": [
+        2
+      ]
+    },
+    "state_machine/step_1/optimizer_state/inner_states/rnn/inner_state/inner_state/2/0/mu/rnn/OnlineLRUCell_0/LRUCell_0/nu_log": {
+      "dtype": "float32",
+      "shape": [
+        2
+      ]
+    },
+    "state_machine/step_1/optimizer_state/inner_states/rnn/inner_state/inner_state/2/0/mu/rnn/OnlineLRUCell_0/LRUCell_0/theta_log": {
+      "dtype": "float32",
+      "shape": [
+        2
+      ]
+    },
+    "state_machine/step_1/optimizer_state/inner_states/rnn/inner_state/inner_state/2/0/nu/rnn/C_img": {
+      "dtype": "float32",
+      "shape": [
+        2,
+        2
+      ]
+    },
+    "state_machine/step_1/optimizer_state/inner_states/rnn/inner_state/inner_state/2/0/nu/rnn/C_real": {
+      "dtype": "float32",
+      "shape": [
+        2,
+        2
+      ]
+    },
+    "state_machine/step_1/optimizer_state/inner_states/rnn/inner_state/inner_state/2/0/nu/rnn/D": {
+      "dtype": "float32",
+      "shape": [
+        2,
+        4
+      ]
+    },
+    "state_machine/step_1/optimizer_state/inner_states/rnn/inner_state/inner_state/2/0/nu/rnn/OnlineLRUCell_0/LRUCell_0/B_img": {
+      "dtype": "float32",
+      "shape": [
+        2,
+        4
+      ]
+    },
+    "state_machine/step_1/optimizer_state/inner_states/rnn/inner_state/inner_state/2/0/nu/rnn/OnlineLRUCell_0/LRUCell_0/B_real": {
+      "dtype": "float32",
+      "shape": [
+        2,
+        4
+      ]
+    },
+    "state_machine/step_1/optimizer_state/inner_states/rnn/inner_state/inner_state/2/0/nu/rnn/OnlineLRUCell_0/LRUCell_0/gamma_log": {
+      "dtype": "float32",
+      "shape": [
+        2
+      ]
+    },
+    "state_machine/step_1/optimizer_state/inner_states/rnn/inner_state/inner_state/2/0/nu/rnn/OnlineLRUCell_0/LRUCell_0/nu_log": {
+      "dtype": "float32",
+      "shape": [
+        2
+      ]
+    },
+    "state_machine/step_1/optimizer_state/inner_states/rnn/inner_state/inner_state/2/0/nu/rnn/OnlineLRUCell_0/LRUCell_0/theta_log": {
+      "dtype": "float32",
+      "shape": [
+        2
+      ]
+    },
+    "state_machine/step_1/optimizer_state/inner_states/td/inner_state/count": {
+      "dtype": "int32",
+      "shape": []
+    },
+    "state_machine/step_1/optimizer_state/inner_states/td/inner_state/hyperparams/learning_rate": {
+      "dtype": "float32",
+      "shape": []
+    },
+    "state_machine/step_1/optimizer_state/inner_states/td/inner_state/inner_state/2/0/count": {
+      "dtype": "int32",
+      "shape": []
+    },
+    "state_machine/step_1/optimizer_state/inner_states/td/inner_state/inner_state/2/0/mu/td/actor/kernel": {
+      "dtype": "float32",
+      "shape": [
+        2,
+        4
+      ]
+    },
+    "state_machine/step_1/optimizer_state/inner_states/td/inner_state/inner_state/2/0/mu/td/critic/bias": {
+      "dtype": "float32",
+      "shape": [
+        1
+      ]
+    },
+    "state_machine/step_1/optimizer_state/inner_states/td/inner_state/inner_state/2/0/mu/td/critic/kernel": {
+      "dtype": "float32",
+      "shape": [
+        2,
+        1
+      ]
+    },
+    "state_machine/step_1/optimizer_state/inner_states/td/inner_state/inner_state/2/0/nu/td/actor/kernel": {
+      "dtype": "float32",
+      "shape": [
+        2,
+        4
+      ]
+    },
+    "state_machine/step_1/optimizer_state/inner_states/td/inner_state/inner_state/2/0/nu/td/critic/bias": {
+      "dtype": "float32",
+      "shape": [
+        1
+      ]
+    },
+    "state_machine/step_1/optimizer_state/inner_states/td/inner_state/inner_state/2/0/nu/td/critic/kernel": {
+      "dtype": "float32",
+      "shape": [
+        2,
+        1
+      ]
+    },
+    "state_machine/step_1/optimizer_updates/rnn/C_img": {
+      "dtype": "float32",
+      "shape": [
+        2,
+        2
+      ]
+    },
+    "state_machine/step_1/optimizer_updates/rnn/C_real": {
+      "dtype": "float32",
+      "shape": [
+        2,
+        2
+      ]
+    },
+    "state_machine/step_1/optimizer_updates/rnn/D": {
+      "dtype": "float32",
+      "shape": [
+        2,
+        4
+      ]
+    },
+    "state_machine/step_1/optimizer_updates/rnn/OnlineLRUCell_0/LRUCell_0/B_img": {
+      "dtype": "float32",
+      "shape": [
+        2,
+        4
+      ]
+    },
+    "state_machine/step_1/optimizer_updates/rnn/OnlineLRUCell_0/LRUCell_0/B_real": {
+      "dtype": "float32",
+      "shape": [
+        2,
+        4
+      ]
+    },
+    "state_machine/step_1/optimizer_updates/rnn/OnlineLRUCell_0/LRUCell_0/gamma_log": {
+      "dtype": "float32",
+      "shape": [
+        2
+      ]
+    },
+    "state_machine/step_1/optimizer_updates/rnn/OnlineLRUCell_0/LRUCell_0/nu_log": {
+      "dtype": "float32",
+      "shape": [
+        2
+      ]
+    },
+    "state_machine/step_1/optimizer_updates/rnn/OnlineLRUCell_0/LRUCell_0/theta_log": {
+      "dtype": "float32",
+      "shape": [
+        2
+      ]
+    },
+    "state_machine/step_1/optimizer_updates/td/actor/kernel": {
+      "dtype": "float32",
+      "shape": [
+        2,
+        4
+      ]
+    },
+    "state_machine/step_1/optimizer_updates/td/critic/bias": {
+      "dtype": "float32",
+      "shape": [
+        1
+      ]
+    },
+    "state_machine/step_1/optimizer_updates/td/critic/kernel": {
+      "dtype": "float32",
+      "shape": [
+        2,
+        1
+      ]
+    },
+    "state_machine/step_1/parameters/params/rnn/C_img": {
+      "dtype": "float32",
+      "shape": [
+        2,
+        2
+      ]
+    },
+    "state_machine/step_1/parameters/params/rnn/C_real": {
+      "dtype": "float32",
+      "shape": [
+        2,
+        2
+      ]
+    },
+    "state_machine/step_1/parameters/params/rnn/D": {
+      "dtype": "float32",
+      "shape": [
+        2,
+        4
+      ]
+    },
+    "state_machine/step_1/parameters/params/rnn/OnlineLRUCell_0/LRUCell_0/B_img": {
+      "dtype": "float32",
+      "shape": [
+        2,
+        4
+      ]
+    },
+    "state_machine/step_1/parameters/params/rnn/OnlineLRUCell_0/LRUCell_0/B_real": {
+      "dtype": "float32",
+      "shape": [
+        2,
+        4
+      ]
+    },
+    "state_machine/step_1/parameters/params/rnn/OnlineLRUCell_0/LRUCell_0/gamma_log": {
+      "dtype": "float32",
+      "shape": [
+        2
+      ]
+    },
+    "state_machine/step_1/parameters/params/rnn/OnlineLRUCell_0/LRUCell_0/nu_log": {
+      "dtype": "float32",
+      "shape": [
+        2
+      ]
+    },
+    "state_machine/step_1/parameters/params/rnn/OnlineLRUCell_0/LRUCell_0/theta_log": {
+      "dtype": "float32",
+      "shape": [
+        2
+      ]
+    },
+    "state_machine/step_1/parameters/params/td/actor/kernel": {
+      "dtype": "float32",
+      "shape": [
+        2,
+        4
+      ]
+    },
+    "state_machine/step_1/parameters/params/td/critic/bias": {
+      "dtype": "float32",
+      "shape": [
+        1
+      ]
+    },
+    "state_machine/step_1/parameters/params/td/critic/kernel": {
+      "dtype": "float32",
+      "shape": [
+        2,
+        1
+      ]
+    },
+    "state_machine/step_1/recurrent_state/0": {
+      "dtype": "complex64",
+      "shape": [
+        1,
+        2
+      ]
+    },
+    "state_machine/step_1/recurrent_state/1/0": {
+      "dtype": "complex64",
+      "shape": [
+        1,
+        2
+      ]
+    },
+    "state_machine/step_1/recurrent_state/1/1": {
+      "dtype": "complex64",
+      "shape": [
+        1,
+        2
+      ]
+    },
+    "state_machine/step_1/recurrent_state/1/2": {
+      "dtype": "complex64",
+      "shape": [
+        1,
+        2,
+        4
+      ]
+    },
+    "state_machine/step_1/sampled_next_action": {
+      "dtype": "float32",
+      "shape": [
+        1,
+        2
+      ]
+    },
+    "state_machine/step_1/slow_parameters/params/rnn/C_img": {
+      "dtype": "float32",
+      "shape": [
+        2,
+        2
+      ]
+    },
+    "state_machine/step_1/slow_parameters/params/rnn/C_real": {
+      "dtype": "float32",
+      "shape": [
+        2,
+        2
+      ]
+    },
+    "state_machine/step_1/slow_parameters/params/rnn/D": {
+      "dtype": "float32",
+      "shape": [
+        2,
+        4
+      ]
+    },
+    "state_machine/step_1/slow_parameters/params/rnn/OnlineLRUCell_0/LRUCell_0/B_img": {
+      "dtype": "float32",
+      "shape": [
+        2,
+        4
+      ]
+    },
+    "state_machine/step_1/slow_parameters/params/rnn/OnlineLRUCell_0/LRUCell_0/B_real": {
+      "dtype": "float32",
+      "shape": [
+        2,
+        4
+      ]
+    },
+    "state_machine/step_1/slow_parameters/params/rnn/OnlineLRUCell_0/LRUCell_0/gamma_log": {
+      "dtype": "float32",
+      "shape": [
+        2
+      ]
+    },
+    "state_machine/step_1/slow_parameters/params/rnn/OnlineLRUCell_0/LRUCell_0/nu_log": {
+      "dtype": "float32",
+      "shape": [
+        2
+      ]
+    },
+    "state_machine/step_1/slow_parameters/params/rnn/OnlineLRUCell_0/LRUCell_0/theta_log": {
+      "dtype": "float32",
+      "shape": [
+        2
+      ]
+    },
+    "state_machine/step_1/slow_parameters/params/td/actor/kernel": {
+      "dtype": "float32",
+      "shape": [
+        2,
+        4
+      ]
+    },
+    "state_machine/step_1/slow_parameters/params/td/critic/bias": {
+      "dtype": "float32",
+      "shape": [
+        1
+      ]
+    },
+    "state_machine/step_1/slow_parameters/params/td/critic/kernel": {
+      "dtype": "float32",
+      "shape": [
+        2,
+        1
+      ]
+    },
+    "state_machine/step_1/td_error": {
+      "dtype": "float32",
+      "shape": [
+        1
+      ]
+    },
+    "state_machine/step_1/value": {
+      "dtype": "float32",
+      "shape": [
+        1,
+        1
+      ]
+    },
+    "state_machine/step_1/value_target": {
+      "dtype": "float32",
+      "shape": [
+        1
+      ]
+    },
+    "state_machine/step_2/action_key": {
+      "dtype": "uint32",
+      "shape": [
+        2
+      ]
+    },
+    "state_machine/step_2/action_loc": {
+      "dtype": "float32",
+      "shape": [
+        1,
+        2
+      ]
+    },
+    "state_machine/step_2/action_scale": {
+      "dtype": "float32",
+      "shape": [
+        1,
+        2
+      ]
+    },
+    "state_machine/step_2/actor_loss": {
+      "dtype": "float32",
+      "shape": [
+        1
+      ]
+    },
+    "state_machine/step_2/average_reward": {
+      "dtype": "float32",
+      "shape": [
+        1
+      ]
+    },
+    "state_machine/step_2/carried_traces/rnn/C_img": {
+      "dtype": "float32",
+      "shape": [
+        1,
+        2,
+        2
+      ]
+    },
+    "state_machine/step_2/carried_traces/rnn/C_real": {
+      "dtype": "float32",
+      "shape": [
+        1,
+        2,
+        2
+      ]
+    },
+    "state_machine/step_2/carried_traces/rnn/D": {
+      "dtype": "float32",
+      "shape": [
+        1,
+        2,
+        4
+      ]
+    },
+    "state_machine/step_2/carried_traces/rnn/OnlineLRUCell_0/LRUCell_0/B_img": {
+      "dtype": "float32",
+      "shape": [
+        1,
+        2,
+        4
+      ]
+    },
+    "state_machine/step_2/carried_traces/rnn/OnlineLRUCell_0/LRUCell_0/B_real": {
+      "dtype": "float32",
+      "shape": [
+        1,
+        2,
+        4
+      ]
+    },
+    "state_machine/step_2/carried_traces/rnn/OnlineLRUCell_0/LRUCell_0/gamma_log": {
+      "dtype": "float32",
+      "shape": [
+        1,
+        2
+      ]
+    },
+    "state_machine/step_2/carried_traces/rnn/OnlineLRUCell_0/LRUCell_0/nu_log": {
+      "dtype": "float32",
+      "shape": [
+        1,
+        2
+      ]
+    },
+    "state_machine/step_2/carried_traces/rnn/OnlineLRUCell_0/LRUCell_0/theta_log": {
+      "dtype": "float32",
+      "shape": [
+        1,
+        2
+      ]
+    },
+    "state_machine/step_2/carried_traces/td/actor/kernel": {
+      "dtype": "float32",
+      "shape": [
+        1,
+        2,
+        4
+      ]
+    },
+    "state_machine/step_2/carried_traces/td/critic/bias": {
+      "dtype": "float32",
+      "shape": [
+        1,
+        1
+      ]
+    },
+    "state_machine/step_2/carried_traces/td/critic/kernel": {
+      "dtype": "float32",
+      "shape": [
+        1,
+        2,
+        1
+      ]
+    },
+    "state_machine/step_2/direct_gradients/params/rnn/C_img": {
+      "dtype": "float32",
+      "shape": [
+        1,
+        2,
+        2
+      ]
+    },
+    "state_machine/step_2/direct_gradients/params/rnn/C_real": {
+      "dtype": "float32",
+      "shape": [
+        1,
+        2,
+        2
+      ]
+    },
+    "state_machine/step_2/direct_gradients/params/rnn/D": {
+      "dtype": "float32",
+      "shape": [
+        1,
+        2,
+        4
+      ]
+    },
+    "state_machine/step_2/direct_gradients/params/rnn/OnlineLRUCell_0/LRUCell_0/B_img": {
+      "dtype": "float32",
+      "shape": [
+        1,
+        2,
+        4
+      ]
+    },
+    "state_machine/step_2/direct_gradients/params/rnn/OnlineLRUCell_0/LRUCell_0/B_real": {
+      "dtype": "float32",
+      "shape": [
+        1,
+        2,
+        4
+      ]
+    },
+    "state_machine/step_2/direct_gradients/params/rnn/OnlineLRUCell_0/LRUCell_0/gamma_log": {
+      "dtype": "float32",
+      "shape": [
+        1,
+        2
+      ]
+    },
+    "state_machine/step_2/direct_gradients/params/rnn/OnlineLRUCell_0/LRUCell_0/nu_log": {
+      "dtype": "float32",
+      "shape": [
+        1,
+        2
+      ]
+    },
+    "state_machine/step_2/direct_gradients/params/rnn/OnlineLRUCell_0/LRUCell_0/theta_log": {
+      "dtype": "float32",
+      "shape": [
+        1,
+        2
+      ]
+    },
+    "state_machine/step_2/direct_gradients/params/td/actor/kernel": {
+      "dtype": "float32",
+      "shape": [
+        1,
+        2,
+        4
+      ]
+    },
+    "state_machine/step_2/direct_gradients/params/td/critic/bias": {
+      "dtype": "float32",
+      "shape": [
+        1,
+        1
+      ]
+    },
+    "state_machine/step_2/direct_gradients/params/td/critic/kernel": {
+      "dtype": "float32",
+      "shape": [
+        1,
+        2,
+        1
+      ]
+    },
+    "state_machine/step_2/emphasis": {
+      "dtype": "float32",
+      "shape": [
+        1
+      ]
+    },
+    "state_machine/step_2/entropy": {
+      "dtype": "float32",
+      "shape": [
+        1
+      ]
+    },
+    "state_machine/step_2/environment/done": {
+      "dtype": "bool",
+      "shape": [
+        1
+      ]
+    },
+    "state_machine/step_2/environment/observation": {
+      "dtype": "float32",
+      "shape": [
+        1,
+        1
+      ]
+    },
+    "state_machine/step_2/environment/reward": {
+      "dtype": "float32",
+      "shape": [
+        1
+      ]
+    },
+    "state_machine/step_2/environment_action": {
+      "dtype": "float32",
+      "shape": [
+        1,
+        2
+      ]
+    },
+    "state_machine/step_2/gradients/params/rnn/C_img": {
+      "dtype": "float32",
+      "shape": [
+        1,
+        2,
+        2
+      ]
+    },
+    "state_machine/step_2/gradients/params/rnn/C_real": {
+      "dtype": "float32",
+      "shape": [
+        1,
+        2,
+        2
+      ]
+    },
+    "state_machine/step_2/gradients/params/rnn/D": {
+      "dtype": "float32",
+      "shape": [
+        1,
+        2,
+        4
+      ]
+    },
+    "state_machine/step_2/gradients/params/rnn/OnlineLRUCell_0/LRUCell_0/B_img": {
+      "dtype": "float32",
+      "shape": [
+        1,
+        2,
+        4
+      ]
+    },
+    "state_machine/step_2/gradients/params/rnn/OnlineLRUCell_0/LRUCell_0/B_real": {
+      "dtype": "float32",
+      "shape": [
+        1,
+        2,
+        4
+      ]
+    },
+    "state_machine/step_2/gradients/params/rnn/OnlineLRUCell_0/LRUCell_0/gamma_log": {
+      "dtype": "float32",
+      "shape": [
+        1,
+        2
+      ]
+    },
+    "state_machine/step_2/gradients/params/rnn/OnlineLRUCell_0/LRUCell_0/nu_log": {
+      "dtype": "float32",
+      "shape": [
+        1,
+        2
+      ]
+    },
+    "state_machine/step_2/gradients/params/rnn/OnlineLRUCell_0/LRUCell_0/theta_log": {
+      "dtype": "float32",
+      "shape": [
+        1,
+        2
+      ]
+    },
+    "state_machine/step_2/gradients/params/td/actor/kernel": {
+      "dtype": "float32",
+      "shape": [
+        1,
+        2,
+        4
+      ]
+    },
+    "state_machine/step_2/gradients/params/td/critic/bias": {
+      "dtype": "float32",
+      "shape": [
+        1,
+        1
+      ]
+    },
+    "state_machine/step_2/gradients/params/td/critic/kernel": {
+      "dtype": "float32",
+      "shape": [
+        1,
+        2,
+        1
+      ]
+    },
+    "state_machine/step_2/incoming_traces/rnn/C_img": {
+      "dtype": "float32",
+      "shape": [
+        1,
+        2,
+        2
+      ]
+    },
+    "state_machine/step_2/incoming_traces/rnn/C_real": {
+      "dtype": "float32",
+      "shape": [
+        1,
+        2,
+        2
+      ]
+    },
+    "state_machine/step_2/incoming_traces/rnn/D": {
+      "dtype": "float32",
+      "shape": [
+        1,
+        2,
+        4
+      ]
+    },
+    "state_machine/step_2/incoming_traces/rnn/OnlineLRUCell_0/LRUCell_0/B_img": {
+      "dtype": "float32",
+      "shape": [
+        1,
+        2,
+        4
+      ]
+    },
+    "state_machine/step_2/incoming_traces/rnn/OnlineLRUCell_0/LRUCell_0/B_real": {
+      "dtype": "float32",
+      "shape": [
+        1,
+        2,
+        4
+      ]
+    },
+    "state_machine/step_2/incoming_traces/rnn/OnlineLRUCell_0/LRUCell_0/gamma_log": {
+      "dtype": "float32",
+      "shape": [
+        1,
+        2
+      ]
+    },
+    "state_machine/step_2/incoming_traces/rnn/OnlineLRUCell_0/LRUCell_0/nu_log": {
+      "dtype": "float32",
+      "shape": [
+        1,
+        2
+      ]
+    },
+    "state_machine/step_2/incoming_traces/rnn/OnlineLRUCell_0/LRUCell_0/theta_log": {
+      "dtype": "float32",
+      "shape": [
+        1,
+        2
+      ]
+    },
+    "state_machine/step_2/incoming_traces/td/actor/kernel": {
+      "dtype": "float32",
+      "shape": [
+        1,
+        2,
+        4
+      ]
+    },
+    "state_machine/step_2/incoming_traces/td/critic/bias": {
+      "dtype": "float32",
+      "shape": [
+        1,
+        1
+      ]
+    },
+    "state_machine/step_2/incoming_traces/td/critic/kernel": {
+      "dtype": "float32",
+      "shape": [
+        1,
+        2,
+        1
+      ]
+    },
+    "state_machine/step_2/key_in": {
+      "dtype": "uint32",
+      "shape": [
+        2
+      ]
+    },
+    "state_machine/step_2/key_out": {
+      "dtype": "uint32",
+      "shape": [
+        2
+      ]
+    },
+    "state_machine/step_2/mean_directions/params/rnn/C_img": {
+      "dtype": "float32",
+      "shape": [
+        2,
+        2
+      ]
+    },
+    "state_machine/step_2/mean_directions/params/rnn/C_real": {
+      "dtype": "float32",
+      "shape": [
+        2,
+        2
+      ]
+    },
+    "state_machine/step_2/mean_directions/params/rnn/D": {
+      "dtype": "float32",
+      "shape": [
+        2,
+        4
+      ]
+    },
+    "state_machine/step_2/mean_directions/params/rnn/OnlineLRUCell_0/LRUCell_0/B_img": {
+      "dtype": "float32",
+      "shape": [
+        2,
+        4
+      ]
+    },
+    "state_machine/step_2/mean_directions/params/rnn/OnlineLRUCell_0/LRUCell_0/B_real": {
+      "dtype": "float32",
+      "shape": [
+        2,
+        4
+      ]
+    },
+    "state_machine/step_2/mean_directions/params/rnn/OnlineLRUCell_0/LRUCell_0/gamma_log": {
+      "dtype": "float32",
+      "shape": [
+        2
+      ]
+    },
+    "state_machine/step_2/mean_directions/params/rnn/OnlineLRUCell_0/LRUCell_0/nu_log": {
+      "dtype": "float32",
+      "shape": [
+        2
+      ]
+    },
+    "state_machine/step_2/mean_directions/params/rnn/OnlineLRUCell_0/LRUCell_0/theta_log": {
+      "dtype": "float32",
+      "shape": [
+        2
+      ]
+    },
+    "state_machine/step_2/mean_directions/params/td/actor/kernel": {
+      "dtype": "float32",
+      "shape": [
+        2,
+        4
+      ]
+    },
+    "state_machine/step_2/mean_directions/params/td/critic/bias": {
+      "dtype": "float32",
+      "shape": [
+        1
+      ]
+    },
+    "state_machine/step_2/mean_directions/params/td/critic/kernel": {
+      "dtype": "float32",
+      "shape": [
+        2,
+        1
+      ]
+    },
+    "state_machine/step_2/model_input": {
+      "dtype": "float32",
+      "shape": [
+        1,
+        4
+      ]
+    },
+    "state_machine/step_2/optimizer_state/inner_states/rnn/inner_state/count": {
+      "dtype": "int32",
+      "shape": []
+    },
+    "state_machine/step_2/optimizer_state/inner_states/rnn/inner_state/hyperparams/learning_rate": {
+      "dtype": "float32",
+      "shape": []
+    },
+    "state_machine/step_2/optimizer_state/inner_states/rnn/inner_state/inner_state/2/0/count": {
+      "dtype": "int32",
+      "shape": []
+    },
+    "state_machine/step_2/optimizer_state/inner_states/rnn/inner_state/inner_state/2/0/mu/rnn/C_img": {
+      "dtype": "float32",
+      "shape": [
+        2,
+        2
+      ]
+    },
+    "state_machine/step_2/optimizer_state/inner_states/rnn/inner_state/inner_state/2/0/mu/rnn/C_real": {
+      "dtype": "float32",
+      "shape": [
+        2,
+        2
+      ]
+    },
+    "state_machine/step_2/optimizer_state/inner_states/rnn/inner_state/inner_state/2/0/mu/rnn/D": {
+      "dtype": "float32",
+      "shape": [
+        2,
+        4
+      ]
+    },
+    "state_machine/step_2/optimizer_state/inner_states/rnn/inner_state/inner_state/2/0/mu/rnn/OnlineLRUCell_0/LRUCell_0/B_img": {
+      "dtype": "float32",
+      "shape": [
+        2,
+        4
+      ]
+    },
+    "state_machine/step_2/optimizer_state/inner_states/rnn/inner_state/inner_state/2/0/mu/rnn/OnlineLRUCell_0/LRUCell_0/B_real": {
+      "dtype": "float32",
+      "shape": [
+        2,
+        4
+      ]
+    },
+    "state_machine/step_2/optimizer_state/inner_states/rnn/inner_state/inner_state/2/0/mu/rnn/OnlineLRUCell_0/LRUCell_0/gamma_log": {
+      "dtype": "float32",
+      "shape": [
+        2
+      ]
+    },
+    "state_machine/step_2/optimizer_state/inner_states/rnn/inner_state/inner_state/2/0/mu/rnn/OnlineLRUCell_0/LRUCell_0/nu_log": {
+      "dtype": "float32",
+      "shape": [
+        2
+      ]
+    },
+    "state_machine/step_2/optimizer_state/inner_states/rnn/inner_state/inner_state/2/0/mu/rnn/OnlineLRUCell_0/LRUCell_0/theta_log": {
+      "dtype": "float32",
+      "shape": [
+        2
+      ]
+    },
+    "state_machine/step_2/optimizer_state/inner_states/rnn/inner_state/inner_state/2/0/nu/rnn/C_img": {
+      "dtype": "float32",
+      "shape": [
+        2,
+        2
+      ]
+    },
+    "state_machine/step_2/optimizer_state/inner_states/rnn/inner_state/inner_state/2/0/nu/rnn/C_real": {
+      "dtype": "float32",
+      "shape": [
+        2,
+        2
+      ]
+    },
+    "state_machine/step_2/optimizer_state/inner_states/rnn/inner_state/inner_state/2/0/nu/rnn/D": {
+      "dtype": "float32",
+      "shape": [
+        2,
+        4
+      ]
+    },
+    "state_machine/step_2/optimizer_state/inner_states/rnn/inner_state/inner_state/2/0/nu/rnn/OnlineLRUCell_0/LRUCell_0/B_img": {
+      "dtype": "float32",
+      "shape": [
+        2,
+        4
+      ]
+    },
+    "state_machine/step_2/optimizer_state/inner_states/rnn/inner_state/inner_state/2/0/nu/rnn/OnlineLRUCell_0/LRUCell_0/B_real": {
+      "dtype": "float32",
+      "shape": [
+        2,
+        4
+      ]
+    },
+    "state_machine/step_2/optimizer_state/inner_states/rnn/inner_state/inner_state/2/0/nu/rnn/OnlineLRUCell_0/LRUCell_0/gamma_log": {
+      "dtype": "float32",
+      "shape": [
+        2
+      ]
+    },
+    "state_machine/step_2/optimizer_state/inner_states/rnn/inner_state/inner_state/2/0/nu/rnn/OnlineLRUCell_0/LRUCell_0/nu_log": {
+      "dtype": "float32",
+      "shape": [
+        2
+      ]
+    },
+    "state_machine/step_2/optimizer_state/inner_states/rnn/inner_state/inner_state/2/0/nu/rnn/OnlineLRUCell_0/LRUCell_0/theta_log": {
+      "dtype": "float32",
+      "shape": [
+        2
+      ]
+    },
+    "state_machine/step_2/optimizer_state/inner_states/td/inner_state/count": {
+      "dtype": "int32",
+      "shape": []
+    },
+    "state_machine/step_2/optimizer_state/inner_states/td/inner_state/hyperparams/learning_rate": {
+      "dtype": "float32",
+      "shape": []
+    },
+    "state_machine/step_2/optimizer_state/inner_states/td/inner_state/inner_state/2/0/count": {
+      "dtype": "int32",
+      "shape": []
+    },
+    "state_machine/step_2/optimizer_state/inner_states/td/inner_state/inner_state/2/0/mu/td/actor/kernel": {
+      "dtype": "float32",
+      "shape": [
+        2,
+        4
+      ]
+    },
+    "state_machine/step_2/optimizer_state/inner_states/td/inner_state/inner_state/2/0/mu/td/critic/bias": {
+      "dtype": "float32",
+      "shape": [
+        1
+      ]
+    },
+    "state_machine/step_2/optimizer_state/inner_states/td/inner_state/inner_state/2/0/mu/td/critic/kernel": {
+      "dtype": "float32",
+      "shape": [
+        2,
+        1
+      ]
+    },
+    "state_machine/step_2/optimizer_state/inner_states/td/inner_state/inner_state/2/0/nu/td/actor/kernel": {
+      "dtype": "float32",
+      "shape": [
+        2,
+        4
+      ]
+    },
+    "state_machine/step_2/optimizer_state/inner_states/td/inner_state/inner_state/2/0/nu/td/critic/bias": {
+      "dtype": "float32",
+      "shape": [
+        1
+      ]
+    },
+    "state_machine/step_2/optimizer_state/inner_states/td/inner_state/inner_state/2/0/nu/td/critic/kernel": {
+      "dtype": "float32",
+      "shape": [
+        2,
+        1
+      ]
+    },
+    "state_machine/step_2/optimizer_updates/rnn/C_img": {
+      "dtype": "float32",
+      "shape": [
+        2,
+        2
+      ]
+    },
+    "state_machine/step_2/optimizer_updates/rnn/C_real": {
+      "dtype": "float32",
+      "shape": [
+        2,
+        2
+      ]
+    },
+    "state_machine/step_2/optimizer_updates/rnn/D": {
+      "dtype": "float32",
+      "shape": [
+        2,
+        4
+      ]
+    },
+    "state_machine/step_2/optimizer_updates/rnn/OnlineLRUCell_0/LRUCell_0/B_img": {
+      "dtype": "float32",
+      "shape": [
+        2,
+        4
+      ]
+    },
+    "state_machine/step_2/optimizer_updates/rnn/OnlineLRUCell_0/LRUCell_0/B_real": {
+      "dtype": "float32",
+      "shape": [
+        2,
+        4
+      ]
+    },
+    "state_machine/step_2/optimizer_updates/rnn/OnlineLRUCell_0/LRUCell_0/gamma_log": {
+      "dtype": "float32",
+      "shape": [
+        2
+      ]
+    },
+    "state_machine/step_2/optimizer_updates/rnn/OnlineLRUCell_0/LRUCell_0/nu_log": {
+      "dtype": "float32",
+      "shape": [
+        2
+      ]
+    },
+    "state_machine/step_2/optimizer_updates/rnn/OnlineLRUCell_0/LRUCell_0/theta_log": {
+      "dtype": "float32",
+      "shape": [
+        2
+      ]
+    },
+    "state_machine/step_2/optimizer_updates/td/actor/kernel": {
+      "dtype": "float32",
+      "shape": [
+        2,
+        4
+      ]
+    },
+    "state_machine/step_2/optimizer_updates/td/critic/bias": {
+      "dtype": "float32",
+      "shape": [
+        1
+      ]
+    },
+    "state_machine/step_2/optimizer_updates/td/critic/kernel": {
+      "dtype": "float32",
+      "shape": [
+        2,
+        1
+      ]
+    },
+    "state_machine/step_2/parameters/params/rnn/C_img": {
+      "dtype": "float32",
+      "shape": [
+        2,
+        2
+      ]
+    },
+    "state_machine/step_2/parameters/params/rnn/C_real": {
+      "dtype": "float32",
+      "shape": [
+        2,
+        2
+      ]
+    },
+    "state_machine/step_2/parameters/params/rnn/D": {
+      "dtype": "float32",
+      "shape": [
+        2,
+        4
+      ]
+    },
+    "state_machine/step_2/parameters/params/rnn/OnlineLRUCell_0/LRUCell_0/B_img": {
+      "dtype": "float32",
+      "shape": [
+        2,
+        4
+      ]
+    },
+    "state_machine/step_2/parameters/params/rnn/OnlineLRUCell_0/LRUCell_0/B_real": {
+      "dtype": "float32",
+      "shape": [
+        2,
+        4
+      ]
+    },
+    "state_machine/step_2/parameters/params/rnn/OnlineLRUCell_0/LRUCell_0/gamma_log": {
+      "dtype": "float32",
+      "shape": [
+        2
+      ]
+    },
+    "state_machine/step_2/parameters/params/rnn/OnlineLRUCell_0/LRUCell_0/nu_log": {
+      "dtype": "float32",
+      "shape": [
+        2
+      ]
+    },
+    "state_machine/step_2/parameters/params/rnn/OnlineLRUCell_0/LRUCell_0/theta_log": {
+      "dtype": "float32",
+      "shape": [
+        2
+      ]
+    },
+    "state_machine/step_2/parameters/params/td/actor/kernel": {
+      "dtype": "float32",
+      "shape": [
+        2,
+        4
+      ]
+    },
+    "state_machine/step_2/parameters/params/td/critic/bias": {
+      "dtype": "float32",
+      "shape": [
+        1
+      ]
+    },
+    "state_machine/step_2/parameters/params/td/critic/kernel": {
+      "dtype": "float32",
+      "shape": [
+        2,
+        1
+      ]
+    },
+    "state_machine/step_2/recurrent_state/0": {
+      "dtype": "complex64",
+      "shape": [
+        1,
+        2
+      ]
+    },
+    "state_machine/step_2/recurrent_state/1/0": {
+      "dtype": "complex64",
+      "shape": [
+        1,
+        2
+      ]
+    },
+    "state_machine/step_2/recurrent_state/1/1": {
+      "dtype": "complex64",
+      "shape": [
+        1,
+        2
+      ]
+    },
+    "state_machine/step_2/recurrent_state/1/2": {
+      "dtype": "complex64",
+      "shape": [
+        1,
+        2,
+        4
+      ]
+    },
+    "state_machine/step_2/sampled_next_action": {
+      "dtype": "float32",
+      "shape": [
+        1,
+        2
+      ]
+    },
+    "state_machine/step_2/slow_parameters/params/rnn/C_img": {
+      "dtype": "float32",
+      "shape": [
+        2,
+        2
+      ]
+    },
+    "state_machine/step_2/slow_parameters/params/rnn/C_real": {
+      "dtype": "float32",
+      "shape": [
+        2,
+        2
+      ]
+    },
+    "state_machine/step_2/slow_parameters/params/rnn/D": {
+      "dtype": "float32",
+      "shape": [
+        2,
+        4
+      ]
+    },
+    "state_machine/step_2/slow_parameters/params/rnn/OnlineLRUCell_0/LRUCell_0/B_img": {
+      "dtype": "float32",
+      "shape": [
+        2,
+        4
+      ]
+    },
+    "state_machine/step_2/slow_parameters/params/rnn/OnlineLRUCell_0/LRUCell_0/B_real": {
+      "dtype": "float32",
+      "shape": [
+        2,
+        4
+      ]
+    },
+    "state_machine/step_2/slow_parameters/params/rnn/OnlineLRUCell_0/LRUCell_0/gamma_log": {
+      "dtype": "float32",
+      "shape": [
+        2
+      ]
+    },
+    "state_machine/step_2/slow_parameters/params/rnn/OnlineLRUCell_0/LRUCell_0/nu_log": {
+      "dtype": "float32",
+      "shape": [
+        2
+      ]
+    },
+    "state_machine/step_2/slow_parameters/params/rnn/OnlineLRUCell_0/LRUCell_0/theta_log": {
+      "dtype": "float32",
+      "shape": [
+        2
+      ]
+    },
+    "state_machine/step_2/slow_parameters/params/td/actor/kernel": {
+      "dtype": "float32",
+      "shape": [
+        2,
+        4
+      ]
+    },
+    "state_machine/step_2/slow_parameters/params/td/critic/bias": {
+      "dtype": "float32",
+      "shape": [
+        1
+      ]
+    },
+    "state_machine/step_2/slow_parameters/params/td/critic/kernel": {
+      "dtype": "float32",
+      "shape": [
+        2,
+        1
+      ]
+    },
+    "state_machine/step_2/td_error": {
+      "dtype": "float32",
+      "shape": [
+        1
+      ]
+    },
+    "state_machine/step_2/value": {
+      "dtype": "float32",
+      "shape": [
+        1,
+        1
+      ]
+    },
+    "state_machine/step_2/value_target": {
+      "dtype": "float32",
+      "shape": [
+        1
+      ]
+    },
+    "state_machine/step_3/action_key": {
+      "dtype": "uint32",
+      "shape": [
+        2
+      ]
+    },
+    "state_machine/step_3/action_loc": {
+      "dtype": "float32",
+      "shape": [
+        1,
+        2
+      ]
+    },
+    "state_machine/step_3/action_scale": {
+      "dtype": "float32",
+      "shape": [
+        1,
+        2
+      ]
+    },
+    "state_machine/step_3/actor_loss": {
+      "dtype": "float32",
+      "shape": [
+        1
+      ]
+    },
+    "state_machine/step_3/average_reward": {
+      "dtype": "float32",
+      "shape": [
+        1
+      ]
+    },
+    "state_machine/step_3/carried_traces/rnn/C_img": {
+      "dtype": "float32",
+      "shape": [
+        1,
+        2,
+        2
+      ]
+    },
+    "state_machine/step_3/carried_traces/rnn/C_real": {
+      "dtype": "float32",
+      "shape": [
+        1,
+        2,
+        2
+      ]
+    },
+    "state_machine/step_3/carried_traces/rnn/D": {
+      "dtype": "float32",
+      "shape": [
+        1,
+        2,
+        4
+      ]
+    },
+    "state_machine/step_3/carried_traces/rnn/OnlineLRUCell_0/LRUCell_0/B_img": {
+      "dtype": "float32",
+      "shape": [
+        1,
+        2,
+        4
+      ]
+    },
+    "state_machine/step_3/carried_traces/rnn/OnlineLRUCell_0/LRUCell_0/B_real": {
+      "dtype": "float32",
+      "shape": [
+        1,
+        2,
+        4
+      ]
+    },
+    "state_machine/step_3/carried_traces/rnn/OnlineLRUCell_0/LRUCell_0/gamma_log": {
+      "dtype": "float32",
+      "shape": [
+        1,
+        2
+      ]
+    },
+    "state_machine/step_3/carried_traces/rnn/OnlineLRUCell_0/LRUCell_0/nu_log": {
+      "dtype": "float32",
+      "shape": [
+        1,
+        2
+      ]
+    },
+    "state_machine/step_3/carried_traces/rnn/OnlineLRUCell_0/LRUCell_0/theta_log": {
+      "dtype": "float32",
+      "shape": [
+        1,
+        2
+      ]
+    },
+    "state_machine/step_3/carried_traces/td/actor/kernel": {
+      "dtype": "float32",
+      "shape": [
+        1,
+        2,
+        4
+      ]
+    },
+    "state_machine/step_3/carried_traces/td/critic/bias": {
+      "dtype": "float32",
+      "shape": [
+        1,
+        1
+      ]
+    },
+    "state_machine/step_3/carried_traces/td/critic/kernel": {
+      "dtype": "float32",
+      "shape": [
+        1,
+        2,
+        1
+      ]
+    },
+    "state_machine/step_3/direct_gradients/params/rnn/C_img": {
+      "dtype": "float32",
+      "shape": [
+        1,
+        2,
+        2
+      ]
+    },
+    "state_machine/step_3/direct_gradients/params/rnn/C_real": {
+      "dtype": "float32",
+      "shape": [
+        1,
+        2,
+        2
+      ]
+    },
+    "state_machine/step_3/direct_gradients/params/rnn/D": {
+      "dtype": "float32",
+      "shape": [
+        1,
+        2,
+        4
+      ]
+    },
+    "state_machine/step_3/direct_gradients/params/rnn/OnlineLRUCell_0/LRUCell_0/B_img": {
+      "dtype": "float32",
+      "shape": [
+        1,
+        2,
+        4
+      ]
+    },
+    "state_machine/step_3/direct_gradients/params/rnn/OnlineLRUCell_0/LRUCell_0/B_real": {
+      "dtype": "float32",
+      "shape": [
+        1,
+        2,
+        4
+      ]
+    },
+    "state_machine/step_3/direct_gradients/params/rnn/OnlineLRUCell_0/LRUCell_0/gamma_log": {
+      "dtype": "float32",
+      "shape": [
+        1,
+        2
+      ]
+    },
+    "state_machine/step_3/direct_gradients/params/rnn/OnlineLRUCell_0/LRUCell_0/nu_log": {
+      "dtype": "float32",
+      "shape": [
+        1,
+        2
+      ]
+    },
+    "state_machine/step_3/direct_gradients/params/rnn/OnlineLRUCell_0/LRUCell_0/theta_log": {
+      "dtype": "float32",
+      "shape": [
+        1,
+        2
+      ]
+    },
+    "state_machine/step_3/direct_gradients/params/td/actor/kernel": {
+      "dtype": "float32",
+      "shape": [
+        1,
+        2,
+        4
+      ]
+    },
+    "state_machine/step_3/direct_gradients/params/td/critic/bias": {
+      "dtype": "float32",
+      "shape": [
+        1,
+        1
+      ]
+    },
+    "state_machine/step_3/direct_gradients/params/td/critic/kernel": {
+      "dtype": "float32",
+      "shape": [
+        1,
+        2,
+        1
+      ]
+    },
+    "state_machine/step_3/emphasis": {
+      "dtype": "float32",
+      "shape": [
+        1
+      ]
+    },
+    "state_machine/step_3/entropy": {
+      "dtype": "float32",
+      "shape": [
+        1
+      ]
+    },
+    "state_machine/step_3/environment/done": {
+      "dtype": "bool",
+      "shape": [
+        1
+      ]
+    },
+    "state_machine/step_3/environment/observation": {
+      "dtype": "float32",
+      "shape": [
+        1,
+        1
+      ]
+    },
+    "state_machine/step_3/environment/reward": {
+      "dtype": "float32",
+      "shape": [
+        1
+      ]
+    },
+    "state_machine/step_3/environment_action": {
+      "dtype": "float32",
+      "shape": [
+        1,
+        2
+      ]
+    },
+    "state_machine/step_3/gradients/params/rnn/C_img": {
+      "dtype": "float32",
+      "shape": [
+        1,
+        2,
+        2
+      ]
+    },
+    "state_machine/step_3/gradients/params/rnn/C_real": {
+      "dtype": "float32",
+      "shape": [
+        1,
+        2,
+        2
+      ]
+    },
+    "state_machine/step_3/gradients/params/rnn/D": {
+      "dtype": "float32",
+      "shape": [
+        1,
+        2,
+        4
+      ]
+    },
+    "state_machine/step_3/gradients/params/rnn/OnlineLRUCell_0/LRUCell_0/B_img": {
+      "dtype": "float32",
+      "shape": [
+        1,
+        2,
+        4
+      ]
+    },
+    "state_machine/step_3/gradients/params/rnn/OnlineLRUCell_0/LRUCell_0/B_real": {
+      "dtype": "float32",
+      "shape": [
+        1,
+        2,
+        4
+      ]
+    },
+    "state_machine/step_3/gradients/params/rnn/OnlineLRUCell_0/LRUCell_0/gamma_log": {
+      "dtype": "float32",
+      "shape": [
+        1,
+        2
+      ]
+    },
+    "state_machine/step_3/gradients/params/rnn/OnlineLRUCell_0/LRUCell_0/nu_log": {
+      "dtype": "float32",
+      "shape": [
+        1,
+        2
+      ]
+    },
+    "state_machine/step_3/gradients/params/rnn/OnlineLRUCell_0/LRUCell_0/theta_log": {
+      "dtype": "float32",
+      "shape": [
+        1,
+        2
+      ]
+    },
+    "state_machine/step_3/gradients/params/td/actor/kernel": {
+      "dtype": "float32",
+      "shape": [
+        1,
+        2,
+        4
+      ]
+    },
+    "state_machine/step_3/gradients/params/td/critic/bias": {
+      "dtype": "float32",
+      "shape": [
+        1,
+        1
+      ]
+    },
+    "state_machine/step_3/gradients/params/td/critic/kernel": {
+      "dtype": "float32",
+      "shape": [
+        1,
+        2,
+        1
+      ]
+    },
+    "state_machine/step_3/incoming_traces/rnn/C_img": {
+      "dtype": "float32",
+      "shape": [
+        1,
+        2,
+        2
+      ]
+    },
+    "state_machine/step_3/incoming_traces/rnn/C_real": {
+      "dtype": "float32",
+      "shape": [
+        1,
+        2,
+        2
+      ]
+    },
+    "state_machine/step_3/incoming_traces/rnn/D": {
+      "dtype": "float32",
+      "shape": [
+        1,
+        2,
+        4
+      ]
+    },
+    "state_machine/step_3/incoming_traces/rnn/OnlineLRUCell_0/LRUCell_0/B_img": {
+      "dtype": "float32",
+      "shape": [
+        1,
+        2,
+        4
+      ]
+    },
+    "state_machine/step_3/incoming_traces/rnn/OnlineLRUCell_0/LRUCell_0/B_real": {
+      "dtype": "float32",
+      "shape": [
+        1,
+        2,
+        4
+      ]
+    },
+    "state_machine/step_3/incoming_traces/rnn/OnlineLRUCell_0/LRUCell_0/gamma_log": {
+      "dtype": "float32",
+      "shape": [
+        1,
+        2
+      ]
+    },
+    "state_machine/step_3/incoming_traces/rnn/OnlineLRUCell_0/LRUCell_0/nu_log": {
+      "dtype": "float32",
+      "shape": [
+        1,
+        2
+      ]
+    },
+    "state_machine/step_3/incoming_traces/rnn/OnlineLRUCell_0/LRUCell_0/theta_log": {
+      "dtype": "float32",
+      "shape": [
+        1,
+        2
+      ]
+    },
+    "state_machine/step_3/incoming_traces/td/actor/kernel": {
+      "dtype": "float32",
+      "shape": [
+        1,
+        2,
+        4
+      ]
+    },
+    "state_machine/step_3/incoming_traces/td/critic/bias": {
+      "dtype": "float32",
+      "shape": [
+        1,
+        1
+      ]
+    },
+    "state_machine/step_3/incoming_traces/td/critic/kernel": {
+      "dtype": "float32",
+      "shape": [
+        1,
+        2,
+        1
+      ]
+    },
+    "state_machine/step_3/key_in": {
+      "dtype": "uint32",
+      "shape": [
+        2
+      ]
+    },
+    "state_machine/step_3/key_out": {
+      "dtype": "uint32",
+      "shape": [
+        2
+      ]
+    },
+    "state_machine/step_3/mean_directions/params/rnn/C_img": {
+      "dtype": "float32",
+      "shape": [
+        2,
+        2
+      ]
+    },
+    "state_machine/step_3/mean_directions/params/rnn/C_real": {
+      "dtype": "float32",
+      "shape": [
+        2,
+        2
+      ]
+    },
+    "state_machine/step_3/mean_directions/params/rnn/D": {
+      "dtype": "float32",
+      "shape": [
+        2,
+        4
+      ]
+    },
+    "state_machine/step_3/mean_directions/params/rnn/OnlineLRUCell_0/LRUCell_0/B_img": {
+      "dtype": "float32",
+      "shape": [
+        2,
+        4
+      ]
+    },
+    "state_machine/step_3/mean_directions/params/rnn/OnlineLRUCell_0/LRUCell_0/B_real": {
+      "dtype": "float32",
+      "shape": [
+        2,
+        4
+      ]
+    },
+    "state_machine/step_3/mean_directions/params/rnn/OnlineLRUCell_0/LRUCell_0/gamma_log": {
+      "dtype": "float32",
+      "shape": [
+        2
+      ]
+    },
+    "state_machine/step_3/mean_directions/params/rnn/OnlineLRUCell_0/LRUCell_0/nu_log": {
+      "dtype": "float32",
+      "shape": [
+        2
+      ]
+    },
+    "state_machine/step_3/mean_directions/params/rnn/OnlineLRUCell_0/LRUCell_0/theta_log": {
+      "dtype": "float32",
+      "shape": [
+        2
+      ]
+    },
+    "state_machine/step_3/mean_directions/params/td/actor/kernel": {
+      "dtype": "float32",
+      "shape": [
+        2,
+        4
+      ]
+    },
+    "state_machine/step_3/mean_directions/params/td/critic/bias": {
+      "dtype": "float32",
+      "shape": [
+        1
+      ]
+    },
+    "state_machine/step_3/mean_directions/params/td/critic/kernel": {
+      "dtype": "float32",
+      "shape": [
+        2,
+        1
+      ]
+    },
+    "state_machine/step_3/model_input": {
+      "dtype": "float32",
+      "shape": [
+        1,
+        4
+      ]
+    },
+    "state_machine/step_3/optimizer_state/inner_states/rnn/inner_state/count": {
+      "dtype": "int32",
+      "shape": []
+    },
+    "state_machine/step_3/optimizer_state/inner_states/rnn/inner_state/hyperparams/learning_rate": {
+      "dtype": "float32",
+      "shape": []
+    },
+    "state_machine/step_3/optimizer_state/inner_states/rnn/inner_state/inner_state/2/0/count": {
+      "dtype": "int32",
+      "shape": []
+    },
+    "state_machine/step_3/optimizer_state/inner_states/rnn/inner_state/inner_state/2/0/mu/rnn/C_img": {
+      "dtype": "float32",
+      "shape": [
+        2,
+        2
+      ]
+    },
+    "state_machine/step_3/optimizer_state/inner_states/rnn/inner_state/inner_state/2/0/mu/rnn/C_real": {
+      "dtype": "float32",
+      "shape": [
+        2,
+        2
+      ]
+    },
+    "state_machine/step_3/optimizer_state/inner_states/rnn/inner_state/inner_state/2/0/mu/rnn/D": {
+      "dtype": "float32",
+      "shape": [
+        2,
+        4
+      ]
+    },
+    "state_machine/step_3/optimizer_state/inner_states/rnn/inner_state/inner_state/2/0/mu/rnn/OnlineLRUCell_0/LRUCell_0/B_img": {
+      "dtype": "float32",
+      "shape": [
+        2,
+        4
+      ]
+    },
+    "state_machine/step_3/optimizer_state/inner_states/rnn/inner_state/inner_state/2/0/mu/rnn/OnlineLRUCell_0/LRUCell_0/B_real": {
+      "dtype": "float32",
+      "shape": [
+        2,
+        4
+      ]
+    },
+    "state_machine/step_3/optimizer_state/inner_states/rnn/inner_state/inner_state/2/0/mu/rnn/OnlineLRUCell_0/LRUCell_0/gamma_log": {
+      "dtype": "float32",
+      "shape": [
+        2
+      ]
+    },
+    "state_machine/step_3/optimizer_state/inner_states/rnn/inner_state/inner_state/2/0/mu/rnn/OnlineLRUCell_0/LRUCell_0/nu_log": {
+      "dtype": "float32",
+      "shape": [
+        2
+      ]
+    },
+    "state_machine/step_3/optimizer_state/inner_states/rnn/inner_state/inner_state/2/0/mu/rnn/OnlineLRUCell_0/LRUCell_0/theta_log": {
+      "dtype": "float32",
+      "shape": [
+        2
+      ]
+    },
+    "state_machine/step_3/optimizer_state/inner_states/rnn/inner_state/inner_state/2/0/nu/rnn/C_img": {
+      "dtype": "float32",
+      "shape": [
+        2,
+        2
+      ]
+    },
+    "state_machine/step_3/optimizer_state/inner_states/rnn/inner_state/inner_state/2/0/nu/rnn/C_real": {
+      "dtype": "float32",
+      "shape": [
+        2,
+        2
+      ]
+    },
+    "state_machine/step_3/optimizer_state/inner_states/rnn/inner_state/inner_state/2/0/nu/rnn/D": {
+      "dtype": "float32",
+      "shape": [
+        2,
+        4
+      ]
+    },
+    "state_machine/step_3/optimizer_state/inner_states/rnn/inner_state/inner_state/2/0/nu/rnn/OnlineLRUCell_0/LRUCell_0/B_img": {
+      "dtype": "float32",
+      "shape": [
+        2,
+        4
+      ]
+    },
+    "state_machine/step_3/optimizer_state/inner_states/rnn/inner_state/inner_state/2/0/nu/rnn/OnlineLRUCell_0/LRUCell_0/B_real": {
+      "dtype": "float32",
+      "shape": [
+        2,
+        4
+      ]
+    },
+    "state_machine/step_3/optimizer_state/inner_states/rnn/inner_state/inner_state/2/0/nu/rnn/OnlineLRUCell_0/LRUCell_0/gamma_log": {
+      "dtype": "float32",
+      "shape": [
+        2
+      ]
+    },
+    "state_machine/step_3/optimizer_state/inner_states/rnn/inner_state/inner_state/2/0/nu/rnn/OnlineLRUCell_0/LRUCell_0/nu_log": {
+      "dtype": "float32",
+      "shape": [
+        2
+      ]
+    },
+    "state_machine/step_3/optimizer_state/inner_states/rnn/inner_state/inner_state/2/0/nu/rnn/OnlineLRUCell_0/LRUCell_0/theta_log": {
+      "dtype": "float32",
+      "shape": [
+        2
+      ]
+    },
+    "state_machine/step_3/optimizer_state/inner_states/td/inner_state/count": {
+      "dtype": "int32",
+      "shape": []
+    },
+    "state_machine/step_3/optimizer_state/inner_states/td/inner_state/hyperparams/learning_rate": {
+      "dtype": "float32",
+      "shape": []
+    },
+    "state_machine/step_3/optimizer_state/inner_states/td/inner_state/inner_state/2/0/count": {
+      "dtype": "int32",
+      "shape": []
+    },
+    "state_machine/step_3/optimizer_state/inner_states/td/inner_state/inner_state/2/0/mu/td/actor/kernel": {
+      "dtype": "float32",
+      "shape": [
+        2,
+        4
+      ]
+    },
+    "state_machine/step_3/optimizer_state/inner_states/td/inner_state/inner_state/2/0/mu/td/critic/bias": {
+      "dtype": "float32",
+      "shape": [
+        1
+      ]
+    },
+    "state_machine/step_3/optimizer_state/inner_states/td/inner_state/inner_state/2/0/mu/td/critic/kernel": {
+      "dtype": "float32",
+      "shape": [
+        2,
+        1
+      ]
+    },
+    "state_machine/step_3/optimizer_state/inner_states/td/inner_state/inner_state/2/0/nu/td/actor/kernel": {
+      "dtype": "float32",
+      "shape": [
+        2,
+        4
+      ]
+    },
+    "state_machine/step_3/optimizer_state/inner_states/td/inner_state/inner_state/2/0/nu/td/critic/bias": {
+      "dtype": "float32",
+      "shape": [
+        1
+      ]
+    },
+    "state_machine/step_3/optimizer_state/inner_states/td/inner_state/inner_state/2/0/nu/td/critic/kernel": {
+      "dtype": "float32",
+      "shape": [
+        2,
+        1
+      ]
+    },
+    "state_machine/step_3/optimizer_updates/rnn/C_img": {
+      "dtype": "float32",
+      "shape": [
+        2,
+        2
+      ]
+    },
+    "state_machine/step_3/optimizer_updates/rnn/C_real": {
+      "dtype": "float32",
+      "shape": [
+        2,
+        2
+      ]
+    },
+    "state_machine/step_3/optimizer_updates/rnn/D": {
+      "dtype": "float32",
+      "shape": [
+        2,
+        4
+      ]
+    },
+    "state_machine/step_3/optimizer_updates/rnn/OnlineLRUCell_0/LRUCell_0/B_img": {
+      "dtype": "float32",
+      "shape": [
+        2,
+        4
+      ]
+    },
+    "state_machine/step_3/optimizer_updates/rnn/OnlineLRUCell_0/LRUCell_0/B_real": {
+      "dtype": "float32",
+      "shape": [
+        2,
+        4
+      ]
+    },
+    "state_machine/step_3/optimizer_updates/rnn/OnlineLRUCell_0/LRUCell_0/gamma_log": {
+      "dtype": "float32",
+      "shape": [
+        2
+      ]
+    },
+    "state_machine/step_3/optimizer_updates/rnn/OnlineLRUCell_0/LRUCell_0/nu_log": {
+      "dtype": "float32",
+      "shape": [
+        2
+      ]
+    },
+    "state_machine/step_3/optimizer_updates/rnn/OnlineLRUCell_0/LRUCell_0/theta_log": {
+      "dtype": "float32",
+      "shape": [
+        2
+      ]
+    },
+    "state_machine/step_3/optimizer_updates/td/actor/kernel": {
+      "dtype": "float32",
+      "shape": [
+        2,
+        4
+      ]
+    },
+    "state_machine/step_3/optimizer_updates/td/critic/bias": {
+      "dtype": "float32",
+      "shape": [
+        1
+      ]
+    },
+    "state_machine/step_3/optimizer_updates/td/critic/kernel": {
+      "dtype": "float32",
+      "shape": [
+        2,
+        1
+      ]
+    },
+    "state_machine/step_3/parameters/params/rnn/C_img": {
+      "dtype": "float32",
+      "shape": [
+        2,
+        2
+      ]
+    },
+    "state_machine/step_3/parameters/params/rnn/C_real": {
+      "dtype": "float32",
+      "shape": [
+        2,
+        2
+      ]
+    },
+    "state_machine/step_3/parameters/params/rnn/D": {
+      "dtype": "float32",
+      "shape": [
+        2,
+        4
+      ]
+    },
+    "state_machine/step_3/parameters/params/rnn/OnlineLRUCell_0/LRUCell_0/B_img": {
+      "dtype": "float32",
+      "shape": [
+        2,
+        4
+      ]
+    },
+    "state_machine/step_3/parameters/params/rnn/OnlineLRUCell_0/LRUCell_0/B_real": {
+      "dtype": "float32",
+      "shape": [
+        2,
+        4
+      ]
+    },
+    "state_machine/step_3/parameters/params/rnn/OnlineLRUCell_0/LRUCell_0/gamma_log": {
+      "dtype": "float32",
+      "shape": [
+        2
+      ]
+    },
+    "state_machine/step_3/parameters/params/rnn/OnlineLRUCell_0/LRUCell_0/nu_log": {
+      "dtype": "float32",
+      "shape": [
+        2
+      ]
+    },
+    "state_machine/step_3/parameters/params/rnn/OnlineLRUCell_0/LRUCell_0/theta_log": {
+      "dtype": "float32",
+      "shape": [
+        2
+      ]
+    },
+    "state_machine/step_3/parameters/params/td/actor/kernel": {
+      "dtype": "float32",
+      "shape": [
+        2,
+        4
+      ]
+    },
+    "state_machine/step_3/parameters/params/td/critic/bias": {
+      "dtype": "float32",
+      "shape": [
+        1
+      ]
+    },
+    "state_machine/step_3/parameters/params/td/critic/kernel": {
+      "dtype": "float32",
+      "shape": [
+        2,
+        1
+      ]
+    },
+    "state_machine/step_3/recurrent_state/0": {
+      "dtype": "complex64",
+      "shape": [
+        1,
+        2
+      ]
+    },
+    "state_machine/step_3/recurrent_state/1/0": {
+      "dtype": "complex64",
+      "shape": [
+        1,
+        2
+      ]
+    },
+    "state_machine/step_3/recurrent_state/1/1": {
+      "dtype": "complex64",
+      "shape": [
+        1,
+        2
+      ]
+    },
+    "state_machine/step_3/recurrent_state/1/2": {
+      "dtype": "complex64",
+      "shape": [
+        1,
+        2,
+        4
+      ]
+    },
+    "state_machine/step_3/sampled_next_action": {
+      "dtype": "float32",
+      "shape": [
+        1,
+        2
+      ]
+    },
+    "state_machine/step_3/slow_parameters/params/rnn/C_img": {
+      "dtype": "float32",
+      "shape": [
+        2,
+        2
+      ]
+    },
+    "state_machine/step_3/slow_parameters/params/rnn/C_real": {
+      "dtype": "float32",
+      "shape": [
+        2,
+        2
+      ]
+    },
+    "state_machine/step_3/slow_parameters/params/rnn/D": {
+      "dtype": "float32",
+      "shape": [
+        2,
+        4
+      ]
+    },
+    "state_machine/step_3/slow_parameters/params/rnn/OnlineLRUCell_0/LRUCell_0/B_img": {
+      "dtype": "float32",
+      "shape": [
+        2,
+        4
+      ]
+    },
+    "state_machine/step_3/slow_parameters/params/rnn/OnlineLRUCell_0/LRUCell_0/B_real": {
+      "dtype": "float32",
+      "shape": [
+        2,
+        4
+      ]
+    },
+    "state_machine/step_3/slow_parameters/params/rnn/OnlineLRUCell_0/LRUCell_0/gamma_log": {
+      "dtype": "float32",
+      "shape": [
+        2
+      ]
+    },
+    "state_machine/step_3/slow_parameters/params/rnn/OnlineLRUCell_0/LRUCell_0/nu_log": {
+      "dtype": "float32",
+      "shape": [
+        2
+      ]
+    },
+    "state_machine/step_3/slow_parameters/params/rnn/OnlineLRUCell_0/LRUCell_0/theta_log": {
+      "dtype": "float32",
+      "shape": [
+        2
+      ]
+    },
+    "state_machine/step_3/slow_parameters/params/td/actor/kernel": {
+      "dtype": "float32",
+      "shape": [
+        2,
+        4
+      ]
+    },
+    "state_machine/step_3/slow_parameters/params/td/critic/bias": {
+      "dtype": "float32",
+      "shape": [
+        1
+      ]
+    },
+    "state_machine/step_3/slow_parameters/params/td/critic/kernel": {
+      "dtype": "float32",
+      "shape": [
+        2,
+        1
+      ]
+    },
+    "state_machine/step_3/td_error": {
+      "dtype": "float32",
+      "shape": [
+        1
+      ]
+    },
+    "state_machine/step_3/value": {
+      "dtype": "float32",
+      "shape": [
+        1,
+        1
+      ]
+    },
+    "state_machine/step_3/value_target": {
+      "dtype": "float32",
+      "shape": [
+        1
+      ]
+    },
+    "state_machine/two_env/delta": {
+      "dtype": "float32",
+      "shape": [
+        2
+      ]
+    },
+    "state_machine/two_env/direction": {
+      "dtype": "float32",
+      "shape": [
+        2
+      ]
+    },
     "step/td_error": {
       "dtype": "float32",
       "shape": [
@@ -796,5 +4570,30 @@
   "python": "3.12.13",
   "seed": 7,
   "source": "RTRRL-AAAI25",
+  "state_machine": {
+    "key_split": [
+      "unused",
+      "model",
+      "step",
+      "carry",
+      "environment",
+      "outer"
+    ],
+    "mock_protocol": "one environment, scalar observation, continuous two-vector action, terminal on transition two, three eager transitions",
+    "normalization": "disabled; pinned running-statistics leaves are None",
+    "phase_order": [
+      "persisted-action environment step",
+      "terminal recurrent reset",
+      "current model input",
+      "sample next action and value",
+      "TD and optimizer update",
+      "trace and feedback persistence"
+    ],
+    "step_key_split": [
+      "next",
+      "action",
+      "dropout"
+    ]
+  },
   "transitions": "deterministic-explicit-mock"
 }
