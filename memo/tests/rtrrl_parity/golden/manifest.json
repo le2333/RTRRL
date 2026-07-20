@@ -1,0 +1,123 @@
+{
+  "algorithm": "lru",
+  "backend": "cpu",
+  "commit": "4301943c349171d828d0fcf3e40944c286451415",
+  "dimensions": {
+    "action_size": 2,
+    "batch_size": 1,
+    "hidden_size": 2,
+    "input_size": 4
+  },
+  "dtype_policy": "float32-complex64",
+  "jax": "0.4.38",
+  "jaxlib": "0.4.38",
+  "leaf_paths": [
+    "credit/after_step_1",
+    "credit/after_step_2",
+    "heads/actor_loc",
+    "heads/actor_scale",
+    "heads/input",
+    "heads/value",
+    "init/action",
+    "init/value",
+    "lru/carry_after",
+    "lru/carry_before",
+    "lru/input",
+    "lru/output",
+    "step/td_error"
+  ],
+  "leaves": {
+    "credit/after_step_1": {
+      "dtype": "complex64",
+      "shape": [
+        12
+      ]
+    },
+    "credit/after_step_2": {
+      "dtype": "complex64",
+      "shape": [
+        12
+      ]
+    },
+    "heads/actor_loc": {
+      "dtype": "float32",
+      "shape": [
+        1,
+        2
+      ]
+    },
+    "heads/actor_scale": {
+      "dtype": "float32",
+      "shape": [
+        1,
+        2
+      ]
+    },
+    "heads/input": {
+      "dtype": "float32",
+      "shape": [
+        1,
+        2
+      ]
+    },
+    "heads/value": {
+      "dtype": "float32",
+      "shape": [
+        1,
+        1
+      ]
+    },
+    "init/action": {
+      "dtype": "float32",
+      "shape": [
+        1,
+        2
+      ]
+    },
+    "init/value": {
+      "dtype": "float32",
+      "shape": [
+        1,
+        1
+      ]
+    },
+    "lru/carry_after": {
+      "dtype": "complex64",
+      "shape": [
+        1,
+        2
+      ]
+    },
+    "lru/carry_before": {
+      "dtype": "complex64",
+      "shape": [
+        1,
+        2
+      ]
+    },
+    "lru/input": {
+      "dtype": "float32",
+      "shape": [
+        1,
+        4
+      ]
+    },
+    "lru/output": {
+      "dtype": "float32",
+      "shape": [
+        1,
+        2
+      ]
+    },
+    "step/td_error": {
+      "dtype": "float32",
+      "shape": [
+        1
+      ]
+    }
+  },
+  "python": "3.12.13",
+  "seed": 7,
+  "source": "RTRRL-AAAI25",
+  "transitions": "deterministic-explicit-mock"
+}

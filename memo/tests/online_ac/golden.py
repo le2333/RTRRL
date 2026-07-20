@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import sys
 from dataclasses import dataclass, fields
 from pathlib import Path
 from typing import Any, Mapping
@@ -17,15 +18,21 @@ import numpy as np
 from memorax.utils import Timestep
 from memorax.utils.axes import remove_feature_axis, remove_time_axis
 
+TESTS_DIR = Path(__file__).parents[1]
+if str(TESTS_DIR) not in sys.path:
+    sys.path.insert(0, str(TESTS_DIR))
+
+from rtrrl_parity.assertions import (  # noqa: E402
+    assert_tree_close,
+    flatten_with_paths as _flatten_with_paths,
+)
+
 GOLDEN_DIR = Path(__file__).with_name("golden")
 
 
 def flatten_with_paths(tree):
-    pairs, treedef = jax.tree_util.tree_flatten_with_path(tree)
-    return {
-        "/".join(str(getattr(k, "key", getattr(k, "idx", k))) for k in path): leaf
-        for path, leaf in pairs
-    }, treedef
+    """Preserve the legacy tuple result while sharing stable path logic."""
+    return _flatten_with_paths(tree), jax.tree_util.tree_structure(tree)
 
 
 @dataclass(frozen=True)
@@ -34,26 +41,8 @@ class GoldenSnapshot:
 
 
 def assert_tree_allclose(actual, expected, *, rtol=1e-6, atol=1e-7):
-    actual_leaves = flatten_with_paths(actual)[0]
-    expected_leaves = (
-        dict(expected.leaves)
-        if isinstance(expected, GoldenSnapshot)
-        else flatten_with_paths(expected)[0]
-    )
-    assert actual_leaves.keys() == expected_leaves.keys()
-    for path in actual_leaves:
-        actual_array = np.asarray(actual_leaves[path])
-        expected_array = np.asarray(expected_leaves[path])
-        if actual_array.dtype.kind in "biufc" and expected_array.dtype.kind in "biufc":
-            np.testing.assert_allclose(
-                actual_array,
-                expected_array,
-                rtol=rtol,
-                atol=atol,
-                err_msg=path,
-            )
-        else:
-            np.testing.assert_array_equal(actual_array, expected_array, err_msg=path)
+    expected_tree = dict(expected.leaves) if isinstance(expected, GoldenSnapshot) else expected
+    assert_tree_close(actual, expected_tree, (rtol, atol))
 
 
 def save_golden(name, tree, metadata):
