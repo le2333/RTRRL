@@ -23,6 +23,17 @@ from trainer_infra.batch_topology import (
     expected_topology,
 )
 
+ROLLBACK_JOB_STATUSES = (
+    "SUBMITTED",
+    "PENDING",
+    "RUNNABLE",
+    "STARTING",
+    "RUNNING",
+    "SUCCEEDED",
+    "FAILED",
+)
+DEFAULT_CREATE_RESPONSE = object()
+
 
 class FakeSts:
     def __init__(self, account: str = ACCOUNT_ID) -> None:
@@ -32,6 +43,19 @@ class FakeSts:
     def get_caller_identity(self) -> dict[str, str]:
         self.calls += 1
         return {"Account": self.account}
+
+
+class FakeClock:
+    def __init__(self) -> None:
+        self.now = 0.0
+        self.sleeps: list[float] = []
+
+    def monotonic(self) -> float:
+        return self.now
+
+    def sleep(self, seconds: float) -> None:
+        self.sleeps.append(seconds)
+        self.now += seconds
 
 
 class FakeBatch:
@@ -70,7 +94,10 @@ class FakeBatch:
         self.mutation_calls: list[tuple[str, dict[str, object]]] = []
         self.batch_api_calls = 0
         self.failed_create: str | None = None
+        self.create_response: object = DEFAULT_CREATE_RESPONSE
         self.failed_delete: str | None = None
+        self.job_after_disable: tuple[str, str] | None = None
+        self.list_job_calls: list[tuple[str, str, str | None]] = []
         self.async_lifecycle = False
         self._describe_counts: dict[str, int] = {}
         self._pending_delete: str | None = None
@@ -167,6 +194,7 @@ class FakeBatch:
         del maxResults
         self.batch_api_calls += 1
         name = jobQueue.rsplit("/", 1)[-1]
+        self.list_job_calls.append((name, jobStatus, nextToken))
         return self._page(
             "jobSummaryList", self.jobs.get((name, jobStatus), []), nextToken
         )
@@ -181,7 +209,7 @@ class FakeBatch:
             page["nextToken"] = str(offset + 1)
         return page
 
-    def create_job_queue(self, **kwargs: object) -> dict[str, str]:
+    def create_job_queue(self, **kwargs: object) -> object:
         name = str(kwargs["jobQueueName"])
         call = deepcopy(kwargs)
         self.create_calls[name] = call
@@ -192,7 +220,12 @@ class FakeBatch:
         if self.async_lifecycle:
             self.queues[name]["status"] = "CREATING"
             self._describe_counts[name] = 0
-        return {"jobQueueArn": str(self.queues[name]["jobQueueArn"])}
+        if self.create_response is not DEFAULT_CREATE_RESPONSE:
+            return deepcopy(self.create_response)
+        return {
+            "jobQueueName": name,
+            "jobQueueArn": str(self.queues[name]["jobQueueArn"]),
+        }
 
     def update_job_queue(self, **kwargs: object) -> dict[str, str]:
         call = deepcopy(kwargs)
@@ -200,6 +233,27 @@ class FakeBatch:
         self.mutation_calls.append(("update_job_queue", call))
         name = str(kwargs["jobQueue"])
         self.queues[name]["state"] = kwargs["state"]
+        if self.job_after_disable == (name, "ANY"):
+            raise AssertionError("test must specify a concrete job status")
+        if (
+            self.job_after_disable is not None
+            and self.job_after_disable[0] == name
+        ):
+            status = self.job_after_disable[1]
+            self.jobs[(name, status)] = [
+                {
+                    "jobId": "late-job-a",
+                    "jobName": "late-a",
+                    "jobQueue": name,
+                    "status": status,
+                },
+                {
+                    "jobId": "late-job-b",
+                    "jobName": "late-b",
+                    "jobQueue": name,
+                    "status": status,
+                },
+            ]
         if self.async_lifecycle:
             self.queues[name]["status"] = "UPDATING"
             self._describe_counts[name] = 0
@@ -289,21 +343,39 @@ def test_deploy_dry_run_has_no_mutation(
     assert fake_services.batch.mutation_calls == []
 
 
-def test_deploy_creates_exact_shared_bindings(
-    fake_services: BatchAdminServices,
+@pytest.mark.parametrize(
+    "queue_key",
+    (
+        "dev-c7am",
+        "dev-c7al",
+        "dev-c7ax",
+        "run-c7am",
+        "run-c7al",
+        "run-c7ax",
+        "dev-g6x",
+        "run-g6x",
+    ),
+)
+def test_deploy_creates_each_exact_shared_binding_without_tags(
+    fake_services: BatchAdminServices, queue_key: str
 ) -> None:
+    spec = expected_topology().queues[queue_key]
     report = deploy_queues(fake_services, execute=True)
     assert report.created == tuple(
-        spec.name for spec in expected_topology().queues.values()
+        item.name for item in expected_topology().queues.values()
     )
-    assert fake_services.batch.create_calls["run-cpu-c7al-queue"] == {
-        "jobQueueName": "run-cpu-c7al-queue",
+    assert fake_services.batch.create_calls[spec.name] == {
+        "jobQueueName": spec.name,
         "state": "ENABLED",
-        "priority": 100,
+        "priority": spec.priority,
         "computeEnvironmentOrder": [
-            fake_services.batch.binding("c7al", order=1),
+            fake_services.batch.binding(environment, order=index)
+            for index, environment in enumerate(
+                spec.compute_environments, start=1
+            )
         ],
     }
+    assert "tags" not in fake_services.batch.create_calls[spec.name]
     assert not any(
         operation.endswith("compute_environment")
         for operation, _ in fake_services.batch.mutation_calls
@@ -317,6 +389,80 @@ def test_deploy_reuses_exact_existing_queue(
     report = deploy_queues(fake_services, execute=True)
     assert report.reused == ("dev-cpu-c7am-queue",)
     assert "dev-cpu-c7am-queue" not in fake_services.batch.create_calls
+
+
+@pytest.mark.parametrize(
+    ("response", "path"),
+    [
+        (None, "create_job_queue"),
+        ([], "create_job_queue"),
+        ({}, "jobQueueName"),
+        ({"jobQueueName": "dev-cpu-c7am-queue"}, "jobQueueArn"),
+        (
+            {
+                "jobQueueName": "wrong-name",
+                "jobQueueArn": (
+                    f"arn:aws:batch:{REGION}:{ACCOUNT_ID}:"
+                    "job-queue/dev-cpu-c7am-queue"
+                ),
+            },
+            "jobQueueName",
+        ),
+        (
+            {
+                "jobQueueName": "dev-cpu-c7am-queue",
+                "jobQueueArn": (
+                    f"arn:aws:batch:us-east-1:{ACCOUNT_ID}:"
+                    "job-queue/dev-cpu-c7am-queue"
+                ),
+            },
+            "jobQueueArn",
+        ),
+        (
+            {
+                "jobQueueName": "dev-cpu-c7am-queue",
+                "jobQueueArn": (
+                    f"arn:aws:batch:{REGION}:123456789012:"
+                    "job-queue/dev-cpu-c7am-queue"
+                ),
+            },
+            "jobQueueArn",
+        ),
+        (
+            {
+                "jobQueueName": "dev-cpu-c7am-queue",
+                "jobQueueArn": (
+                    f"arn:aws:batch:{REGION}:{ACCOUNT_ID}:"
+                    "compute-environment/dev-cpu-c7am-queue"
+                ),
+            },
+            "jobQueueArn",
+        ),
+        (
+            {
+                "jobQueueName": "dev-cpu-c7am-queue",
+                "jobQueueArn": (
+                    f"arn:aws:batch:{REGION}:{ACCOUNT_ID}:"
+                    "job-queue/run-cpu-c7am-queue"
+                ),
+            },
+            "jobQueueArn",
+        ),
+    ],
+)
+def test_invalid_create_response_is_never_owned_or_rolled_back(
+    fake_services: BatchAdminServices, response: object, path: str
+) -> None:
+    fake_services.batch.create_response = response
+
+    with pytest.raises(DeploymentError, match=path) as raised:
+        deploy_queues(fake_services, execute=True)
+
+    assert raised.value.report.created == ()
+    assert raised.value.report.rolled_back == ()
+    assert fake_services.batch.update_calls == []
+    assert fake_services.batch.delete_calls == []
+    assert "dev-cpu-c7am-queue" in fake_services.batch.queues
 
 
 def test_existing_drift_is_never_updated(
@@ -345,28 +491,37 @@ def test_partial_creation_removes_only_new_unreferenced_queues(
     assert all(call["jobQueue"] in expected for call in fake_services.batch.delete_calls)
 
 
-def test_rollback_rechecks_paginated_jobs_and_keeps_referenced_queue(
-    fake_services: BatchAdminServices,
+@pytest.mark.parametrize("status", ROLLBACK_JOB_STATUSES)
+def test_rollback_disables_then_rechecks_all_statuses_and_defers_late_job(
+    fake_services: BatchAdminServices, status: str
 ) -> None:
     fake_services.batch.fail_create("run-gpu-queue")
-    fake_services.batch.jobs[("dev-cpu-c7am-queue", "RUNNING")] = [
-        {
-            "jobId": "job-1",
-            "jobName": "audit",
-            "jobQueue": "dev-cpu-c7am-queue",
-            "status": "RUNNING",
-        }
-    ]
+    fake_services.batch.job_after_disable = ("dev-cpu-c7am-queue", status)
 
     with pytest.raises(DeploymentError) as raised:
         deploy_queues(fake_services, execute=True)
 
     assert "dev-cpu-c7am-queue" not in raised.value.report.rolled_back
+    assert raised.value.report.rollback_deferred == ("dev-cpu-c7am-queue",)
     assert any(
-        "dev-cpu-c7am-queue" in error and "job" in error
+        "dev-cpu-c7am-queue" in error
+        and "deferred" in error
+        and "job" in error
         for error in raised.value.report.rollback_errors
     )
     assert "dev-cpu-c7am-queue" in fake_services.batch.queues
+    assert fake_services.batch.queues["dev-cpu-c7am-queue"]["state"] == "DISABLED"
+    assert not any(
+        call["jobQueue"] == "dev-cpu-c7am-queue"
+        for call in fake_services.batch.delete_calls
+    )
+    calls = [
+        job_status
+        for name, job_status, _ in fake_services.batch.list_job_calls
+        if name == "dev-cpu-c7am-queue"
+    ]
+    assert set(calls) == set(ROLLBACK_JOB_STATUSES)
+    assert calls.count(status) == 2
 
 
 def test_partial_rollback_error_is_preserved_in_audit_report(
@@ -386,22 +541,29 @@ def test_partial_rollback_error_is_preserved_in_audit_report(
 
 
 def test_rollback_waits_through_async_disable_and_delete_states(
-    fake_services: BatchAdminServices, monkeypatch: pytest.MonkeyPatch
+    fake_services: BatchAdminServices,
 ) -> None:
+    clock = FakeClock()
     fake_services.batch.async_lifecycle = True
     fake_services.batch.fail_create("run-gpu-queue")
-    monkeypatch.setattr("trainer_infra.batch_admin.time.sleep", lambda _: None)
 
     with pytest.raises(DeploymentError) as raised:
-        deploy_queues(fake_services, execute=True)
+        deploy_queues(
+            fake_services,
+            execute=True,
+            timeout_seconds=5.0,
+            monotonic=clock.monotonic,
+            sleep=clock.sleep,
+        )
 
     assert len(raised.value.report.rolled_back) == 7
     assert raised.value.report.rollback_errors == ()
 
 
 def test_create_wait_is_bounded_and_rolls_back(
-    fake_services: BatchAdminServices, monkeypatch: pytest.MonkeyPatch
+    fake_services: BatchAdminServices,
 ) -> None:
+    clock = FakeClock()
     original = fake_services.batch.describe_job_queues
 
     def never_visible(**kwargs: object) -> dict[str, object]:
@@ -410,12 +572,89 @@ def test_create_wait_is_bounded_and_rolls_back(
         return original(**kwargs)
 
     fake_services.batch.describe_job_queues = never_visible
-    monkeypatch.setattr("trainer_infra.batch_admin.time.sleep", lambda _: None)
 
     with pytest.raises(DeploymentError, match="timed out") as raised:
-        deploy_queues(fake_services, execute=True)
+        deploy_queues(
+            fake_services,
+            execute=True,
+            timeout_seconds=2.0,
+            monotonic=clock.monotonic,
+            sleep=clock.sleep,
+        )
 
     assert raised.value.report.created == ("dev-cpu-c7am-queue",)
+
+
+@pytest.mark.parametrize("timeout", [0, -1, float("inf"), float("nan"), True])
+def test_deploy_rejects_non_finite_or_non_positive_timeout_before_aws(
+    fake_services: BatchAdminServices, timeout: object
+) -> None:
+    with pytest.raises(ValueError, match="timeout_seconds"):
+        deploy_queues(fake_services, execute=True, timeout_seconds=timeout)
+    assert fake_services.sts.calls == 0
+    assert fake_services.batch.batch_api_calls == 0
+
+
+def test_wait_checks_absolute_deadline_after_aws_call(
+    fake_services: BatchAdminServices,
+) -> None:
+    clock = FakeClock()
+    original = fake_services.batch.describe_job_queues
+
+    def slow_describe(**kwargs: object) -> dict[str, object]:
+        response = original(**kwargs)
+        requested = kwargs.get("jobQueues")
+        if (
+            requested == ["dev-cpu-c7am-queue"]
+            and "dev-cpu-c7am-queue" in fake_services.batch.queues
+        ):
+            clock.now += 2.1
+        return response
+
+    fake_services.batch.describe_job_queues = slow_describe
+
+    with pytest.raises(DeploymentError, match="timed out"):
+        deploy_queues(
+            fake_services,
+            execute=True,
+            timeout_seconds=2.0,
+            monotonic=clock.monotonic,
+            sleep=clock.sleep,
+        )
+
+    assert clock.sleeps == []
+
+
+def test_wait_sleep_is_limited_to_remaining_deadline(
+    fake_services: BatchAdminServices,
+) -> None:
+    clock = FakeClock()
+    fake_services.batch.async_lifecycle = True
+    original = fake_services.batch.describe_job_queues
+
+    def slow_describe(**kwargs: object) -> dict[str, object]:
+        response = original(**kwargs)
+        requested = kwargs.get("jobQueues")
+        if (
+            requested == ["dev-cpu-c7am-queue"]
+            and "dev-cpu-c7am-queue" in fake_services.batch.queues
+        ):
+            clock.now += 0.75
+        return response
+
+    fake_services.batch.describe_job_queues = slow_describe
+
+    with pytest.raises(DeploymentError, match="timed out"):
+        deploy_queues(
+            fake_services,
+            execute=True,
+            timeout_seconds=1.0,
+            monotonic=clock.monotonic,
+            sleep=clock.sleep,
+        )
+
+    assert clock.sleeps[0] == pytest.approx(0.25)
+    assert all(value <= 1.0 for value in clock.sleeps)
 
 
 def test_cli_inventory_uses_fixed_region_and_prints_json(

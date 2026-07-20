@@ -3,9 +3,10 @@ from __future__ import annotations
 from collections.abc import Mapping
 from dataclasses import dataclass, replace
 from datetime import datetime, timezone
+import math
 import time
 from types import MappingProxyType
-from typing import Any
+from typing import Any, Callable
 
 from trainer_infra.batch_topology import (
     ACCOUNT_ID,
@@ -28,7 +29,7 @@ NONTERMINAL_JOB_STATUSES = (
 )
 _ALL_JOB_STATUSES = (*NONTERMINAL_JOB_STATUSES, "SUCCEEDED", "FAILED")
 _PAGE_SIZE = 100
-_WAIT_ATTEMPTS = 60
+_DEFAULT_TIMEOUT_SECONDS = 60.0
 _WAIT_SECONDS = 1.0
 
 
@@ -81,6 +82,7 @@ class DeploymentReport:
     rolled_back: tuple[str, ...]
     topology_valid: bool
     rollback_errors: tuple[str, ...] = ()
+    rollback_deferred: tuple[str, ...] = ()
 
 
 class DeploymentError(RuntimeError):
@@ -113,6 +115,50 @@ def _integer(value: object, path: str) -> int:
     return value
 
 
+def _validated_timeout(value: object) -> float:
+    if (
+        isinstance(value, bool)
+        or not isinstance(value, (int, float))
+        or not math.isfinite(value)
+        or value <= 0
+    ):
+        raise ValueError(
+            "timeout_seconds must be a finite positive number, "
+            f"got {value!r}"
+        )
+    return float(value)
+
+
+def _new_deadline(timeout_seconds: float, monotonic: Callable[[], float]) -> float:
+    now = monotonic()
+    if not math.isfinite(now):
+        raise ValueError(f"monotonic must return a finite number, got {now!r}")
+    return now + timeout_seconds
+
+
+def _remaining(
+    deadline: float,
+    monotonic: Callable[[], float],
+    context: str,
+) -> float:
+    now = monotonic()
+    if not math.isfinite(now):
+        raise ValueError(f"monotonic must return a finite number, got {now!r}")
+    remaining = deadline - now
+    if remaining <= 0:
+        raise TimeoutError(f"timed out {context}")
+    return remaining
+
+
+def _sleep_until_next_poll(
+    deadline: float,
+    monotonic: Callable[[], float],
+    sleep: Callable[[float], None],
+    context: str,
+) -> None:
+    sleep(min(_WAIT_SECONDS, _remaining(deadline, monotonic, context)))
+
+
 def _verify_identity(services: BatchAdminServices) -> None:
     identity = _mapping(services.sts.get_caller_identity(), "sts.get_caller_identity")
     account = identity.get("Account")
@@ -131,6 +177,8 @@ def _paginated(
     result_key: str,
     path: str,
     arguments: Mapping[str, object] | None = None,
+    deadline: float | None = None,
+    monotonic: Callable[[], float] | None = None,
 ) -> tuple[Mapping[str, Any], ...]:
     values: list[Mapping[str, Any]] = []
     token: str | None = None
@@ -140,7 +188,12 @@ def _paginated(
         request["maxResults"] = _PAGE_SIZE
         if token is not None:
             request["nextToken"] = token
-        response = _mapping(method(**request), path)
+        raw_response = method(**request)
+        if deadline is not None:
+            if monotonic is None:
+                raise ValueError("monotonic is required with deadline")
+            _remaining(deadline, monotonic, f"waiting for {path}")
+        response = _mapping(raw_response, path)
         page = _list(response.get(result_key), f"{path}.{result_key}")
         for index, value in enumerate(page):
             values.append(_mapping(value, f"{path}.{result_key}[{index}]"))
@@ -285,10 +338,20 @@ def _wait_for_valid_queue(
     services: BatchAdminServices,
     expected: QueueSpec,
     environment_arns: Mapping[str, str],
+    *,
+    deadline: float,
+    monotonic: Callable[[], float],
+    sleep: Callable[[float], None],
 ) -> None:
     last_status = "not visible"
-    for _ in range(_WAIT_ATTEMPTS):
+    while True:
         actual = _describe_named_queue(services, expected.name)
+        _remaining(
+            deadline,
+            monotonic,
+            f"waiting for job queue {expected.name!r} to become VALID; "
+            f"last status {last_status}",
+        )
         if actual is not None:
             status = actual.get("status")
             last_status = repr(status)
@@ -299,11 +362,13 @@ def _wait_for_valid_queue(
             if status == "VALID":
                 validate_queue(actual, expected, environment_arns)
                 return
-        time.sleep(_WAIT_SECONDS)
-    raise TimeoutError(
-        f"timed out waiting for job queue {expected.name!r} to become VALID; "
-        f"last status {last_status}"
-    )
+        _sleep_until_next_poll(
+            deadline,
+            monotonic,
+            sleep,
+            f"waiting for job queue {expected.name!r} to become VALID; "
+            f"last status {last_status}",
+        )
 
 
 def _create_arguments(
@@ -323,66 +388,156 @@ def _create_arguments(
     }
 
 
-def _queue_has_any_jobs(services: BatchAdminServices, name: str) -> bool:
+def _validate_create_response(value: object, expected: QueueSpec) -> str:
+    response = _mapping(value, "create_job_queue")
+    name = _string(response.get("jobQueueName"), "create_job_queue.jobQueueName")
+    if name != expected.name:
+        raise ProfileDriftError(
+            "create_job_queue.jobQueueName: expected "
+            f"{expected.name!r}, got {name!r}"
+        )
+    arn = _string(response.get("jobQueueArn"), "create_job_queue.jobQueueArn")
+    expected_arn = (
+        f"arn:aws:batch:{REGION}:{ACCOUNT_ID}:job-queue/{expected.name}"
+    )
+    if arn != expected_arn:
+        raise ProfileDriftError(
+            "create_job_queue.jobQueueArn: expected "
+            f"{expected_arn!r}, got {arn!r}"
+        )
+    return arn
+
+
+def _queue_has_any_jobs(
+    services: BatchAdminServices,
+    name: str,
+    *,
+    deadline: float,
+    monotonic: Callable[[], float],
+) -> bool:
+    found = False
     for status in _ALL_JOB_STATUSES:
         jobs = _paginated(
             services.batch.list_jobs,
             result_key="jobSummaryList",
             path=f"rollback.list_jobs[{name},{status}]",
             arguments={"jobQueue": name, "jobStatus": status},
+            deadline=deadline,
+            monotonic=monotonic,
         )
         if jobs:
-            return True
-    return False
+            found = True
+    return found
 
 
 def _wait_for_queue_state(
-    services: BatchAdminServices, name: str, state: str
+    services: BatchAdminServices,
+    name: str,
+    state: str,
+    *,
+    deadline: float,
+    monotonic: Callable[[], float],
+    sleep: Callable[[float], None],
 ) -> None:
-    for _ in range(_WAIT_ATTEMPTS):
+    context = (
+        f"waiting for job queue {name!r} state {state} and status VALID"
+    )
+    while True:
         actual = _describe_named_queue(services, name)
+        _remaining(deadline, monotonic, context)
         if (
             actual is not None
             and actual.get("state") == state
             and actual.get("status") == "VALID"
         ):
             return
-        time.sleep(_WAIT_SECONDS)
-    raise TimeoutError(
-        f"timed out waiting for job queue {name!r} state {state} and status VALID"
-    )
+        _sleep_until_next_poll(deadline, monotonic, sleep, context)
 
 
-def _wait_for_queue_deletion(services: BatchAdminServices, name: str) -> None:
-    for _ in range(_WAIT_ATTEMPTS):
+def _wait_for_queue_deletion(
+    services: BatchAdminServices,
+    name: str,
+    *,
+    deadline: float,
+    monotonic: Callable[[], float],
+    sleep: Callable[[float], None],
+) -> None:
+    context = f"waiting for job queue {name!r} deletion"
+    while True:
         if _describe_named_queue(services, name) is None:
+            _remaining(deadline, monotonic, context)
             return
-        time.sleep(_WAIT_SECONDS)
-    raise TimeoutError(f"timed out waiting for job queue {name!r} deletion")
+        _remaining(deadline, monotonic, context)
+        _sleep_until_next_poll(deadline, monotonic, sleep, context)
 
 
 def _rollback_created(
-    services: BatchAdminServices, created: tuple[str, ...]
-) -> tuple[tuple[str, ...], tuple[str, ...]]:
+    services: BatchAdminServices,
+    created: tuple[str, ...],
+    *,
+    timeout_seconds: float,
+    monotonic: Callable[[], float],
+    sleep: Callable[[float], None],
+) -> tuple[tuple[str, ...], tuple[str, ...], tuple[str, ...]]:
     rolled_back: list[str] = []
     errors: list[str] = []
+    deferred: list[str] = []
     for name in reversed(created):
         try:
-            if _queue_has_any_jobs(services, name):
-                raise RuntimeError("fresh job inventory is not empty")
+            deadline = _new_deadline(timeout_seconds, monotonic)
             services.batch.update_job_queue(jobQueue=name, state="DISABLED")
-            _wait_for_queue_state(services, name, "DISABLED")
+            _remaining(deadline, monotonic, f"disabling job queue {name!r}")
+            _wait_for_queue_state(
+                services,
+                name,
+                "DISABLED",
+                deadline=deadline,
+                monotonic=monotonic,
+                sleep=sleep,
+            )
+            # AWS Batch exposes jobs by queue but no general reverse-reference API.
+            # Ownership comes from the validated create response; this post-disable
+            # seven-state scan is the final deletion safety gate.
+            job_deadline = _new_deadline(timeout_seconds, monotonic)
+            if _queue_has_any_jobs(
+                services,
+                name,
+                deadline=job_deadline,
+                monotonic=monotonic,
+            ):
+                deferred.append(name)
+                errors.append(
+                    f"{name}: deferred deletion: fresh post-disable job "
+                    "inventory is not empty"
+                )
+                continue
+            deadline = _new_deadline(timeout_seconds, monotonic)
             services.batch.delete_job_queue(jobQueue=name)
-            _wait_for_queue_deletion(services, name)
+            _remaining(deadline, monotonic, f"deleting job queue {name!r}")
+            _wait_for_queue_deletion(
+                services,
+                name,
+                deadline=deadline,
+                monotonic=monotonic,
+                sleep=sleep,
+            )
             rolled_back.append(name)
         except Exception as error:
             errors.append(f"{name}: {type(error).__name__}: {error}")
-    return tuple(rolled_back), tuple(errors)
+    return tuple(rolled_back), tuple(errors), tuple(deferred)
 
 
 def deploy_queues(
-    services: BatchAdminServices, *, execute: bool = False
+    services: BatchAdminServices,
+    *,
+    execute: bool = False,
+    timeout_seconds: float = _DEFAULT_TIMEOUT_SECONDS,
+    monotonic: Callable[[], float] | None = None,
+    sleep: Callable[[float], None] | None = None,
 ) -> DeploymentReport:
+    timeout = _validated_timeout(timeout_seconds)
+    monotonic_fn = monotonic or time.monotonic
+    sleep_fn = sleep or time.sleep
     environment_arns, existing = _inspect_expected_resources(services)
     topology = expected_topology()
     reused = tuple(
@@ -409,24 +564,43 @@ def deploy_queues(
         for key, expected in topology.queues.items():
             if key in existing:
                 continue
-            services.batch.create_job_queue(
+            deadline = _new_deadline(timeout, monotonic_fn)
+            response = services.batch.create_job_queue(
                 **_create_arguments(expected, environment_arns)
             )
+            _validate_create_response(response, expected)
             created.append(expected.name)
             report = replace(report, created=tuple(created))
-            _wait_for_valid_queue(services, expected, environment_arns)
+            _remaining(
+                deadline,
+                monotonic_fn,
+                f"creating job queue {expected.name!r}",
+            )
+            _wait_for_valid_queue(
+                services,
+                expected,
+                environment_arns,
+                deadline=deadline,
+                monotonic=monotonic_fn,
+                sleep=sleep_fn,
+            )
             _inspect_expected_resources(services)
         BatchTopologyValidator(services.batch, services.sts).validate()
         return report
     except Exception as error:
-        rolled_back, rollback_errors = _rollback_created(
-            services, tuple(created)
+        rolled_back, rollback_errors, rollback_deferred = _rollback_created(
+            services,
+            tuple(created),
+            timeout_seconds=timeout,
+            monotonic=monotonic_fn,
+            sleep=sleep_fn,
         )
         failed_report = replace(
             report,
             created=tuple(created),
             rolled_back=rolled_back,
             rollback_errors=rollback_errors,
+            rollback_deferred=rollback_deferred,
             topology_valid=False,
         )
         raise DeploymentError(str(error), failed_report) from error
