@@ -8,6 +8,12 @@ from typing import Any, Callable, Mapping
 from flax import struct
 
 
+TraceStepFn = Callable[
+    [Any, Any, Any, Any, Mapping[str, Any]],
+    tuple[Any, Any, Any, Any, Any, Any],
+]
+
+
 @dataclass(frozen=True)
 class AgentProgram:
     """A built program and its stable host-side schemas."""
@@ -73,7 +79,7 @@ class JAXEnvAdapter:
     step_fn: Callable[..., Any]
     env_params: Any
     build_context: Mapping[str, Any]
-    trace_step_fn: Callable[..., Any] | None = None
+    trace_step_fn: TraceStepFn
 
 
 @dataclass(frozen=True)

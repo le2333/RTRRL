@@ -150,9 +150,9 @@ def make_meta_program(
         native_trace_step = getattr(env, "trace_step", None)
         if callable(native_trace_step):
 
-            def trace_step_fn(state, action, params, build_context):
+            def trace_step_fn(key, state, action, params, build_context):
                 del build_context
-                return native_trace_step(jax.random.key(0), state, action, params)
+                return native_trace_step(key, state, action, params)
 
     if not callable(trace_step_fn):
         raise ValueError(
@@ -694,7 +694,8 @@ def make_meta_program(
                 terminated,
                 truncated,
                 _,
-            ) = jax.vmap(trace_step_fn, in_axes=(0, 0, None, None))(
+            ) = jax.vmap(trace_step_fn, in_axes=(0, 0, 0, None, None))(
+                step_keys,
                 current.env_state,
                 chosen,
                 env_params,

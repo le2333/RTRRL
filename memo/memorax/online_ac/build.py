@@ -191,9 +191,9 @@ def legacy_env_adapter(env, env_params, *, strip_normalization=True):
             "terminal observations and separate ending signals"
         )
 
-    def evaluation_trace_step(state, action, params, build_context):
+    def evaluation_trace_step(key, state, action, params, build_context):
         del build_context
-        return trace_step_fn(jax.random.key(0), state, action, params)
+        return trace_step_fn(key, state, action, params)
 
     return JAXEnvAdapter(
         reset_fn=concrete_env.reset,

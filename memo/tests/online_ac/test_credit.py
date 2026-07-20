@@ -65,6 +65,7 @@ def test_jax_env_adapter_has_explicit_jax_boundary_fields():
         step_fn=_identity,
         env_params=env_params,
         build_context={"action_shape": (2,)},
+        trace_step_fn=_identity,
     )
 
     assert [field.name for field in fields(adapter)] == [
@@ -72,11 +73,23 @@ def test_jax_env_adapter_has_explicit_jax_boundary_fields():
         "step_fn",
         "env_params",
         "build_context",
+        "trace_step_fn",
     ]
     assert callable(adapter.reset_fn)
     assert callable(adapter.step_fn)
+    assert callable(adapter.trace_step_fn)
     assert adapter.env_params is env_params
     assert jax.tree.leaves(adapter) == [adapter]
+
+
+def test_jax_env_adapter_requires_trace_step_callable():
+    with pytest.raises(TypeError, match="trace_step_fn"):
+        JAXEnvAdapter(
+            reset_fn=_identity,
+            step_fn=_identity,
+            env_params=None,
+            build_context={},
+        )
 
 
 def test_action_decision_names_all_action_semantics():
