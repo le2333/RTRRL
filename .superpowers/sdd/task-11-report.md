@@ -2,7 +2,7 @@
 
 ## Status
 
-The historical `rtrrl/rtrrl.py` is now a 72-line compatibility CLI. It keeps
+The historical `rtrrl/rtrrl.py` is now a compatibility-only module. It keeps
 `RTRRLParams`, `train_rtrrl`, `--config_path`, legacy YAML fields, and CLI
 overrides, while Memorax owns normalization, component/program selection,
 training, evaluation, historical metric translation, and logger lifecycle.
@@ -144,3 +144,106 @@ counter dtype differences under JAX x64-disabled operation, previously
 recorded in Task 10; Task 11 does not modify StreamAC. HPO study YAMLs are
 configuration generators rather than direct legacy CLI inputs and therefore
 are reported as explicitly out of runtime-audit scope.
+
+## Review-Blocker Corrections (Authoritative)
+
+This section supersedes the earlier build-description, parameter-API, CLI,
+classification, mock-provenance, local-count, and final-Batch statements.
+
+### TDD Evidence
+
+The review regressions were added before their production fixes:
+
+- build subprocesses returned a fixed construction label and omitted the
+  effective environment and selected builder;
+- top-level Memorax `env_name: halfcheetah` left
+  `env_params.env_name` at `StatelessCartPoleEasy`, and conflicting top-level
+  and nested names did not fail;
+- static build description reported top-level backend even when the runner
+  would use nested `env_params.init_kwargs.backend`;
+- `RTRRLParams` was the frozen Memorax schema rather than the historical
+  mutable dataclass, so mutation and `rtrrl_fixed.py` parse-then-assignment
+  failed;
+- `--field=value` and boolean disable forms were not parsed;
+- invalid profile/value files were reported as accepted and every other
+  `ValueError` was treated as unknown; malformed YAML aborted the audit;
+- the mock expected dictionary was duplicated in production/test and its
+  `num_episodes=1` did not come from the approved Task-9 synthetic
+  characterization.
+
+Each RED failed for the named missing behavior. The corrected entrypoint suite
+passes all 17 contracts.
+
+### Effective Environment and Builder Contract
+
+Top-level Memorax environment names now populate the exact nested environment
+configuration consumed by `make_legacy_env`; bare names are canonicalized to
+`brax-*`. If top-level and nested names are both explicit, canonical equality
+is accepted and a conflict raises `InvalidRTRRLConfig`. Nested
+`env_params.init_kwargs.backend` retains the runner's legacy precedence over
+the top-level backend.
+
+Static build output no longer claims a fixed construction string. It reports:
+
+- final environment name, mode, and effective backend;
+- shared versus independent topology and exact builder function;
+- selected recurrent, feature, and actor components;
+- meta-RL, observation/reward normalization, and pass-observation inputs.
+
+Subprocess contracts cover the historical shared YAML, the top-level Memorax
+shared YAML, and
+`memo/config/independent_rtrrl_hopper_maskP_lru.yml`. Every parse/build
+subprocess still reports no environment startup and no JAX import.
+
+### Historical Mutable Parameter API
+
+`rtrrl/rtrrl.py` contains compatibility-only copies of historical
+`EnvironmentParams`, `OptimizerConfig`, and
+`@dataclass(unsafe_hash=True) RTRRLParams`. The RTRRL class preserves base
+`87fbcf5` field order, defaults, constructor surface, class name, and mutable
+assignment behavior. Tests cover representative construction/mutation,
+all historical field names, nested defaults, `rtrrl_fixed.py` parsing followed
+by both assignments, and `train_rtrrl` normalization/delegation. No training
+math was restored.
+
+### CLI and Classification
+
+Overrides support spaced and equals forms, dotted optimizer paths, boolean
+enable forms, and `--no-*`/`--no_*` disable forms. Tests run the external
+script from both repository root and `rtrrl/`; CLI values deterministically
+override YAML budgets, optimizer values, and booleans.
+
+Audit categories are now:
+
+- accepted;
+- unsupported explicit branch;
+- unknown field (`UnknownRTRRLField`);
+- deprecated no-op;
+- invalid config/profile/value.
+
+Synthetic fixtures cover all categories, invalid root mappings, and malformed
+YAML. The actual repository result remains 697 accepted, 0 unsupported,
+0 unknown, 0 deprecated no-op, and 0 invalid, with no YAML edits.
+
+### Versioned Historical Mock Fixture
+
+The exact expected dictionary now lives only in
+`tests/rtrrl_parity/golden/historical_mock_epoch_v1.json`. Its metadata names
+the approved Task-9 `_synthetic_summary` characterization and base
+`87fbcf5`. Production independently constructs that synthetic epoch from step
+rewards, dones, TD errors, values, targets, entropy/loss observations, state
+norm vectors, and float32 learning rates, then calls the production translator.
+The exact fixture has `steps=30` and `num_episodes=3`.
+
+### Corrected Verification
+
+- Local config/entrypoint: 89 passed, peak RSS 468,268 KiB.
+- Local ruff, compileall, `git diff --check`, and IDE diagnostics passed.
+- Authorized 8,192-MiB Batch
+  `971dfb2f-f5ac-443a-989b-7c43ab8b4a5b` succeeded.
+- Batch relevant parity/builders: 217 passed and five authorized directional
+  finite-difference skips, with the same two documented StreamAC dtype cases
+  excluded; peak RSS 3,892,576 KiB.
+- Batch ruff and compileall passed; pyright reported 0 errors and 0 warnings.
+
+No complete RL environment ran locally.

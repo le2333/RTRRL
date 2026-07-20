@@ -11,6 +11,14 @@ class UnsupportedRTRRLBranch(ValueError):
     """Raised when a historical configuration selects an unsupported branch."""
 
 
+class UnknownRTRRLField(ValueError):
+    """Raised when a configuration contains a field outside the frozen union."""
+
+
+class InvalidRTRRLConfig(ValueError):
+    """Raised when known RTRRL fields form an invalid static recipe."""
+
+
 @dataclass(frozen=True)
 class FrozenMapping(Mapping[str, Any]):
     """Small immutable mapping used for intentionally extensible keyword bags."""
@@ -342,7 +350,7 @@ def _validate_strict_value_immutability(
         return config
     conflicts = _strict_nondefault_experimental_fields(config)
     if conflicts:
-        raise ValueError(
+        raise InvalidRTRRLConfig(
             "strict profile cannot use nondefault experimental values: "
             f"{', '.join(conflicts)}"
         )
@@ -371,7 +379,9 @@ def _unknown_fields(raw: Mapping[str, Any], schema: type, prefix: str = "") -> N
     for key in raw:
         if key not in known:
             path = f"{prefix}.{key}" if prefix else key
-            raise ValueError(f"unknown RTRRL configuration field: {path}")
+            raise UnknownRTRRLField(
+                f"unknown RTRRL configuration field: {path}"
+            )
 
 
 def _coerce_optional_float(value: Any) -> float | None:
@@ -399,12 +409,30 @@ def _normalize_optimizer(raw: Any, path: str, default: LegacyOptimizerConfig):
     )
 
 
-def _normalize_environment(raw: Any):
+def _canonical_environment_name(value: Any) -> str:
+    name = str(value)
+    if name.startswith("brax-") or name.startswith("brax::"):
+        return name.replace("brax::", "brax-", 1)
+    return f"brax-{name}"
+
+
+def _normalize_environment(raw: Any, top_level_env_name: Any = None):
     default = LegacyEnvironmentConfig()
-    if raw is None:
-        return default
-    values = _raw_mapping(raw)
+    values = {} if raw is None else _raw_mapping(raw)
     _unknown_fields(values, LegacyEnvironmentConfig, "env_params")
+    nested_name = values.get("env_name")
+    if top_level_env_name is not None:
+        canonical_top = _canonical_environment_name(top_level_env_name)
+        if (
+            nested_name is not None
+            and _canonical_environment_name(nested_name) != canonical_top
+        ):
+            raise InvalidRTRRLConfig(
+                "conflicting environment names: "
+                f"env_name={top_level_env_name!r}, "
+                f"env_params.env_name={nested_name!r}"
+            )
+        values["env_name"] = canonical_top
     if "reward_scaling" in values:
         values["reward_scaling"] = float(values["reward_scaling"])
     for key in ("max_ep_length", "batch_size"):
@@ -444,7 +472,10 @@ def normalize_legacy_config(raw: Any) -> LegacyRTRRLConfig:
     values["optimizer_params_rnn"] = _normalize_optimizer(
         values.get("optimizer_params_rnn"), "optimizer_params_rnn", rnn_default
     )
-    values["env_params"] = _normalize_environment(values.get("env_params"))
+    values["env_params"] = _normalize_environment(
+        values.get("env_params"),
+        values.get("env_name") if "env_name" in explicit else None,
+    )
 
     for key in _FLOAT_FIELDS & values.keys():
         values[key] = _coerce_optional_float(values[key])
@@ -472,12 +503,22 @@ def normalize_legacy_config(raw: Any) -> LegacyRTRRLConfig:
     if "profile" not in explicit:
         if _STRICT_EXPERIMENTAL_FIELDS & explicit:
             values["profile"] = "memo_experimental"
+    topology = values.get("rtrrl_topology", "shared")
+    if topology not in {"shared", "independent"}:
+        raise InvalidRTRRLConfig(
+            f"invalid RTRRL topology: {topology!r}"
+        )
+    backbone = values.get("backbone", "lru")
+    if backbone not in {"lru", "rtu"}:
+        raise InvalidRTRRLConfig(
+            f"invalid RTRRL backbone: {backbone!r}"
+        )
     if values.get("profile", "aaai25_strict_lru") == "aaai25_strict_lru":
         conflicts = tuple(
             sorted(_STRICT_EXPERIMENTAL_FIELDS & explicit)
         )
         if conflicts:
-            raise ValueError(
+            raise InvalidRTRRLConfig(
                 "strict profile cannot be combined with experimental branch "
                 f"flags: {', '.join(conflicts)}"
             )
@@ -514,7 +555,7 @@ def to_component_config(legacy: LegacyRTRRLConfig) -> RTRRLComponentConfig:
             sorted(_STRICT_EXPERIMENTAL_FIELDS & set(legacy.explicit_fields))
         )
         if conflicts:
-            raise ValueError(
+            raise InvalidRTRRLConfig(
                 "strict profile cannot be combined with experimental branch "
                 f"flags: {', '.join(conflicts)}"
             )
@@ -571,4 +612,6 @@ def to_component_config(legacy: LegacyRTRRLConfig) -> RTRRLComponentConfig:
             experimental_overrides=overrides,
             **numerical,
         )
-    raise ValueError(f"unknown RTRRL component profile: {legacy.profile!r}")
+    raise InvalidRTRRLConfig(
+        f"unknown RTRRL component profile: {legacy.profile!r}"
+    )

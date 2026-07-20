@@ -3,9 +3,12 @@
 from __future__ import annotations
 
 import argparse
+from collections.abc import Mapping
 from dataclasses import asdict
 import json
+import math
 from pathlib import Path
+import struct
 import sys
 from types import SimpleNamespace
 from typing import Any, Sequence
@@ -13,6 +16,8 @@ from typing import Any, Sequence
 import yaml
 
 from .compatibility import (
+    InvalidRTRRLConfig,
+    UnknownRTRRLField,
     UnsupportedRTRRLBranch,
     normalize_legacy_config,
     to_component_config,
@@ -58,28 +63,50 @@ def historical_rtrrl_metrics(
 
 
 def run_mock_epoch() -> dict[str, Any]:
-    """Exercise the production metric translation with a pinned mock summary."""
+    """Build the approved Task-9 synthetic epoch and translate its summary."""
 
+    def float32(value: float) -> float:
+        return struct.unpack("!f", struct.pack("!f", value))[0]
+
+    def mean_float32(values: Sequence[float]) -> float:
+        return float32(sum(float32(value) for value in values) / len(values))
+
+    rewards = (1.0, 2.0, 3.0)
+    dones = (0.0, 0.5, 1.0)
+    td_errors = (0.5, -0.25, 1.0)
+    values = (10.0, 20.0, 30.0)
+    value_targets = (11.0, 19.0, 32.0)
+    entropies = (0.2, 0.4, 0.6)
+    actor_losses = (-0.3, -0.6, -0.9)
+    num_envs = 2
+    num_episodes = round(sum(dones) * num_envs)
+    divisor = max(num_episodes, 1)
     summary = SimpleNamespace(
-        steps=30,
-        mean_reward=4.0,
-        num_episodes=1,
-        mean_delta=0.8333333134651184,
-        mean_r_bar=0.10000000149011612,
-        mean_v=20.0,
-        total_td_loss=19.399999618530273,
-        actor_loss=-0.6000000238418579,
-        critic_loss=20.0,
-        entropy=0.4000000059604645,
-        v_targ=20.66666603088379,
+        steps=15 * num_envs,
+        mean_reward=float32(sum(rewards) * num_envs / divisor),
+        num_episodes=num_episodes,
+        mean_delta=float32(sum(td_errors) * num_envs / divisor),
+        mean_r_bar=float32(float32(0.3) / divisor),
+        mean_v=mean_float32(values),
+        actor_loss=mean_float32(actor_losses),
+        critic_loss=mean_float32(values),
+        entropy=mean_float32(entropies),
+        v_targ=mean_float32(value_targets),
         magnitude_loss=None,
-        learning_rate_td=0.0010000000474974513,
-        learning_rate_rnn=0.00019999999494757503,
+        learning_rate_td=float32(1e-3),
+        learning_rate_rnn=float32(2e-4),
         norms={
-            "['z']['trace']": 5.0,
-            "['params']['weight']": 10.0,
-            "['slow_params']['weight']": 13.0,
+            "['z']['trace']": float32(math.sqrt(3.0**2 + 4.0**2)),
+            "['params']['weight']": float32(
+                math.sqrt(6.0**2 + 8.0**2)
+            ),
+            "['slow_params']['weight']": float32(
+                math.sqrt(5.0**2 + 12.0**2)
+            ),
         },
+    )
+    summary.total_td_loss = float32(
+        summary.actor_loss + summary.critic_loss
     )
     return historical_rtrrl_metrics(
         summary,
@@ -107,13 +134,24 @@ def _parse_overrides(arguments: Sequence[str]) -> dict[str, Any]:
         token = arguments[index]
         if not token.startswith("--"):
             raise ValueError(f"unexpected positional argument: {token}")
-        name = token[2:].replace("-", "_")
-        if index + 1 < len(arguments) and not arguments[index + 1].startswith("--"):
+        option = token[2:]
+        if "=" in option:
+            option, raw_value = option.split("=", 1)
+            value = yaml.safe_load(raw_value)
+            index += 1
+        elif option.startswith(("no-", "no_")):
+            option = option[3:]
+            value = False
+            index += 1
+        elif index + 1 < len(arguments) and not arguments[
+            index + 1
+        ].startswith("--"):
             value = yaml.safe_load(arguments[index + 1])
             index += 2
         else:
             value = True
             index += 1
+        name = option.replace("-", "_")
         _set_nested(overrides, name, value)
     return overrides
 
@@ -143,10 +181,10 @@ def load_legacy_mapping(
     return raw
 
 
-def normalize_legacy_invocation(raw: dict[str, Any]):
+def normalize_legacy_invocation(raw: Any):
     """Normalize legacy budget aliases before the frozen Memorax schema."""
 
-    values = dict(raw)
+    values = dict(raw) if isinstance(raw, Mapping) else dict(vars(raw))
     environment = values.get("env_params")
     legacy_num_envs = (
         environment.get("batch_size", 1)
@@ -168,10 +206,11 @@ def describe_legacy_build(config) -> dict[str, Any]:
     """Resolve the effective static AgentProgram recipe without an environment."""
 
     effective = to_component_config(config)
+    environment_kwargs = dict(config.env_params.init_kwargs)
+    backend = environment_kwargs.get("backend", config.backend)
     return {
         "environment_started": False,
         "jax_imported": "jax" in sys.modules,
-        "construction": "memorax.RTRRL/AgentProgram",
         "effective": {
             "total_timesteps": config.total_timesteps,
             "num_epochs": config.num_epochs,
@@ -182,6 +221,26 @@ def describe_legacy_build(config) -> dict[str, Any]:
             "td_learning_rate": config.td_lr,
             "rnn_learning_rate": config.rnn_lr,
             "rnn_gradient_clip": config.rnn_grad_clip,
+            "environment": {
+                "env_name": config.env_params.env_name,
+                "mode": config.mode,
+                "backend": backend,
+            },
+            "builder": {
+                "function": (
+                    "build_independent_rtrrl_agent"
+                    if effective.topology == "independent"
+                    else "build_rtrrl_agent"
+                ),
+                "topology": effective.topology,
+                "recurrent_component": effective.recurrent_component,
+                "feature_component": effective.feature_component,
+                "actor_component": effective.actor_component,
+                "meta_rl": effective.meta_rl,
+                "normalize_observation": effective.normalize_observation,
+                "normalize_reward": effective.normalize_reward,
+                "pass_observation": config.pass_obs,
+            },
         },
     }
 
@@ -210,18 +269,29 @@ def audit_repository_configs(repository_root: str | Path) -> dict[str, Any]:
         "unsupported": [],
         "unknown_fields": [],
         "deprecated_no_op": [],
+        "invalid_config": [],
     }
     root = Path(repository_root)
     for path in repository_rtrrl_configs(root):
         relative = str(path.relative_to(root))
         try:
             config = normalize_legacy_invocation(load_legacy_mapping(path))
+            to_component_config(config)
         except UnsupportedRTRRLBranch as error:
             classified["unsupported"].append(
                 {"path": relative, "reason": str(error)}
             )
-        except ValueError as error:
+        except UnknownRTRRLField as error:
             classified["unknown_fields"].append(
+                {"path": relative, "reason": str(error)}
+            )
+        except (
+            InvalidRTRRLConfig,
+            TypeError,
+            ValueError,
+            yaml.YAMLError,
+        ) as error:
+            classified["invalid_config"].append(
                 {"path": relative, "reason": str(error)}
             )
         else:
@@ -251,7 +321,8 @@ def audit_repository_configs(repository_root: str | Path) -> dict[str, Any]:
 
 def parse_compatibility_cli(argv: Sequence[str] | None = None):
     parser = argparse.ArgumentParser(
-        description="Historical RTRRL CLI backed by Memorax AgentProgram"
+        description="Historical RTRRL CLI backed by Memorax AgentProgram",
+        allow_abbrev=False,
     )
     parser.add_argument("--config_path", "--config-path")
     parser.add_argument(

@@ -1,6 +1,8 @@
 from .compatibility import (
+    InvalidRTRRLConfig,
     LegacyRTRRLConfig,
     RTRRLComponentConfig,
+    UnknownRTRRLField,
     UnsupportedRTRRLBranch,
     normalize_legacy_config,
     to_component_config,
@@ -43,7 +45,9 @@ __all__ = [
     "RTRRLEpochSummary",
     "RTRRLState",
     "RTRRLComponents",
+    "InvalidRTRRLConfig",
     "UnsupportedRTRRLBranch",
+    "UnknownRTRRLField",
     "aggregate_epoch_summary",
     "build_rtrrl_program",
     "normalize_legacy_config",
