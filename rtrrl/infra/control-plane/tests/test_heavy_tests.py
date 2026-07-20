@@ -9,7 +9,12 @@ import subprocess
 
 import pytest
 
+from trainer_infra import heavy_test_cli
 from trainer_infra.heavy_tests import (
+    AggregateJobFailure,
+    HeavyTestRunner,
+    JobEvidence,
+    SubmittedTestJob,
     TEST_PROFILES,
     AwsNetworkSettings,
     ProfileDriftError,
@@ -471,6 +476,7 @@ def test_heavy_test_overlay_installs_current_sources() -> None:
 
     assert "ARG BASE_IMAGE" in dockerfile
     assert "FROM ${BASE_IMAGE}" in dockerfile
+    assert "apt-get install --yes --no-install-recommends time" in dockerfile
     assert "COPY training-sdk /workspace/training-sdk" in dockerfile
     assert "COPY memo /app" in dockerfile
     assert dockerfile.index("/opt/venv/bin/python -m ensurepip") < dockerfile.index(
@@ -579,3 +585,327 @@ printf '%s\n' '{"images":[],"failures":[{"failureCode":"ImageNotFound","failureR
     assert "ImageNotFound" in result.stderr
     assert "missing test image" in result.stderr
     assert '"images":[]' in result.stderr
+
+
+class FakeJobBatch(FakeBatch):
+    def __init__(self) -> None:
+        super().__init__()
+        self.job_definitions: list[dict[str, object]] = []
+        self.register_job_definition_calls: list[dict[str, object]] = []
+        self.submit_job_calls: list[dict[str, object]] = []
+        self.jobs: dict[str, dict[str, object]] = {}
+
+    def describe_job_definitions(self, **kwargs: object) -> dict[str, object]:
+        name = kwargs["jobDefinitionName"]
+        return {
+            "jobDefinitions": [
+                deepcopy(definition)
+                for definition in self.job_definitions
+                if definition["jobDefinitionName"] == name
+            ]
+        }
+
+    def register_job_definition(self, **kwargs: object) -> dict[str, object]:
+        self.register_job_definition_calls.append(deepcopy(kwargs))
+        revision = len(self.job_definitions) + 1
+        name = str(kwargs["jobDefinitionName"])
+        definition = {
+            **deepcopy(kwargs),
+            "revision": revision,
+            "jobDefinitionArn": (
+                f"arn:aws:batch:eu-north-1:123456789012:job-definition/{name}:{revision}"
+            ),
+        }
+        self.job_definitions.append(definition)
+        return {
+            "jobDefinitionName": name,
+            "jobDefinitionArn": definition["jobDefinitionArn"],
+            "revision": revision,
+        }
+
+    def submit_job(self, **kwargs: object) -> dict[str, str]:
+        self.submit_job_calls.append(deepcopy(kwargs))
+        job_id = f"job-{len(self.submit_job_calls)}"
+        self.jobs[job_id] = {
+            "jobId": job_id,
+            "status": "SUCCEEDED",
+            "container": {"logStreamName": f"stream/{job_id}"},
+        }
+        return {"jobName": str(kwargs["jobName"]), "jobId": job_id}
+
+    def describe_jobs(self, *, jobs: list[str]) -> dict[str, object]:
+        return {"jobs": [deepcopy(self.jobs[job_id]) for job_id in jobs]}
+
+
+class FakeLogs:
+    def __init__(self, messages: dict[str, list[str]]) -> None:
+        self.messages = messages
+        self.calls: list[dict[str, object]] = []
+
+    def get_log_events(self, **kwargs: object) -> dict[str, object]:
+        self.calls.append(deepcopy(kwargs))
+        stream = str(kwargs["logStreamName"])
+        return {
+            "events": [{"message": message} for message in self.messages.get(stream, [])],
+            "nextForwardToken": "done",
+        }
+
+
+IMAGE = "007122174918.dkr.ecr.eu-north-1.amazonaws.com/rtrrl@sha256:" + "a" * 64
+
+
+def test_one_job_per_exact_test_file() -> None:
+    batch = FakeJobBatch()
+    runner = HeavyTestRunner(batch, FakeLogs({}), sleep=lambda _: None)
+
+    jobs = runner.submit(
+        profile="c7ax",
+        image=IMAGE,
+        tests=[
+            "memo/tests/online_ac/test_eval_trace.py",
+            "memo/tests/online_ac/test_jit_contract.py",
+        ],
+    )
+
+    assert len(jobs) == 2
+    assert len(batch.submit_job_calls) == 2
+    assert all(" /usr/bin/time -v " in f" {job.command_text} " for job in jobs)
+    assert all(
+        call["containerOverrides"]["command"][0:2] == ["bash", "-lc"]
+        for call in batch.submit_job_calls
+    )
+    assert "test_eval_trace.py -q" in jobs[0].command_text
+    assert "test_jit_contract.py -q" in jobs[1].command_text
+
+
+@pytest.mark.parametrize(
+    "path",
+    [
+        "memo/pyproject.toml",
+        "../tests/x.py",
+        "rtrrl/tests/x.py",
+        "/memo/tests/x.py",
+        "memo/tests/../x.py",
+        "memo/tests/x.txt",
+    ],
+)
+def test_rejects_non_memo_test_path(path: str) -> None:
+    runner = HeavyTestRunner(FakeJobBatch(), FakeLogs({}), sleep=lambda _: None)
+
+    with pytest.raises(ValueError, match="memo/tests"):
+        runner.submit(profile="c7ax", image=IMAGE, tests=[path])
+
+
+@pytest.mark.parametrize(
+    "image",
+    [
+        "repo:latest",
+        "repo@sha256:abc",
+        "repo@sha256:" + "A" * 64,
+        "repo@sha256:" + "a" * 63,
+    ],
+)
+def test_rejects_image_without_exact_digest(image: str) -> None:
+    runner = HeavyTestRunner(FakeJobBatch(), FakeLogs({}), sleep=lambda _: None)
+
+    with pytest.raises(ValueError, match="digest"):
+        runner.submit(
+            profile="c7ax",
+            image=image,
+            tests=["memo/tests/online_ac/test_eval_trace.py"],
+        )
+
+
+def test_reuses_only_exact_digest_bound_job_definition() -> None:
+    batch = FakeJobBatch()
+    runner = HeavyTestRunner(batch, FakeLogs({}), sleep=lambda _: None)
+
+    first = runner.submit(
+        profile="c7ax",
+        image=IMAGE,
+        tests=["memo/tests/online_ac/test_eval_trace.py"],
+    )
+    second = runner.submit(
+        profile="c7ax",
+        image=IMAGE,
+        tests=["memo/tests/online_ac/test_jit_contract.py"],
+    )
+
+    assert len(batch.register_job_definition_calls) == 1
+    definition = batch.register_job_definition_calls[0]
+    assert definition["type"] == "container"
+    assert definition["platformCapabilities"] == ["EC2"]
+    assert definition["containerProperties"]["image"] == IMAGE
+    assert definition["containerProperties"]["resourceRequirements"] == [
+        {"type": "VCPU", "value": "4"},
+        {"type": "MEMORY", "value": "7168"},
+    ]
+    assert first[0].job_definition_arn == second[0].job_definition_arn
+    assert first[0].job_definition_revision == 1
+
+
+def test_gpu_job_probes_jax_and_l4_before_pytest() -> None:
+    batch = FakeJobBatch()
+    runner = HeavyTestRunner(batch, FakeLogs({}), sleep=lambda _: None)
+
+    job = runner.submit(
+        profile="g6x",
+        image=IMAGE,
+        tests=["memo/tests/online_ac/test_jit_contract.py"],
+    )[0]
+
+    command = job.command_text
+    assert command.index("jax.devices()") < command.index("/usr/bin/time -v")
+    assert command.index("nvidia-smi --query-gpu=name,memory.total") < command.index(
+        "/usr/bin/time -v"
+    )
+    assert command.index("NVIDIA L4") < command.index("/usr/bin/time -v")
+    definition = batch.register_job_definition_calls[0]
+    assert {"type": "GPU", "value": "1"} in definition["containerProperties"][
+        "resourceRequirements"
+    ]
+
+
+def test_wait_collects_log_stream_rss_and_gpu_evidence() -> None:
+    batch = FakeJobBatch()
+    batch.jobs = {
+        "cpu": {
+            "jobId": "cpu",
+            "status": "SUCCEEDED",
+            "container": {"logStreamName": "stream/cpu"},
+        },
+        "gpu": {
+            "jobId": "gpu",
+            "status": "SUCCEEDED",
+            "container": {"logStreamName": "stream/gpu"},
+        },
+    }
+    logs = FakeLogs(
+        {
+            "stream/cpu": ["Maximum resident set size (kbytes): 1234"],
+            "stream/gpu": [
+                "NVIDIA L4, 23034 MiB",
+                "Maximum resident set size (kbytes): 5678",
+            ],
+        }
+    )
+    runner = HeavyTestRunner(batch, logs, sleep=lambda _: None)
+
+    evidence = runner.wait(["cpu", "gpu"])
+
+    assert [item.status for item in evidence] == ["SUCCEEDED", "SUCCEEDED"]
+    assert evidence[0].log_stream_name == "stream/cpu"
+    assert evidence[0].maximum_rss_lines == (
+        "Maximum resident set size (kbytes): 1234",
+    )
+    assert evidence[1].gpu_lines == ("NVIDIA L4, 23034 MiB",)
+    assert all(call["logGroupName"] == "/aws/batch/job" for call in logs.calls)
+
+
+def test_wait_aggregates_all_terminal_failures_with_evidence() -> None:
+    batch = FakeJobBatch()
+    batch.jobs = {
+        "failed": {
+            "jobId": "failed",
+            "status": "FAILED",
+            "statusReason": "Essential container exited",
+            "container": {
+                "logStreamName": "stream/failed",
+                "exitCode": 1,
+                "reason": "pytest failed",
+            },
+        },
+        "ok": {
+            "jobId": "ok",
+            "status": "SUCCEEDED",
+            "container": {"logStreamName": "stream/ok", "exitCode": 0},
+        },
+    }
+    logs = FakeLogs(
+        {
+            "stream/failed": [
+                "assert False",
+                "Maximum resident set size (kbytes): 9000",
+            ],
+            "stream/ok": ["Maximum resident set size (kbytes): 1000"],
+        }
+    )
+    runner = HeavyTestRunner(batch, logs, sleep=lambda _: None)
+
+    with pytest.raises(AggregateJobFailure) as raised:
+        runner.wait(["failed", "ok"])
+
+    assert [item.job_id for item in raised.value.evidence] == ["failed", "ok"]
+    assert raised.value.evidence[0].status_reason == "Essential container exited"
+    assert raised.value.evidence[0].container_reason == "pytest failed"
+    assert raised.value.evidence[0].log_lines[0] == "assert False"
+
+
+def test_submit_cli_prints_machine_readable_job_evidence(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    class Runner:
+        def submit(self, **kwargs: object) -> tuple[SubmittedTestJob, ...]:
+            assert kwargs == {
+                "profile": "c7ax",
+                "image": IMAGE,
+                "tests": ["memo/tests/online_ac/test_eval_trace.py"],
+            }
+            return (
+                SubmittedTestJob(
+                    job_id="job-1",
+                    test_file="memo/tests/online_ac/test_eval_trace.py",
+                    profile="c7ax",
+                    image=IMAGE,
+                    job_definition_arn="arn:definition:1",
+                    job_definition_revision=1,
+                    command_text="/usr/bin/time -v python -m pytest test.py",
+                ),
+            )
+
+    monkeypatch.setattr(heavy_test_cli, "_runner", Runner)
+
+    result = heavy_test_cli.main(
+        [
+            "submit",
+            "--profile",
+            "c7ax",
+            "--image",
+            IMAGE,
+            "memo/tests/online_ac/test_eval_trace.py",
+        ]
+    )
+
+    assert result == 0
+    assert json.loads(capsys.readouterr().out)["job_id"] == "job-1"
+
+
+def test_wait_cli_prints_failure_evidence_and_summary(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    evidence = JobEvidence(
+        job_id="job-1",
+        status="FAILED",
+        log_stream_name="stream/job-1",
+        maximum_rss_lines=("Maximum resident set size (kbytes): 1234",),
+        gpu_lines=(),
+        log_lines=("assert False",),
+        status_reason="Essential container exited",
+        exit_code=1,
+    )
+
+    class Runner:
+        def wait(self, job_ids: list[str]) -> tuple[JobEvidence, ...]:
+            assert job_ids == ["job-1"]
+            raise AggregateJobFailure([evidence])
+
+    monkeypatch.setattr(heavy_test_cli, "_runner", Runner)
+
+    result = heavy_test_cli.main(["wait", "job-1"])
+    captured = capsys.readouterr()
+
+    assert result == 1
+    assert json.loads(captured.out)["log_lines"] == ["assert False"]
+    assert "job-1=FAILED" in captured.err

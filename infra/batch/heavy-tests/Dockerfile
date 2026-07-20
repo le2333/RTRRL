@@ -1,6 +1,9 @@
 ARG BASE_IMAGE
 FROM ${BASE_IMAGE}
 
+RUN apt-get update \
+    && apt-get install --yes --no-install-recommends time \
+    && rm -rf /var/lib/apt/lists/*
 COPY training-sdk /workspace/training-sdk
 COPY memo /app
 RUN /opt/venv/bin/python -m ensurepip
