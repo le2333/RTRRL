@@ -477,11 +477,16 @@ def make_step_fn(
                     discrete=config.discrete,
                 )
                 entropy = distribution.entropy().mean()
-                return entropy * config.entropy_rate, entropy
+                magnitude_loss = jnp.abs(distribution.mean()).mean()
+                objective = (
+                    entropy * config.entropy_rate
+                    - magnitude_loss * config.action_magnitude_factor
+                )
+                return objective, (entropy, magnitude_loss)
 
             (
                 (direct_gradients, hidden_direct_gradient),
-                entropy,
+                (entropy, magnitude_loss),
             ) = jax.grad(
                 direct_objective,
                 argnums=(0, 1),
@@ -503,6 +508,7 @@ def make_step_fn(
                 gradients,
                 actor_loss,
                 entropy,
+                magnitude_loss,
             )
 
         (
@@ -513,6 +519,7 @@ def make_step_fn(
             gradients,
             actor_loss,
             entropy,
+            magnitude_loss,
         ) = jax.vmap(gradients_for_environment)(
             recurrent_state, model_input
         )
@@ -616,6 +623,11 @@ def make_step_fn(
             value_target_mean=jnp.mean(value_target),
             entropy_mean=jnp.mean(entropy),
             actor_loss_mean=jnp.mean(actor_loss),
+            magnitude_loss_mean=(
+                jnp.mean(magnitude_loss)
+                if config.action_magnitude_factor
+                else None
+            ),
         )
         if not debug:
             return next_state, next_key, train_metrics

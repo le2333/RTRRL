@@ -12,8 +12,9 @@ hyperparameters are configurable. Algorithm and environment are never mixed
 across experiments.
 """
 import time
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, replace
 from pprint import pprint
+from typing import Any
 
 import flax.linen as nn
 import jax
@@ -35,6 +36,14 @@ from memorax.algorithms import (
     StreamACRtrl,
 )
 from memorax.algorithms.rtrrl.compatibility import normalize_legacy_config
+from memorax.algorithms.rtrrl.compatibility import to_component_config
+from memorax.algorithms.rtrrl.heads import RTRRLTDHead
+from memorax.algorithms.rtrrl.lru import AAAI25LRU
+from memorax.algorithms.rtrrl.program import (
+    LegacyRTRRLEnvironmentAdapter,
+    build_rtrrl_program,
+)
+from memorax.algorithms.rtrrl.types import RTRRLComponents
 from memorax.networks import (
     RNN,
     FeatureExtractor,
@@ -147,6 +156,36 @@ def _reject_legacy_new_conflict(cfg):
             )
 
 
+def _find_pipeline_state(value):
+    if hasattr(value, "pipeline_state"):
+        return value.pipeline_state
+    for name in ("inner_state", "env_state"):
+        if hasattr(value, name):
+            found = _find_pipeline_state(getattr(value, name))
+            if found is not None:
+                return found
+    return None
+
+
+def _make_rtrrl_renderer(env):
+    render = getattr(env, "render", None)
+    if render is None:
+        return None
+
+    def render_evaluation(environment_states):
+        pipeline_state = _find_pipeline_state(environment_states)
+        if pipeline_state is None:
+            return None
+        first_environment = jax.tree.map(
+            lambda value: value[:, 0],
+            pipeline_state,
+        )
+        frames = render(first_environment)
+        return np.asarray(frames) if frames is not None else None
+
+    return render_evaluation
+
+
 def build_networks(cfg: ExperimentConfig, action_space) -> tuple[Network, Network]:
     """Build actor/critic networks from cfg.agent_type and the action space.
 
@@ -234,7 +273,7 @@ def build_stream_ac_agent(cfg: ExperimentConfig, env, env_params):
     )
 
 
-def build_rtrrl_agent(cfg: ExperimentConfig, env, env_params):
+def build_rtrrl_agent(cfg: Any, env, env_params):
     """Build an RTRRL agent (shared LRU-RTRL torso -> Gaussian actor + V critic).
 
     Layout: FeatureExtractor([o,(a),(r)]) -> Memoroid(LRUCell) -> silu -> heads.
@@ -252,6 +291,55 @@ def build_rtrrl_agent(cfg: ExperimentConfig, env, env_params):
     if isinstance(action_space, Discrete):
         raise ValueError(
             "RTRRL currently targets continuous-action envs (Gaussian actor)."
+        )
+
+    if cfg.profile == "aaai25_strict_lru":
+        observation_dim = env.observation_space(env_params).shape[0]
+        action_dim = action_space.shape[0]
+        component_config = replace(
+            to_component_config(cfg),
+            observation_dim=observation_dim,
+            action_dim=action_dim,
+            discrete=False,
+        )
+        input_dim = observation_dim + (
+            action_dim + 1 if component_config.meta_rl else 0
+        )
+        components = RTRRLComponents(
+            recurrent=AAAI25LRU(
+                input_dim=input_dim,
+                hidden_dim=component_config.hidden_dim,
+                output_dim=component_config.hidden_dim,
+            ),
+            head=RTRRLTDHead(
+                action_dim=action_dim,
+                discrete=False,
+                f_align=False,
+            ),
+        )
+        concrete_environment = legacy_env_adapter(
+            env,
+            env_params,
+            strip_normalization=True,
+        ).build_context["env"]
+        environment = LegacyRTRRLEnvironmentAdapter(
+            concrete_environment,
+            env_params,
+            component_config.num_envs,
+            normalize_observation=component_config.normalize_observation,
+            normalize_reward=component_config.normalize_reward,
+        )
+        program = build_rtrrl_program(
+            component_config,
+            components,
+            environment,
+        )
+        return RTRRL.from_program(
+            program,
+            profile=cfg.profile,
+            num_envs=cfg.num_envs,
+            runtime_config=cfg,
+            render_evaluation=_make_rtrrl_renderer(env),
         )
 
     use_encoder = getattr(cfg, "use_encoder", True)
@@ -344,6 +432,8 @@ def build_rtrrl_agent(cfg: ExperimentConfig, env, env_params):
         update_trace_before_td=getattr(cfg, "update_trace_before_td", True),
         normalize_obs=getattr(cfg, "normalize_obs", False),
         normalize_reward=getattr(cfg, "normalize_reward", False),
+        act_magnitude_factor=getattr(cfg, "act_magnitude_factor", 0.0),
+        profile="memo_experimental",
         # sum->mean ablation: original averages log_prob/entropy over action dims.
         logprob_scale=(
             1.0 / action_space.shape[0]
@@ -594,8 +684,8 @@ def _log_historical_rtrrl_epoch(
     log_td_lr: bool,
     log_rnn_lr: bool,
     log_norms: bool,
-    eval_reward: float | None = None,
-    video_frames=None,
+    evaluation_summary=None,
+    render_evaluation=None,
 ):
     """Preserve historical logger cadence, step, best-eval, and video semantics."""
 
@@ -609,6 +699,20 @@ def _log_historical_rtrrl_epoch(
         if epoch_index % log_every == 0
         else {}
     )
+    eval_reward = None
+    video_frames = None
+    if evaluation_summary is not None:
+        info = evaluation_summary.info
+        completed = info["returned_episode"]
+        if bool(jnp.any(completed)):
+            eval_reward = float(
+                jnp.mean(
+                    info["returned_episode_returns"],
+                    where=completed,
+                )
+            )
+            if render_evaluation is not None:
+                video_frames = render_evaluation(info["environment_state"])
     if eval_reward is not None:
         metrics["eval/rewards"] = eval_reward
         if video_frames is not None:
@@ -624,6 +728,109 @@ def _log_historical_rtrrl_epoch(
     logger.log(metrics, step=(epoch_index + 1) * steps_per_epoch)
 
 
+def _train_strict_rtrrl_loop(agent: RTRRL, cfg, logger):
+    """Run the closed program and translate its summaries only on the host."""
+
+    key = jax.random.key(cfg.seed)
+    init = jax.jit(agent.program.init_fn)
+    train = jax.jit(agent.program.train_epoch_fn, static_argnums=(2,))
+    evaluate = jax.jit(agent.program.evaluate_fn, static_argnums=(2,))
+
+    key, init_key = jax.random.split(key)
+    state = init(init_key)
+    steps_per_epoch = (
+        cfg.total_timesteps // cfg.num_epochs // agent.num_envs
+    )
+    if steps_per_epoch < 1:
+        raise ValueError("strict RTRRL epoch must contain at least one transition")
+
+    logger["best_eval_reward"] = -jnp.inf
+    steps_since_best = 0
+    runtime_config = agent.runtime_config
+    log_td_lr = bool(
+        getattr(
+            getattr(runtime_config, "optimizer_params_td", None),
+            "decay_type",
+            None,
+        )
+    )
+    log_rnn_lr = bool(
+        getattr(
+            getattr(runtime_config, "optimizer_params_rnn", None),
+            "decay_type",
+            None,
+        )
+    )
+    log_norms = getattr(runtime_config, "log_norms", False)
+
+    try:
+        for epoch_index in trange(cfg.num_epochs, mininterval=1):
+            key, train_key, eval_key = jax.random.split(key, 3)
+            state, summary = train(
+                train_key,
+                state,
+                steps_per_epoch,
+            )
+            jax.block_until_ready((state, summary))
+
+            evaluation_summary = None
+            if cfg.eval_every and (
+                epoch_index % cfg.eval_every == 0
+                or epoch_index == cfg.num_epochs - 1
+            ):
+                _, evaluation_summary = evaluate(
+                    eval_key,
+                    state,
+                    cfg.eval_steps,
+                )
+                jax.block_until_ready(evaluation_summary)
+
+            environment_config = getattr(
+                runtime_config, "env_params", None
+            )
+            render_every = (
+                cfg.eval_every
+                * getattr(runtime_config, "render_every_evals", 10)
+            )
+            should_render = bool(
+                evaluation_summary is not None
+                and getattr(environment_config, "render", False)
+                and (
+                    (
+                        render_every
+                        and epoch_index % render_every == 0
+                        and epoch_index > 0
+                    )
+                    or epoch_index == cfg.num_epochs - 1
+                )
+            )
+            previous_best = logger["best_eval_reward"]
+            _log_historical_rtrrl_epoch(
+                logger,
+                summary,
+                epoch_index=epoch_index,
+                steps_per_epoch=steps_per_epoch,
+                log_every=cfg.log_every,
+                log_td_lr=log_td_lr,
+                log_rnn_lr=log_rnn_lr,
+                log_norms=log_norms,
+                evaluation_summary=evaluation_summary,
+                render_evaluation=(
+                    agent.render_evaluation if should_render else None
+                ),
+            )
+            if logger["best_eval_reward"] > previous_best:
+                steps_since_best = 0
+            elif evaluation_summary is not None:
+                steps_since_best += 1
+            if cfg.patience and steps_since_best >= cfg.patience:
+                break
+    finally:
+        logger.finalize()
+
+    return logger["best_eval_reward"]
+
+
 def train_loop(agent, cfg: ExperimentConfig, logger=DummyLogger()):
     """Epoch loop: train -> eval -> Aim logger, with early stopping.
 
@@ -635,8 +842,10 @@ def train_loop(agent, cfg: ExperimentConfig, logger=DummyLogger()):
 
     cfg.seed = cfg.seed or int(np.random.randint(1e6))
     logger.log_params(asdict(cfg))
-    key = jax.random.key(cfg.seed)
+    if isinstance(agent, RTRRL) and agent.profile == "aaai25_strict_lru":
+        return _train_strict_rtrrl_loop(agent, cfg, logger)
 
+    key = jax.random.key(cfg.seed)
     # lox.spool wraps train/evaluate so their internal lox.log calls are
     # returned as a `logs` dict instead of being emitted to a lox sink.
     #

@@ -205,6 +205,7 @@ class RTRRLComponentConfig:
     update_period: float = 1.0
     normalize_observation: bool = False
     normalize_reward: bool = False
+    action_magnitude_factor: float = 0.0
     debug_max_steps: int = 3
 
     def __post_init__(self) -> None:
@@ -415,6 +416,7 @@ def to_component_config(legacy: LegacyRTRRLConfig) -> RTRRLComponentConfig:
         "update_period": legacy.update_period,
         "normalize_observation": legacy.normalize_obs,
         "normalize_reward": legacy.normalize_reward,
+        "action_magnitude_factor": legacy.act_magnitude_factor,
     }
     if legacy.profile == "aaai25_strict_lru":
         return RTRRLComponentConfig(

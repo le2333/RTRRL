@@ -8,7 +8,6 @@ from .compatibility import (
 from .legacy import (
     RTRRL,
     RTRRLConfig,
-    RTRRLState,
     _find_leaf as _find_leaf,
     _tree_norm as _tree_norm,
 )
@@ -18,7 +17,7 @@ from .program import (
     build_rtrrl_program,
 )
 from .state_machine import make_init_fn, make_step_fn
-from .types import RTRRLComponents
+from .types import RTRRLComponents, RTRRLState
 
 __all__ = [
     "RTRRL",

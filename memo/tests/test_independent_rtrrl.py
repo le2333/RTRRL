@@ -37,6 +37,7 @@ class TinyContinuousEnv:
 
 def config(**overrides):
     values = dict(
+        profile="memo_experimental",
         num_envs=1,
         hidden_dim=2,
         encoder_dim=2,

@@ -42,6 +42,7 @@ _NORMALIZATION_LOG_KEYS = {
 
 def _rtrrl_config(**overrides):
     values = dict(
+        profile="memo_experimental",
         num_envs=1,
         gamma=0.91,
         lambda_pi=0.73,

@@ -31,6 +31,150 @@ from .types import RTRRLComponents, RTRRLState, TrainStepMetrics
 
 
 @struct.dataclass
+class RTRRLEnvironmentState:
+    """Fixed JAX view of a legacy Gymnax-style vector environment."""
+
+    obs: Any
+    reward: Any
+    done: Any
+    inner_state: Any
+    keys: Any
+    observation_mean: Any
+    observation_m2: Any
+    observation_count: Any
+    reward_mean: Any
+    reward_m2: Any
+    reward_count: Any
+    discounted_return: Any
+
+
+class LegacyRTRRLEnvironmentAdapter:
+    """Translate legacy keyed reset/step calls outside the numerical core."""
+
+    def __init__(
+        self,
+        env: Any,
+        env_params: Any,
+        num_envs: int,
+        *,
+        normalize_observation: bool = False,
+        normalize_reward: bool = False,
+        eps: float = 1e-8,
+        reward_gamma: float = 0.99,
+    ):
+        self.env = env
+        self.env_params = env_params
+        self.num_envs = num_envs
+        self.normalize_observation = normalize_observation
+        self.normalize_reward = normalize_reward
+        self.eps = eps
+        self.reward_gamma = reward_gamma
+
+    def reset(self, key):
+        reset_root, step_root = jax.random.split(key)
+        reset_keys = jax.random.split(reset_root, self.num_envs)
+        step_keys = jax.random.split(step_root, self.num_envs)
+        observation, inner_state = jax.vmap(
+            self.env.reset, in_axes=(0, None)
+        )(reset_keys, self.env_params)
+        observation_mean = jnp.zeros_like(observation)
+        observation_m2 = jnp.ones_like(observation)
+        observation_count = jnp.ones(
+            (self.num_envs,), dtype=jnp.float32
+        )
+        if self.normalize_observation:
+            observation_count = observation_count + 1
+            delta = observation - observation_mean
+            observation_mean = (
+                observation_mean
+                + delta / observation_count[:, None]
+            )
+            delta2 = observation - observation_mean
+            observation_m2 = observation_m2 + delta * delta2
+            observation = (observation - observation_mean) / jnp.sqrt(
+                observation_m2 / observation_count[:, None] + self.eps
+            )
+        return RTRRLEnvironmentState(
+            obs=observation,
+            reward=jnp.zeros((self.num_envs,), dtype=jnp.float32),
+            done=jnp.zeros((self.num_envs,), dtype=jnp.bool_),
+            inner_state=inner_state,
+            keys=step_keys,
+            observation_mean=observation_mean,
+            observation_m2=observation_m2,
+            observation_count=observation_count,
+            reward_mean=jnp.zeros((self.num_envs,), dtype=jnp.float32),
+            reward_m2=jnp.ones((self.num_envs,), dtype=jnp.float32),
+            reward_count=jnp.ones((self.num_envs,), dtype=jnp.float32),
+            discounted_return=jnp.zeros(
+                (self.num_envs,), dtype=jnp.float32
+            ),
+        )
+
+    def step(self, state: RTRRLEnvironmentState, action):
+        split_keys = jax.vmap(lambda key: jax.random.split(key, 2))(state.keys)
+        next_keys = split_keys[:, 0]
+        environment_keys = split_keys[:, 1]
+        observation, inner_state, reward, done, _ = jax.vmap(
+            self.env.step, in_axes=(0, 0, 0, None)
+        )(
+            environment_keys,
+            state.inner_state,
+            action,
+            self.env_params,
+        )
+        observation_mean = state.observation_mean
+        observation_m2 = state.observation_m2
+        observation_count = state.observation_count
+        if self.normalize_observation:
+            observation_count = observation_count + 1
+            delta = observation - observation_mean
+            observation_mean = (
+                observation_mean
+                + delta / observation_count[:, None]
+            )
+            delta2 = observation - observation_mean
+            observation_m2 = observation_m2 + delta * delta2
+            observation = (observation - observation_mean) / jnp.sqrt(
+                observation_m2 / observation_count[:, None] + self.eps
+            )
+        reward = jnp.asarray(reward, dtype=jnp.float32)
+        reward_mean = state.reward_mean
+        reward_m2 = state.reward_m2
+        reward_count = state.reward_count
+        discounted_return = (
+            reward
+            + self.reward_gamma
+            * state.discounted_return
+            * (1 - done)
+        )
+        if self.normalize_reward:
+            reward_count = reward_count + 1
+            delta = discounted_return - reward_mean
+            reward_mean = reward_mean + delta / reward_count
+            delta2 = discounted_return - reward_mean
+            reward_m2 = reward_m2 + delta * delta2
+            reward = reward / jnp.sqrt(
+                reward_m2 / reward_count + self.eps
+            )
+        discounted_return = discounted_return * (1 - done)
+        return RTRRLEnvironmentState(
+            obs=observation,
+            reward=reward,
+            done=jnp.asarray(done, dtype=jnp.bool_),
+            inner_state=inner_state,
+            keys=next_keys,
+            observation_mean=observation_mean,
+            observation_m2=observation_m2,
+            observation_count=observation_count,
+            reward_mean=reward_mean,
+            reward_m2=reward_m2,
+            reward_count=reward_count,
+            discounted_return=discounted_return,
+        )
+
+
+@struct.dataclass
 class RTRRLEpochSummary:
     """Historical epoch values represented only by scalar pytree leaves."""
 
@@ -90,7 +234,6 @@ def aggregate_epoch_summary(
     num_envs: int,
     learning_rate_td: Any = None,
     learning_rate_rnn: Any = None,
-    magnitude_loss: Any = None,
 ) -> RTRRLEpochSummary:
     """Apply the pinned AAAI25 epoch reductions to scalar step summaries."""
 
@@ -115,7 +258,9 @@ def aggregate_epoch_summary(
         }
     )
     return RTRRLEpochSummary(
-        steps=jnp.asarray(num_steps * num_envs, dtype=jnp.int32),
+        steps=jnp.asarray(
+            final_state.step_count * num_envs, dtype=jnp.int32
+        ),
         mean_reward=jnp.asarray(
             jnp.sum(metrics.reward) * environment_count / divisor_float,
             dtype=jnp.float32,
@@ -143,7 +288,11 @@ def aggregate_epoch_summary(
         v_targ=jnp.asarray(
             jnp.mean(metrics.value_target_mean), dtype=jnp.float32
         ),
-        magnitude_loss=magnitude_loss,
+        magnitude_loss=(
+            jnp.asarray(jnp.mean(metrics.magnitude_loss_mean), dtype=jnp.float32)
+            if metrics.magnitude_loss_mean is not None
+            else None
+        ),
         learning_rate_td=learning_rate_td,
         learning_rate_rnn=learning_rate_rnn,
         norms=norms,
@@ -182,9 +331,15 @@ def _make_evaluate_fn(
         environment_state = env.reset(reset_key)
         recurrent_state = state.initial_recurrent_state
         feedback_action = jnp.zeros_like(state.action)
+        running_return = jnp.zeros_like(environment_state.reward)
 
         def evaluate_step(carry, _):
-            current_environment, current_recurrent, previous_action = carry
+            (
+                current_environment,
+                current_recurrent,
+                previous_action,
+                current_return,
+            ) = carry
             done = current_environment.done
             current_recurrent = jax.tree.map(
                 lambda initial, current: jax.vmap(jnp.where)(
@@ -236,20 +391,41 @@ def _make_evaluate_fn(
                 persisted_feedback_action=action,
             )
             next_environment = env.step(current_environment, decision.env_action)
+            episode_return = current_return + next_environment.reward
+            returned_episode = next_environment.done
+            returned_episode_returns = jnp.where(
+                returned_episode,
+                episode_return,
+                jnp.zeros_like(episode_return),
+            )
+            next_return = jnp.where(
+                returned_episode,
+                jnp.zeros_like(episode_return),
+                episode_return,
+            )
             event = {
                 "reward": next_environment.reward,
                 "done": next_environment.done,
+                "returned_episode": returned_episode,
+                "returned_episode_returns": returned_episode_returns,
+                "environment_state": next_environment,
                 "action_decision": decision,
             }
             return (
                 next_environment,
                 next_recurrent,
                 decision.persisted_feedback_action,
+                next_return,
             ), event
 
         _, events = jax.lax.scan(
             evaluate_step,
-            (environment_state, recurrent_state, feedback_action),
+            (
+                environment_state,
+                recurrent_state,
+                feedback_action,
+                running_return,
+            ),
             xs=None,
             length=num_steps,
         )
@@ -324,6 +500,8 @@ def build_rtrrl_program(
 
 
 __all__ = [
+    "LegacyRTRRLEnvironmentAdapter",
+    "RTRRLEnvironmentState",
     "RTRRLEpochSummary",
     "aggregate_epoch_summary",
     "build_rtrrl_program",

@@ -163,3 +163,83 @@ Schema-size Batch job:
   through scalar `norms/*` values. It never scales with epoch length.
 - Experimental RTU, prediction, independent-topology component restoration is
   intentionally deferred to Task 10. The external legacy script remains Task 11.
+
+## Review-Blocker Correction (Supersedes Stale Claims Above)
+
+This section supersedes the earlier lifecycle, logging-step, evaluation,
+optional-metric, and final-verification claims in this report.
+
+### Corrected Production Lifecycle
+
+- `build_rtrrl_agent` normalizes the profile before component construction.
+- `aaai25_strict_lru` constructs `AAAI25LRU`, `RTRRLTDHead`, the fixed legacy
+  environment adapter, and exactly one `build_rtrrl_program(...)`.
+- The returned public `RTRRL` façade is created with `RTRRL.from_program`;
+  `init`, `warmup`, `train`, `evaluate`, and `_update_step` delegate to that
+  closed `AgentProgram`. Strict construction cannot call `build_meta_program`.
+- The old meta updater remains reachable only behind the explicit
+  `memo_experimental` profile boundary pending Task 10. The historical
+  constructor rejects a strict profile, so it cannot create a disguised second
+  strict lifecycle.
+- Package-level `memorax.algorithms.rtrrl.RTRRLState` is now the identical
+  class object declared by `AgentProgram.state_schema`
+  (`memorax.algorithms.rtrrl.types.RTRRLState`).
+- `_update_step` requests one scan transition from the strict program regardless
+  of `num_envs`; the experimental compatibility route passes `num_envs` to its
+  older env-step-count API so that its internal division also executes once.
+
+### Corrected Production Logging and Evaluation
+
+- `train_loop` detects the strict façade and runs the closed init, epoch, and
+  evaluation functions directly under one JIT per fixed shape. It passes the
+  real `RTRRLEpochSummary` to `_log_historical_rtrrl_epoch`; logging is no longer
+  helper-only.
+- `summary.steps` is persisted cumulative environment interaction count:
+  `final_state.step_count * num_envs`. Epoch index 4, scan length 3, and two
+  environments therefore emits `steps=30`, while the logger step remains the
+  historical scan counter `15`.
+- Evaluation retains `ActionDecision`, per-step environment state, completion
+  masks, and completed episode returns. Host translation computes
+  `eval/rewards`, updates `eval/best_eval_reward`, and sends retained pipeline
+  state to the renderer on the historical render cadence when rendering is
+  enabled and available.
+- The strict legacy-environment adapter strips callback-emitting normalization
+  wrappers and owns equivalent fixed-pytree observation/reward running
+  statistics. A normalized strict builder JAXPR is explicitly checked for no
+  host callbacks.
+- `magnitude_loss` now comes from the actual action-distribution mean and affects
+  the direct objective when `act_magnitude_factor` is nonzero. Learning-rate
+  values come from optimizer state/fallback configuration and historical
+  `lr/td` and `lr/rnn` keys are emitted exactly when the corresponding
+  `decay_type` is enabled.
+- Production train epochs still return final state plus scalar/event summary
+  only. Evaluation state history is confined to evaluation output for episode
+  aggregation and rendering.
+
+### Corrected TDD and Batch Evidence
+
+Review RED job `7b886f2b-2d0f-47bc-a064-b5f2c0d85946` failed eight intended
+contracts: public schema identity, strict builder routing, multi-environment
+single-step behavior, evaluation event information, cumulative steps,
+evaluate-to-render logging, magnitude source, and real strict train-loop
+logging. Normalization ownership received a separate RED in job
+`65b02067-8459-498e-939a-1122b0177a56`.
+
+Focused GREEN job `b9639235-73e7-4d40-8c0c-7541143ac40e` passed all 15
+program/logging and relevant real RTRRL builder tests.
+
+Final authorized Batch job `41e06b40-6846-48cc-ba1a-da484a89f911`:
+
+- queue/definition: `rtrrl-cpu2-queue` / `rtrrl-cpu-job:14`;
+- resources: 4 vCPU, 8192 MiB;
+- runtime: Python 3.12, JAX/JAXLIB 0.10.0, Flax 0.12.7, CPU;
+- complete `tests/rtrrl_parity`: 103 passed, 5 pre-existing opt-in skips;
+- profile-relevant real RTRRL builders: 5 passed, 12 deselected;
+- ruff: all changed production and contract files passed;
+- pyright: strict `memorax/algorithms/rtrrl` package, 0 errors/warnings;
+- compileall: passed;
+- local `git diff --check`: passed.
+
+The only intentional remaining compatibility boundary is
+`profile="memo_experimental"` for Task 10 branches. It is explicit and cannot be
+selected by the public strict façade.

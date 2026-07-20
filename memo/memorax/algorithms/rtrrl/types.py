@@ -59,6 +59,7 @@ class TrainStepMetrics:
     value_target_mean: Any
     entropy_mean: Any
     actor_loss_mean: Any
+    magnitude_loss_mean: Any = None
 
 
 @struct.dataclass
