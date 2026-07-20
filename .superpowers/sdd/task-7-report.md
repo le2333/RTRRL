@@ -185,3 +185,98 @@ passed. Local `git diff --check` also exited zero.
   repository lock currently resolves JAX/JAXLIB 0.10.0 in Batch; both passed.
 - The controller remains too memory-constrained for safe local JAX regression
   runs, so numerical evidence is from the authorized Batch workers.
+
+## Review Follow-Up: Dutch Update and Environment-Axis Contract
+
+### Corrected Pinned Equation
+
+Review against `RTRRL-AAAI25/traces.py:47-52` found that the original Task 7
+Dutch direction used the wrong subtraction operand. The source first computes
+the delta-weighted trace and then uses that same value in the correction:
+
+```text
+g_i = delta_i * trace_i
+update_i = g_i
+           + alpha * value_difference_i * (trace_i - g_i)
+           + preweighted_direct_i
+```
+
+The earlier report equation using `(trace - immediate_gradient)` is superseded
+by this equation. `immediate_gradients` had no basis in pinned `compute_updates`
+and was removed from `combine_update_directions`.
+
+### Review RED
+
+Tests were changed before production code and run on authorized 8 GiB Batch job
+`69d22ba3-649e-4247-b54b-4fc2c923f395`. The result was:
+
+```text
+6 failed, 17 passed
+```
+
+The focused Dutch test omitted the obsolete immediate-gradient argument and
+failed because the old API still required it. Its asymmetric arrays separately
+compute the pinned formula and the prior mistaken formula, then explicitly
+assert that the result is not the prior formula.
+
+The other five RED failures established the missing environment-axis contract:
+
+- scalar trace leaf was silently broadcast;
+- one-environment trace leaf was silently broadcast against two deltas;
+- scalar direct leaf was silently broadcast;
+- one-environment direct leaf was silently broadcast against two deltas; and
+- scalar delta failed later with an incidental JAX indexing error instead of a
+  boundary error.
+
+### Shape and Routing Contract
+
+`combine_update_directions` now requires `delta.shape == (num_envs,)`. Every
+trace and direct-gradient leaf must be non-scalar and have
+`leaf.shape[0] == num_envs`; scalar and merely broadcast-compatible leaves
+raise a path/domain-specific `ValueError` before arithmetic. Trace and direct
+tree structures must also match within each domain.
+
+Direct gradients are explicitly preweighted at this API boundary. Objective
+construction owns entropy and other direct coefficients. The combination rule:
+
+- preserves actor, critic, and recurrent direct leaves in their own domains;
+- does not multiply direct leaves by delta;
+- does not apply an entropy coefficient a second time; and
+- applies `recurrent_scale` only to the recurrent traced term.
+
+The routing test uses distinct actor/critic/recurrent traces, distinct direct
+values, heterogeneous deltas, a separate recurrent scale, and a distinct
+already-applied entropy coefficient. It rejects actor/recurrent swapping,
+delta-weighting direct terms, duplicate entropy scaling, and recurrent-scaling
+direct terms independently.
+
+### Review GREEN and Static Evidence
+
+Focused review GREEN ran on authorized Batch job
+`11194593-67b1-4e08-95b0-0683af40731e`:
+
+```text
+23 passed in 1.06s
+```
+
+Final full RTRRL parity and static checks ran on authorized Batch job
+`32913586-6d34-48b3-a96c-16f37e0a5505`:
+
+```text
+74 passed, 5 skipped
+ruff: All checks passed!
+pyright: 0 errors, 0 warnings, 0 informations
+compileall: exit 0
+```
+
+The five skips remain the existing opt-in directional finite-difference tests.
+Local `ruff`, `compileall`, IDE diagnostics, and `git diff --check` also passed.
+
+### Review Concerns
+
+- The explicit leading-environment-axis contract is intentionally stricter
+  than JAX broadcasting. Task 8 callers must batch even one-environment
+  trace/direct leaves as shape `(1, ...)`.
+- Dutch direct gradients are added after the pinned true-online correction and
+  are already coefficient-weighted; callers must not pass raw entropy
+  gradients expecting this rule to scale them.

@@ -220,8 +220,7 @@ def test_combine_directions_multiplies_delta_per_environment_before_mean():
 
 def test_dutch_critic_direction_includes_true_online_correction():
     traces = {"critic": {"w": jnp.array([[2.0, -1.0], [4.0, 3.0]])}}
-    gradients = {"critic": {"w": jnp.array([[0.5, 0.25], [0.5, -1.0]])}}
-    direct = {"critic": {"w": jnp.zeros((2, 2))}}
+    direct = {"critic": {"w": jnp.array([[0.25, 0.5], [0.75, 1.0]])}}
     delta = jnp.array([2.0, -1.0])
     value_difference = jnp.array([0.75, -0.5])
     alpha = 0.1
@@ -232,49 +231,140 @@ def test_dutch_critic_direction_includes_true_online_correction():
         delta=delta,
         recurrent_scale=0.25,
         trace_mode="dutch",
-        immediate_gradients=gradients,
         critic_learning_rate=alpha,
         critic_value_difference=value_difference,
     )
-    per_environment = (
-        delta[:, None] * traces["critic"]["w"]
+    delta_trace = delta[:, None] * traces["critic"]["w"]
+    pinned_per_environment = (
+        delta_trace
         + alpha
         * value_difference[:, None]
-        * (traces["critic"]["w"] - gradients["critic"]["w"])
+        * (traces["critic"]["w"] - delta_trace)
+        + direct["critic"]["w"]
     )
 
     np.testing.assert_allclose(
         actual["critic"]["w"],
-        jnp.mean(per_environment, axis=0),
+        jnp.mean(pinned_per_environment, axis=0),
         rtol=1e-6,
         atol=1e-7,
     )
-    wrong_plain_td = jnp.mean(delta[:, None] * traces["critic"]["w"], axis=0)
-    assert not np.allclose(actual["critic"]["w"], wrong_plain_td)
+    old_immediate_gradient = jnp.array([[0.5, 0.25], [0.5, -1.0]])
+    old_mistaken_formula = jnp.mean(
+        delta_trace
+        + alpha
+        * value_difference[:, None]
+        * (traces["critic"]["w"] - old_immediate_gradient)
+        + direct["critic"]["w"],
+        axis=0,
+    )
+    assert not np.allclose(actual["critic"]["w"], old_mistaken_formula)
 
 
-def test_direct_entropy_is_not_delta_or_recurrent_scale_weighted():
+@pytest.mark.parametrize(
+    ("traces", "direct", "match"),
+    [
+        (
+            {"actor": {"w": jnp.array(3.0)}},
+            {"actor": {"w": jnp.ones((2, 1))}},
+            "trace leaf.*leading environment dimension",
+        ),
+        (
+            {"actor": {"w": jnp.ones((1, 2))}},
+            {"actor": {"w": jnp.ones((2, 2))}},
+            "trace leaf.*environment size 1.*delta environment size 2",
+        ),
+        (
+            {"actor": {"w": jnp.ones((2, 2))}},
+            {"actor": {"w": jnp.array(4.0)}},
+            "direct leaf.*leading environment dimension",
+        ),
+        (
+            {"actor": {"w": jnp.ones((2, 2))}},
+            {"actor": {"w": jnp.ones((1, 2))}},
+            "direct leaf.*environment size 1.*delta environment size 2",
+        ),
+    ],
+)
+def test_combine_rejects_scalar_or_mismatched_environment_leaves(
+    traces,
+    direct,
+    match,
+):
+    with pytest.raises(ValueError, match=match):
+        combine_update_directions(
+            traces,
+            direct,
+            delta=jnp.array([2.0, -1.0]),
+            recurrent_scale=0.2,
+        )
+
+
+def test_combine_rejects_scalar_delta_without_environment_count():
+    with pytest.raises(ValueError, match="delta must have one environment dimension"):
+        combine_update_directions(
+            {"actor": {"w": jnp.ones((2, 1))}},
+            {"actor": {"w": jnp.ones((2, 1))}},
+            delta=jnp.array(2.0),
+            recurrent_scale=0.2,
+        )
+
+
+def test_preweighted_direct_routing_is_domain_exact_and_not_rescaled():
     traces = {
-        "actor": {"w": jnp.zeros((2, 1))},
-        "recurrent": {"w": jnp.zeros((2, 1))},
+        "actor": {"w": jnp.array([[1.0], [2.0]])},
+        "critic": {"w": jnp.array([[3.0], [5.0]])},
+        "recurrent": {"w": jnp.array([[7.0], [11.0]])},
     }
-    entropy_rate = 0.03
-    logprob_scale = 0.5
-    entropy_grad = entropy_rate * logprob_scale * jnp.array([[4.0], [8.0]])
-    direct = {"actor": {"w": entropy_grad}, "recurrent": {"w": entropy_grad}}
+    direct = {
+        "actor": {"w": jnp.array([[13.0], [17.0]])},
+        "critic": {"w": jnp.array([[19.0], [23.0]])},
+        "recurrent": {"w": jnp.array([[29.0], [31.0]])},
+    }
+    delta = jnp.array([2.0, -3.0])
+    recurrent_scale = 0.1
+    already_applied_entropy_coefficient = 0.2
 
     actual = combine_update_directions(
         traces,
         direct,
-        delta=jnp.array([10.0, -20.0]),
-        recurrent_scale=0.2,
+        delta=delta,
+        recurrent_scale=recurrent_scale,
     )
+    expected = {
+        "actor": jnp.mean(delta[:, None] * traces["actor"]["w"] + direct["actor"]["w"], axis=0),
+        "critic": jnp.mean(
+            delta[:, None] * traces["critic"]["w"] + direct["critic"]["w"], axis=0
+        ),
+        "recurrent": jnp.mean(
+            recurrent_scale * delta[:, None] * traces["recurrent"]["w"]
+            + direct["recurrent"]["w"],
+            axis=0,
+        ),
+    }
+    for domain in expected:
+        np.testing.assert_allclose(actual[domain]["w"], expected[domain])
 
-    expected = jnp.mean(entropy_grad, axis=0)
-    np.testing.assert_allclose(actual["actor"]["w"], expected)
-    np.testing.assert_allclose(actual["recurrent"]["w"], expected)
-    assert not np.allclose(actual["actor"]["w"], expected * entropy_rate)
-    assert not np.allclose(actual["recurrent"]["w"], expected * 0.2)
+    swapped_actor = jnp.mean(
+        delta[:, None] * traces["actor"]["w"] + direct["recurrent"]["w"], axis=0
+    )
+    delta_weighted_actor_direct = jnp.mean(
+        delta[:, None] * (traces["actor"]["w"] + direct["actor"]["w"]), axis=0
+    )
+    duplicate_entropy_scaled_actor = jnp.mean(
+        delta[:, None] * traces["actor"]["w"]
+        + already_applied_entropy_coefficient * direct["actor"]["w"],
+        axis=0,
+    )
+    recurrent_scaled_direct = jnp.mean(
+        recurrent_scale
+        * (delta[:, None] * traces["recurrent"]["w"] + direct["recurrent"]["w"]),
+        axis=0,
+    )
+    assert not np.allclose(actual["actor"]["w"], swapped_actor)
+    assert not np.allclose(actual["actor"]["w"], delta_weighted_actor_direct)
+    assert not np.allclose(actual["actor"]["w"], duplicate_entropy_scaled_actor)
+    assert not np.allclose(actual["recurrent"]["w"], recurrent_scaled_direct)
 
 
 def test_parameter_domain_scaling_applies_only_to_recurrent_traced_direction():

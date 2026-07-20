@@ -23,6 +23,22 @@ def _broadcast_environment(values, leaf):
     return values[(slice(None),) + (None,) * (leaf.ndim - 1)]
 
 
+def _validate_environment_tree(tree, *, kind, domain, environment_count):
+    for path, leaf in jax.tree_util.tree_leaves_with_path(tree):
+        location = jax.tree_util.keystr(path)
+        if leaf.ndim == 0:
+            raise ValueError(
+                f"{kind} leaf {location} in domain {domain} must have a "
+                f"non-scalar leading environment dimension; got shape {leaf.shape}"
+            )
+        if leaf.shape[0] != environment_count:
+            raise ValueError(
+                f"{kind} leaf {location} in domain {domain} has environment "
+                f"size {leaf.shape[0]}, but delta environment size "
+                f"{environment_count}"
+            )
+
+
 def td_error(
     *,
     reward,
@@ -58,6 +74,25 @@ def _dutch_trace(old, gradient, *, decay, learning_rate, terminated):
     return (
         decay * reset_old
         + _broadcast_environment(correction, gradient) * gradient
+    )
+
+
+def _dutch_update_direction(
+    trace,
+    direct,
+    *,
+    delta,
+    learning_rate,
+    value_difference,
+):
+    delta_trace = _broadcast_environment(delta, trace) * trace
+    return jnp.mean(
+        delta_trace
+        + learning_rate
+        * _broadcast_environment(value_difference, trace)
+        * (trace - delta_trace)
+        + direct,
+        axis=0,
     )
 
 
@@ -131,45 +166,70 @@ def combine_update_directions(
     delta,
     recurrent_scale,
     trace_mode="accumulate",
-    immediate_gradients=None,
     critic_learning_rate=None,
     critic_value_difference=None,
 ):
-    """Combine per-environment traced and direct ascent directions."""
+    """Combine per-environment traced and preweighted direct directions.
+
+    ``direct_gradients`` is an API boundary: objective coefficients, including
+    entropy coefficients, have already been applied. This rule routes each
+    direct leaf unchanged; it never delta-weights or domain-rescales it.
+    """
 
     if traces.keys() != direct_gradients.keys():
         raise ValueError("traced and direct gradient domains must match")
     if trace_mode not in {"accumulate", "dutch"}:
         raise ValueError(f"unknown trace mode: {trace_mode}")
+    delta = jnp.asarray(delta)
+    if delta.ndim != 1:
+        raise ValueError(
+            "delta must have one environment dimension; "
+            f"got shape {delta.shape}"
+        )
+    environment_count = delta.shape[0]
+    for domain in traces:
+        if (
+            jax.tree_util.tree_structure(traces[domain])
+            != jax.tree_util.tree_structure(direct_gradients[domain])
+        ):
+            raise ValueError(
+                f"traced and direct gradient trees must match in domain {domain}"
+            )
+        _validate_environment_tree(
+            traces[domain],
+            kind="trace",
+            domain=domain,
+            environment_count=environment_count,
+        )
+        _validate_environment_tree(
+            direct_gradients[domain],
+            kind="direct",
+            domain=domain,
+            environment_count=environment_count,
+        )
     if trace_mode == "dutch" and (
-        immediate_gradients is None
-        or critic_learning_rate is None
-        or critic_value_difference is None
+        critic_learning_rate is None or critic_value_difference is None
     ):
         raise ValueError(
-            "Dutch critic updates require immediate gradients, learning rate, "
-            "and value difference"
+            "Dutch critic updates require learning rate and value difference"
         )
 
     combined = {}
     for domain in traces:
         traced_scale = recurrent_scale if domain == "recurrent" else 1.0
         if domain == "critic" and trace_mode == "dutch":
-            assert immediate_gradients is not None
             assert critic_learning_rate is not None
             assert critic_value_difference is not None
             combined[domain] = jax.tree.map(
-                lambda trace, direct, gradient: jnp.mean(
-                    _broadcast_environment(delta, trace) * trace
-                    + critic_learning_rate
-                    * _broadcast_environment(critic_value_difference, trace)
-                    * (trace - gradient)
-                    + direct,
-                    axis=0,
+                lambda trace, direct: _dutch_update_direction(
+                    trace,
+                    direct,
+                    delta=delta,
+                    learning_rate=critic_learning_rate,
+                    value_difference=critic_value_difference,
                 ),
                 traces[domain],
                 direct_gradients[domain],
-                immediate_gradients[domain],
             )
         else:
             combined[domain] = jax.tree.map(
