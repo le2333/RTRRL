@@ -34,6 +34,8 @@ class SubmittedTestJob:
     job_id: str
     test_file: str
     purpose: ExecutionPurpose
+    kind: str
+    name_prefix: str
     profile: str
     queue_name: str
     queue_arn: str
@@ -58,6 +60,8 @@ class JobEvidence:
     jax_gpu_lines: tuple[str, ...] = ()
     evidence_errors: tuple[str, ...] = ()
     purpose: ExecutionPurpose | None = None
+    kind: str | None = None
+    name_prefix: str | None = None
     profile: str | None = None
     queue_name: str | None = None
     queue_arn: str | None = None
@@ -70,6 +74,8 @@ class JobEvidence:
 @dataclass(frozen=True)
 class _JobIdentity:
     purpose: ExecutionPurpose
+    kind: str
+    name_prefix: str
     profile: str
     queue_name: str
     queue_arn: str
@@ -77,6 +83,26 @@ class _JobIdentity:
     job_definition_revision: int
     image: str
     resource_requirements: tuple[ResourceRequirement, ...]
+
+
+@dataclass(frozen=True)
+class _ParsedJobIdentity:
+    purpose: ExecutionPurpose
+    kind: str
+    name_prefix: str
+    profile: str
+    queue_name: str
+    queue_arn: str
+    definition_reference: str
+    definition_name: str
+    definition_revision: int
+    image_digest: str
+    image: str
+    resource_requirements: tuple[ResourceRequirement, ...]
+
+
+class _DefinitionNotReady(RuntimeError):
+    """Raised only when definition evidence may still become visible."""
 
 
 class AggregateJobFailure(RuntimeError):
@@ -118,13 +144,18 @@ _DIGEST_IMAGE_RE = re.compile(
     rf"(?:{_REGISTRY}/)?{_IMAGE_COMPONENT}(?:/{_IMAGE_COMPONENT})*"
     r"@sha256:[0-9a-f]{64}"
 )
+_ALLOWED_NAME_PREFIXES = {
+    "trainer-heavy-test": "heavy-test",
+    "trainer-smoke": "smoke",
+}
+_AWS_BATCH_NAME_RE = re.compile(r"[A-Za-z0-9_-]{1,128}")
 _JOB_NAME_RE = re.compile(
-    r"trainer-heavy-test-(dev|run)-(c7am|c7al|c7ax|g6x)-"
+    r"(trainer-(heavy-test|smoke))-(dev|run)-(c7am|c7al|c7ax|g6x)-"
     r"[A-Za-z0-9_-]+-[0-9a-f]{12}"
 )
 _JOB_DEFINITION_ARN_RE = re.compile(
     rf"arn:aws:batch:{REGION}:({ACCOUNT_ID}):job-definition/"
-    r"(trainer-heavy-test-(dev|run)-(c7am|c7al|c7ax|g6x)-"
+    r"((trainer-(heavy-test|smoke))-(dev|run)-(c7am|c7al|c7ax|g6x)-"
     r"([0-9a-f]{64})):([1-9][0-9]*)"
 )
 _TERMINAL_JOB_STATES = frozenset({"SUCCEEDED", "FAILED"})
@@ -156,6 +187,24 @@ def _get_profile(name: str) -> ResourceProfile:
 def _validate_digest_image(image: str) -> None:
     if _DIGEST_IMAGE_RE.fullmatch(image) is None:
         raise ValueError("image must be an exact lowercase sha256 digest reference")
+
+
+def _validate_aws_batch_name(name: str, *, field: str) -> None:
+    if _AWS_BATCH_NAME_RE.fullmatch(name) is None:
+        raise ValueError(
+            f"{field} must contain only AWS Batch name characters and be at most "
+            "128 characters"
+        )
+
+
+def _validate_name_prefix(name_prefix: str) -> str:
+    if type(name_prefix) is not str or name_prefix not in _ALLOWED_NAME_PREFIXES:
+        expected = ", ".join(_ALLOWED_NAME_PREFIXES)
+        raise ValueError(
+            f"name_prefix must be exactly one of: {expected}; got {name_prefix!r}"
+        )
+    _validate_aws_batch_name(name_prefix, field="name_prefix")
+    return _ALLOWED_NAME_PREFIXES[name_prefix]
 
 
 def _validate_test_path(test_file: str, repository_root: Path) -> str:
@@ -241,10 +290,15 @@ def _container_properties(
 
 
 def _definition_name(
-    purpose: ExecutionPurpose, profile_name: str, image: str
+    name_prefix: str,
+    purpose: ExecutionPurpose,
+    profile_name: str,
+    image: str,
 ) -> str:
     digest = image.rsplit("@sha256:", 1)[1]
-    return f"trainer-heavy-test-{purpose.value}-{profile_name}-{digest}"
+    name = f"{name_prefix}-{purpose.value}-{profile_name}-{digest}"
+    _validate_aws_batch_name(name, field="job definition name")
+    return name
 
 
 def _definition_matches(
@@ -354,12 +408,13 @@ class HeavyTestRunner:
 
     def _get_or_register_definition(
         self,
+        name_prefix: str,
         purpose: ExecutionPurpose,
         profile_name: str,
         profile: ResourceProfile,
         image: str,
     ) -> tuple[str, int]:
-        name = _definition_name(purpose, profile_name, image)
+        name = _definition_name(name_prefix, purpose, profile_name, image)
         container = _container_properties(profile, image)
         self._definition_lock_dir.mkdir(parents=True, exist_ok=True)
         lock_path = self._definition_lock_dir / f"{name}.lock"
@@ -426,6 +481,7 @@ class HeavyTestRunner:
         purpose: ExecutionPurpose = ExecutionPurpose.DEV,
         name_prefix: str = "trainer-heavy-test",
     ) -> tuple[SubmittedTestJob, ...]:
+        kind = _validate_name_prefix(name_prefix)
         purpose = ExecutionPurpose(purpose)
         _validate_digest_image(image)
         test_files = tuple(
@@ -438,7 +494,7 @@ class HeavyTestRunner:
         topology = self._topology_validator.validate()
         queue_arn = topology.queue_arns[f"{purpose.value}-{profile}"]
         definition_arn, definition_revision = self._get_or_register_definition(
-            purpose, profile, profile_spec, image
+            name_prefix, purpose, profile, profile_spec, image
         )
 
         submitted = []
@@ -455,6 +511,7 @@ class HeavyTestRunner:
             suffix = f"-{unique}"
             stem = stem[: 128 - len(prefix) - len(suffix)]
             job_name = f"{prefix}{stem}{suffix}"
+            _validate_aws_batch_name(job_name, field="job name")
             try:
                 response = self._batch.submit_job(
                     jobName=job_name,
@@ -476,6 +533,8 @@ class HeavyTestRunner:
                     job_id=job_id,
                     test_file=test_file,
                     purpose=purpose,
+                    kind=kind,
+                    name_prefix=name_prefix,
                     profile=profile,
                     queue_name=queue_spec.name,
                     queue_arn=queue_arn,
@@ -611,17 +670,20 @@ class HeavyTestRunner:
             token = next_token
         return tuple(lines)
 
-    def _load_job_identity(self, job: Mapping[str, Any]) -> _JobIdentity:
+    def _parse_job_identity(self, job: Mapping[str, Any]) -> _ParsedJobIdentity:
         job_name = job.get("jobName")
         if not isinstance(job_name, str):
             raise RuntimeError("jobName is missing")
         job_name_match = _JOB_NAME_RE.fullmatch(job_name)
         if job_name_match is None:
             raise RuntimeError(
-                f"jobName is not a trainer-heavy-test job: {job_name!r}"
+                "jobName is not a trainer-heavy-test or trainer-smoke job: "
+                f"{job_name!r}"
             )
-        purpose = ExecutionPurpose(job_name_match.group(1))
-        profile_name = job_name_match.group(2)
+        name_prefix, kind, purpose_text, profile_name = job_name_match.groups()
+        purpose = ExecutionPurpose(purpose_text)
+        if _ALLOWED_NAME_PREFIXES[name_prefix] != kind:
+            raise RuntimeError("jobName kind does not match its approved prefix")
         profile = _get_profile(profile_name)
         queue = queue_for(purpose, profile_name)
 
@@ -648,6 +710,8 @@ class HeavyTestRunner:
         (
             definition_account,
             definition_name,
+            definition_prefix,
+            definition_kind,
             definition_purpose,
             definition_profile,
             image_digest,
@@ -655,6 +719,10 @@ class HeavyTestRunner:
         ) = definition_match.groups()
         if definition_account != ACCOUNT_ID:
             raise RuntimeError("jobDefinition AWS account does not match topology")
+        if definition_prefix != name_prefix or definition_kind != kind:
+            raise RuntimeError(
+                "jobDefinition kind/prefix does not match the jobName kind/prefix"
+            )
         if definition_purpose != purpose.value:
             raise RuntimeError(
                 "jobDefinition purpose does not match the jobName purpose"
@@ -664,17 +732,63 @@ class HeavyTestRunner:
                 "jobDefinition profile does not match the jobName profile"
             )
         definition_revision = int(revision_text)
+
+        expected_resources = _typed_resource_requirements(profile)
+        job_container = job.get("container")
+        if not isinstance(job_container, Mapping):
+            raise RuntimeError("job container details are missing")
+        image = job_container.get("image")
+        if not isinstance(image, str):
+            raise RuntimeError("job container image is missing")
+        try:
+            _validate_digest_image(image)
+        except ValueError as error:
+            raise RuntimeError(f"job container image is invalid: {error}") from error
+        if not image.endswith(f"@sha256:{image_digest}"):
+            raise RuntimeError(
+                "job container image does not match the jobDefinition digest"
+            )
+        job_resources = _normalize_resource_requirements(
+            job_container.get("resourceRequirements")
+        )
+        if job_resources != expected_resources:
+            raise RuntimeError(
+                "job container resourceRequirements do not match the profile"
+            )
+        return _ParsedJobIdentity(
+            purpose=purpose,
+            kind=kind,
+            name_prefix=name_prefix,
+            profile=profile_name,
+            queue_name=queue.name,
+            queue_arn=queue_arn,
+            definition_reference=definition_reference,
+            definition_name=definition_name,
+            definition_revision=definition_revision,
+            image_digest=image_digest,
+            image=image,
+            resource_requirements=expected_resources,
+        )
+
+    def _load_job_definition(
+        self, parsed: _ParsedJobIdentity
+    ) -> _JobIdentity:
         definitions: list[Mapping[str, Any]] = []
         definition_token: str | None = None
         while True:
             definition_arguments: dict[str, object] = {
-                "jobDefinitionName": definition_name,
+                "jobDefinitionName": parsed.definition_name,
             }
             if definition_token is not None:
                 definition_arguments["nextToken"] = definition_token
-            definition_response = self._batch.describe_job_definitions(
-                **definition_arguments
-            )
+            try:
+                definition_response = self._batch.describe_job_definitions(
+                    **definition_arguments
+                )
+            except Exception as error:
+                raise _DefinitionNotReady(
+                    f"jobDefinition query is not ready: {error}"
+                ) from error
             definitions.extend(
                 item
                 for item in definition_response.get("jobDefinitions", [])
@@ -690,9 +804,13 @@ class HeavyTestRunner:
         matching_definitions = [
             item
             for item in definitions
-            if item.get("jobDefinitionArn") == definition_reference
-            and item.get("revision") == definition_revision
+            if item.get("jobDefinitionArn") == parsed.definition_reference
+            and item.get("revision") == parsed.definition_revision
         ]
+        if not matching_definitions:
+            raise _DefinitionNotReady(
+                "jobDefinition ARN/revision is not visible yet"
+            )
         if len(matching_definitions) != 1:
             raise RuntimeError(
                 "jobDefinition ARN/revision did not resolve to exactly one definition"
@@ -704,54 +822,54 @@ class HeavyTestRunner:
         image = definition_container.get("image")
         if not isinstance(image, str):
             raise RuntimeError("jobDefinition image is missing")
-        _validate_digest_image(image)
-        if not image.endswith(f"@sha256:{image_digest}"):
+        try:
+            _validate_digest_image(image)
+        except ValueError as error:
+            raise RuntimeError(f"jobDefinition image digest is invalid: {error}") from error
+        if not image.endswith(f"@sha256:{parsed.image_digest}"):
             raise RuntimeError(
                 "jobDefinition image digest does not match its definition name"
             )
+        if image != parsed.image:
+            raise RuntimeError(
+                "job container image does not match the jobDefinition image"
+            )
+        profile = _get_profile(parsed.profile)
         expected_container = _container_properties(profile, image)
         if not _definition_matches(definition, expected_container):
             raise RuntimeError(
                 "jobDefinition container image/resources do not match the profile"
             )
-        expected_resources = _typed_resource_requirements(profile)
-
-        job_container = job.get("container")
-        if not isinstance(job_container, Mapping):
-            raise RuntimeError("job container details are missing")
-        if job_container.get("image") != image:
-            raise RuntimeError(
-                "job container image does not match the jobDefinition image"
-            )
-        job_resources = _normalize_resource_requirements(
-            job_container.get("resourceRequirements")
-        )
-        if job_resources != expected_resources:
-            raise RuntimeError(
-                "job container resourceRequirements do not match the profile"
-            )
         return _JobIdentity(
-            purpose=purpose,
-            profile=profile_name,
-            queue_name=queue.name,
-            queue_arn=queue_arn,
-            job_definition_arn=definition_reference,
-            job_definition_revision=definition_revision,
+            purpose=parsed.purpose,
+            kind=parsed.kind,
+            name_prefix=parsed.name_prefix,
+            profile=parsed.profile,
+            queue_name=parsed.queue_name,
+            queue_arn=parsed.queue_arn,
+            job_definition_arn=parsed.definition_reference,
+            job_definition_revision=parsed.definition_revision,
             image=image,
-            resource_requirements=expected_resources,
+            resource_requirements=parsed.resource_requirements,
         )
 
     def _resolve_job_identity(
         self, job: Mapping[str, Any]
     ) -> tuple[_JobIdentity | None, str | None]:
+        try:
+            parsed = self._parse_job_identity(job)
+        except Exception as error:
+            return None, f"job identity validation failed: {error}"
         last_error: Exception | None = None
         for attempt in range(self._evidence_max_attempts):
             try:
-                return self._load_job_identity(job), None
-            except Exception as error:
+                return self._load_job_definition(parsed), None
+            except _DefinitionNotReady as error:
                 last_error = error
                 if attempt + 1 < self._evidence_max_attempts:
                     self._sleep(self._retry_delay_seconds)
+            except Exception as error:
+                return None, f"job identity validation failed: {error}"
         return None, f"job identity validation failed: {last_error}"
 
     def _collect_job_evidence(
@@ -766,6 +884,9 @@ class HeavyTestRunner:
         identity, identity_error = self._resolve_job_identity(latest)
         if identity_error is not None:
             errors.append(identity_error)
+        evidence_attempts = (
+            self._evidence_max_attempts if identity is not None else 1
+        )
         is_gpu = identity is not None and identity.profile == "g6x"
         container = latest.get("container")
         if not isinstance(container, Mapping):
@@ -776,7 +897,7 @@ class HeavyTestRunner:
 
         if status in _TERMINAL_JOB_STATES and stream is None:
             last_error: Exception | None = None
-            for attempt in range(self._evidence_max_attempts):
+            for attempt in range(evidence_attempts):
                 try:
                     response = self._batch.describe_jobs(jobs=[job_id])
                     refreshed = response.get("jobs", [])
@@ -791,7 +912,7 @@ class HeavyTestRunner:
                                 break
                 except Exception as error:
                     last_error = error
-                if attempt + 1 < self._evidence_max_attempts:
+                if attempt + 1 < evidence_attempts:
                     self._sleep(self._retry_delay_seconds)
             if stream is None:
                 detail = f": {last_error}" if last_error is not None else ""
@@ -800,7 +921,7 @@ class HeavyTestRunner:
         log_lines: tuple[str, ...] = ()
         if stream is not None:
             last_error = None
-            for attempt in range(self._evidence_max_attempts):
+            for attempt in range(evidence_attempts):
                 try:
                     candidate_lines = self._read_log_lines(stream)
                     log_lines = candidate_lines
@@ -822,7 +943,7 @@ class HeavyTestRunner:
                         break
                 except Exception as error:
                     last_error = error
-                if attempt + 1 < self._evidence_max_attempts:
+                if attempt + 1 < evidence_attempts:
                     self._sleep(self._retry_delay_seconds)
             if last_error is not None and not log_lines:
                 errors.append(f"CloudWatch logs unavailable: {last_error}")
@@ -866,6 +987,8 @@ class HeavyTestRunner:
             jax_gpu_lines=jax_gpu_lines,
             evidence_errors=tuple(errors),
             purpose=identity.purpose if identity is not None else None,
+            kind=identity.kind if identity is not None else None,
+            name_prefix=identity.name_prefix if identity is not None else None,
             profile=identity.profile if identity is not None else None,
             queue_name=identity.queue_name if identity is not None else None,
             queue_arn=identity.queue_arn if identity is not None else None,
