@@ -4,7 +4,24 @@ import pytest
 from pydantic import ValidationError
 
 from trainer_infra.loaders import load_experiment, load_script_catalog
-from trainer_infra.models import ContinuousDomain, DiscreteDomain, ExecutionSpec, HpoSpec
+from trainer_infra.models import (
+    ContinuousDomain,
+    DiscreteDomain,
+    ExecutionSpec,
+    HpoSpec,
+    ResourcesSpec,
+)
+
+
+@pytest.mark.parametrize("profile", ["c7am", "c7al", "c7ax", "g6x"])
+def test_resources_accepts_only_declared_profiles(profile: str) -> None:
+    assert ResourcesSpec(profile=profile).profile == profile
+
+
+@pytest.mark.parametrize("profile", ["cpu", "gpu", "g6f", "c7a.2xlarge"])
+def test_resources_rejects_legacy_or_undeclared_profiles(profile: str) -> None:
+    with pytest.raises(ValidationError):
+        ResourcesSpec(profile=profile)
 
 
 def test_domains_reject_empty_or_invalid_bounds() -> None:
@@ -43,7 +60,7 @@ experiment:
   name: hopper
 defaults:
   image: repo/image@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
-  resources: {profile: gpu}
+  resources: {profile: g6x}
   hpo: {total_trials: 5, configs_per_batch: 2}
   execution: {runs_per_job: 2}
 groups:

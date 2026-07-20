@@ -184,7 +184,7 @@ class LoggingSpec(ContractModel):
 
 
 class ResourcesSpec(ContractModel):
-    profile: str
+    profile: Literal["c7am", "c7al", "c7ax", "g6x"]
 
 
 class ExperimentDefaults(ContractModel):
