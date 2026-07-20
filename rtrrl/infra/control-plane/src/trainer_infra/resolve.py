@@ -21,6 +21,7 @@ from trainer_infra.models import (
     ResolvedParameter,
     ScriptCatalog,
     SearchDomain,
+    freeze_json,
 )
 
 
@@ -216,6 +217,10 @@ def resolve_experiment(
 
     for group_name, group in spec.groups.items():
         image = group.image or spec.defaults.image
+        if "image" in group.overrides:
+            image = group.overrides["image"]
+        if not isinstance(image, str):
+            raise ValueError(f"group '{group_name}' has invalid image reference")
         catalog = catalogs.get(image)
         if catalog is None:
             raise ValueError(f"no catalog for exact image reference '{image}'")
@@ -260,7 +265,7 @@ def resolve_experiment(
                 resources=configuration.resources,
                 hpo=configuration.hpo,
                 execution=configuration.execution,
-                metadata=MappingProxyType(metadata),
+                metadata=freeze_json(metadata),
                 parameters=parameters,
             )
         )
@@ -268,6 +273,6 @@ def resolve_experiment(
     return ResolvedExperiment(
         name=spec.experiment.name,
         description=spec.experiment.description,
-        metadata=MappingProxyType(experiment_metadata),
+        metadata=freeze_json(experiment_metadata),
         groups=tuple(resolved_groups),
     )

@@ -11,6 +11,44 @@ from pydantic import BaseModel, ConfigDict, NonNegativeInt, PositiveInt, model_v
 JsonScalar: TypeAlias = str | int | float | bool | None
 
 
+def _immutable(*_args: Any, **_kwargs: Any) -> None:
+    raise TypeError("frozen JSON values cannot be modified")
+
+
+class FrozenDict(dict[str, Any]):
+    __delitem__ = _immutable
+    __ior__ = _immutable
+    __setitem__ = _immutable
+    clear = _immutable
+    pop = _immutable
+    popitem = _immutable
+    setdefault = _immutable
+    update = _immutable
+
+
+class FrozenList(list[Any]):
+    __delitem__ = _immutable
+    __iadd__ = _immutable
+    __imul__ = _immutable
+    __setitem__ = _immutable
+    append = _immutable
+    clear = _immutable
+    extend = _immutable
+    insert = _immutable
+    pop = _immutable
+    remove = _immutable
+    reverse = _immutable
+    sort = _immutable
+
+
+def freeze_json(value: Any) -> Any:
+    if isinstance(value, dict):
+        return FrozenDict({key: freeze_json(item) for key, item in value.items()})
+    if isinstance(value, list):
+        return FrozenList(freeze_json(item) for item in value)
+    return value
+
+
 class ContractModel(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 

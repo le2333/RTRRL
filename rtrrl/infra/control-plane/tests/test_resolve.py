@@ -1,3 +1,5 @@
+import json
+
 import pytest
 
 from trainer_infra.models import (
@@ -9,6 +11,7 @@ from trainer_infra.models import (
 from trainer_infra.resolve import resolve_experiment
 
 IMAGE = "repo/image@sha256:" + "a" * 64
+OVERRIDE_IMAGE = "repo/image@sha256:" + "b" * 64
 
 
 @pytest.fixture
@@ -209,3 +212,58 @@ def test_catalog_lookup_requires_exact_image_reference(catalog: ScriptCatalog) -
 
     with pytest.raises(ValueError, match="catalog.*repo/image@sha256"):
         resolve_experiment(spec, {"repo/image:dev": catalog})
+
+
+def test_group_override_image_selects_matching_catalog(catalog: ScriptCatalog) -> None:
+    spec = ExperimentSpec.model_validate(
+        {
+            "experiment": {"name": "hopper"},
+            "defaults": {
+                "image": IMAGE,
+                "resources": {"profile": "gpu"},
+                "hpo": {"total_trials": 1, "configs_per_batch": 1},
+                "execution": {"runs_per_job": 1},
+            },
+            "groups": {
+                "shared": {
+                    "script": "rtrrl",
+                    "overrides": {"image": OVERRIDE_IMAGE},
+                }
+            },
+        }
+    )
+
+    group = resolve_experiment(spec, {OVERRIDE_IMAGE: catalog}).groups[0]
+
+    assert group.image == OVERRIDE_IMAGE
+
+
+def test_resolved_metadata_is_recursively_immutable_and_json_serializable(
+    catalog: ScriptCatalog,
+) -> None:
+    spec = ExperimentSpec.model_validate(
+        {
+            "experiment": {
+                "name": "hopper",
+                "metadata": {"labels": ["baseline"], "owner": {"name": "research"}},
+            },
+            "defaults": {
+                "image": IMAGE,
+                "resources": {"profile": "gpu"},
+                "hpo": {"total_trials": 1, "configs_per_batch": 1},
+                "execution": {"runs_per_job": 1},
+            },
+            "groups": {"shared": {"script": "rtrrl"}},
+        }
+    )
+
+    metadata = resolve_experiment(spec, {IMAGE: catalog}).groups[0].metadata
+
+    with pytest.raises(TypeError):
+        metadata["labels"].append("changed")
+    with pytest.raises(TypeError):
+        metadata["owner"]["name"] = "changed"
+    assert json.loads(json.dumps(metadata)) == {
+        "labels": ["baseline"],
+        "owner": {"name": "research"},
+    }
