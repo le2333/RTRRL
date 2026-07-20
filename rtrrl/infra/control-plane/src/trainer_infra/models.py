@@ -227,6 +227,8 @@ class DiscreteSearch:
 
     def __post_init__(self) -> None:
         for index, value in enumerate(self.values):
+            if isinstance(value, float) and not math.isfinite(value):
+                raise ValueError("categorical float values must be finite")
             if any(value == previous for previous in self.values[:index]):
                 raise ValueError("duplicate categorical values are not allowed")
 

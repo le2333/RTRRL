@@ -77,7 +77,7 @@ def test_run_identity_uses_explicit_sequence_independent_of_trial_number() -> No
     )
     second = materialize_run(
         group,
-        FakeTrial(7),
+        FakeTrial(19),
         {"topology": "dual"},
         run_number=2,
     )
@@ -87,11 +87,11 @@ def test_run_identity_uses_explicit_sequence_independent_of_trial_number() -> No
     assert first.run_name == "shared-0001"
     assert first.run_id == "experiment-123:shared:0001"
     assert second.run_number == 2
-    assert second.trial_number == 7
+    assert second.trial_number == 19
     assert second.run_name == "shared-0002"
     assert second.run_id == "experiment-123:shared:0002"
     assert second.context["run_number"] == 2
-    assert second.context["trial_number"] == 7
+    assert second.context["trial_number"] == 19
     assert second.context["run_name"] == second.run_name
     assert json.loads(second.run_json)["context"] == dict(second.context)
 

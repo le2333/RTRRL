@@ -176,6 +176,12 @@ def test_discrete_search_rejects_python_equal_categorical_values(
         DiscreteSearch(values)
 
 
+@pytest.mark.parametrize("value", [float("nan"), float("inf"), float("-inf")])
+def test_discrete_search_rejects_non_finite_float(value: float) -> None:
+    with pytest.raises(ValueError, match="categorical float values must be finite"):
+        DiscreteSearch((value,))
+
+
 def test_create_study_uses_constant_liar_tpe_sampler() -> None:
     with warnings.catch_warnings(record=True) as caught:
         study = create_study(study_name="experiment-123:shared", direction="maximize")
