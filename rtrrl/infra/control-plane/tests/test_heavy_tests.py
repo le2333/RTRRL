@@ -2,7 +2,10 @@ from __future__ import annotations
 
 from copy import deepcopy
 from dataclasses import FrozenInstanceError
+import json
+import os
 from pathlib import Path
+import subprocess
 
 import pytest
 
@@ -403,21 +406,64 @@ def test_only_missing_c7ax_queue_is_created(fake_batch: FakeBatch) -> None:
     assert fake_batch.update_calls == []
 
 
-def test_heavy_test_builder_creates_a_filtered_temporary_context() -> None:
-    builder = (HEAVY_TEST_IMAGE_DIR / "build-image.sh").read_text()
+def _write_executable(path: Path, content: str) -> None:
+    path.write_text(content)
+    path.chmod(0o755)
 
-    assert 'mktemp -d' in builder
-    assert '"${REPOSITORY_ROOT}/memo/"' in builder
-    assert '"${BUILD_CONTEXT}/memo/"' in builder
-    assert '"${REPOSITORY_ROOT}/training-sdk/"' in builder
-    assert '"${BUILD_CONTEXT}/training-sdk/"' in builder
-    assert '"${BUILD_CONTEXT}/Dockerfile"' in builder
-    for excluded in (".git", ".venv", "__pycache__", ".cache", "cache", "logs", "*.log"):
-        assert f"--exclude={excluded!r}" in builder
 
-    assert "docker build" in builder
-    assert '"${BUILD_CONTEXT}"' in builder
-    assert '"${REPOSITORY_ROOT}"' not in builder.split("docker build", maxsplit=1)[1]
+def test_heavy_test_builder_stages_only_allowed_files(tmp_path: Path) -> None:
+    source = tmp_path / "source"
+    context = tmp_path / "context"
+    dockerfile = tmp_path / "Dockerfile"
+    dockerfile.write_text("FROM scratch\n")
+    forbidden_directories = (
+        ".git",
+        ".venv",
+        "__pycache__",
+        ".cache",
+        ".pytest_cache",
+        ".ruff_cache",
+        "cache",
+        "log",
+        "logs",
+    )
+
+    for tree in ("memo", "training-sdk"):
+        tree_root = source / tree
+        (tree_root / "src").mkdir(parents=True)
+        (tree_root / "keep.txt").write_text(f"{tree} root")
+        (tree_root / "src" / "keep.py").write_text(f"{tree} nested")
+        (tree_root / "src" / "debug.log").write_text("forbidden log")
+        for directory in forbidden_directories:
+            for parent in (tree_root, tree_root / "src"):
+                forbidden = parent / directory
+                forbidden.mkdir()
+                (forbidden / "forbidden.txt").write_text("forbidden")
+
+    subprocess.run(
+        [
+            "bash",
+            "-c",
+            'source "$1"; stage_context "$2" "$3" "$4"',
+            "bash",
+            str(HEAVY_TEST_IMAGE_DIR / "build-image.sh"),
+            str(source),
+            str(context),
+            str(dockerfile),
+        ],
+        check=True,
+    )
+
+    assert (context / "Dockerfile").read_text() == "FROM scratch\n"
+    for tree in ("memo", "training-sdk"):
+        assert (context / tree / "keep.txt").read_text() == f"{tree} root"
+        assert (context / tree / "src" / "keep.py").read_text() == f"{tree} nested"
+    staged_paths = tuple(context.rglob("*"))
+    assert all(
+        not set(path.relative_to(context).parts).intersection(forbidden_directories)
+        for path in staged_paths
+    )
+    assert all(path.suffix != ".log" for path in staged_paths)
 
 
 def test_heavy_test_overlay_installs_current_sources() -> None:
@@ -441,14 +487,95 @@ def test_heavy_test_overlay_installs_current_sources() -> None:
     assert 'ENTRYPOINT ["/usr/local/bin/entrypoint.sh"]' in dockerfile
 
 
-def test_heavy_test_builder_maps_profiles_and_emits_digest_reference() -> None:
-    builder = (HEAVY_TEST_IMAGE_DIR / "build-image.sh").read_text()
+def test_heavy_test_builder_stdout_is_exactly_final_json(
+    tmp_path: Path,
+) -> None:
+    fake_bin = tmp_path / "bin"
+    fake_bin.mkdir()
+    digest = f"sha256:{'a' * 64}"
+    _write_executable(
+        fake_bin / "aws",
+        f"""#!/usr/bin/env bash
+set -eu
+case "$*" in
+  *get-login-password*) echo password ;;
+  *batch-get-image*) printf '%s\\n' '{{"images":[{{"imageId":{{"imageDigest":"{digest}"}}}}],"failures":[]}}' ;;
+  *) echo "unexpected aws call: $*" >&2; exit 1 ;;
+esac
+""",
+    )
+    _write_executable(
+        fake_bin / "docker",
+        """#!/usr/bin/env bash
+set -eu
+case "$1" in
+  info) exit 0 ;;
+  login) read -r password; echo "docker login: $password" ;;
+  build|push|run) echo "docker $1 diagnostic" ;;
+  *) exit 1 ;;
+esac
+""",
+    )
+    env = {
+        **os.environ,
+        "ACCOUNT_ID": "007122174918",
+        "ECR_RETRY_DELAY_SECONDS": "0",
+        "PATH": f"{fake_bin}:{os.environ['PATH']}",
+    }
 
-    assert "--profile c7am|c7ax|g6x" in builder
-    assert "memorax-rtrl-cpu" in builder
-    assert "memorax-rtrl-gpu" in builder
-    assert builder.count("aws ecr batch-get-image") == 2
-    assert builder.index("BASE_DIGEST=") < builder.index("docker build")
-    assert "aws ecr describe-images" not in builder
-    assert '"image":' in builder
-    assert "@${PUSHED_DIGEST}" in builder
+    result = subprocess.run(
+        [str(HEAVY_TEST_IMAGE_DIR / "build-image.sh"), "--profile", "c7ax"],
+        check=True,
+        capture_output=True,
+        text=True,
+        env=env,
+    )
+
+    assert len(result.stdout.splitlines()) == 1
+    payload = json.loads(result.stdout)
+    assert payload["digest"] == digest
+    assert payload["image"] == f"007122174918.dkr.ecr.eu-north-1.amazonaws.com/rtrrl@{digest}"
+    assert "docker build diagnostic" in result.stderr
+    assert "docker push diagnostic" in result.stderr
+    assert "docker run diagnostic" in result.stderr
+
+
+def test_heavy_test_builder_retries_and_reports_ecr_failures(
+    tmp_path: Path,
+) -> None:
+    fake_bin = tmp_path / "bin"
+    fake_bin.mkdir()
+    counter = tmp_path / "calls"
+    _write_executable(
+        fake_bin / "aws",
+        """#!/usr/bin/env bash
+set -eu
+count=0
+[ ! -f "$COUNTER_FILE" ] || count="$(cat "$COUNTER_FILE")"
+count=$((count + 1))
+printf '%s' "$count" >"$COUNTER_FILE"
+printf '%s\n' '{"images":[],"failures":[{"failureCode":"ImageNotFound","failureReason":"missing test image"}]}'
+""",
+    )
+    env = {
+        **os.environ,
+        "ACCOUNT_ID": "007122174918",
+        "COUNTER_FILE": str(counter),
+        "ECR_MAX_ATTEMPTS": "3",
+        "ECR_RETRY_DELAY_SECONDS": "0",
+        "PATH": f"{fake_bin}:{os.environ['PATH']}",
+    }
+
+    result = subprocess.run(
+        [str(HEAVY_TEST_IMAGE_DIR / "build-image.sh"), "--profile", "c7ax"],
+        capture_output=True,
+        text=True,
+        env=env,
+    )
+
+    assert result.returncode != 0
+    assert result.stdout == ""
+    assert counter.read_text() == "3"
+    assert "ImageNotFound" in result.stderr
+    assert "missing test image" in result.stderr
+    assert '"images":[]' in result.stderr
