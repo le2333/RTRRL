@@ -92,6 +92,13 @@ def test_oracle_fixture_has_required_sections():
         "lru/reset/input",
         "lru/reset/carry_after",
         "lru/reset/output",
+        "lru/unbatched/input",
+        "lru/unbatched/carry_before",
+        "lru/unbatched/carry_after",
+        "lru/unbatched/projection",
+        "lru/unbatched/skip",
+        "lru/unbatched/preactivation",
+        "lru/unbatched/output",
         "credit/after_step_1",
         "credit/after_step_2",
         "init/action",
@@ -110,6 +117,10 @@ def test_oracle_fixture_has_required_sections():
         "input_vjp_leaf": "heads/vjp/input",
         "variable_collections": ["params", "falign"],
     }
+    assert manifest["lru_forward"]["reset"] == (
+        "one-step output ignores the previous hidden state for both boolean "
+        "reset values"
+    )
 
 
 def test_oracle_fixture_matches_all_manifest_leaf_metadata():

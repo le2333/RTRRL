@@ -83,7 +83,8 @@ class _InitializerCell(nn.Module):
             partial(_matrix_init, normalization=jnp.sqrt(2 * self.input_dim)),
             (self.hidden_dim, self.input_dim),
         )
-        return (B_real + 1j * B_img) @ inputs[0]
+        input_vector = inputs if inputs.ndim == 1 else inputs[0]
+        return (B_real + 1j * B_img) @ input_vector
 
 
 class _InitializerOnlineCell(nn.Module):
@@ -122,7 +123,8 @@ class _InitializerLayer(nn.Module):
             self.input_dim,
             name="OnlineLRUCell_0",
         )(inputs)
-        return ((C_real + 1j * C_img) @ hidden).real + D @ inputs[0]
+        input_vector = inputs if inputs.ndim == 1 else inputs[0]
+        return ((C_real + 1j * C_img) @ hidden).real + D @ input_vector
 
 
 @struct.dataclass
@@ -206,8 +208,11 @@ class AAAI25LRU:
         reset: Array | bool,
     ) -> tuple[LRUCarry, Array]:
         del carry, reset
-        projected_input = jax.vmap(lambda value: self.normalized_B(params) @ value)(
-            inputs
+        normalized_B = self.normalized_B(params)
+        projected_input = (
+            normalized_B @ inputs
+            if inputs.ndim == 1
+            else jax.vmap(lambda value: normalized_B @ value)(inputs)
         )
         next_carry = LRUCarry(hidden=projected_input)
         _, _, preactivation = self.readout_parts(params, next_carry, inputs)

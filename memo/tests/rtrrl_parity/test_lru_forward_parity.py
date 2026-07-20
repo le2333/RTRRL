@@ -48,6 +48,7 @@ def test_generic_memorax_lru_documents_strict_aaai25_differences():
     assert carry.decay.shape == (1, 1, 2)
     assert readout.shape == (1, 1, 2)
     assert generic.config.dtype is None
+    assert list(variables["params"])[:2] == ["theta_log", "nu_log"]
 
 
 def _oracle_params(arrays):
@@ -143,7 +144,7 @@ def test_fixture_forward_matches_every_recurrence_and_readout_leaf():
     )
 
 
-def test_fixture_reset_discards_previous_hidden_state():
+def test_fixture_one_step_ignores_previous_hidden_for_both_reset_values():
     arrays, _ = load_oracle()
     component = AAAI25LRU(input_dim=4, hidden_dim=2, output_dim=2)
     params = _oracle_params(arrays)
@@ -153,11 +154,8 @@ def test_fixture_reset_discards_previous_hidden_state():
     reset_carry, reset_output = component.forward(
         params, carry, reset_input, reset=jnp.array([True])
     )
-    zero_carry_output = component.forward(
-        params,
-        LRUCarry(hidden=jnp.zeros_like(carry.hidden)),
-        reset_input,
-        reset=False,
+    no_reset_carry, no_reset_output = component.forward(
+        params, carry, reset_input, reset=False
     )
 
     assert_tree_close(
@@ -169,8 +167,16 @@ def test_fixture_reset_discards_previous_hidden_state():
         "exact",
     )
     assert_tree_close(
+        {"hidden": no_reset_carry.hidden, "output": no_reset_output},
+        {
+            "hidden": arrays["lru/next/carry_after"],
+            "output": arrays["lru/next/output"],
+        },
+        "exact",
+    )
+    assert_tree_close(
         (reset_carry, reset_output),
-        zero_carry_output,
+        (no_reset_carry, no_reset_output),
         "exact",
     )
 
@@ -211,3 +217,40 @@ def test_fixture_forward_eager_and_jit_have_measured_parity():
 
     assert_tree_close(eager, compiled, "exact")
     assert np.isfinite(np.asarray(compiled[1])).all()
+
+
+def test_fixture_unbatched_initialize_and_forward_preserve_vector_shapes():
+    arrays, _ = load_oracle()
+    component = AAAI25LRU(input_dim=4, hidden_dim=2, output_dim=2)
+    inputs = jnp.asarray(arrays["lru/unbatched/input"])
+
+    params, carry = component.initialize(
+        jnp.asarray(arrays["lru/init_key"]), inputs.shape
+    )
+    next_carry, output = component.forward(params, carry, inputs, reset=False)
+    projection, skip, preactivation = component.readout_parts(
+        params, next_carry, inputs
+    )
+
+    assert carry.hidden.shape == (2,)
+    assert next_carry.hidden.shape == (2,)
+    assert output.shape == (2,)
+    assert_tree_close(
+        {
+            "carry_before": carry.hidden,
+            "carry_after": next_carry.hidden,
+            "projection": projection,
+            "skip": skip,
+            "preactivation": preactivation,
+            "output": output,
+        },
+        {
+            "carry_before": arrays["lru/unbatched/carry_before"],
+            "carry_after": arrays["lru/unbatched/carry_after"],
+            "projection": arrays["lru/unbatched/projection"],
+            "skip": arrays["lru/unbatched/skip"],
+            "preactivation": arrays["lru/unbatched/preactivation"],
+            "output": arrays["lru/unbatched/output"],
+        },
+        "exact",
+    )

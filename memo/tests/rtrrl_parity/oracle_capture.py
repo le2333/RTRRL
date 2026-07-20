@@ -133,6 +133,22 @@ def _capture_arrays(seed: int) -> tuple[dict[str, np.ndarray], dict[str, str]]:
     lru_projection = (lru_carry_after_1[0] @ lru_C.transpose()).real
     lru_skip = lru_input @ lru_params["D"].transpose()
     lru_preactivation = lru_projection + lru_skip
+    lru_unbatched_input = lru_input[0]
+    lru_unbatched_carry_before = lru.initialize_carry(
+        lru_key, lru_unbatched_input.shape
+    )
+    lru_unbatched_carry_after, lru_unbatched_output = lru.apply(
+        lru_variables,
+        lru_unbatched_carry_before,
+        lru_unbatched_input,
+    )
+    lru_unbatched_projection = (
+        lru_unbatched_carry_after[0] @ lru_C.transpose()
+    ).real
+    lru_unbatched_skip = lru_unbatched_input @ lru_params["D"].transpose()
+    lru_unbatched_preactivation = (
+        lru_unbatched_projection + lru_unbatched_skip
+    )
 
     model = RNNActorCritic(
         a_dim=2,
@@ -279,6 +295,17 @@ def _capture_arrays(seed: int) -> tuple[dict[str, np.ndarray], dict[str, str]]:
         "lru/reset/input": np.asarray(lru_input_2),
         "lru/reset/carry_after": np.asarray(lru_reset_carry[0]),
         "lru/reset/output": np.asarray(lru_reset_output),
+        "lru/unbatched/input": np.asarray(lru_unbatched_input),
+        "lru/unbatched/carry_before": np.asarray(
+            lru_unbatched_carry_before[0]
+        ),
+        "lru/unbatched/carry_after": np.asarray(lru_unbatched_carry_after[0]),
+        "lru/unbatched/projection": np.asarray(lru_unbatched_projection),
+        "lru/unbatched/skip": np.asarray(lru_unbatched_skip),
+        "lru/unbatched/preactivation": np.asarray(
+            lru_unbatched_preactivation
+        ),
+        "lru/unbatched/output": np.asarray(lru_unbatched_output),
         "credit/after_step_1": _credit_vector(lru_carry_after_1, jax),
         "credit/after_step_2": _credit_vector(lru_carry_after_2, jax),
         "init/action": np.asarray(initial_action),
@@ -364,7 +391,10 @@ def main(
                 "C_img",
                 "D",
             ],
-            "reset": "boolean true discards the previous hidden state",
+            "reset": (
+                "one-step output ignores the previous hidden state for both "
+                "boolean reset values"
+            ),
         },
         "leaf_paths": leaf_paths,
         "leaves": {

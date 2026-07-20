@@ -80,6 +80,13 @@
     "lru/reset/input",
     "lru/reset/output",
     "lru/skip",
+    "lru/unbatched/carry_after",
+    "lru/unbatched/carry_before",
+    "lru/unbatched/input",
+    "lru/unbatched/output",
+    "lru/unbatched/preactivation",
+    "lru/unbatched/projection",
+    "lru/unbatched/skip",
     "step/td_error"
   ],
   "leaves": {
@@ -431,6 +438,48 @@
         2
       ]
     },
+    "lru/unbatched/carry_after": {
+      "dtype": "complex64",
+      "shape": [
+        2
+      ]
+    },
+    "lru/unbatched/carry_before": {
+      "dtype": "complex64",
+      "shape": [
+        2
+      ]
+    },
+    "lru/unbatched/input": {
+      "dtype": "float32",
+      "shape": [
+        4
+      ]
+    },
+    "lru/unbatched/output": {
+      "dtype": "float32",
+      "shape": [
+        2
+      ]
+    },
+    "lru/unbatched/preactivation": {
+      "dtype": "float32",
+      "shape": [
+        2
+      ]
+    },
+    "lru/unbatched/projection": {
+      "dtype": "float32",
+      "shape": [
+        2
+      ]
+    },
+    "lru/unbatched/skip": {
+      "dtype": "float32",
+      "shape": [
+        2
+      ]
+    },
     "step/td_error": {
       "dtype": "float32",
       "shape": [
@@ -450,7 +499,7 @@
       "C_img",
       "D"
     ],
-    "reset": "boolean true discards the previous hidden state"
+    "reset": "one-step output ignores the previous hidden state for both boolean reset values"
   },
   "python": "3.12.13",
   "seed": 7,
