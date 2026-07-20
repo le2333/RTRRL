@@ -89,7 +89,8 @@ def _exact_gradients(agent, state, sampled_action):
     return jax.jacobian(traced)(params), jax.jacobian(direct)(params)
 
 
-def _exact_one_step(agent, state, key, final_state):
+def _legacy_oracle_step(agent, state, key):
+    """44a5483 legacy update math, independent of the composed scan."""
     action_key, step_key = jax.random.split(key)
     obs, done, previous_action, reward = state.timestep.to_sequence()
     params = agent._grad_params(state.params, state.slow_torso)
@@ -111,7 +112,7 @@ def _exact_one_step(agent, state, key, final_state):
         else sampled_action
     )
     step_keys = jax.random.split(step_key, agent.cfg.num_envs)
-    next_obs, _, next_reward, next_done, _ = jax.vmap(
+    next_obs, env_state, next_reward, next_done, _ = jax.vmap(
         agent.env.step, in_axes=(0, 0, 0, None)
     )(step_keys, state.env_state, env_action, agent.env_params)
     next_inputs = Timestep(
@@ -143,9 +144,39 @@ def _exact_one_step(agent, state, key, final_state):
     td_error = (
         next_reward + agent.cfg.gamma * (1 - next_done) * next_value - value
     )
-    _, direct_grads = _exact_gradients(agent, state, sampled_action)
+    traced_grads, direct_grads = _exact_gradients(
+        agent, state, sampled_action
+    )
+    trace_decays = {
+        "actor": agent.cfg.gamma * agent.cfg.lambda_pi,
+        "critic": agent.cfg.gamma * agent.cfg.lambda_v,
+        "feature_extractor": agent.cfg.gamma * agent.cfg.lambda_rnn,
+        "torso": agent.cfg.gamma * agent.cfg.lambda_rnn,
+        "pred": agent.cfg.gamma * agent.cfg.lambda_rnn,
+    }
+
+    def carry_trace(old, gradient, decay):
+        trailing = old.ndim - 1
+        continues = (1 - next_done)[
+            (slice(None),) + (None,) * trailing
+        ]
+        emphasis = state.I[
+            (slice(None),) + (None,) * (gradient.ndim - 1)
+        ]
+        return decay * continues * old + emphasis * gradient
+
+    carried_traces = {
+        name: jax.tree.map(
+            lambda old, gradient: carry_trace(
+                old, gradient, trace_decays[name]
+            ),
+            state.traces[name],
+            traced_grads[name],
+        )
+        for name in state.traces
+    }
     update_traces = (
-        final_state.traces
+        carried_traces
         if agent.cfg.update_trace_before_td
         else state.traces
     )
@@ -172,14 +203,56 @@ def _exact_one_step(agent, state, key, final_state):
     adam_updates, adam_state = agent.optimizer.update(
         ascent_updates, state.opt_state, state.params
     )
-    return {
+    fast_params = cast(
+        Any, optax.apply_updates(state.params, adam_updates)
+    )
+    slow_torso = (
+        fast_params["torso"]
+        if agent.cfg.update_period == 1.0
+        else optax.incremental_update(
+            fast_params["torso"],
+            state.slow_torso,
+            agent.cfg.update_period,
+        )
+    )
+    broadcast_dims = tuple(
+        range(state.timestep.done.ndim, state.timestep.action.ndim)
+    )
+    persisted_action = jnp.where(
+        jnp.expand_dims(next_done, axis=broadcast_dims),
+        jnp.zeros_like(env_action),
+        env_action,
+    )
+    next_reward_f = jnp.asarray(next_reward, dtype=jnp.float32)
+    persisted_reward = jnp.where(
+        next_done, jnp.zeros_like(next_reward_f), next_reward_f
+    )
+    oracle_state = state.replace(
+        step=state.step + agent.cfg.num_envs,
+        update_step=state.update_step + 1,
+        timestep=Timestep(
+            obs=next_obs,
+            action=persisted_action,
+            reward=persisted_reward,
+            done=next_done,
+        ),
+        env_state=env_state,
+        params=fast_params,
+        slow_torso=slow_torso,
+        traces=carried_traces,
+        opt_state=adam_state,
+        carry=acting_carry,
+        sensitivity=acting_sensitivity,
+        I=agent.cfg.gamma * state.I * (1 - next_done) + next_done,
+    )
+    return oracle_state, {
         "acting_carry": acting_carry,
         "acting_sensitivity": acting_sensitivity,
         "bootstrap_carry": bootstrap_state[0],
         "bootstrap_sensitivity": bootstrap_state[1],
         "wrong_bootstrap": wrong_bootstrap,
         "incoming_traces": state.traces,
-        "carried_traces": final_state.traces,
+        "carried_traces": carried_traces,
         "update_traces": update_traces,
         "ascent_updates": ascent_updates,
         "adam_updates": adam_updates,
@@ -397,11 +470,12 @@ def test_composed_one_step_preserves_exact_update_domain_and_adam(
     )
     oracle_key = jax.random.split(train_key, 1)[0]
     observables = _rtrrl_observables(agent, initial, oracle_key)
-    debug = _exact_one_step(agent, initial, oracle_key, final)
+    oracle_state, debug = _legacy_oracle_step(agent, initial, oracle_key)
     expected_traced, expected_direct = _exact_gradients(
         agent, initial, observables["sampled_action"]
     )
 
+    assert_tree_allclose(final, oracle_state)
     assert_tree_allclose(
         metrics.action_decision.sampled_action[0],
         observables["sampled_action"],
@@ -521,12 +595,26 @@ def test_composed_terminal_step_preserves_exact_intermediate_states(
         train_key, initial, num_steps=3
     )
     golden, _ = load_golden("rtrrl_lru")
+    expected = initial
+    expected_states = []
+
+    for index, key in enumerate(jax.random.split(train_key, 3)):
+        expected, _ = _legacy_oracle_step(agent, expected, key)
+        expected_states.append(expected)
+        assert_tree_allclose(_tree_at(metrics.state_after, index), expected)
 
     assert_tree_allclose(
         actual,
         _golden_section(golden["trace_timing/incoming"], "train"),
     )
-    assert_tree_allclose(_tree_at(metrics.state_after, -1), actual)
+    assert_tree_allclose(actual, expected_states[-1])
+    mutated_first = expected_states[0].replace(
+        step=expected_states[0].step + 1
+    )
+    with pytest.raises(AssertionError):
+        assert_tree_allclose(
+            _tree_at(metrics.state_after, 0), mutated_first
+        )
     np.testing.assert_array_equal(
         metrics.action_decision.persisted_feedback_action[-1],
         np.zeros((1, 2), np.float32),
@@ -556,8 +644,8 @@ def test_composed_prediction_gradient_matches_exact_objective(
     final, metrics = agent.program.train_epoch_fn(
         train_key, initial, num_steps=1
     )
-    debug = _exact_one_step(
-        agent, initial, jax.random.split(train_key, 1)[0], final
+    _, debug = _legacy_oracle_step(
+        agent, initial, jax.random.split(train_key, 1)[0]
     )
     expected = _exact_prediction_gradients(
         agent, initial, debug["prediction_target"]
