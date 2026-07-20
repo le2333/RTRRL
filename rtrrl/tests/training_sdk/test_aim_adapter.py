@@ -222,9 +222,9 @@ def test_emit_appends_before_send(tmp_path):
     operations = []
 
     class RecordingSpool(MemorySpool):
-        def append(self, event):
-            operations.append(("append", event.event_id))
-            super().append(event)
+        def append_many(self, events):
+            operations.append(("append_many", tuple(event.event_id for event in events)))
+            super().append_many(events)
 
     class RecordingAim(FakeAim):
         def send(self, event):
@@ -236,7 +236,34 @@ def test_emit_appends_before_send(tmp_path):
     )
     run.log_metrics(10, {"train/loss": 1.0})
 
-    assert [operation for operation, _ in operations] == ["append", "send"]
+    assert [operation for operation, _ in operations] == ["append_many", "send"]
+
+
+def test_failed_summary_batch_append_sends_no_aim_events(tmp_path):
+    class FailingBatchSpool(MemorySpool):
+        failed = False
+
+        def append_many(self, events):
+            if not self.failed:
+                self.failed = True
+                raise OSError("disk full before durable batch")
+            super().append_many(events)
+
+    aim = FakeAim()
+    run = make_training_run(tmp_path, aim=aim, spool=FailingBatchSpool())
+
+    with pytest.raises(OSError, match="disk full"):
+        run.log_episode_summary(
+            env_steps=10, episode_return=2.5, episode_length=10
+        )
+
+    assert aim.events == []
+    assert run.spool.events == ()
+
+    run.log_episode_summary(
+        env_steps=10, episode_return=3.5, episode_length=8
+    )
+    assert {event.aim_step for event in run.spool.events} == {1}
 
 
 def test_only_aim_unavailable_is_suppressed(tmp_path):

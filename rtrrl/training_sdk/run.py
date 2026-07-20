@@ -21,7 +21,7 @@ class Spool(Protocol):
     @property
     def unsent_events(self) -> tuple[MetricEvent, ...]: ...
 
-    def append(self, event: MetricEvent) -> None: ...
+    def append_many(self, events: tuple[MetricEvent, ...]) -> None: ...
 
     def mark_sent(self, event_id: str) -> None: ...
 
@@ -86,8 +86,7 @@ class TrainingRun:
         self._emit_many((event,))
 
     def _emit_many(self, events: tuple[MetricEvent, ...]) -> None:
-        for event in events:
-            self.spool.append(event)
+        self.spool.append_many(events)
         for event in events:
             try:
                 self.aim.send(event)
@@ -122,7 +121,17 @@ class TrainingRun:
             raise TypeError("episode_length must be an integer")
         if episode_length < 0:
             raise ValueError("episode_length must be non-negative")
-        next_summary_sequence = self._summary_sequence + 1
+        persisted_summary_sequence = max(
+            (
+                event.aim_step
+                for event in self.spool.events
+                if event.stream == "episode_summary"
+            ),
+            default=0,
+        )
+        next_summary_sequence = (
+            max(self._summary_sequence, persisted_summary_sequence) + 1
+        )
         events = MetricEvent.episode_summary(
             env_steps=env_steps,
             summary_sequence=next_summary_sequence,
@@ -130,8 +139,8 @@ class TrainingRun:
             episode_length=episode_length,
         )
         self._validate_env_steps(env_steps)
-        self._summary_sequence = next_summary_sequence
         self._emit_many(events)
+        self._summary_sequence = next_summary_sequence
 
     def log_episode(self, episode: Episode) -> None:
         self.rerun.log_episode(episode)

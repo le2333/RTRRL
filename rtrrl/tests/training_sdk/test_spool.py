@@ -69,10 +69,33 @@ def test_spool_appends_before_attempting_send(tmp_path):
     class InspectingSink:
         def send(self, sent_event):
             records = [json.loads(line) for line in path.read_text().splitlines()]
-            assert records[0]["event"]["event_id"] == sent_event.event_id
+            assert records[0]["events"][0]["event_id"] == sent_event.event_id
 
     spool.append(event)
     spool.replay(InspectingSink())
+
+
+def test_summary_batch_is_one_record_and_reopens_as_three_events(tmp_path):
+    path = tmp_path / "events.jsonl"
+    events = MetricEvent.episode_summary(
+        env_steps=10,
+        summary_sequence=1,
+        episode_return=2.5,
+        episode_length=10,
+    )
+
+    EventSpool(path).append_many(events)
+
+    records = [json.loads(line) for line in path.read_text().splitlines()]
+    assert len(records) == 1
+    assert records[0]["record"] == "batch"
+    assert len(records[0]["events"]) == 3
+    reopened = EventSpool(path)
+    assert reopened.events == events
+    assert reopened.unsent_events == events
+    sink = IdempotentSink()
+    reopened.replay(sink)
+    assert sink.event_ids == [event.event_id for event in events]
 
 
 def test_spool_persists_unsent_events_and_sent_status(tmp_path):
@@ -146,7 +169,39 @@ def test_first_spool_creation_fsyncs_new_directory_entries(tmp_path, monkeypatch
 
 def test_spool_corruption_is_reported_explicitly(tmp_path):
     path = tmp_path / "events.jsonl"
-    path.write_text('{"record":"event","event":')
+    path.write_text('{"record":"batch","events":\n')
+
+    with pytest.raises(SpoolCorruptionError, match="line 1"):
+        EventSpool(path)
+
+
+def test_spool_discards_only_final_unterminated_torn_record(tmp_path):
+    path = tmp_path / "events.jsonl"
+    first = MetricEvent.metrics_event(1, {"train/loss": 1.0})
+    spool = EventSpool(path)
+    spool.append(first)
+    with path.open("a") as spool_file:
+        spool_file.write('{"record":"batch","events":')
+
+    reopened = EventSpool(path)
+
+    assert reopened.events == (first,)
+    second = MetricEvent.metrics_event(2, {"train/loss": 0.5})
+    reopened.append(second)
+    assert EventSpool(path).events == (first, second)
+
+
+def test_spool_rejects_corruption_before_a_later_record(tmp_path):
+    path = tmp_path / "events.jsonl"
+    valid = {
+        "record": "batch",
+        "events": [MetricEvent.metrics_event(2, {"train/loss": 0.5}).to_dict()],
+    }
+    path.write_text(
+        '{"record":"batch","events":\n'
+        + json.dumps(valid)
+        + "\n"
+    )
 
     with pytest.raises(SpoolCorruptionError, match="line 1"):
         EventSpool(path)

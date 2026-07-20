@@ -228,10 +228,25 @@ class EventSpool:
         if not self.path.exists():
             return
         try:
-            lines = self.path.read_text(encoding="utf-8").splitlines()
+            raw_contents = self.path.read_bytes()
+            decoded_contents = raw_contents.decode("utf-8")
         except UnicodeDecodeError as exc:
             raise SpoolCorruptionError(f"corrupt spool encoding: {exc}") from exc
+        if raw_contents and not raw_contents.endswith(b"\n"):
+            durable_size = raw_contents.rfind(b"\n") + 1
+            with self.path.open("r+b") as spool_file:
+                spool_file.truncate(durable_size)
+                spool_file.flush()
+                os.fsync(spool_file.fileno())
+            decoded_contents = raw_contents[:durable_size].decode("utf-8")
+        lines = decoded_contents.splitlines(keepends=True)
         for line_number, line in enumerate(lines, start=1):
+            if not line.endswith("\n"):
+                if line_number == len(lines):
+                    break
+                raise SpoolCorruptionError(
+                    f"corrupt unterminated spool record at line {line_number}"
+                )
             try:
                 record = json.loads(line)
                 self._apply_record(record)
@@ -245,11 +260,15 @@ class EventSpool:
             raise TypeError("record must be a JSON object")
         record_type = record["record"]
         if record_type == "event":
-            event = MetricEvent.from_dict(record["event"])
-            if event.event_id in self._events_by_id:
-                raise ValueError(f"duplicate event ID {event.event_id!r}")
-            self._events.append(event)
-            self._events_by_id[event.event_id] = event
+            self._add_loaded_events((MetricEvent.from_dict(record["event"]),))
+            return
+        if record_type == "batch":
+            payloads = record["events"]
+            if not isinstance(payloads, list) or not payloads:
+                raise ValueError("batch record must contain a non-empty events list")
+            self._add_loaded_events(
+                tuple(MetricEvent.from_dict(payload) for payload in payloads)
+            )
             return
         if record_type == "sent":
             event_id = record["event_id"]
@@ -258,6 +277,20 @@ class EventSpool:
             self._sent_event_ids.add(event_id)
             return
         raise ValueError(f"unknown spool record type {record_type!r}")
+
+    def _validate_new_events(self, events: tuple[MetricEvent, ...]) -> None:
+        event_ids = set(self._events_by_id)
+        for event in events:
+            if not isinstance(event, MetricEvent):
+                raise TypeError("spool batches may contain only MetricEvent values")
+            if event.event_id in event_ids:
+                raise ValueError(f"duplicate event ID {event.event_id!r}")
+            event_ids.add(event.event_id)
+
+    def _add_loaded_events(self, events: tuple[MetricEvent, ...]) -> None:
+        self._validate_new_events(events)
+        self._events.extend(events)
+        self._events_by_id.update((event.event_id, event) for event in events)
 
     def _append_record(self, record: Mapping[str, Any]) -> None:
         missing_directories: list[Path] = []
@@ -271,19 +304,31 @@ class EventSpool:
 
         creating_spool = not self.path.exists()
         with self.path.open("a", encoding="utf-8") as spool_file:
-            spool_file.write(json.dumps(record, allow_nan=False, separators=(",", ":")))
-            spool_file.write("\n")
+            encoded_record = (
+                json.dumps(record, allow_nan=False, separators=(",", ":")) + "\n"
+            )
+            spool_file.write(encoded_record)
             spool_file.flush()
             os.fsync(spool_file.fileno())
         if creating_spool:
             _fsync_directory(self.path.parent)
 
     def append(self, event: MetricEvent) -> None:
-        if event.event_id in self._events_by_id:
-            raise ValueError(f"duplicate event ID {event.event_id!r}")
-        self._append_record({"record": "event", "event": event.to_dict()})
-        self._events.append(event)
-        self._events_by_id[event.event_id] = event
+        self.append_many((event,))
+
+    def append_many(self, events: tuple[MetricEvent, ...]) -> None:
+        events = tuple(events)
+        if not events:
+            return
+        self._validate_new_events(events)
+        self._append_record(
+            {
+                "record": "batch",
+                "events": [event.to_dict() for event in events],
+            }
+        )
+        self._events.extend(events)
+        self._events_by_id.update((event.event_id, event) for event in events)
 
     def mark_sent(self, event_id: str) -> None:
         if event_id not in self._events_by_id:
@@ -320,9 +365,19 @@ class MemorySpool:
         )
 
     def append(self, event: MetricEvent) -> None:
-        if any(existing.event_id == event.event_id for existing in self._events):
-            raise ValueError(f"duplicate event ID {event.event_id!r}")
-        self._events.append(event)
+        self.append_many((event,))
+
+    def append_many(self, events: tuple[MetricEvent, ...]) -> None:
+        events = tuple(events)
+        existing_ids = {event.event_id for event in self._events}
+        batch_ids: set[str] = set()
+        for event in events:
+            if not isinstance(event, MetricEvent):
+                raise TypeError("spool batches may contain only MetricEvent values")
+            if event.event_id in existing_ids or event.event_id in batch_ids:
+                raise ValueError(f"duplicate event ID {event.event_id!r}")
+            batch_ids.add(event.event_id)
+        self._events.extend(events)
 
     def mark_sent(self, event_id: str) -> None:
         if not any(event.event_id == event_id for event in self._events):
