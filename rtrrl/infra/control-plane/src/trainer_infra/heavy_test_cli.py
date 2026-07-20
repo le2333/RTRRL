@@ -3,7 +3,6 @@ from __future__ import annotations
 import argparse
 from dataclasses import asdict
 import json
-import os
 import sys
 from typing import Sequence
 
@@ -27,10 +26,9 @@ def _print_error(value: object) -> None:
 
 
 def _runner() -> HeavyTestRunner:
-    region = os.environ.get("AWS_REGION", os.environ.get("AWS_DEFAULT_REGION", "eu-north-1"))
     return HeavyTestRunner(
-        boto3.client("batch", region_name=region),
-        boto3.client("logs", region_name=region),
+        boto3.client("batch", region_name="eu-north-1"),
+        boto3.client("logs", region_name="eu-north-1"),
     )
 
 

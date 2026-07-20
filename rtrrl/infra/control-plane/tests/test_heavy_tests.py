@@ -18,6 +18,7 @@ from trainer_infra.heavy_tests import (
     HeavyTestRunner,
     JobEvidence,
     PartialSubmissionError,
+    ResourceRequirement,
     SubmittedTestJob,
     TEST_PROFILES,
     AwsNetworkSettings,
@@ -70,7 +71,7 @@ class FakeBatch:
             "computeResources": {
                 "type": "EC2",
                 "minvCpus": 0,
-                "maxvCpus": 32,
+                "maxvCpus": 16,
                 "desiredvCpus": 0,
                 "instanceTypes": [profile.instance_type],
                 "subnets": list(NETWORK_SETTINGS.subnets),
@@ -113,6 +114,7 @@ class FakeBatch:
             deepcopy(queue)
             for name, queue in self.job_queues.items()
             if TEST_PROFILES[name].queue in jobQueues
+            or queue["jobQueueArn"] in jobQueues
         ]
         return {"jobQueues": queues}
 
@@ -262,7 +264,7 @@ def test_network_list_order_is_not_profile_drift(
         ("compute", "status", "INVALID"),
         ("resources", "type", "SPOT"),
         ("resources", "minvCpus", 1),
-        ("resources", "maxvCpus", 16),
+        ("resources", "maxvCpus", 32),
         ("resources", "instanceTypes", ["c7a.large"]),
         ("queue", "jobQueueName", "wrong-queue"),
         ("queue", "state", "DISABLED"),
@@ -363,7 +365,7 @@ def test_missing_c7ax_resources_are_created_exactly() -> None:
             "computeResources": {
                 "type": "EC2",
                 "minvCpus": 0,
-                "maxvCpus": 32,
+                "maxvCpus": 16,
                 "desiredvCpus": 0,
                 "instanceTypes": ["c7a.xlarge"],
                 "subnets": list(NETWORK_SETTINGS.subnets),
@@ -769,6 +771,64 @@ class FakeJobBatch(FakeBatch):
         self.describe_jobs_calls: list[list[str]] = []
         self.jobs: dict[str, dict[str, object]] = {}
 
+    def add_identity_job(
+        self,
+        job_id: str,
+        profile_name: str,
+        *,
+        status: str = "SUCCEEDED",
+        stream: str | None = None,
+    ) -> dict[str, object]:
+        profile = TEST_PROFILES[profile_name]
+        digest = IMAGE.rsplit("@sha256:", 1)[1]
+        definition_name = f"trainer-heavy-test-{profile_name}-{digest}"
+        definition_arn = (
+            "arn:aws:batch:eu-north-1:123456789012:job-definition/"
+            f"{definition_name}:1"
+        )
+        resources = [
+            {"type": "VCPU", "value": str(profile.vcpus)},
+            {"type": "MEMORY", "value": str(profile.memory_mib)},
+        ]
+        if profile.gpus:
+            resources.append({"type": "GPU", "value": str(profile.gpus)})
+        if not any(
+            item.get("jobDefinitionArn") == definition_arn
+            for item in self.job_definitions
+        ):
+            self.job_definitions.append(
+                {
+                    "jobDefinitionName": definition_name,
+                    "jobDefinitionArn": definition_arn,
+                    "revision": 1,
+                    "type": "container",
+                    "platformCapabilities": ["EC2"],
+                    "containerProperties": {
+                        "image": IMAGE,
+                        "command": ["bash", "-lc", "exit 64"],
+                        "resourceRequirements": deepcopy(resources),
+                        "logConfiguration": {"logDriver": "awslogs"},
+                    },
+                }
+            )
+        queue = self.job_queues[profile_name]
+        container: dict[str, object] = {
+            "image": IMAGE,
+            "resourceRequirements": deepcopy(resources),
+        }
+        if stream is not None:
+            container["logStreamName"] = stream
+        job = {
+            "jobId": job_id,
+            "jobName": f"trainer-heavy-test-{profile_name}-test-file-{'a' * 12}",
+            "jobQueue": queue["jobQueueArn"],
+            "jobDefinition": definition_arn,
+            "status": status,
+            "container": container,
+        }
+        self.jobs[job_id] = job
+        return job
+
     def describe_job_definitions(self, **kwargs: object) -> dict[str, object]:
         name = kwargs["jobDefinitionName"]
         return {
@@ -860,6 +920,12 @@ def test_one_job_per_exact_test_file() -> None:
     )
     assert "test_eval_trace.py -q" in jobs[0].command_text
     assert "test_jit_contract.py -q" in jobs[1].command_text
+    assert jobs[0].queue_name == "rtrrl-cpu-c7ax-queue"
+    assert jobs[0].queue_arn == batch.job_queues["c7ax"]["jobQueueArn"]
+    assert jobs[0].resource_requirements == (
+        ResourceRequirement(type="MEMORY", value="7168"),
+        ResourceRequirement(type="VCPU", value="4"),
+    )
     assert all(
         str(call["jobName"]).startswith("trainer-heavy-test-c7ax-")
         for call in batch.submit_job_calls
@@ -1171,22 +1237,13 @@ def test_gpu_job_probes_jax_and_l4_before_pytest() -> None:
 
 def test_wait_collects_log_stream_rss_and_gpu_evidence() -> None:
     batch = FakeJobBatch()
-    batch.jobs = {
-        "cpu": {
-            "jobId": "cpu",
-            "status": "SUCCEEDED",
-            "container": {"logStreamName": "stream/cpu"},
-        },
-        "gpu": {
-            "jobId": "gpu",
-            "status": "SUCCEEDED",
-            "container": {"logStreamName": "stream/gpu"},
-        },
-    }
+    batch.add_identity_job("cpu", "c7ax", stream="stream/cpu")
+    batch.add_identity_job("gpu", "g6x", stream="stream/gpu")
     logs = FakeLogs(
         {
             "stream/cpu": ["Maximum resident set size (kbytes): 1234"],
             "stream/gpu": [
+                "[CudaDevice(id=0)]",
                 "NVIDIA L4, 23034 MiB",
                 "Maximum resident set size (kbytes): 5678",
             ],
@@ -1202,28 +1259,163 @@ def test_wait_collects_log_stream_rss_and_gpu_evidence() -> None:
         "Maximum resident set size (kbytes): 1234",
     )
     assert evidence[1].gpu_lines == ("NVIDIA L4, 23034 MiB",)
+    assert evidence[0].profile == "c7ax"
+    assert evidence[0].queue_name == "rtrrl-cpu-c7ax-queue"
+    assert evidence[0].queue_arn == batch.job_queues["c7ax"]["jobQueueArn"]
+    assert evidence[0].job_definition_revision == 1
+    assert evidence[0].image == IMAGE
+    assert evidence[0].resource_requirements == (
+        ResourceRequirement(type="MEMORY", value="7168"),
+        ResourceRequirement(type="VCPU", value="4"),
+    )
+    assert evidence[1].profile == "g6x"
+    assert evidence[1].resource_requirements == (
+        ResourceRequirement(type="GPU", value="1"),
+        ResourceRequirement(type="MEMORY", value="12000"),
+        ResourceRequirement(type="VCPU", value="4"),
+    )
     assert all(call["logGroupName"] == "/aws/batch/job" for call in logs.calls)
+
+
+@pytest.mark.parametrize(
+    ("drift", "expected_error"),
+    [
+        ("ordinary-name", "not a trainer-heavy-test"),
+        ("queue", "jobQueue"),
+        ("queue-region", "eu-north-1"),
+        ("definition", "jobDefinition"),
+        ("image", "image"),
+        ("resources", "resourceRequirements"),
+        ("definition-image", "image digest"),
+        ("definition-resources", "container image/resources"),
+    ],
+)
+def test_wait_rejects_unclosed_aws_job_identity(
+    drift: str,
+    expected_error: str,
+) -> None:
+    batch = FakeJobBatch()
+    job = batch.add_identity_job("job", "c7ax", stream="stream/job")
+    container = job["container"]
+    assert isinstance(container, dict)
+    if drift == "ordinary-name":
+        job["jobName"] = "ordinary-batch-job"
+    elif drift == "queue":
+        job["jobQueue"] = "arn:aws:batch:eu-north-1:123456789012:job-queue/wrong"
+    elif drift == "queue-region":
+        wrong_queue_arn = (
+            "arn:aws:batch:us-east-1:123456789012:job-queue/"
+            "rtrrl-cpu-c7ax-queue"
+        )
+        batch.job_queues["c7ax"]["jobQueueArn"] = wrong_queue_arn
+        job["jobQueue"] = wrong_queue_arn
+    elif drift == "definition":
+        job["jobDefinition"] = (
+            "arn:aws:batch:eu-north-1:123456789012:job-definition/"
+            f"trainer-heavy-test-c7ax-{'b' * 64}:9"
+        )
+    elif drift == "image":
+        container["image"] = IMAGE.replace("a" * 64, "b" * 64)
+    elif drift == "resources":
+        container["resourceRequirements"] = [
+            {"type": "VCPU", "value": "4"},
+            {"type": "MEMORY", "value": "9999"},
+        ]
+    elif drift == "definition-image":
+        definition_container = batch.job_definitions[0]["containerProperties"]
+        assert isinstance(definition_container, dict)
+        wrong_image = IMAGE.replace("a" * 64, "b" * 64)
+        definition_container["image"] = wrong_image
+        container["image"] = wrong_image
+    else:
+        definition_container = batch.job_definitions[0]["containerProperties"]
+        assert isinstance(definition_container, dict)
+        wrong_resources = [
+            {"type": "VCPU", "value": "4"},
+            {"type": "MEMORY", "value": "9999"},
+        ]
+        definition_container["resourceRequirements"] = wrong_resources
+        container["resourceRequirements"] = deepcopy(wrong_resources)
+    runner = HeavyTestRunner(
+        batch,
+        FakeLogs({"stream/job": ["Maximum resident set size (kbytes): 123"]}),
+        evidence_max_attempts=1,
+        sleep=lambda _: None,
+    )
+
+    with pytest.raises(AggregateJobFailure) as raised:
+        runner.wait(["job"])
+
+    evidence = raised.value.evidence[0]
+    assert evidence.profile is None
+    assert any(expected_error in error for error in evidence.evidence_errors)
+
+
+def test_wait_identity_failure_does_not_block_other_job_evidence() -> None:
+    batch = FakeJobBatch()
+    bad = batch.add_identity_job("bad", "c7ax", stream="stream/bad")
+    bad["jobName"] = "ordinary-job"
+    batch.add_identity_job("good", "c7ax", stream="stream/good")
+    logs = FakeLogs(
+        {
+            "stream/bad": ["Maximum resident set size (kbytes): 111"],
+            "stream/good": ["Maximum resident set size (kbytes): 222"],
+        }
+    )
+    runner = HeavyTestRunner(
+        batch,
+        logs,
+        evidence_max_attempts=1,
+        sleep=lambda _: None,
+    )
+
+    with pytest.raises(AggregateJobFailure) as raised:
+        runner.wait(["bad", "good"])
+
+    bad_evidence, good_evidence = raised.value.evidence
+    assert bad_evidence.profile is None
+    assert good_evidence.profile == "c7ax"
+    assert good_evidence.maximum_rss_lines == (
+        "Maximum resident set size (kbytes): 222",
+    )
+    assert good_evidence.evidence_errors == ()
+
+
+def test_wait_job_definition_identity_follows_pagination() -> None:
+    class PaginatedDefinitionBatch(FakeJobBatch):
+        def describe_job_definitions(self, **kwargs: object) -> dict[str, object]:
+            definitions = super().describe_job_definitions(**kwargs)["jobDefinitions"]
+            if "nextToken" not in kwargs:
+                return {"jobDefinitions": [], "nextToken": "page-2"}
+            return {"jobDefinitions": definitions}
+
+    batch = PaginatedDefinitionBatch()
+    batch.add_identity_job("job", "c7ax", stream="stream/job")
+    runner = HeavyTestRunner(
+        batch,
+        FakeLogs({"stream/job": ["Maximum resident set size (kbytes): 123"]}),
+        sleep=lambda _: None,
+    )
+
+    evidence = runner.wait(["job"])
+
+    assert evidence[0].job_definition_revision == 1
+    assert evidence[0].evidence_errors == ()
 
 
 def test_wait_aggregates_all_terminal_failures_with_evidence() -> None:
     batch = FakeJobBatch()
-    batch.jobs = {
-        "failed": {
-            "jobId": "failed",
-            "status": "FAILED",
-            "statusReason": "Essential container exited",
-            "container": {
-                "logStreamName": "stream/failed",
-                "exitCode": 1,
-                "reason": "pytest failed",
-            },
-        },
-        "ok": {
-            "jobId": "ok",
-            "status": "SUCCEEDED",
-            "container": {"logStreamName": "stream/ok", "exitCode": 0},
-        },
-    }
+    failed = batch.add_identity_job(
+        "failed", "c7ax", status="FAILED", stream="stream/failed"
+    )
+    failed["statusReason"] = "Essential container exited"
+    failed_container = failed["container"]
+    assert isinstance(failed_container, dict)
+    failed_container.update({"exitCode": 1, "reason": "pytest failed"})
+    ok = batch.add_identity_job("ok", "c7ax", stream="stream/ok")
+    ok_container = ok["container"]
+    assert isinstance(ok_container, dict)
+    ok_container["exitCode"] = 0
     logs = FakeLogs(
         {
             "stream/failed": [
@@ -1318,6 +1510,7 @@ def test_poll_sleep_is_capped_by_remaining_deadline_and_no_extra_aws_call() -> N
         sleep=sleep,
         poll_interval_seconds=15.0,
         wait_timeout_seconds=5.0,
+        evidence_max_attempts=1,
     )
 
     with pytest.raises(AggregateJobFailure) as raised:
@@ -1334,29 +1527,17 @@ def test_wait_retries_late_log_stream_without_blocking_other_jobs() -> None:
         def __init__(self) -> None:
             super().__init__()
             self.refreshes = 0
-            self.jobs = {
-                "late": {
-                    "jobId": "late",
-                    "jobName": "trainer-heavy-test-c7ax-late",
-                    "status": "SUCCEEDED",
-                    "container": {},
-                },
-                "ready": {
-                    "jobId": "ready",
-                    "jobName": "trainer-heavy-test-c7ax-ready",
-                    "status": "SUCCEEDED",
-                    "container": {"logStreamName": "stream/ready"},
-                },
-            }
+            self.add_identity_job("late", "c7ax")
+            self.add_identity_job("ready", "c7ax", stream="stream/ready")
 
         def describe_jobs(self, *, jobs: list[str]) -> dict[str, object]:
             response = super().describe_jobs(jobs=jobs)
             if jobs == ["late"]:
                 self.refreshes += 1
                 if self.refreshes >= 2:
-                    response["jobs"][0]["container"] = {
-                        "logStreamName": "stream/late"
-                    }
+                    container = response["jobs"][0]["container"]
+                    assert isinstance(container, dict)
+                    container["logStreamName"] = "stream/late"
             return response
 
     batch = LateStreamBatch()
@@ -1384,14 +1565,7 @@ def test_wait_retries_late_log_stream_without_blocking_other_jobs() -> None:
 
 def test_wait_retries_empty_cloudwatch_log_until_required_evidence_arrives() -> None:
     batch = FakeJobBatch()
-    batch.jobs = {
-        "cpu": {
-            "jobId": "cpu",
-            "jobName": "trainer-heavy-test-c7ax-cpu",
-            "status": "SUCCEEDED",
-            "container": {"logStreamName": "stream/cpu"},
-        }
-    }
+    batch.add_identity_job("cpu", "c7ax", stream="stream/cpu")
 
     class LateLogs(FakeLogs):
         def get_log_events(self, **kwargs: object) -> dict[str, object]:
@@ -1424,20 +1598,8 @@ def test_wait_retries_empty_cloudwatch_log_until_required_evidence_arrives() -> 
 
 def test_wait_collects_per_job_log_errors_and_requires_success_evidence() -> None:
     batch = FakeJobBatch()
-    batch.jobs = {
-        "broken-log": {
-            "jobId": "broken-log",
-            "jobName": "trainer-heavy-test-c7ax-broken",
-            "status": "SUCCEEDED",
-            "container": {"logStreamName": "stream/broken"},
-        },
-        "gpu": {
-            "jobId": "gpu",
-            "jobName": "trainer-heavy-test-g6x-gpu",
-            "status": "SUCCEEDED",
-            "container": {"logStreamName": "stream/gpu"},
-        },
-    }
+    batch.add_identity_job("broken-log", "c7ax", stream="stream/broken")
+    batch.add_identity_job("gpu", "g6x", stream="stream/gpu")
 
     class PartiallyBrokenLogs(FakeLogs):
         def get_log_events(self, **kwargs: object) -> dict[str, object]:
@@ -1487,9 +1649,15 @@ def test_submit_cli_prints_machine_readable_job_evidence(
                     job_id="job-1",
                     test_file="memo/tests/online_ac/test_eval_trace.py",
                     profile="c7ax",
+                    queue_name="rtrrl-cpu-c7ax-queue",
+                    queue_arn="arn:queue:c7ax",
                     image=IMAGE,
                     job_definition_arn="arn:definition:1",
                     job_definition_revision=1,
+                    resource_requirements=(
+                        ResourceRequirement(type="MEMORY", value="7168"),
+                        ResourceRequirement(type="VCPU", value="4"),
+                    ),
                     command_text="/usr/bin/time -v python -m pytest test.py",
                 ),
             )
@@ -1508,7 +1676,35 @@ def test_submit_cli_prints_machine_readable_job_evidence(
     )
 
     assert result == 0
-    assert json.loads(capsys.readouterr().out)["job_id"] == "job-1"
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["job_id"] == "job-1"
+    assert payload["queue_name"] == "rtrrl-cpu-c7ax-queue"
+    assert payload["queue_arn"] == "arn:queue:c7ax"
+    assert payload["resource_requirements"] == [
+        {"type": "MEMORY", "value": "7168"},
+        {"type": "VCPU", "value": "4"},
+    ]
+
+
+def test_cli_clients_ignore_environment_region_drift(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls: list[tuple[str, str]] = []
+
+    def client(service: str, *, region_name: str) -> object:
+        calls.append((service, region_name))
+        return object()
+
+    monkeypatch.setenv("AWS_REGION", "us-east-1")
+    monkeypatch.setenv("AWS_DEFAULT_REGION", "ap-southeast-2")
+    monkeypatch.setattr(heavy_test_cli.boto3, "client", client)
+
+    heavy_test_cli._runner()
+
+    assert calls == [
+        ("batch", "eu-north-1"),
+        ("logs", "eu-north-1"),
+    ]
 
 
 def test_wait_cli_prints_failure_evidence_and_summary(
@@ -1551,9 +1747,15 @@ def test_submit_cli_reports_partial_submission_as_stderr_json(
         job_id="job-1",
         test_file="memo/tests/online_ac/test_eval_trace.py",
         profile="c7ax",
+        queue_name="rtrrl-cpu-c7ax-queue",
+        queue_arn="arn:queue:c7ax",
         image=IMAGE,
         job_definition_arn="arn:definition:1",
         job_definition_revision=1,
+        resource_requirements=(
+            ResourceRequirement(type="MEMORY", value="7168"),
+            ResourceRequirement(type="VCPU", value="4"),
+        ),
         command_text="/usr/bin/time -v python -m pytest test.py",
     )
 

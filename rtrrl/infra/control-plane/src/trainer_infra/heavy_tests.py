@@ -44,13 +44,22 @@ class AwsNetworkSettings:
 
 
 @dataclass(frozen=True)
+class ResourceRequirement:
+    type: str
+    value: str
+
+
+@dataclass(frozen=True)
 class SubmittedTestJob:
     job_id: str
     test_file: str
     profile: str
+    queue_name: str
+    queue_arn: str
     image: str
     job_definition_arn: str
     job_definition_revision: int
+    resource_requirements: tuple[ResourceRequirement, ...]
     command_text: str
 
 
@@ -67,6 +76,24 @@ class JobEvidence:
     exit_code: int | None = None
     jax_gpu_lines: tuple[str, ...] = ()
     evidence_errors: tuple[str, ...] = ()
+    profile: str | None = None
+    queue_name: str | None = None
+    queue_arn: str | None = None
+    job_definition_arn: str | None = None
+    job_definition_revision: int | None = None
+    image: str | None = None
+    resource_requirements: tuple[ResourceRequirement, ...] = ()
+
+
+@dataclass(frozen=True)
+class _JobIdentity:
+    profile: str
+    queue_name: str
+    queue_arn: str
+    job_definition_arn: str
+    job_definition_revision: int
+    image: str
+    resource_requirements: tuple[ResourceRequirement, ...]
 
 
 class AggregateJobFailure(RuntimeError):
@@ -148,7 +175,7 @@ _COMPUTE_RESOURCE_FIELDS: Mapping[str, object] = MappingProxyType(
     {
         "type": "EC2",
         "minvCpus": 0,
-        "maxvCpus": 32,
+        "maxvCpus": 16,
     }
 )
 _QUEUE_FIELDS: Mapping[str, object] = MappingProxyType(
@@ -164,6 +191,13 @@ _REGISTRY = rf"(?:localhost|{_REGISTRY_LABEL}(?:\.{_REGISTRY_LABEL})*)(?::[0-9]+
 _DIGEST_IMAGE_RE = re.compile(
     rf"(?:{_REGISTRY}/)?{_IMAGE_COMPONENT}(?:/{_IMAGE_COMPONENT})*"
     r"@sha256:[0-9a-f]{64}"
+)
+_JOB_NAME_RE = re.compile(
+    r"trainer-heavy-test-(c7am|c7ax|g6x)-[A-Za-z0-9_-]+-[0-9a-f]{12}"
+)
+_JOB_DEFINITION_ARN_RE = re.compile(
+    r"arn:aws:batch:eu-north-1:([0-9]{12}):job-definition/"
+    r"(trainer-heavy-test-(c7am|c7ax|g6x)-([0-9a-f]{64})):([1-9][0-9]*)"
 )
 _TERMINAL_JOB_STATES = frozenset({"SUCCEEDED", "FAILED"})
 _LOG_GROUP = "/aws/batch/job"
@@ -330,7 +364,7 @@ def create_c7ax_if_missing(batch: Any, settings: AwsNetworkSettings) -> None:
             computeResources={
                 "type": "EC2",
                 "minvCpus": 0,
-                "maxvCpus": 32,
+                "maxvCpus": 16,
                 "desiredvCpus": 0,
                 "instanceTypes": [profile.instance_type],
                 "subnets": list(settings.subnets),
@@ -411,6 +445,35 @@ def _resource_requirements(profile: HeavyTestProfile) -> list[dict[str, str]]:
     if profile.gpus:
         requirements.append({"type": "GPU", "value": str(profile.gpus)})
     return requirements
+
+
+def _typed_resource_requirements(
+    profile: HeavyTestProfile,
+) -> tuple[ResourceRequirement, ...]:
+    return _normalize_resource_requirements(_resource_requirements(profile))
+
+
+def _normalize_resource_requirements(
+    value: object,
+) -> tuple[ResourceRequirement, ...]:
+    if not isinstance(value, list):
+        raise RuntimeError(f"resourceRequirements must be a list, got {value!r}")
+    normalized: list[ResourceRequirement] = []
+    for item in value:
+        if not isinstance(item, Mapping):
+            raise RuntimeError(f"invalid resource requirement: {item!r}")
+        requirement_type = item.get("type")
+        requirement_value = item.get("value")
+        if not isinstance(requirement_type, str) or not isinstance(
+            requirement_value, str
+        ):
+            raise RuntimeError(f"invalid resource requirement: {item!r}")
+        normalized.append(
+            ResourceRequirement(type=requirement_type, value=requirement_value)
+        )
+    if len({item.type for item in normalized}) != len(normalized):
+        raise RuntimeError("duplicate resource requirement types")
+    return tuple(sorted(normalized, key=lambda item: item.type))
 
 
 def _container_properties(
@@ -641,9 +704,14 @@ class HeavyTestRunner:
                     job_id=job_id,
                     test_file=test_file,
                     profile=profile,
+                    queue_name=validated.profile.queue,
+                    queue_arn=validated.queue_arn,
                     image=image,
                     job_definition_arn=definition_arn,
                     job_definition_revision=definition_revision,
+                    resource_requirements=_typed_resource_requirements(
+                        validated.profile
+                    ),
                     command_text=command,
                 )
             )
@@ -770,6 +838,175 @@ class HeavyTestRunner:
             token = next_token
         return tuple(lines)
 
+    def _load_job_identity(self, job: Mapping[str, Any]) -> _JobIdentity:
+        job_name = job.get("jobName")
+        if not isinstance(job_name, str):
+            raise RuntimeError("jobName is missing")
+        job_name_match = _JOB_NAME_RE.fullmatch(job_name)
+        if job_name_match is None:
+            raise RuntimeError(
+                f"jobName is not a trainer-heavy-test job: {job_name!r}"
+            )
+        profile_name = job_name_match.group(1)
+        profile = _get_profile(profile_name)
+
+        queue_reference = job.get("jobQueue")
+        if not isinstance(queue_reference, str):
+            raise RuntimeError("jobQueue is missing")
+        queues: list[Mapping[str, Any]] = []
+        queue_token: str | None = None
+        while True:
+            queue_arguments: dict[str, object] = {
+                "jobQueues": [queue_reference],
+            }
+            if queue_token is not None:
+                queue_arguments["nextToken"] = queue_token
+            queue_response = self._batch.describe_job_queues(**queue_arguments)
+            queues.extend(
+                item
+                for item in queue_response.get("jobQueues", [])
+                if isinstance(item, Mapping)
+            )
+            next_queue_token = queue_response.get("nextToken")
+            if not isinstance(next_queue_token, str) or not next_queue_token:
+                break
+            queue_token = next_queue_token
+        matching_queues = [
+            item for item in queues if item.get("jobQueueName") == profile.queue
+        ]
+        if len(matching_queues) != 1:
+            raise RuntimeError(
+                f"jobQueue does not resolve uniquely to {profile.queue!r}"
+            )
+        queue_arn = matching_queues[0].get("jobQueueArn")
+        if not isinstance(queue_arn, str) or not queue_arn:
+            raise RuntimeError("job queue ARN is missing")
+        queue_arn_match = re.fullmatch(
+            r"arn:aws:batch:eu-north-1:([0-9]{12}):job-queue/"
+            + re.escape(profile.queue),
+            queue_arn,
+        )
+        if queue_arn_match is None:
+            raise RuntimeError(
+                f"jobQueue ARN is not the exact eu-north-1 profile ARN: {queue_arn!r}"
+            )
+        if queue_reference not in {profile.queue, queue_arn}:
+            raise RuntimeError(
+                f"jobQueue reference {queue_reference!r} does not match "
+                f"{profile.queue!r} / {queue_arn!r}"
+            )
+
+        definition_reference = job.get("jobDefinition")
+        if not isinstance(definition_reference, str):
+            raise RuntimeError("jobDefinition is missing")
+        definition_match = _JOB_DEFINITION_ARN_RE.fullmatch(definition_reference)
+        if definition_match is None:
+            raise RuntimeError(
+                f"jobDefinition ARN is not digest-bound: {definition_reference!r}"
+            )
+        (
+            definition_account,
+            definition_name,
+            definition_profile,
+            image_digest,
+            revision_text,
+        ) = definition_match.groups()
+        if definition_account != queue_arn_match.group(1):
+            raise RuntimeError("jobDefinition and jobQueue AWS accounts do not match")
+        if definition_profile != profile_name:
+            raise RuntimeError(
+                "jobDefinition profile does not match the jobName profile"
+            )
+        definition_revision = int(revision_text)
+        definitions: list[Mapping[str, Any]] = []
+        definition_token: str | None = None
+        while True:
+            definition_arguments: dict[str, object] = {
+                "jobDefinitionName": definition_name,
+            }
+            if definition_token is not None:
+                definition_arguments["nextToken"] = definition_token
+            definition_response = self._batch.describe_job_definitions(
+                **definition_arguments
+            )
+            definitions.extend(
+                item
+                for item in definition_response.get("jobDefinitions", [])
+                if isinstance(item, Mapping)
+            )
+            next_definition_token = definition_response.get("nextToken")
+            if (
+                not isinstance(next_definition_token, str)
+                or not next_definition_token
+            ):
+                break
+            definition_token = next_definition_token
+        matching_definitions = [
+            item
+            for item in definitions
+            if item.get("jobDefinitionArn") == definition_reference
+            and item.get("revision") == definition_revision
+        ]
+        if len(matching_definitions) != 1:
+            raise RuntimeError(
+                "jobDefinition ARN/revision did not resolve to exactly one definition"
+            )
+        definition = matching_definitions[0]
+        definition_container = definition.get("containerProperties")
+        if not isinstance(definition_container, Mapping):
+            raise RuntimeError("jobDefinition containerProperties are missing")
+        image = definition_container.get("image")
+        if not isinstance(image, str):
+            raise RuntimeError("jobDefinition image is missing")
+        _validate_digest_image(image)
+        if not image.endswith(f"@sha256:{image_digest}"):
+            raise RuntimeError(
+                "jobDefinition image digest does not match its definition name"
+            )
+        expected_container = _container_properties(profile, image)
+        if not _definition_matches(definition, expected_container):
+            raise RuntimeError(
+                "jobDefinition container image/resources do not match the profile"
+            )
+        expected_resources = _typed_resource_requirements(profile)
+
+        job_container = job.get("container")
+        if not isinstance(job_container, Mapping):
+            raise RuntimeError("job container details are missing")
+        if job_container.get("image") != image:
+            raise RuntimeError(
+                "job container image does not match the jobDefinition image"
+            )
+        job_resources = _normalize_resource_requirements(
+            job_container.get("resourceRequirements")
+        )
+        if job_resources != expected_resources:
+            raise RuntimeError(
+                "job container resourceRequirements do not match the profile"
+            )
+        return _JobIdentity(
+            profile=profile_name,
+            queue_name=profile.queue,
+            queue_arn=queue_arn,
+            job_definition_arn=definition_reference,
+            job_definition_revision=definition_revision,
+            image=image,
+            resource_requirements=expected_resources,
+        )
+
+    def _resolve_job_identity(
+        self, job: Mapping[str, Any]
+    ) -> tuple[_JobIdentity | None, str | None]:
+        last_error: Exception | None = None
+        for attempt in range(self._evidence_max_attempts):
+            try:
+                return self._load_job_identity(job), None
+            except Exception as error:
+                last_error = error
+                if attempt + 1 < self._evidence_max_attempts:
+                    self._sleep(self._retry_delay_seconds)
+        return None, f"job identity validation failed: {last_error}"
+
     def _collect_job_evidence(
         self,
         job: Mapping[str, Any],
@@ -779,10 +1016,10 @@ class HeavyTestRunner:
         job_id = str(job["jobId"])
         status = str(job.get("status", "UNKNOWN"))
         latest = job
-        identity = " ".join(
-            str(latest.get(field, "")) for field in ("jobName", "jobDefinition")
-        )
-        is_gpu = "trainer-heavy-test-g6x-" in identity
+        identity, identity_error = self._resolve_job_identity(latest)
+        if identity_error is not None:
+            errors.append(identity_error)
+        is_gpu = identity is not None and identity.profile == "g6x"
         container = latest.get("container")
         if not isinstance(container, Mapping):
             container = {}
@@ -881,6 +1118,19 @@ class HeavyTestRunner:
             else None,
             jax_gpu_lines=jax_gpu_lines,
             evidence_errors=tuple(errors),
+            profile=identity.profile if identity is not None else None,
+            queue_name=identity.queue_name if identity is not None else None,
+            queue_arn=identity.queue_arn if identity is not None else None,
+            job_definition_arn=identity.job_definition_arn
+            if identity is not None
+            else None,
+            job_definition_revision=identity.job_definition_revision
+            if identity is not None
+            else None,
+            image=identity.image if identity is not None else None,
+            resource_requirements=identity.resource_requirements
+            if identity is not None
+            else (),
         )
 
     def wait(
