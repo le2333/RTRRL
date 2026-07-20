@@ -30,6 +30,15 @@ class ResourceRequirement:
 
 
 @dataclass(frozen=True)
+class RegisteredJobDefinition:
+    name: str
+    arn: str
+    revision: int
+    owned: bool
+    scope: str | None
+
+
+@dataclass(frozen=True)
 class SubmittedTestJob:
     job_id: str
     test_file: str
@@ -42,6 +51,8 @@ class SubmittedTestJob:
     image: str
     job_definition_arn: str
     job_definition_revision: int
+    definition_scope: str | None
+    definition_owned: bool
     resource_requirements: tuple[ResourceRequirement, ...]
     command_text: str
 
@@ -69,6 +80,7 @@ class JobEvidence:
     job_definition_revision: int | None = None
     image: str | None = None
     resource_requirements: tuple[ResourceRequirement, ...] = ()
+    definition_scope: str | None = None
 
 
 @dataclass(frozen=True)
@@ -83,6 +95,7 @@ class _JobIdentity:
     job_definition_revision: int
     image: str
     resource_requirements: tuple[ResourceRequirement, ...]
+    definition_scope: str | None
 
 
 @dataclass(frozen=True)
@@ -99,10 +112,24 @@ class _ParsedJobIdentity:
     image_digest: str
     image: str
     resource_requirements: tuple[ResourceRequirement, ...]
+    definition_scope: str | None
 
 
 class _DefinitionNotReady(RuntimeError):
     """Raised only when definition evidence may still become visible."""
+
+
+class _RegisteredDefinitionFailure(RuntimeError):
+    def __init__(
+        self,
+        definition: RegisteredJobDefinition,
+        cause: Exception,
+    ) -> None:
+        self.definition = definition
+        super().__init__(
+            "registered job definition could not be verified: "
+            f"{type(cause).__name__}: {cause}"
+        )
 
 
 class AggregateJobFailure(RuntimeError):
@@ -125,10 +152,12 @@ class PartialSubmissionError(RuntimeError):
         self,
         *,
         submitted: Sequence[SubmittedTestJob],
+        registered_definitions: Sequence[RegisteredJobDefinition],
         failed_test: str,
         cause: Exception,
     ) -> None:
         self.submitted = tuple(submitted)
+        self.registered_definitions = tuple(registered_definitions)
         self.failed_test = failed_test
         self.cause = f"{type(cause).__name__}: {cause}"
         super().__init__(
@@ -155,9 +184,11 @@ _JOB_NAME_RE = re.compile(
 )
 _JOB_DEFINITION_ARN_RE = re.compile(
     rf"arn:aws:batch:{REGION}:({ACCOUNT_ID}):job-definition/"
-    r"((trainer-(heavy-test|smoke))-(c7am|c7al|c7ax|g6x)-"
+    r"((trainer-(heavy-test|smoke))-(?:(s[a-z0-9]{6,24})-)?"
+    r"(c7am|c7al|c7ax|g6x)-"
     r"([0-9a-f]{64})):([1-9][0-9]*)"
 )
+_DEFINITION_SCOPE_RE = re.compile(r"s[a-z0-9]{6,24}")
 _TERMINAL_JOB_STATES = frozenset({"SUCCEEDED", "FAILED"})
 _LOG_GROUP = "/aws/batch/job"
 _JOB_DEFINITION_COMMAND = ["bash", "-lc", "exit 64"]
@@ -293,11 +324,28 @@ def _definition_name(
     name_prefix: str,
     profile_name: str,
     image: str,
+    definition_scope: str | None = None,
 ) -> str:
     digest = image.rsplit("@sha256:", 1)[1]
-    name = f"{name_prefix}-{profile_name}-{digest}"
+    scope = f"-{definition_scope}" if definition_scope is not None else ""
+    name = f"{name_prefix}{scope}-{profile_name}-{digest}"
     _validate_aws_batch_name(name, field="job definition name")
     return name
+
+
+def _validate_definition_scope(
+    name_prefix: str, definition_scope: str | None
+) -> str | None:
+    if definition_scope is None:
+        return None
+    if name_prefix != "trainer-smoke":
+        raise ValueError("definition_scope is internal to trainer-smoke")
+    if (
+        type(definition_scope) is not str
+        or _DEFINITION_SCOPE_RE.fullmatch(definition_scope) is None
+    ):
+        raise ValueError("definition_scope must match s[a-z0-9]{6,24}")
+    return definition_scope
 
 
 def _definition_matches(
@@ -331,13 +379,30 @@ def _canonical_container(container: Mapping[str, Any]) -> dict[str, Any]:
 
 def _job_definition_identity(
     definition: Mapping[str, Any],
+    *,
+    expected_name: str | None = None,
 ) -> tuple[str, int]:
     arn = definition.get("jobDefinitionArn")
     revision = definition.get("revision")
-    if not isinstance(arn, str) or not arn:
+    if type(arn) is not str or not arn:
         raise RuntimeError("Batch returned a job definition without an ARN")
-    if not isinstance(revision, int):
+    if type(revision) is not int or revision < 1:
         raise RuntimeError("Batch returned a job definition without a revision")
+    if expected_name is not None:
+        expected_arn = (
+            f"arn:aws:batch:{REGION}:{ACCOUNT_ID}:"
+            f"job-definition/{expected_name}:{revision}"
+        )
+        if arn != expected_arn:
+            raise RuntimeError(
+                f"Batch returned unexpected job definition ARN {arn!r}"
+            )
+        response_name = definition.get("jobDefinitionName")
+        if type(response_name) is not str or response_name != expected_name:
+            raise RuntimeError(
+                "Batch returned unexpected job definition name "
+                f"{response_name!r}"
+            )
     return arn, revision
 
 
@@ -424,42 +489,91 @@ class HeavyTestRunner:
         profile_name: str,
         profile: ResourceProfile,
         image: str,
-    ) -> tuple[str, int]:
-        name = _definition_name(name_prefix, profile_name, image)
+        definition_scope: str | None,
+    ) -> RegisteredJobDefinition:
+        name = _definition_name(
+            name_prefix, profile_name, image, definition_scope
+        )
         container = _container_properties(profile, image)
+        if definition_scope is not None:
+            return self._resolve_or_register_definition(
+                name, container, definition_scope
+            )
         self._definition_lock_dir.mkdir(parents=True, exist_ok=True)
         lock_path = self._definition_lock_dir / f"{name}.lock"
         with lock_path.open("a+") as lock_file:
             fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX)
-            matching = self._find_matching_definitions(name, container)
-            if matching:
-                latest = max(matching, key=lambda item: item.get("revision", -1))
-                return _job_definition_identity(latest)
+            return self._resolve_or_register_definition(name, container, None)
 
-            self._batch.register_job_definition(
-                jobDefinitionName=name,
-                type="container",
-                platformCapabilities=["EC2"],
-                containerProperties=container,
+    def _resolve_or_register_definition(
+        self,
+        name: str,
+        container: Mapping[str, object],
+        scope: str | None,
+    ) -> RegisteredJobDefinition:
+        matching = self._find_matching_definitions(name, container)
+        if matching:
+            identities = [
+                (*_job_definition_identity(item, expected_name=name), item)
+                for item in matching
+            ]
+            arn, revision, _ = max(identities, key=lambda item: item[1])
+            return RegisteredJobDefinition(
+                name=name,
+                arn=arn,
+                revision=revision,
+                owned=False,
+                scope=scope,
             )
-            for attempt in range(self._evidence_max_attempts):
-                matching = self._find_matching_definitions(name, container)
-                if matching:
-                    latest = max(
-                        matching, key=lambda item: item.get("revision", -1)
+        response = self._batch.register_job_definition(
+            jobDefinitionName=name,
+            type="container",
+            platformCapabilities=["EC2"],
+            containerProperties=container,
+        )
+        if not isinstance(response, Mapping):
+            raise RuntimeError("register_job_definition response must be a mapping")
+        arn, revision = _job_definition_identity(response, expected_name=name)
+        registered = RegisteredJobDefinition(
+            name=name,
+            arn=arn,
+            revision=revision,
+            owned=True,
+            scope=scope,
+        )
+        last_error: Exception = RuntimeError(
+            "registered job definition is not visible"
+        )
+        for attempt in range(self._evidence_max_attempts):
+            try:
+                reread = self._find_matching_definitions(name, container)
+                exact = [
+                    item
+                    for item in reread
+                    if item.get("jobDefinitionArn") == arn
+                    and item.get("revision") == revision
+                ]
+                if len(exact) == 1:
+                    return registered
+                if len(exact) > 1:
+                    raise RuntimeError(
+                        "registered ARN/revision resolved to duplicate definitions"
                     )
-                    return _job_definition_identity(latest)
-                if attempt + 1 < self._evidence_max_attempts:
-                    self._sleep(self._retry_delay_seconds)
-            raise RuntimeError(
-                "registered job definition could not be re-read as an exact match"
-            )
+                last_error = RuntimeError(
+                    "registered ARN/revision is not visible"
+                )
+            except Exception as error:
+                last_error = error
+            if attempt + 1 < self._evidence_max_attempts:
+                self._sleep(self._retry_delay_seconds)
+        raise _RegisteredDefinitionFailure(registered, last_error)
 
     def _find_matching_definitions(
         self, name: str, container: Mapping[str, object]
     ) -> list[Mapping[str, Any]]:
         definitions: list[Mapping[str, Any]] = []
         token: str | None = None
+        seen_tokens: set[str] = set()
         while True:
             arguments: dict[str, object] = {
                 "jobDefinitionName": name,
@@ -468,14 +582,27 @@ class HeavyTestRunner:
             if token is not None:
                 arguments["nextToken"] = token
             response = self._batch.describe_job_definitions(**arguments)
-            definitions.extend(
-                definition
-                for definition in response.get("jobDefinitions", [])
-                if isinstance(definition, Mapping)
-            )
+            if not isinstance(response, Mapping):
+                raise RuntimeError(
+                    "describe_job_definitions response must be a mapping"
+                )
+            values = response.get("jobDefinitions")
+            if type(values) is not list:
+                raise RuntimeError(
+                    "describe_job_definitions.jobDefinitions must be a list"
+                )
+            for definition in values:
+                if not isinstance(definition, Mapping):
+                    raise RuntimeError("job definition must be a mapping")
+                definitions.append(definition)
             next_token = response.get("nextToken")
-            if not isinstance(next_token, str) or not next_token:
+            if next_token is None:
                 break
+            if type(next_token) is not str or not next_token:
+                raise RuntimeError("job definition nextToken is malformed")
+            if next_token in seen_tokens:
+                raise RuntimeError("job definition nextToken cycle")
+            seen_tokens.add(next_token)
             token = next_token
         return [
             definition
@@ -491,8 +618,12 @@ class HeavyTestRunner:
         tests: Sequence[str],
         purpose: ExecutionPurpose = ExecutionPurpose.DEV,
         name_prefix: str = "trainer-heavy-test",
+        definition_scope: str | None = None,
     ) -> tuple[SubmittedTestJob, ...]:
         kind = _validate_name_prefix(name_prefix)
+        definition_scope = _validate_definition_scope(
+            name_prefix, definition_scope
+        )
         purpose = ExecutionPurpose(purpose)
         _validate_digest_image(image)
         test_files = tuple(
@@ -504,9 +635,28 @@ class HeavyTestRunner:
         queue_spec = queue_for(purpose, profile)
         topology = self._topology_validator.validate()
         queue_arn = topology.queue_arns[f"{purpose.value}-{profile}"]
-        definition_arn, definition_revision = self._get_or_register_definition(
-            name_prefix, profile, profile_spec, image
-        )
+        try:
+            definition = self._get_or_register_definition(
+                name_prefix,
+                profile,
+                profile_spec,
+                image,
+                definition_scope,
+            )
+        except _RegisteredDefinitionFailure as error:
+            raise PartialSubmissionError(
+                submitted=(),
+                registered_definitions=(error.definition,),
+                failed_test=test_files[0],
+                cause=error,
+            ) from error
+        except Exception as error:
+            raise PartialSubmissionError(
+                submitted=(),
+                registered_definitions=(),
+                failed_test=test_files[0],
+                cause=error,
+            ) from error
 
         submitted = []
         for test_file in test_files:
@@ -527,7 +677,7 @@ class HeavyTestRunner:
                 response = self._batch.submit_job(
                     jobName=job_name,
                     jobQueue=queue_arn,
-                    jobDefinition=definition_arn,
+                    jobDefinition=definition.arn,
                     containerOverrides={"command": ["bash", "-c", command]},
                 )
                 job_id = response.get("jobId")
@@ -536,6 +686,7 @@ class HeavyTestRunner:
             except Exception as error:
                 raise PartialSubmissionError(
                     submitted=submitted,
+                    registered_definitions=(definition,),
                     failed_test=test_file,
                     cause=error,
                 ) from error
@@ -550,8 +701,10 @@ class HeavyTestRunner:
                     queue_name=queue_spec.name,
                     queue_arn=queue_arn,
                     image=image,
-                    job_definition_arn=definition_arn,
-                    job_definition_revision=definition_revision,
+                    job_definition_arn=definition.arn,
+                    job_definition_revision=definition.revision,
+                    definition_scope=definition.scope,
+                    definition_owned=definition.owned,
                     resource_requirements=_typed_resource_requirements(
                         profile_spec
                     ),
@@ -598,9 +751,37 @@ class HeavyTestRunner:
                 for job_id in chunk:
                     errors.setdefault(job_id, []).append(message)
                 continue
-            for job in response.get("jobs", []):
-                if isinstance(job, Mapping) and isinstance(job.get("jobId"), str):
-                    described[str(job["jobId"])] = job
+            jobs_value = response.get("jobs")
+            if type(jobs_value) is not list:
+                for job_id in chunk:
+                    errors.setdefault(job_id, []).append(
+                        "Batch describe_jobs jobs must be a list"
+                    )
+                continue
+            page_ids: set[str] = set()
+            malformed: str | None = None
+            page_jobs: dict[str, Mapping[str, Any]] = {}
+            for job in jobs_value:
+                if not isinstance(job, Mapping):
+                    malformed = "Batch describe_jobs job must be a mapping"
+                    break
+                job_id_value = job.get("jobId")
+                if type(job_id_value) is not str or not job_id_value:
+                    malformed = "Batch describe_jobs jobId must be a string"
+                    break
+                if job_id_value not in chunk:
+                    malformed = "Batch describe_jobs returned an unexpected job"
+                    break
+                if job_id_value in page_ids:
+                    malformed = "Batch describe_jobs returned a duplicate job"
+                    break
+                page_ids.add(job_id_value)
+                page_jobs[job_id_value] = job
+            if malformed is not None:
+                for job_id in chunk:
+                    errors.setdefault(job_id, []).append(malformed)
+                continue
+            described.update(page_jobs)
             for job_id in chunk:
                 if job_id not in described:
                     errors.setdefault(job_id, []).append(
@@ -637,6 +818,12 @@ class HeavyTestRunner:
             )
             for job_id, messages in errors.items():
                 evidence_errors.setdefault(job_id, []).extend(messages)
+                if job_id not in described:
+                    terminal[job_id] = last_seen.get(
+                        job_id,
+                        {"jobId": job_id, "status": "UNKNOWN"},
+                    )
+                    pending.discard(job_id)
             for job_id, job in described.items():
                 last_seen[job_id] = job
                 status = job.get("status")
@@ -659,6 +846,7 @@ class HeavyTestRunner:
             return ()
         lines: list[str] = []
         token: str | None = None
+        seen_tokens: set[str] = set()
         while True:
             arguments: dict[str, object] = {
                 "logGroupName": _LOG_GROUP,
@@ -668,18 +856,57 @@ class HeavyTestRunner:
             if token is not None:
                 arguments["nextToken"] = token
             response = self._logs.get_log_events(**arguments)
+            if not isinstance(response, Mapping):
+                raise RuntimeError("CloudWatch get_log_events returned a non-mapping")
+            events = response.get("events")
+            if type(events) is not list:
+                raise RuntimeError("CloudWatch events must be a list")
+            for index, event in enumerate(events):
+                if not isinstance(event, Mapping):
+                    raise RuntimeError(
+                        f"CloudWatch event {index} must be a mapping"
+                    )
+                message = event.get("message")
+                if type(message) is not str:
+                    raise RuntimeError("CloudWatch event message must be a string")
+                lines.append(message)
             next_token = response.get("nextForwardToken")
+            if next_token is None:
+                break
+            if type(next_token) is not str or not next_token:
+                raise RuntimeError("CloudWatch nextForwardToken is malformed")
             if token is not None and next_token == token:
                 break
-            lines.extend(
-                str(event.get("message", ""))
-                for event in response.get("events", [])
-                if isinstance(event, Mapping)
-            )
-            if not isinstance(next_token, str):
-                break
+            if next_token in seen_tokens:
+                raise RuntimeError("CloudWatch nextForwardToken token cycle")
+            seen_tokens.add(next_token)
             token = next_token
         return tuple(lines)
+
+    @staticmethod
+    def _successful_attempt_container(
+        job: Mapping[str, Any],
+    ) -> tuple[Mapping[str, Any] | None, str | None]:
+        attempts = job.get("attempts")
+        if type(attempts) is not list:
+            return None, "smoke job attempts must be a list"
+        successful: list[Mapping[str, Any]] = []
+        for index, attempt in enumerate(attempts):
+            if not isinstance(attempt, Mapping):
+                return None, f"smoke job attempt {index} must be a mapping"
+            container = attempt.get("container")
+            if not isinstance(container, Mapping):
+                return None, f"smoke job attempt {index} container must be a mapping"
+            exit_code = container.get("exitCode")
+            if type(exit_code) is int and exit_code == 0:
+                successful.append(container)
+        if len(successful) != 1:
+            return (
+                None,
+                "smoke job must have exactly one successful attempt; "
+                f"got {len(successful)}",
+            )
+        return successful[0], None
 
     def _parse_job_identity(self, job: Mapping[str, Any]) -> _ParsedJobIdentity:
         job_name = job.get("jobName")
@@ -723,6 +950,7 @@ class HeavyTestRunner:
             definition_name,
             definition_prefix,
             definition_kind,
+            definition_scope,
             definition_profile,
             image_digest,
             revision_text,
@@ -774,6 +1002,7 @@ class HeavyTestRunner:
             image_digest=image_digest,
             image=image,
             resource_requirements=expected_resources,
+            definition_scope=definition_scope,
         )
 
     def _load_job_definition(
@@ -781,6 +1010,7 @@ class HeavyTestRunner:
     ) -> _JobIdentity:
         definitions: list[Mapping[str, Any]] = []
         definition_token: str | None = None
+        seen_tokens: set[str] = set()
         while True:
             definition_arguments: dict[str, object] = {
                 "jobDefinitionName": parsed.definition_name,
@@ -795,17 +1025,28 @@ class HeavyTestRunner:
                 raise _DefinitionNotReady(
                     f"jobDefinition query is not ready: {error}"
                 ) from error
-            definitions.extend(
-                item
-                for item in definition_response.get("jobDefinitions", [])
-                if isinstance(item, Mapping)
-            )
+            if not isinstance(definition_response, Mapping):
+                raise RuntimeError(
+                    "jobDefinition query returned a non-mapping response"
+                )
+            values = definition_response.get("jobDefinitions")
+            if type(values) is not list:
+                raise RuntimeError("jobDefinition query returned a non-list")
+            for item in values:
+                if not isinstance(item, Mapping):
+                    raise RuntimeError("jobDefinition query returned a non-mapping item")
+                definitions.append(item)
             next_definition_token = definition_response.get("nextToken")
+            if next_definition_token is None:
+                break
             if (
-                not isinstance(next_definition_token, str)
+                type(next_definition_token) is not str
                 or not next_definition_token
             ):
-                break
+                raise RuntimeError("jobDefinition nextToken is malformed")
+            if next_definition_token in seen_tokens:
+                raise RuntimeError("jobDefinition nextToken cycle")
+            seen_tokens.add(next_definition_token)
             definition_token = next_definition_token
         matching_definitions = [
             item
@@ -857,6 +1098,7 @@ class HeavyTestRunner:
             job_definition_revision=parsed.definition_revision,
             image=image,
             resource_requirements=parsed.resource_requirements,
+            definition_scope=parsed.definition_scope,
         )
 
     def _resolve_job_identity(
@@ -897,11 +1139,25 @@ class HeavyTestRunner:
         container = latest.get("container")
         if not isinstance(container, Mapping):
             container = {}
-        stream = container.get("logStreamName")
+        is_smoke = isinstance(latest.get("jobName"), str) and str(
+            latest["jobName"]
+        ).startswith("trainer-smoke-")
+        evidence_container = container
+        if is_smoke:
+            successful_container, attempt_error = self._successful_attempt_container(
+                latest
+            )
+            if attempt_error is not None:
+                errors.append(attempt_error)
+                evidence_container = {}
+            else:
+                assert successful_container is not None
+                evidence_container = successful_container
+        stream = evidence_container.get("logStreamName")
         if not isinstance(stream, str):
             stream = None
 
-        if status in _TERMINAL_JOB_STATES and stream is None:
+        if status in _TERMINAL_JOB_STATES and stream is None and not is_smoke:
             last_error: Exception | None = None
             for attempt in range(evidence_attempts):
                 try:
@@ -984,11 +1240,11 @@ class HeavyTestRunner:
             status_reason=latest.get("statusReason")
             if isinstance(latest.get("statusReason"), str)
             else None,
-            container_reason=container.get("reason")
-            if isinstance(container.get("reason"), str)
+            container_reason=evidence_container.get("reason")
+            if isinstance(evidence_container.get("reason"), str)
             else None,
-            exit_code=container.get("exitCode")
-            if isinstance(container.get("exitCode"), int)
+            exit_code=evidence_container.get("exitCode")
+            if type(evidence_container.get("exitCode")) is int
             else None,
             jax_gpu_lines=jax_gpu_lines,
             evidence_errors=tuple(errors),
@@ -1008,6 +1264,9 @@ class HeavyTestRunner:
             resource_requirements=identity.resource_requirements
             if identity is not None
             else (),
+            definition_scope=identity.definition_scope
+            if identity is not None
+            else None,
         )
 
     def wait(

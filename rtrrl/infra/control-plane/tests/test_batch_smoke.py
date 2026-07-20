@@ -2,13 +2,14 @@ from __future__ import annotations
 
 from copy import deepcopy
 from dataclasses import replace
+from datetime import datetime, timezone
 import json
 from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
 
-from trainer_infra import batch_admin_cli
+from trainer_infra import batch_admin_cli, batch_smoke
 from trainer_infra.batch_smoke import SmokeServices, run_smoke, smoke_plan
 from trainer_infra.batch_topology import (
     ACCOUNT_ID,
@@ -28,10 +29,26 @@ class SmokeBatch(FakeBatch):
     def __init__(self) -> None:
         super().__init__()
         self.fail_submission_number: int | None = None
+        self.malformed_register_response = False
+        self.actual_queue_override: str | None = None
+        self.multiple_success_attempts = False
+        self.no_success_attempt = False
+        self.fail_definition_reads_after_registration = False
         for profile, environment in self.compute_environments.items():
             environment["ecsClusterArn"] = (
                 f"arn:aws:ecs:{REGION}:{ACCOUNT_ID}:cluster/{profile}"
             )
+
+    def register_job_definition(self, **kwargs: object) -> dict[str, object]:
+        response = super().register_job_definition(**kwargs)
+        if self.malformed_register_response:
+            return {"jobDefinitionArn": response["jobDefinitionArn"]}
+        return response
+
+    def describe_job_definitions(self, **kwargs: object) -> dict[str, object]:
+        if self.fail_definition_reads_after_registration and self.job_definitions:
+            raise RuntimeError("definition read unavailable")
+        return super().describe_job_definitions(**kwargs)
 
     def submit_job(self, **kwargs: object) -> dict[str, str]:
         next_number = len(self.submit_job_calls) + 1
@@ -56,26 +73,29 @@ class SmokeBatch(FakeBatch):
             f"arn:aws:ecs:{REGION}:{ACCOUNT_ID}:"
             f"container-instance/{profile}/container-{purpose}-{profile}"
         )
+        attempt = {
+            "container": {
+                "containerInstanceArn": container_instance_arn,
+                "exitCode": 1 if self.no_success_attempt else 0,
+                "logStreamName": stream,
+            }
+        }
+        attempts = [attempt]
+        if self.multiple_success_attempts:
+            attempts.append(deepcopy(attempt))
         self.jobs[job_id] = {
             "jobId": job_id,
             "jobName": job_name,
-            "jobQueue": kwargs["jobQueue"],
+            "jobQueue": self.actual_queue_override or kwargs["jobQueue"],
             "jobDefinition": definition_arn,
             "status": "SUCCEEDED",
-            "attempts": [
-                {
-                    "container": {
-                        "containerInstanceArn": container_instance_arn,
-                        "exitCode": 0,
-                    }
-                }
-            ],
+            "attempts": attempts,
             "container": {
                 "image": container_properties["image"],
                 "resourceRequirements": deepcopy(
                     container_properties["resourceRequirements"]
                 ),
-                "logStreamName": stream,
+                "logStreamName": "wrong/top-level/stream",
                 "exitCode": 0,
             },
         }
@@ -86,6 +106,8 @@ class SmokeLogs(FakeLogs):
     def __init__(self) -> None:
         super().__init__()
         self.missing_l4: set[tuple[str, str]] = set()
+        self.malformed_event = False
+        self.cyclic_tokens = False
 
     def get_log_events(self, **kwargs: object) -> dict[str, object]:
         stream = str(kwargs["logStreamName"])
@@ -99,10 +121,34 @@ class SmokeLogs(FakeLogs):
             messages.append("JAX devices: [CudaDevice(id=0)]")
             if (purpose, profile) not in self.missing_l4:
                 messages.append("NVIDIA L4, 23034 MiB")
-        return {
-            "events": [{"message": message} for message in messages],
-            "nextForwardToken": "done",
-        }
+        token = kwargs.get("nextToken")
+        if self.cyclic_tokens:
+            next_token = {"done-a": "done-b", "done-b": "done-a"}.get(
+                token, "done-a"
+            )
+            return {
+                "events": [{"message": message} for message in messages],
+                "nextForwardToken": next_token,
+            }
+        if token is not None and not self.cyclic_tokens:
+            return {"events": [], "nextForwardToken": token}
+        events: list[object] = [{"message": message} for message in messages]
+        if self.malformed_event:
+            events.append({"message": 123})
+        return {"events": events, "nextForwardToken": "done"}
+
+
+class FakeClock:
+    def __init__(self) -> None:
+        self.now = 0.0
+        self.sleeps: list[float] = []
+
+    def monotonic(self) -> float:
+        return self.now
+
+    def sleep(self, seconds: float) -> None:
+        self.sleeps.append(seconds)
+        self.now += seconds
 
 
 class FakeEcs:
@@ -148,9 +194,17 @@ class FakeEc2:
     def __init__(self, ecs: FakeEcs) -> None:
         self.ecs = ecs
         self.calls: list[list[str]] = []
+        self.paginate = False
 
-    def describe_instances(self, *, InstanceIds: list[str]) -> dict[str, object]:
+    def describe_instances(
+        self,
+        *,
+        InstanceIds: list[str],
+        NextToken: str | None = None,
+    ) -> dict[str, object]:
         self.calls.append(list(InstanceIds))
+        if self.paginate and NextToken is None:
+            return {"Reservations": [], "NextToken": "page-2"}
         instance_id = InstanceIds[0]
         profile = instance_id.removeprefix("i-")
         return {
@@ -167,8 +221,7 @@ class FakeEc2:
         }
 
 
-@pytest.fixture
-def fake_services() -> SmokeServices:
+def _fake_services() -> SmokeServices:
     batch = SmokeBatch()
     logs = SmokeLogs()
     ecs = FakeEcs()
@@ -179,6 +232,11 @@ def fake_services() -> SmokeServices:
         ecs=ecs,
         ec2=FakeEc2(ecs),
     )
+
+
+@pytest.fixture
+def fake_services() -> SmokeServices:
+    return _fake_services()
 
 
 def test_smoke_matrix_is_exact_and_has_exact_resources() -> None:
@@ -235,8 +293,10 @@ def test_execute_collects_all_evidence_and_reuses_definition_revisions(
         cpu_image=CPU_IMAGE,
         gpu_image=GPU_IMAGE,
         execute=True,
+        sleep=lambda _: None,
     )
     assert report.passed
+    assert report.definition_scope.startswith("s")
     assert len(report.cases) == 8
     assert len(fake_services.batch.submit_job_calls) == 8
     assert len(fake_services.batch.register_job_definition_calls) == 4
@@ -252,6 +312,18 @@ def test_execute_collects_all_evidence_and_reuses_definition_revisions(
         if "-g6x-" in name
     )
     by_case = {(item.purpose.value, item.profile): item for item in report.cases}
+    plan = {(item.purpose.value, item.profile): item for item in smoke_plan(CPU_IMAGE, GPU_IMAGE)}
+    for key, item in by_case.items():
+        expected = plan[key]
+        assert item.queue_name == expected.queue_name
+        assert item.queue_arn.endswith(f"/{expected.queue_name}")
+        assert item.image == expected.image
+        assert item.resource_requirements == tuple(
+            sorted(expected.resource_requirements)
+        )
+        assert item.log_stream_name == f"stream/{key[0]}/{key[1]}"
+        assert item.profile_marker_lines == (f"trainer_smoke_profile={key[1]}",)
+        assert item.purpose_marker_lines == (f"trainer_smoke_purpose={key[0]}",)
     for profile, instance_type in (
         ("c7am", "c7a.medium"),
         ("c7al", "c7a.large"),
@@ -265,15 +337,59 @@ def test_execute_collects_all_evidence_and_reuses_definition_revisions(
         assert dev.instance_type == run.instance_type == instance_type
         assert dev.exit_code == run.exit_code == 0
         assert dev.maximum_rss_lines and run.maximum_rss_lines
-    assert by_case[("dev", "g6x")].gpu_lines
-    assert by_case[("run", "g6x")].jax_gpu_lines
+    for purpose in ("dev", "run"):
+        assert by_case[(purpose, "g6x")].gpu_lines
+        assert by_case[(purpose, "g6x")].jax_gpu_lines
     path = tmp_path / ".trainer/smoke/trainer-smoke-shared-queues.json"
     payload = json.loads(path.read_text())
     assert payload["passed"] is True
+    assert payload["definition_scope"] == report.definition_scope
+    assert payload["owned_job_definition_arns"] == list(
+        report.owned_job_definition_arns
+    )
     assert len(payload["cases"]) == 8
     assert payload["job_definition_arns"] == list(report.job_definition_arns)
     assert payload["log_stream_names"] == list(report.log_stream_names)
     assert not list(path.parent.glob("*.tmp"))
+
+
+def test_ec2_evidence_paginates_to_unique_instance(
+    fake_services: SmokeServices,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    assert isinstance(fake_services.ec2, FakeEc2)
+    fake_services.ec2.paginate = True
+    report = run_smoke(
+        fake_services,
+        cpu_image=CPU_IMAGE,
+        gpu_image=GPU_IMAGE,
+        execute=True,
+        sleep=lambda _: None,
+    )
+    assert report.passed
+    assert len(fake_services.ec2.calls) == 16
+
+
+def test_queue_observation_timestamp_is_after_topology_validation(
+    fake_services: SmokeServices,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    captured = datetime(2026, 7, 20, 20, 0, tzinfo=timezone.utc)
+    observed = datetime(2026, 7, 20, 20, 1, tzinfo=timezone.utc)
+    values = iter((captured, observed))
+    monkeypatch.setattr(batch_smoke, "_utc_now", lambda: next(values))
+    report = run_smoke(
+        fake_services,
+        cpu_image=CPU_IMAGE,
+        gpu_image=GPU_IMAGE,
+        execute=True,
+    )
+    assert report.captured_at == captured
+    assert report.queue_deployment_observed_at == observed
 
 
 def test_wrong_instance_and_missing_gpu_evidence_fail_closed(
@@ -350,6 +466,9 @@ def test_partial_submission_report_retains_created_job_ids(
     assert not report.passed
     assert [case.job_id for case in report.cases[:3]] == ["job-1", "job-2", "job-3"]
     assert all(case.job_id is None for case in report.cases[3:])
+    assert report.cases[3].job_definition_arn is not None
+    assert report.cases[3].job_definition_revision == 1
+    assert report.cases[3].job_definition_arn in report.owned_job_definition_arns
     payload = json.loads(
         (tmp_path / ".trainer/smoke/trainer-smoke-shared-queues.json").read_text()
     )
@@ -358,6 +477,236 @@ def test_partial_submission_report_retains_created_job_ids(
         "job-2",
         "job-3",
     ]
+
+
+def test_each_execution_uses_a_unique_definition_scope(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    first = run_smoke(
+        _fake_services(),
+        cpu_image=CPU_IMAGE,
+        gpu_image=GPU_IMAGE,
+        execute=True,
+    )
+    second = run_smoke(
+        _fake_services(),
+        cpu_image=CPU_IMAGE,
+        gpu_image=GPU_IMAGE,
+        execute=True,
+    )
+    assert first.definition_scope != second.definition_scope
+    assert set(first.job_definition_arns).isdisjoint(second.job_definition_arns)
+    for report in (first, second):
+        assert len(report.owned_job_definition_arns) == 4
+        assert all(
+            f"trainer-smoke-{report.definition_scope}-" in arn
+            for arn in report.owned_job_definition_arns
+        )
+
+
+def test_actual_queue_drift_is_recorded_not_replaced_by_plan(
+    fake_services: SmokeServices,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    assert isinstance(fake_services.batch, SmokeBatch)
+    fake_services.batch.actual_queue_override = (
+        f"arn:aws:batch:{REGION}:{ACCOUNT_ID}:job-queue/run-gpu-queue"
+    )
+    report = run_smoke(
+        fake_services,
+        cpu_image=CPU_IMAGE,
+        gpu_image=GPU_IMAGE,
+        execute=True,
+    )
+    assert not report.passed
+    first = report.cases[0]
+    assert first.expected_queue_name == "dev-cpu-c7am-queue"
+    assert first.queue_name == "run-gpu-queue"
+    assert first.queue_arn.endswith("/run-gpu-queue")
+    assert "queue mismatch" in report.failure_text
+
+
+def test_definition_read_failure_keeps_registered_identity(
+    fake_services: SmokeServices,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    assert isinstance(fake_services.batch, SmokeBatch)
+    fake_services.batch.fail_definition_reads_after_registration = True
+    report = run_smoke(
+        fake_services,
+        cpu_image=CPU_IMAGE,
+        gpu_image=GPU_IMAGE,
+        execute=True,
+        sleep=lambda _: None,
+    )
+    assert not report.passed
+    assert report.owned_job_definition_arns
+    assert report.cases[0].job_definition_arn in report.owned_job_definition_arns
+    assert report.cases[0].job_definition_revision == 1
+    assert report.cases[0].job_id is None
+    assert fake_services.batch.submit_job_calls == []
+    assert "definition read unavailable" in report.failure_text
+
+
+def test_malformed_register_response_fails_before_submit_and_writes_report(
+    fake_services: SmokeServices,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    assert isinstance(fake_services.batch, SmokeBatch)
+    fake_services.batch.malformed_register_response = True
+    report = run_smoke(
+        fake_services,
+        cpu_image=CPU_IMAGE,
+        gpu_image=GPU_IMAGE,
+        execute=True,
+    )
+    assert not report.passed
+    assert fake_services.batch.submit_job_calls == []
+    assert "revision" in report.failure_text
+    assert (tmp_path / ".trainer/smoke/trainer-smoke-shared-queues.json").is_file()
+
+
+@pytest.mark.parametrize("attempt_mode", ("none", "multiple"))
+def test_logs_require_one_successful_attempt(
+    fake_services: SmokeServices,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    attempt_mode: str,
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    assert isinstance(fake_services.batch, SmokeBatch)
+    if attempt_mode == "none":
+        fake_services.batch.no_success_attempt = True
+    else:
+        fake_services.batch.multiple_success_attempts = True
+    report = run_smoke(
+        fake_services,
+        cpu_image=CPU_IMAGE,
+        gpu_image=GPU_IMAGE,
+        execute=True,
+    )
+    assert not report.passed
+    assert "exactly one successful attempt" in report.failure_text
+    assert all(case.log_stream_name is None for case in report.cases)
+
+
+@pytest.mark.parametrize("boundary", ("malformed-event", "token-cycle"))
+def test_log_boundaries_fail_closed(
+    fake_services: SmokeServices,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    boundary: str,
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    assert isinstance(fake_services.logs, SmokeLogs)
+    if boundary == "malformed-event":
+        fake_services.logs.malformed_event = True
+    else:
+        fake_services.logs.cyclic_tokens = True
+    report = run_smoke(
+        fake_services,
+        cpu_image=CPU_IMAGE,
+        gpu_image=GPU_IMAGE,
+        execute=True,
+        sleep=lambda _: None,
+    )
+    assert not report.passed
+    assert (
+        "event message must be a string" in report.failure_text
+        or "token cycle" in report.failure_text
+    )
+
+
+def test_global_deadline_stops_after_sdk_return_and_preserves_artifacts(
+    fake_services: SmokeServices,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    clock = FakeClock()
+    original = fake_services.batch.describe_jobs
+
+    def slow_describe(*, jobs: list[str]) -> dict[str, object]:
+        response = original(jobs=jobs)
+        clock.now = 2.0
+        return response
+
+    fake_services.batch.describe_jobs = slow_describe
+    report = run_smoke(
+        fake_services,
+        cpu_image=CPU_IMAGE,
+        gpu_image=GPU_IMAGE,
+        execute=True,
+        timeout_seconds=1.0,
+        monotonic=clock.monotonic,
+        sleep=clock.sleep,
+    )
+    assert not report.passed
+    assert "deadline" in report.failure_text
+    assert len(report.owned_job_definition_arns) == 4
+    assert [case.job_id for case in report.cases] == [
+        f"job-{index}" for index in range(1, 9)
+    ]
+    assert (tmp_path / ".trainer/smoke/trainer-smoke-shared-queues.json").is_file()
+
+
+def test_deadline_after_registration_retains_owned_definition_on_case(
+    fake_services: SmokeServices,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    clock = FakeClock()
+    original = fake_services.batch.register_job_definition
+
+    def slow_register(**kwargs: object) -> dict[str, object]:
+        response = original(**kwargs)
+        clock.now = 2.0
+        return response
+
+    fake_services.batch.register_job_definition = slow_register
+    report = run_smoke(
+        fake_services,
+        cpu_image=CPU_IMAGE,
+        gpu_image=GPU_IMAGE,
+        execute=True,
+        timeout_seconds=1.0,
+        monotonic=clock.monotonic,
+        sleep=clock.sleep,
+    )
+    assert not report.passed
+    assert len(report.owned_job_definition_arns) == 1
+    assert report.cases[0].job_definition_arn == report.owned_job_definition_arns[0]
+    assert report.cases[0].job_definition_revision == 1
+    assert report.cases[0].job_id is None
+
+
+@pytest.mark.parametrize("timeout", (0, -1, float("inf"), float("nan"), True))
+def test_invalid_timeout_fails_before_aws(
+    fake_services: SmokeServices,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    timeout: object,
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    with pytest.raises(ValueError, match="timeout_seconds"):
+        run_smoke(
+            fake_services,
+            cpu_image=CPU_IMAGE,
+            gpu_image=GPU_IMAGE,
+            execute=True,
+            timeout_seconds=timeout,  # type: ignore[arg-type]
+        )
+    assert fake_services.batch.register_job_definition_calls == []
+    assert fake_services.batch.submit_job_calls == []
 
 
 def test_cli_smoke_constructs_all_clients_in_fixed_region(

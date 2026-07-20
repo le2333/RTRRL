@@ -215,6 +215,14 @@ class FakeBatch:
             "jobQueue": queue["jobQueueArn"],
             "jobDefinition": definition_arn,
             "status": status,
+            "attempts": [
+                {
+                    "container": {
+                        "exitCode": 0,
+                        "logStreamName": stream,
+                    }
+                }
+            ],
             "container": {
                 "image": IMAGE,
                 "resourceRequirements": resources,
@@ -229,6 +237,8 @@ class FakeLogs:
 
     def get_log_events(self, **kwargs: object) -> dict[str, object]:
         stream = str(kwargs["logStreamName"])
+        if kwargs.get("nextToken") is not None:
+            return {"events": [], "nextForwardToken": kwargs["nextToken"]}
         return {
             "events": [
                 {"message": message} for message in self.messages.get(stream, [])
@@ -448,6 +458,39 @@ def test_dev_and_run_reuse_purpose_neutral_definition_revision() -> None:
     )
 
 
+def test_scoped_smoke_definition_is_shared_only_within_scope() -> None:
+    batch = FakeBatch()
+    runner = HeavyTestRunner(batch, FakeLogs(), FakeSts(), sleep=lambda _: None)
+    first = runner.submit(
+        purpose=ExecutionPurpose.DEV,
+        profile="c7al",
+        image=IMAGE,
+        tests=["memo/tests/online_ac/test_eval_trace.py"],
+        name_prefix="trainer-smoke",
+        definition_scope="sabc123",
+    )[0]
+    paired = runner.submit(
+        purpose=ExecutionPurpose.RUN,
+        profile="c7al",
+        image=IMAGE,
+        tests=["memo/tests/online_ac/test_eval_trace.py"],
+        name_prefix="trainer-smoke",
+        definition_scope="sabc123",
+    )[0]
+    other = runner.submit(
+        purpose=ExecutionPurpose.DEV,
+        profile="c7al",
+        image=IMAGE,
+        tests=["memo/tests/online_ac/test_eval_trace.py"],
+        name_prefix="trainer-smoke",
+        definition_scope="sdef456",
+    )[0]
+    assert first.job_definition_arn == paired.job_definition_arn
+    assert first.job_definition_arn != other.job_definition_arn
+    assert "trainer-smoke-sabc123-c7al-" in first.job_definition_arn
+    assert len(batch.register_job_definition_calls) == 2
+
+
 @pytest.mark.parametrize(
     "prefix",
     [
@@ -583,6 +626,31 @@ def test_missing_definition_is_retried_as_eventually_consistent() -> None:
     assert sleeps == [7, 7]
 
 
+def test_wait_rejects_duplicate_describe_jobs_response() -> None:
+    class DuplicateJobs(FakeBatch):
+        def describe_jobs(self, *, jobs: list[str]) -> dict[str, object]:
+            response = super().describe_jobs(jobs=jobs)
+            values = response["jobs"]
+            assert isinstance(values, list)
+            return {"jobs": [*values, *deepcopy(values)]}
+
+    batch = DuplicateJobs()
+    batch.add_identity_job("job", "c7ax")
+    runner = HeavyTestRunner(
+        batch,
+        FakeLogs({"stream/job": ["Maximum resident set size (kbytes): 123"]}),
+        FakeSts(),
+        evidence_max_attempts=1,
+        sleep=lambda _: None,
+    )
+    with pytest.raises(AggregateJobFailure) as raised:
+        runner.wait(["job"])
+    assert any(
+        "duplicate" in message
+        for message in raised.value.evidence[0].evidence_errors
+    )
+
+
 def test_g6x_wait_requires_and_returns_complete_gpu_evidence() -> None:
     batch = FakeBatch()
     batch.add_identity_job("gpu", "g6x", stream="stream/gpu")
@@ -645,6 +713,71 @@ def test_partial_submission_retains_successful_job() -> None:
             ],
         )
     assert [job.job_id for job in raised.value.submitted] == ["job-1"]
+
+
+def test_submit_failure_retains_registered_definition_ownership() -> None:
+    class FailSubmit(FakeBatch):
+        def submit_job(self, **kwargs: object) -> dict[str, str]:
+            raise RuntimeError("rejected")
+
+    batch = FailSubmit()
+    runner = HeavyTestRunner(batch, FakeLogs(), FakeSts(), sleep=lambda _: None)
+    with pytest.raises(PartialSubmissionError) as raised:
+        runner.submit(
+            profile="c7ax",
+            image=IMAGE,
+            tests=["memo/tests/online_ac/test_eval_trace.py"],
+            name_prefix="trainer-smoke",
+            definition_scope="sabc123",
+        )
+    assert raised.value.submitted == ()
+    assert len(raised.value.registered_definitions) == 1
+    definition = raised.value.registered_definitions[0]
+    assert definition.owned
+    assert definition.revision == 1
+    assert definition.arn.startswith(
+        f"arn:aws:batch:{REGION}:{ACCOUNT_ID}:job-definition/"
+        "trainer-smoke-sabc123-c7ax-"
+    )
+
+
+def test_malformed_registration_response_fails_before_submit() -> None:
+    class MalformedRegister(FakeBatch):
+        def register_job_definition(self, **kwargs: object) -> dict[str, object]:
+            response = super().register_job_definition(**kwargs)
+            return {"jobDefinitionArn": response["jobDefinitionArn"]}
+
+    batch = MalformedRegister()
+    runner = HeavyTestRunner(batch, FakeLogs(), FakeSts(), sleep=lambda _: None)
+    with pytest.raises(PartialSubmissionError, match="revision"):
+        runner.submit(
+            profile="c7ax",
+            image=IMAGE,
+            tests=["memo/tests/online_ac/test_eval_trace.py"],
+            name_prefix="trainer-smoke",
+            definition_scope="sabc123",
+        )
+    assert batch.submit_job_calls == []
+
+
+def test_registration_response_requires_exact_definition_name() -> None:
+    class MissingName(FakeBatch):
+        def register_job_definition(self, **kwargs: object) -> dict[str, object]:
+            response = super().register_job_definition(**kwargs)
+            response.pop("jobDefinitionName")
+            return response
+
+    batch = MissingName()
+    runner = HeavyTestRunner(batch, FakeLogs(), FakeSts(), sleep=lambda _: None)
+    with pytest.raises(PartialSubmissionError, match="name"):
+        runner.submit(
+            profile="c7ax",
+            image=IMAGE,
+            tests=["memo/tests/online_ac/test_eval_trace.py"],
+            name_prefix="trainer-smoke",
+            definition_scope="sabc123",
+        )
+    assert batch.submit_job_calls == []
 
 
 def test_gpu_submission_keeps_probe_and_resource_contract(
