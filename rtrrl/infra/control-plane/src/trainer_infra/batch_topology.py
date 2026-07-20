@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from collections.abc import Mapping, Sequence
+from collections.abc import Mapping
 from dataclasses import dataclass
 from enum import StrEnum
 from types import MappingProxyType
@@ -165,19 +165,8 @@ def _require_field(
     path: str = "",
 ) -> None:
     actual = resource.get(field)
-    if actual != expected:
+    if type(actual) is not type(expected) or actual != expected:
         raise _drift(f"{path}{field}", expected, actual)
-
-
-def _require_nonempty_string(
-    resource: Mapping[str, Any], field: str, *, path: str = ""
-) -> str:
-    actual = resource.get(field)
-    if not isinstance(actual, str) or not actual:
-        raise ProfileDriftError(
-            f"{path}{field}: expected non-empty string, got {actual!r}"
-        )
-    return actual
 
 
 def _require_string_set(
@@ -207,23 +196,122 @@ def _require_string_set(
         )
 
 
+def _require_mapping(value: object, path: str) -> Mapping[str, Any]:
+    if not isinstance(value, Mapping):
+        raise ProfileDriftError(f"{path}: expected mapping, got {value!r}")
+    return value
+
+
+def _require_list(value: object, path: str) -> list[Any]:
+    if type(value) is not list:
+        raise ProfileDriftError(f"{path}: expected list, got {value!r}")
+    return value
+
+
 def require_one(
     resources: object,
     *,
     kind: str,
     name: str,
+    path: str | None = None,
 ) -> Mapping[str, Any]:
-    if (
-        not isinstance(resources, Sequence)
-        or isinstance(resources, (str, bytes))
-        or len(resources) != 1
-        or not isinstance(resources[0], Mapping)
-    ):
-        count = len(resources) if isinstance(resources, Sequence) else "non-sequence"
+    field_path = path or kind
+    values = _require_list(resources, field_path)
+    if len(values) != 1:
         raise ProfileDriftError(
-            f"{kind} {name!r}: expected exactly one result, got {count}"
+            f"{field_path}: expected exactly one {kind} {name!r}, got {len(values)}"
         )
-    return resources[0]
+    return _require_mapping(values[0], f"{field_path}[0]")
+
+
+def _validate_batch_arn(
+    value: object,
+    *,
+    resource_type: str,
+    name: str,
+    path: str,
+) -> str:
+    expected = f"arn:aws:batch:{REGION}:{ACCOUNT_ID}:{resource_type}/{name}"
+    if not isinstance(value, str):
+        raise _drift(path, expected, value)
+    parts = value.split(":", 5)
+    if len(parts) != 6:
+        raise _drift(path, expected, value)
+    prefix, partition, service, region, account, resource = parts
+    resource_parts = resource.split("/", 1)
+    if (
+        prefix != "arn"
+        or partition != "aws"
+        or service != "batch"
+        or region != REGION
+        or account != ACCOUNT_ID
+        or resource_parts != [resource_type, name]
+    ):
+        raise _drift(path, expected, value)
+    return value
+
+
+def _validate_ami_configuration(
+    resources: Mapping[str, Any],
+    expected: ComputeEnvironmentSpec,
+) -> None:
+    path = "computeResources."
+    configuration = require_one(
+        resources.get("ec2Configuration"),
+        kind="AMI configuration",
+        name=expected.name,
+        path=f"{path}ec2Configuration",
+    )
+    _require_field(
+        configuration,
+        "imageType",
+        expected.ami_family,
+        path=f"{path}ec2Configuration[0].",
+    )
+    if "imageIdOverride" in configuration:
+        _require_field(
+            configuration,
+            "imageIdOverride",
+            "",
+            path=f"{path}ec2Configuration[0].",
+        )
+    if "imageId" in resources:
+        raise ProfileDriftError(
+            f"{path}imageId: expected field to be absent, "
+            f"got {resources['imageId']!r}"
+        )
+    if "launchTemplate" in resources:
+        launch_template = _require_mapping(
+            resources["launchTemplate"], f"{path}launchTemplate"
+        )
+        if launch_template:
+            raise ProfileDriftError(
+                f"{path}launchTemplate: expected empty mapping, "
+                f"got {launch_template!r}"
+            )
+
+
+def _validate_compute_environment_order(
+    actual: Mapping[str, Any],
+    expected: QueueSpec,
+    environment_arns: Mapping[str, str],
+) -> None:
+    path = "computeEnvironmentOrder"
+    entries = _require_list(actual.get(path), path)
+    if len(entries) != len(expected.compute_environments):
+        raise _drift(path, f"{len(expected.compute_environments)} entries", entries)
+    for index, (entry_value, environment_key) in enumerate(
+        zip(entries, expected.compute_environments, strict=True)
+    ):
+        entry_path = f"{path}[{index}]"
+        entry = _require_mapping(entry_value, entry_path)
+        _require_field(entry, "order", index + 1, path=f"{entry_path}.")
+        _require_field(
+            entry,
+            "computeEnvironment",
+            environment_arns[environment_key],
+            path=f"{entry_path}.",
+        )
 
 
 def validate_compute_environment(
@@ -235,9 +323,7 @@ def validate_compute_environment(
     _require_field(actual, "type", "MANAGED")
     _require_field(actual, "state", "ENABLED")
     _require_field(actual, "status", "VALID")
-    resources = actual.get("computeResources")
-    if not isinstance(resources, Mapping):
-        raise _drift("computeResources", "mapping", resources)
+    resources = _require_mapping(actual.get("computeResources"), "computeResources")
     path = "computeResources."
     _require_field(resources, "type", "EC2", path=path)
     _require_field(resources, "minvCpus", 0, path=path)
@@ -251,18 +337,13 @@ def validate_compute_environment(
         path=path,
     )
     _require_field(resources, "instanceRole", network.instance_role, path=path)
-    configuration = require_one(
-        resources.get("ec2Configuration"),
-        kind="computeResources.ec2Configuration entry",
+    _validate_ami_configuration(resources, expected)
+    return _validate_batch_arn(
+        actual.get("computeEnvironmentArn"),
+        resource_type="compute-environment",
         name=expected.name,
+        path="computeEnvironmentArn",
     )
-    _require_field(
-        configuration,
-        "imageType",
-        expected.ami_family,
-        path="computeResources.ec2Configuration[0].",
-    )
-    return _require_nonempty_string(actual, "computeEnvironmentArn")
 
 
 def validate_queue(
@@ -274,12 +355,13 @@ def validate_queue(
     _require_field(actual, "state", "ENABLED")
     _require_field(actual, "status", "VALID")
     _require_field(actual, "priority", expected.priority)
-    expected_order = [
-        {"order": order, "computeEnvironment": environment_arns[key]}
-        for order, key in enumerate(expected.compute_environments, start=1)
-    ]
-    _require_field(actual, "computeEnvironmentOrder", expected_order)
-    return _require_nonempty_string(actual, "jobQueueArn")
+    _validate_compute_environment_order(actual, expected, environment_arns)
+    return _validate_batch_arn(
+        actual.get("jobQueueArn"),
+        resource_type="job-queue",
+        name=expected.name,
+        path="jobQueueArn",
+    )
 
 
 class BatchTopologyValidator:
@@ -296,22 +378,36 @@ class BatchTopologyValidator:
         self._network = network
 
     def validate(self) -> ValidatedTopology:
-        account = self._sts.get_caller_identity()["Account"]
-        region = self._batch.meta.region_name
-        if account != ACCOUNT_ID or region != REGION:
+        identity = _require_mapping(
+            self._sts.get_caller_identity(), "sts.get_caller_identity"
+        )
+        account = identity.get("Account")
+        meta = getattr(self._batch, "meta", None)
+        region = getattr(meta, "region_name", None)
+        if (
+            type(account) is not str
+            or account != ACCOUNT_ID
+            or type(region) is not str
+            or region != REGION
+        ):
             raise ProfileDriftError(
-                f"expected {ACCOUNT_ID}/{REGION}, got {account}/{region}"
+                "sts.Account/batch.meta.region_name: expected "
+                f"{ACCOUNT_ID}/{REGION}, got {account!r}/{region!r}"
             )
 
         environment_arns: dict[str, str] = {}
         for key, expected in self._topology.compute_environments.items():
-            response = self._batch.describe_compute_environments(
-                computeEnvironments=[expected.name]
+            response = _require_mapping(
+                self._batch.describe_compute_environments(
+                    computeEnvironments=[expected.name]
+                ),
+                "describe_compute_environments",
             )
             actual = require_one(
                 response.get("computeEnvironments"),
                 kind="compute environment",
                 name=expected.name,
+                path="describe_compute_environments.computeEnvironments",
             )
             environment_arns[key] = validate_compute_environment(
                 actual, expected, self._network
@@ -319,11 +415,15 @@ class BatchTopologyValidator:
 
         queue_arns: dict[str, str] = {}
         for key, expected in self._topology.queues.items():
-            response = self._batch.describe_job_queues(jobQueues=[expected.name])
+            response = _require_mapping(
+                self._batch.describe_job_queues(jobQueues=[expected.name]),
+                "describe_job_queues",
+            )
             actual = require_one(
                 response.get("jobQueues"),
                 kind="job queue",
                 name=expected.name,
+                path="describe_job_queues.jobQueues",
             )
             queue_arns[key] = validate_queue(actual, expected, environment_arns)
 

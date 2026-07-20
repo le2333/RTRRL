@@ -100,7 +100,7 @@ class FakeBatch:
     ) -> dict[str, object]:
         self.describe_compute_environment_calls.append(computeEnvironments)
         found = [
-            deepcopy(environment)
+            environment
             for environment in self.compute_environments.values()
             if environment["computeEnvironmentName"] in computeEnvironments
         ]
@@ -109,7 +109,7 @@ class FakeBatch:
     def describe_job_queues(self, *, jobQueues: list[str]) -> dict[str, object]:
         self.describe_job_queue_calls.append(jobQueues)
         found = [
-            deepcopy(queue)
+            queue
             for queue in self.queues.values()
             if queue["jobQueueName"] in jobQueues
         ]
@@ -133,6 +133,18 @@ class FakeBatch:
 
     def create_job_queue(self, **kwargs: object) -> None:
         self.mutation_calls.append(("create_job_queue", kwargs))
+
+    def delete_compute_environment(self, **kwargs: object) -> None:
+        self.mutation_calls.append(("delete_compute_environment", kwargs))
+
+    def delete_job_queue(self, **kwargs: object) -> None:
+        self.mutation_calls.append(("delete_job_queue", kwargs))
+
+    def tag_resource(self, **kwargs: object) -> None:
+        self.mutation_calls.append(("tag_resource", kwargs))
+
+    def untag_resource(self, **kwargs: object) -> None:
+        self.mutation_calls.append(("untag_resource", kwargs))
 
 
 @pytest.fixture
@@ -179,12 +191,19 @@ def test_expected_topology_is_exact_and_shared() -> None:
         "c7ax": ("c7a.xlarge", 16, "ECS_AL2023"),
         "g6x": ("g6.xlarge", 32, "ECS_AL2023_NVIDIA"),
     }
-    assert topology.queues["dev-c7am"].compute_environments == ("c7am",)
-    assert topology.queues["run-c7am"].compute_environments == ("c7am",)
-    assert topology.queues["dev-c7al"].compute_environments == ("c7al",)
-    assert topology.queues["run-c7al"].compute_environments == ("c7al",)
-    assert topology.queues["dev-c7ax"].compute_environments == ("c7ax",)
-    assert topology.queues["run-c7ax"].compute_environments == ("c7ax",)
+    assert {
+        key: (spec.name, spec.priority, spec.compute_environments)
+        for key, spec in topology.queues.items()
+    } == {
+        "dev-c7am": ("dev-cpu-c7am-queue", 10, ("c7am",)),
+        "dev-c7al": ("dev-cpu-c7al-queue", 10, ("c7al",)),
+        "dev-c7ax": ("dev-cpu-c7ax-queue", 10, ("c7ax",)),
+        "run-c7am": ("run-cpu-c7am-queue", 100, ("c7am",)),
+        "run-c7al": ("run-cpu-c7al-queue", 100, ("c7al",)),
+        "run-c7ax": ("run-cpu-c7ax-queue", 100, ("c7ax",)),
+        "dev-g6x": ("dev-gpu-queue", 10, ("g6x",)),
+        "run-g6x": ("run-gpu-queue", 100, ("g6x",)),
+    }
     assert queue_for(ExecutionPurpose.DEV, "g6x").name == "dev-gpu-queue"
     assert queue_for(ExecutionPurpose.RUN, "g6x").name == "run-gpu-queue"
 
@@ -211,6 +230,11 @@ def test_queue_lookup_rejects_unknown_profile() -> None:
 def test_validator_accepts_exact_topology_using_only_read_calls(
     fake_services: SimpleNamespace,
 ) -> None:
+    original_compute_environments = deepcopy(
+        fake_services.batch.compute_environments
+    )
+    original_queues = deepcopy(fake_services.batch.queues)
+
     validated = validator(fake_services).validate()
 
     assert tuple(validated.compute_environment_arns) == (
@@ -233,6 +257,8 @@ def test_validator_accepts_exact_topology_using_only_read_calls(
     assert len(fake_services.batch.describe_job_queue_calls) == 8
     assert fake_services.sts.calls == 1
     assert fake_services.batch.mutation_calls == []
+    assert fake_services.batch.compute_environments == original_compute_environments
+    assert fake_services.batch.queues == original_queues
     with pytest.raises(TypeError):
         validated.queue_arns["other"] = "arn"
 
@@ -258,6 +284,92 @@ def test_compute_environment_drift_fails_without_mutation(
         validator(fake_services).validate()
 
     assert fake_services.batch.mutation_calls == []
+
+
+@pytest.mark.parametrize(
+    "arn",
+    [
+        (
+            "arn:aws-us-gov:batch:eu-north-1:007122174918:"
+            "compute-environment/rtrrl-cpu-c7am-ce"
+        ),
+        (
+            "arn:aws:s3:eu-north-1:007122174918:"
+            "compute-environment/rtrrl-cpu-c7am-ce"
+        ),
+        (
+            "arn:aws:batch:us-east-1:007122174918:"
+            "compute-environment/rtrrl-cpu-c7am-ce"
+        ),
+        (
+            "arn:aws:batch:eu-north-1:123456789012:"
+            "compute-environment/rtrrl-cpu-c7am-ce"
+        ),
+        (
+            "arn:aws:batch:eu-north-1:007122174918:"
+            "job-queue/rtrrl-cpu-c7am-ce"
+        ),
+        (
+            "arn:aws:batch:eu-north-1:007122174918:"
+            "compute-environment/rtrrl-cpu-c7ax-ce"
+        ),
+        "not-an-arn",
+    ],
+)
+def test_compute_environment_arn_must_be_exact_even_when_queue_binding_agrees(
+    fake_services: SimpleNamespace, arn: str
+) -> None:
+    fake_services.batch.compute_environments["c7am"]["computeEnvironmentArn"] = arn
+    for key in ("dev-c7am", "run-c7am"):
+        fake_services.batch.queues[key]["computeEnvironmentOrder"] = [
+            {"order": 1, "computeEnvironment": arn}
+        ]
+
+    with pytest.raises(ProfileDriftError, match="computeEnvironmentArn"):
+        validator(fake_services).validate()
+
+
+@pytest.mark.parametrize(
+    "arn",
+    [
+        "arn:aws-us-gov:batch:eu-north-1:007122174918:job-queue/dev-cpu-c7am-queue",
+        "arn:aws:s3:eu-north-1:007122174918:job-queue/dev-cpu-c7am-queue",
+        "arn:aws:batch:us-east-1:007122174918:job-queue/dev-cpu-c7am-queue",
+        "arn:aws:batch:eu-north-1:123456789012:job-queue/dev-cpu-c7am-queue",
+        (
+            "arn:aws:batch:eu-north-1:007122174918:"
+            "compute-environment/dev-cpu-c7am-queue"
+        ),
+        "arn:aws:batch:eu-north-1:007122174918:job-queue/run-cpu-c7am-queue",
+        "not-an-arn",
+    ],
+)
+def test_job_queue_arn_must_match_exact_queue(fake_services: SimpleNamespace, arn: str) -> None:
+    fake_services.batch.queues["dev-c7am"]["jobQueueArn"] = arn
+
+    with pytest.raises(ProfileDriftError, match="jobQueueArn"):
+        validator(fake_services).validate()
+
+
+@pytest.mark.parametrize(
+    "value",
+    [
+        NETWORK.subnets[1:],
+        (*NETWORK.subnets, "subnet-extra"),
+        (*NETWORK.subnets, NETWORK.subnets[0]),
+        (*NETWORK.subnets[:-1], 7),
+    ],
+    ids=["missing", "extra", "duplicate", "non-string"],
+)
+def test_network_subnets_fail_closed_for_non_exact_sets(
+    fake_services: SimpleNamespace, value: tuple[object, ...]
+) -> None:
+    resources = fake_services.batch.compute_environments["c7am"]["computeResources"]
+    assert isinstance(resources, dict)
+    resources["subnets"] = list(value)
+
+    with pytest.raises(ProfileDriftError, match="computeResources.subnets"):
+        validator(fake_services).validate()
 
 
 @pytest.mark.parametrize("field", ["subnets", "securityGroupIds"])
@@ -286,20 +398,114 @@ def test_desired_vcpus_and_update_available_are_not_drift(
     validator(fake_services).validate()
 
 
-def test_ami_validation_checks_only_image_type(fake_services: SimpleNamespace) -> None:
+def test_ami_validation_allows_unrelated_metadata_and_empty_override(
+    fake_services: SimpleNamespace,
+) -> None:
     resources = fake_services.batch.compute_environments["c7al"]["computeResources"]
     assert isinstance(resources, dict)
     resources["ec2Configuration"] = [
         {
             "imageType": "ECS_AL2023",
-            "imageIdOverride": "ami-dynamic",
+            "imageIdOverride": "",
             "imageKubernetesVersion": "ignored",
         }
     ]
     validator(fake_services).validate()
 
+
+def test_ami_validation_rejects_wrong_image_type(fake_services: SimpleNamespace) -> None:
+    resources = fake_services.batch.compute_environments["c7al"]["computeResources"]
+    assert isinstance(resources, dict)
     resources["ec2Configuration"] = [{"imageType": "ECS_AL2"}]
     with pytest.raises(ProfileDriftError, match="imageType"):
+        validator(fake_services).validate()
+
+
+@pytest.mark.parametrize(
+    ("field", "value", "path"),
+    [
+        (
+            "ec2Configuration",
+            [{"imageType": "ECS_AL2023", "imageIdOverride": "ami-override"}],
+            "imageIdOverride",
+        ),
+        ("imageId", "ami-legacy", "computeResources.imageId"),
+        ("launchTemplate", {"launchTemplateName": "custom"}, "launchTemplate"),
+    ],
+)
+def test_ami_overrides_fail_closed(
+    fake_services: SimpleNamespace,
+    field: str,
+    value: object,
+    path: str,
+) -> None:
+    resources = fake_services.batch.compute_environments["c7al"]["computeResources"]
+    assert isinstance(resources, dict)
+    resources[field] = value
+
+    with pytest.raises(ProfileDriftError, match=path):
+        validator(fake_services).validate()
+
+
+@pytest.mark.parametrize(
+    ("location", "field", "value"),
+    [
+        ("resources", "minvCpus", False),
+        ("resources", "minvCpus", 0.0),
+        ("resources", "maxvCpus", True),
+        ("resources", "maxvCpus", 32.0),
+        ("resources", "instanceTypes", ("c7a.large",)),
+        (
+            "resources",
+            "ec2Configuration",
+            ({"imageType": "ECS_AL2023"},),
+        ),
+        ("queue", "priority", True),
+        ("queue", "priority", 10.0),
+        (
+            "queue",
+            "computeEnvironmentOrder",
+            (
+                {
+                    "order": 1,
+                    "computeEnvironment": (
+                        "arn:aws:batch:eu-north-1:007122174918:"
+                        "compute-environment/rtrrl-cpu-c7am-ce"
+                    ),
+                },
+            ),
+        ),
+        (
+            "queue",
+            "computeEnvironmentOrder",
+            [
+                {
+                    "order": True,
+                    "computeEnvironment": (
+                        "arn:aws:batch:eu-north-1:007122174918:"
+                        "compute-environment/rtrrl-cpu-c7am-ce"
+                    ),
+                }
+            ],
+        ),
+    ],
+)
+def test_aws_fields_require_exact_python_types(
+    fake_services: SimpleNamespace,
+    location: str,
+    field: str,
+    value: object,
+) -> None:
+    if location == "resources":
+        resources = fake_services.batch.compute_environments["c7al"][
+            "computeResources"
+        ]
+        assert isinstance(resources, dict)
+        resources[field] = value
+    else:
+        fake_services.batch.queues["dev-c7am"][field] = value
+
+    with pytest.raises(ProfileDriftError, match=field):
         validator(fake_services).validate()
 
 
@@ -346,6 +552,100 @@ def test_validator_rejects_wrong_account_or_region(
     fake_services.batch.meta.region_name = region
 
     with pytest.raises(ProfileDriftError, match=f"{ACCOUNT_ID}/{REGION}"):
+        validator(fake_services).validate()
+
+
+@pytest.mark.parametrize(
+    ("response", "path"),
+    [
+        (None, "sts.get_caller_identity"),
+        ([], "sts.get_caller_identity"),
+        ({}, "sts.Account"),
+        ({"Account": 7122174918}, "sts.Account"),
+        ({"Account": True}, "sts.Account"),
+    ],
+)
+def test_sts_response_failures_are_profile_drift(
+    fake_services: SimpleNamespace, response: object, path: str
+) -> None:
+    fake_services.sts.get_caller_identity = lambda: response
+
+    with pytest.raises(ProfileDriftError, match=path):
+        validator(fake_services).validate()
+
+
+@pytest.mark.parametrize(
+    ("response", "path"),
+    [
+        (None, "describe_compute_environments"),
+        ([], "describe_compute_environments"),
+        ({}, "computeEnvironments"),
+        ({"computeEnvironments": ()}, "computeEnvironments"),
+        ({"computeEnvironments": [None]}, r"computeEnvironments\[0\]"),
+    ],
+)
+def test_compute_environment_response_containers_fail_with_paths(
+    fake_services: SimpleNamespace, response: object, path: str
+) -> None:
+    fake_services.batch.describe_compute_environments = (
+        lambda *, computeEnvironments: response
+    )
+
+    with pytest.raises(ProfileDriftError, match=path):
+        validator(fake_services).validate()
+
+
+@pytest.mark.parametrize(
+    ("response", "path"),
+    [
+        (None, "describe_job_queues"),
+        ([], "describe_job_queues"),
+        ({}, "jobQueues"),
+        ({"jobQueues": ()}, "jobQueues"),
+        ({"jobQueues": [None]}, r"jobQueues\[0\]"),
+    ],
+)
+def test_job_queue_response_containers_fail_with_paths(
+    fake_services: SimpleNamespace, response: object, path: str
+) -> None:
+    fake_services.batch.describe_job_queues = lambda *, jobQueues: response
+
+    with pytest.raises(ProfileDriftError, match=path):
+        validator(fake_services).validate()
+
+
+@pytest.mark.parametrize(
+    ("target", "field", "path"),
+    [
+        ("compute", "computeResources", "computeResources"),
+        ("compute", "computeEnvironmentArn", "computeEnvironmentArn"),
+        ("queue", "computeEnvironmentOrder", "computeEnvironmentOrder"),
+        ("queue", "jobQueueArn", "jobQueueArn"),
+    ],
+)
+def test_missing_aws_fields_raise_profile_drift_with_path(
+    fake_services: SimpleNamespace,
+    target: str,
+    field: str,
+    path: str,
+) -> None:
+    resource = (
+        fake_services.batch.compute_environments["c7am"]
+        if target == "compute"
+        else fake_services.batch.queues["dev-c7am"]
+    )
+    del resource[field]
+
+    with pytest.raises(ProfileDriftError, match=path):
+        validator(fake_services).validate()
+
+
+def test_missing_batch_region_metadata_is_profile_drift(
+    fake_services: SimpleNamespace,
+) -> None:
+    fake_services.batch.meta = None
+
+    with pytest.raises(ProfileDriftError, match="batch.meta.region_name"):
         validator(fake_services).validate()
 
 
