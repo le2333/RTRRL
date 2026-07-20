@@ -99,7 +99,7 @@ def _capture_arrays(seed: int) -> tuple[dict[str, np.ndarray], dict[str, str]]:
         d_output=2,
         d_hidden=2,
         plasticity="rtrl",
-        activation=None,
+        activation="silu",
     )
     lru_carry_before = lru.initialize_carry(lru_key, lru_input.shape)
     (lru_carry_after_1, lru_output), lru_variables = lru.init_with_output(
@@ -108,11 +108,31 @@ def _capture_arrays(seed: int) -> tuple[dict[str, np.ndarray], dict[str, str]]:
         lru_input,
     )
     lru_input_2 = jnp.array([[-0.125, 0.375, 0.5, -0.25]], dtype=jnp.float32)
-    lru_carry_after_2, _ = lru.apply(
+    lru_carry_after_2, lru_output_2 = lru.apply(
         lru_variables,
         lru_carry_after_1,
         lru_input_2,
     )
+    lru_reset_carry, lru_reset_output = lru.apply(
+        lru_variables,
+        lru_carry_after_1,
+        lru_input_2,
+        resets=jnp.array([True]),
+    )
+    lru_params = lru_variables["params"]
+    lru_cell_params = lru_params["OnlineLRUCell_0"]["LRUCell_0"]
+    lru_lambda = online_lru.get_lambda(
+        lru_cell_params["nu_log"], lru_cell_params["theta_log"]
+    )
+    lru_normalized_B = online_lru.get_B_norm(
+        lru_cell_params["B_real"],
+        lru_cell_params["B_img"],
+        lru_cell_params["gamma_log"],
+    )
+    lru_C = lru_params["C_real"] + 1j * lru_params["C_img"]
+    lru_projection = (lru_carry_after_1[0] @ lru_C.transpose()).real
+    lru_skip = lru_input @ lru_params["D"].transpose()
+    lru_preactivation = lru_projection + lru_skip
 
     model = RNNActorCritic(
         a_dim=2,
@@ -236,9 +256,29 @@ def _capture_arrays(seed: int) -> tuple[dict[str, np.ndarray], dict[str, str]]:
             head_variables_vjp["falign"]["td"]["critic"]["B"]
         ),
         "lru/input": np.asarray(lru_input),
+        "lru/init_key": np.asarray(lru_key),
         "lru/carry_before": np.asarray(lru_carry_before[0]),
         "lru/carry_after": np.asarray(lru_carry_after_1[0]),
+        "lru/lambda": np.asarray(lru_lambda),
+        "lru/normalized_B": np.asarray(lru_normalized_B),
+        "lru/params/nu_log": np.asarray(lru_cell_params["nu_log"]),
+        "lru/params/theta_log": np.asarray(lru_cell_params["theta_log"]),
+        "lru/params/gamma_log": np.asarray(lru_cell_params["gamma_log"]),
+        "lru/params/B_real": np.asarray(lru_cell_params["B_real"]),
+        "lru/params/B_img": np.asarray(lru_cell_params["B_img"]),
+        "lru/params/C_real": np.asarray(lru_params["C_real"]),
+        "lru/params/C_img": np.asarray(lru_params["C_img"]),
+        "lru/params/D": np.asarray(lru_params["D"]),
+        "lru/projection": np.asarray(lru_projection),
+        "lru/skip": np.asarray(lru_skip),
+        "lru/preactivation": np.asarray(lru_preactivation),
         "lru/output": np.asarray(lru_output),
+        "lru/next/input": np.asarray(lru_input_2),
+        "lru/next/carry_after": np.asarray(lru_carry_after_2[0]),
+        "lru/next/output": np.asarray(lru_output_2),
+        "lru/reset/input": np.asarray(lru_input_2),
+        "lru/reset/carry_after": np.asarray(lru_reset_carry[0]),
+        "lru/reset/output": np.asarray(lru_reset_output),
         "credit/after_step_1": _credit_vector(lru_carry_after_1, jax),
         "credit/after_step_2": _credit_vector(lru_carry_after_2, jax),
         "init/action": np.asarray(initial_action),
@@ -311,6 +351,20 @@ def main(
             ],
             "input_vjp_leaf": "heads/vjp/input",
             "variable_collections": ["params", "falign"],
+        },
+        "lru_forward": {
+            "activation": "silu",
+            "parameter_leaves": [
+                "nu_log",
+                "theta_log",
+                "gamma_log",
+                "B_real",
+                "B_img",
+                "C_real",
+                "C_img",
+                "D",
+            ],
+            "reset": "boolean true discards the previous hidden state",
         },
         "leaf_paths": leaf_paths,
         "leaves": {

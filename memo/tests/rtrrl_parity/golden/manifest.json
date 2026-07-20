@@ -58,8 +58,28 @@
     "init/value",
     "lru/carry_after",
     "lru/carry_before",
+    "lru/init_key",
     "lru/input",
+    "lru/lambda",
+    "lru/next/carry_after",
+    "lru/next/input",
+    "lru/next/output",
+    "lru/normalized_B",
     "lru/output",
+    "lru/params/B_img",
+    "lru/params/B_real",
+    "lru/params/C_img",
+    "lru/params/C_real",
+    "lru/params/D",
+    "lru/params/gamma_log",
+    "lru/params/nu_log",
+    "lru/params/theta_log",
+    "lru/preactivation",
+    "lru/projection",
+    "lru/reset/carry_after",
+    "lru/reset/input",
+    "lru/reset/output",
+    "lru/skip",
     "step/td_error"
   ],
   "leaves": {
@@ -262,6 +282,12 @@
         2
       ]
     },
+    "lru/init_key": {
+      "dtype": "uint32",
+      "shape": [
+        2
+      ]
+    },
     "lru/input": {
       "dtype": "float32",
       "shape": [
@@ -269,7 +295,136 @@
         4
       ]
     },
+    "lru/lambda": {
+      "dtype": "complex64",
+      "shape": [
+        2
+      ]
+    },
+    "lru/next/carry_after": {
+      "dtype": "complex64",
+      "shape": [
+        1,
+        2
+      ]
+    },
+    "lru/next/input": {
+      "dtype": "float32",
+      "shape": [
+        1,
+        4
+      ]
+    },
+    "lru/next/output": {
+      "dtype": "float32",
+      "shape": [
+        1,
+        2
+      ]
+    },
+    "lru/normalized_B": {
+      "dtype": "complex64",
+      "shape": [
+        2,
+        4
+      ]
+    },
     "lru/output": {
+      "dtype": "float32",
+      "shape": [
+        1,
+        2
+      ]
+    },
+    "lru/params/B_img": {
+      "dtype": "float32",
+      "shape": [
+        2,
+        4
+      ]
+    },
+    "lru/params/B_real": {
+      "dtype": "float32",
+      "shape": [
+        2,
+        4
+      ]
+    },
+    "lru/params/C_img": {
+      "dtype": "float32",
+      "shape": [
+        2,
+        2
+      ]
+    },
+    "lru/params/C_real": {
+      "dtype": "float32",
+      "shape": [
+        2,
+        2
+      ]
+    },
+    "lru/params/D": {
+      "dtype": "float32",
+      "shape": [
+        2,
+        4
+      ]
+    },
+    "lru/params/gamma_log": {
+      "dtype": "float32",
+      "shape": [
+        2
+      ]
+    },
+    "lru/params/nu_log": {
+      "dtype": "float32",
+      "shape": [
+        2
+      ]
+    },
+    "lru/params/theta_log": {
+      "dtype": "float32",
+      "shape": [
+        2
+      ]
+    },
+    "lru/preactivation": {
+      "dtype": "float32",
+      "shape": [
+        1,
+        2
+      ]
+    },
+    "lru/projection": {
+      "dtype": "float32",
+      "shape": [
+        1,
+        2
+      ]
+    },
+    "lru/reset/carry_after": {
+      "dtype": "complex64",
+      "shape": [
+        1,
+        2
+      ]
+    },
+    "lru/reset/input": {
+      "dtype": "float32",
+      "shape": [
+        1,
+        4
+      ]
+    },
+    "lru/reset/output": {
+      "dtype": "float32",
+      "shape": [
+        1,
+        2
+      ]
+    },
+    "lru/skip": {
       "dtype": "float32",
       "shape": [
         1,
@@ -282,6 +437,20 @@
         1
       ]
     }
+  },
+  "lru_forward": {
+    "activation": "silu",
+    "parameter_leaves": [
+      "nu_log",
+      "theta_log",
+      "gamma_log",
+      "B_real",
+      "B_img",
+      "C_real",
+      "C_img",
+      "D"
+    ],
+    "reset": "boolean true discards the previous hidden state"
   },
   "python": "3.12.13",
   "seed": 7,
