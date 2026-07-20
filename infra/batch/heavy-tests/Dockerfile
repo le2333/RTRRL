@@ -6,6 +6,7 @@ RUN apt-get update \
     && rm -rf /var/lib/apt/lists/*
 COPY training-sdk /workspace/training-sdk
 COPY memo /app
+RUN ln -s /app /app/memo
 RUN /opt/venv/bin/python -m ensurepip
 RUN /opt/venv/bin/python -m pip install /workspace/training-sdk pytest
 

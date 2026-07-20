@@ -479,6 +479,7 @@ def test_heavy_test_overlay_installs_current_sources() -> None:
     assert "apt-get install --yes --no-install-recommends time" in dockerfile
     assert "COPY training-sdk /workspace/training-sdk" in dockerfile
     assert "COPY memo /app" in dockerfile
+    assert "RUN ln -s /app /app/memo" in dockerfile
     assert dockerfile.index("/opt/venv/bin/python -m ensurepip") < dockerfile.index(
         "/opt/venv/bin/python -m pip install"
     )
