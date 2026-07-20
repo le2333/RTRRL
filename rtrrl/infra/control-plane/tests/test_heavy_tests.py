@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from copy import deepcopy
 from dataclasses import FrozenInstanceError
+from pathlib import Path
 
 import pytest
 
@@ -24,6 +25,8 @@ NETWORK_SETTINGS = AwsNetworkSettings(
         "arn:aws:iam::007122174918:instance-profile/rtrrl-ecs-instance-role"
     ),
 )
+REPOSITORY_ROOT = Path(__file__).parents[4]
+HEAVY_TEST_IMAGE_DIR = REPOSITORY_ROOT / "infra" / "batch" / "heavy-tests"
 
 
 class FakeBatch:
@@ -398,3 +401,54 @@ def test_only_missing_c7ax_queue_is_created(fake_batch: FakeBatch) -> None:
     assert fake_batch.create_compute_environment_calls == []
     assert len(fake_batch.create_job_queue_calls) == 1
     assert fake_batch.update_calls == []
+
+
+def test_heavy_test_builder_creates_a_filtered_temporary_context() -> None:
+    builder = (HEAVY_TEST_IMAGE_DIR / "build-image.sh").read_text()
+
+    assert 'mktemp -d' in builder
+    assert '"${REPOSITORY_ROOT}/memo/"' in builder
+    assert '"${BUILD_CONTEXT}/memo/"' in builder
+    assert '"${REPOSITORY_ROOT}/training-sdk/"' in builder
+    assert '"${BUILD_CONTEXT}/training-sdk/"' in builder
+    assert '"${BUILD_CONTEXT}/Dockerfile"' in builder
+    for excluded in (".git", ".venv", "__pycache__", ".cache", "cache", "logs", "*.log"):
+        assert f"--exclude={excluded!r}" in builder
+
+    assert "docker build" in builder
+    assert '"${BUILD_CONTEXT}"' in builder
+    assert '"${REPOSITORY_ROOT}"' not in builder.split("docker build", maxsplit=1)[1]
+
+
+def test_heavy_test_overlay_installs_current_sources() -> None:
+    dockerfile = (HEAVY_TEST_IMAGE_DIR / "Dockerfile").read_text()
+
+    assert "ARG BASE_IMAGE" in dockerfile
+    assert "FROM ${BASE_IMAGE}" in dockerfile
+    assert "COPY training-sdk /workspace/training-sdk" in dockerfile
+    assert "COPY memo /app" in dockerfile
+    assert dockerfile.index("/opt/venv/bin/python -m ensurepip") < dockerfile.index(
+        "/opt/venv/bin/python -m pip install"
+    )
+    assert (
+        "RUN /opt/venv/bin/python -m pip install /workspace/training-sdk pytest"
+        in dockerfile
+    )
+    assert "WORKDIR /app" in dockerfile
+    assert "PYTHONPATH=/workspace/training-sdk/src:/app" in dockerfile
+    assert "XLA_PYTHON_CLIENT_PREALLOCATE=false" in dockerfile
+    assert "MALLOC_ARENA_MAX=2" in dockerfile
+    assert 'ENTRYPOINT ["/usr/local/bin/entrypoint.sh"]' in dockerfile
+
+
+def test_heavy_test_builder_maps_profiles_and_emits_digest_reference() -> None:
+    builder = (HEAVY_TEST_IMAGE_DIR / "build-image.sh").read_text()
+
+    assert "--profile c7am|c7ax|g6x" in builder
+    assert "memorax-rtrl-cpu" in builder
+    assert "memorax-rtrl-gpu" in builder
+    assert builder.count("aws ecr batch-get-image") == 2
+    assert builder.index("BASE_DIGEST=") < builder.index("docker build")
+    assert "aws ecr describe-images" not in builder
+    assert '"image":' in builder
+    assert "@${PUSHED_DIGEST}" in builder
