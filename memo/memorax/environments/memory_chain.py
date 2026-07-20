@@ -9,8 +9,6 @@ Observation: [bit, is_first] float32 (bit only informative at t=0).
 Action: Discrete(2) — predict the cue bit.
 Reward: +1 at the final step if action == cue, else 0.
 """
-from typing import Any
-
 import jax
 import jax.numpy as jnp
 from flax import struct
@@ -52,6 +50,17 @@ class MemoryChain:
     def step(
         self, key: Key, state: MemoryChainState, action: Array, params: MemoryChainParams
     ) -> tuple[Array, MemoryChainState, Array, Array, dict]:
+        obs, new_state, reward, terminated, _, info = self.trace_step(
+            key, state, action, params
+        )
+        return obs, new_state, reward, terminated, info
+
+    def trace_step(
+        self, key: Key, state: MemoryChainState, action: Array, params: MemoryChainParams
+    ) -> tuple[Array, MemoryChainState, Array, Array, Array, dict]:
+        """Step without auto-reset and expose natural termination explicitly."""
+
+        del key, params
         L = state.L
         t = state.t
         predict_step = t == (L - 1)
@@ -61,7 +70,7 @@ class MemoryChain:
         new_t = jnp.where(predict_step, t, t + 1)
         obs = jnp.stack([jnp.float32(0.0), jnp.float32(0.0)])
         new_state = MemoryChainState(bit=state.bit, t=new_t, L=L)
-        return obs, new_state, reward, done, {}
+        return obs, new_state, reward, done, jnp.asarray(False), {}
 
     def observation_space(self, params: MemoryChainParams) -> spaces.Box:
         return spaces.Box(low=-1.0, high=1.0, shape=(2,))

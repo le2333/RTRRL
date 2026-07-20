@@ -44,11 +44,25 @@ class Transition:
 
 
 @struct.dataclass
+class EvalTrace:
+    """Fixed-shape transition data from one evaluation rollout."""
+
+    observations: Any
+    actions: Any
+    rewards: Any
+    terminals: Any
+    truncations: Any
+    valid_transitions: Any
+    environment_states: Any = None
+
+
+@struct.dataclass
 class EvalSummary:
     """Fixed JAX-pytree evaluation outputs consumed by host-side façades."""
 
     info: Any = None
     normalization: Any = None
+    trace: EvalTrace | None = None
 
 
 @dataclass(frozen=True)
@@ -59,6 +73,7 @@ class JAXEnvAdapter:
     step_fn: Callable[..., Any]
     env_params: Any
     build_context: Mapping[str, Any]
+    trace_step_fn: Callable[..., Any] | None = None
 
 
 @dataclass(frozen=True)

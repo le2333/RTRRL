@@ -31,8 +31,9 @@ masks = {
 
 
 class BraxGymnaxWrapper(GymnaxWrapper):
-    def __init__(self, env):
+    def __init__(self, env, *, trace_env=None):
         super().__init__(env)
+        self._trace_env = trace_env if trace_env is not None else env
         self.action_size = env.action_size
         self.observation_size = (env.observation_size,)
 
@@ -51,6 +52,28 @@ class BraxGymnaxWrapper(GymnaxWrapper):
             next_state,
             next_state.reward,
             next_state.done.astype(jnp.bool),
+            {},
+        )
+
+    def trace_step(
+        self, key: Key, state, action: Array, params
+    ) -> tuple[Array, Any, Array, Array, Array, dict]:
+        """Step before auto-reset and retain Brax's native ending semantics."""
+
+        del key, params
+        next_state = self._trace_env.step(state, action)
+        if "truncation" not in next_state.info:
+            raise ValueError("Brax environment does not expose truncation")
+        truncated = next_state.info["truncation"].astype(jnp.bool_)
+        terminated = jnp.logical_and(
+            next_state.done.astype(jnp.bool_), jnp.logical_not(truncated)
+        )
+        return (
+            next_state.obs,
+            next_state,
+            next_state.reward,
+            terminated,
+            truncated,
             {},
         )
 
@@ -74,10 +97,11 @@ def make(env_id: str, mode="F", backend="generalized", **kwargs) -> tuple:
     from brax.envs.wrappers.training import AutoResetWrapper, EpisodeWrapper
 
     env = envs.get_environment(env_name=env_id, backend=backend, **kwargs)
-    env = EpisodeWrapper(env, episode_length=1000, action_repeat=1)
-    env = AutoResetWrapper(env)
+    trace_env = EpisodeWrapper(env, episode_length=1000, action_repeat=1)
+    env = AutoResetWrapper(trace_env)
     env = BraxGymnaxWrapper(
         env,
+        trace_env=trace_env,
     )
     env = MaskObservationWrapper(env, mask=masks[env_id][mode])
 

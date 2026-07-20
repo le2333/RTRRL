@@ -44,6 +44,12 @@ class TinyContinuousEnv:
         return obs, TinyEnvState(jnp.asarray(0, jnp.int32), obs)
 
     def step(self, key, state, action, params):
+        obs, next_state, reward, terminated, _, info = self.trace_step(
+            key, state, action, params
+        )
+        return obs, next_state, reward, terminated, info
+
+    def trace_step(self, key, state, action, params):
         del key
         action = jnp.asarray(action, jnp.float32)
         obs = state.observation + action + jnp.array([0.15, 0.45], jnp.float32)
@@ -55,6 +61,7 @@ class TinyContinuousEnv:
             TinyEnvState(step_count, obs),
             reward,
             done,
+            jnp.asarray(False),
             {"step_count": step_count},
         )
 
@@ -79,6 +86,12 @@ class TinyDiscreteEnv:
         return obs, TinyEnvState(jnp.asarray(0, jnp.int32), obs)
 
     def step(self, key, state, action, params):
+        obs, next_state, reward, terminated, _, info = self.trace_step(
+            key, state, action, params
+        )
+        return obs, next_state, reward, terminated, info
+
+    def trace_step(self, key, state, action, params):
         del key
         direction = jnp.where(action == 0, -1.0, 1.0)
         delta = jnp.array([0.2 * direction, 0.1 + 0.05 * direction], jnp.float32)
@@ -91,6 +104,7 @@ class TinyDiscreteEnv:
             TinyEnvState(step_count, obs),
             reward,
             done,
+            jnp.asarray(False),
             {"step_count": step_count},
         )
 

@@ -27,7 +27,7 @@ from .normalization import (
 from .objectives import make_stream_ac_objective
 from .td import make_td0
 from .traces import make_stream_ac_trace
-from .types import ActionDecision, AgentProgram, EvalSummary
+from .types import ActionDecision, AgentProgram, EvalSummary, EvalTrace
 from .updates import make_whole_tree_obgd
 
 
@@ -140,6 +140,21 @@ def make_standard_program(
     )
     env = parts.env
     env_params = parts.env_params
+    trace_step_fn = getattr(parts, "trace_step_fn", None)
+    trace_build_context = getattr(parts, "trace_build_context", {})
+    if trace_step_fn is None:
+        native_trace_step = getattr(env, "trace_step", None)
+        if callable(native_trace_step):
+
+            def trace_step_fn(state, action, params, build_context):
+                del build_context
+                return native_trace_step(jax.random.key(0), state, action, params)
+
+    if not callable(trace_step_fn):
+        raise ValueError(
+            "environment must expose an evaluation-only trace_step preserving "
+            "terminal observations and separate ending signals"
+        )
     actor_network = parts.actor_network
     critic_network = parts.critic_network
     if normalization_enabled and environment_owns_normalization(env):
@@ -553,6 +568,7 @@ def make_standard_program(
         reset_key, eval_key = jax.random.split(key)
         reset_keys = jax.random.split(reset_key, config.num_envs)
         obs, env_state = jax.vmap(env.reset, in_axes=(0, None))(reset_keys, env_params)
+        initial_trace_observation = obs
         normalizer_state = state.normalizer_state
         if normalization_enabled:
             if normalizer.config.reset_on_start:
@@ -613,6 +629,19 @@ def make_standard_program(
             next_obs, next_env_state, next_reward, next_done, info = jax.vmap(
                 env.step, in_axes=(0, 0, 0, None)
             )(step_keys, current.env_state, chosen, env_params)
+            (
+                trace_observation,
+                trace_env_state,
+                trace_reward,
+                terminated,
+                truncated,
+                _,
+            ) = jax.vmap(trace_step_fn, in_axes=(0, 0, None, None))(
+                current.env_state,
+                chosen,
+                env_params,
+                trace_build_context,
+            )
             next_normalizer_state = current.normalizer_state
             if normalization_enabled:
                 normalized = normalizer.step(
@@ -629,7 +658,7 @@ def make_standard_program(
                 range(current.timestep.done.ndim, current.timestep.action.ndim)
             )
             next_reward = jnp.asarray(next_reward, dtype=jnp.float32)
-            return current.replace(
+            next_state = current.replace(
                 step=current.step + config.num_envs,
                 timestep=Timestep(
                     obs=next_obs,
@@ -647,16 +676,60 @@ def make_standard_program(
                 actor_carry=actor_carry,
                 actor_sensitivity=actor_sensitivity,
                 normalizer_state=next_normalizer_state,
-            ), EvalSummary(
+            )
+            summary = EvalSummary(
                 info=info,
                 normalization=normalization_metrics(
                     next_normalizer_state, normalizer.config.eps
                 ),
             )
+            transition = (
+                trace_observation,
+                chosen,
+                trace_reward,
+                terminated,
+                truncated,
+                trace_env_state,
+            )
+            return next_state, (summary, transition)
 
         step_keys = jax.random.split(eval_key, num_steps)
-        eval_state, summary = jax.lax.scan(eval_step, eval_state, step_keys)
-        return eval_state, summary
+        eval_state, (summary, transition) = jax.lax.scan(
+            eval_step, eval_state, step_keys
+        )
+        (
+            trace_observations,
+            actions,
+            rewards,
+            terminals,
+            truncations,
+            environment_states,
+        ) = transition
+        observations = jax.tree.map(
+            lambda initial, following: jnp.concatenate(
+                (initial[None], following), axis=0
+            ),
+            initial_trace_observation,
+            trace_observations,
+        )
+        finished = jnp.logical_or(terminals, truncations)
+        has_finished = jnp.any(finished, axis=0)
+        valid_transitions = jnp.where(
+            has_finished,
+            jnp.argmax(finished, axis=0) + 1,
+            jnp.zeros_like(has_finished, dtype=jnp.int32),
+        ).astype(jnp.int32)
+        return eval_state, summary.replace(
+            trace=EvalTrace(
+                observations=observations,
+                actions=actions,
+                rewards=rewards,
+                terminals=terminals,
+                truncations=truncations,
+                valid_transitions=valid_transitions,
+                environment_states=environment_states,
+            )
+        )
 
     return AgentProgram(
         init_fn=init_fn,

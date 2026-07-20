@@ -1,6 +1,5 @@
 from typing import Any
 
-import jax
 import jax.numpy as jnp
 from flax import struct
 from gymnax.environments import environment
@@ -45,6 +44,33 @@ class RecordEpisodeStatistics:
         obs, env_state, reward, done, info = self._env.step(
             key, state.env_state, action, params
         )
+        state, info = self._record(state, env_state, reward, done, info)
+        return obs, state, reward, done, info
+
+    def trace_step(
+        self,
+        key: Key,
+        state: RecordEpisodeStatisticsState,
+        action: int | float,
+        params: EnvParams | None = None,
+    ) -> tuple[
+        Array,
+        RecordEpisodeStatisticsState,
+        Array,
+        Array,
+        Array,
+        dict[str, Any],
+    ]:
+        """Preserve the wrapped environment's evaluation-only ending signals."""
+
+        obs, env_state, reward, terminated, truncated, info = self._env.trace_step(
+            key, state.env_state, action, params
+        )
+        done = jnp.logical_or(terminated, truncated)
+        state, info = self._record(state, env_state, reward, done, info)
+        return obs, state, reward, terminated, truncated, info
+
+    def _record(self, state, env_state, reward, done, info):
         new_episode_return = state.episode_returns + reward
         new_discounted_episode_return = (
             state.discounted_episode_returns + state.episode_discount * reward
@@ -71,4 +97,4 @@ class RecordEpisodeStatistics:
         )
         info["returned_episode_lengths"] = state.returned_episode_lengths
         info["returned_episode"] = done
-        return obs, state, reward, done, info
+        return state, info

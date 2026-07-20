@@ -35,6 +35,8 @@ from .types import (
 class _MetaParts:
     env: Any
     env_params: Any
+    trace_step_fn: Any
+    trace_build_context: Any
     feature_extractor: Any
     torso: Any
     actor_head: Any
@@ -47,6 +49,8 @@ class _MetaParts:
 class _StandardParts:
     env: Any
     env_params: Any
+    trace_step_fn: Any
+    trace_build_context: Any
     actor_network: Any
     critic_network: Any
 
@@ -180,9 +184,21 @@ def legacy_env_adapter(env, env_params, *, strip_normalization=True):
 
     normalize_observation, normalize_reward = _normalization_flags(env)
     concrete_env = _strip_outer_normalization(env) if strip_normalization else env
+    trace_step_fn = getattr(concrete_env, "trace_step", None)
+    if not callable(trace_step_fn):
+        raise ValueError(
+            "environment must expose an evaluation-only trace_step preserving "
+            "terminal observations and separate ending signals"
+        )
+
+    def evaluation_trace_step(state, action, params, build_context):
+        del build_context
+        return trace_step_fn(jax.random.key(0), state, action, params)
+
     return JAXEnvAdapter(
         reset_fn=concrete_env.reset,
         step_fn=concrete_env.step,
+        trace_step_fn=evaluation_trace_step,
         env_params=env_params,
         build_context={
             "env": concrete_env,
@@ -246,6 +262,8 @@ def build_meta_program(config: MetaProgramConfig, env: JAXEnvAdapter) -> AgentPr
         raise TypeError("config must be MetaProgramConfig")
     if not isinstance(env, JAXEnvAdapter):
         raise TypeError("env must be JAXEnvAdapter")
+    if not callable(env.trace_step_fn):
+        raise ValueError("env trace_step_fn must be callable")
     _validate_evaluation(config)
     _validate_exact_core(config.torso, config.credit)
     if not isinstance(config.target, SlowSubtreeTargetConfig):
@@ -266,6 +284,8 @@ def build_meta_program(config: MetaProgramConfig, env: JAXEnvAdapter) -> AgentPr
     parts = _MetaParts(
         env=env.build_context["env"],
         env_params=env.env_params,
+        trace_step_fn=env.trace_step_fn,
+        trace_build_context=env.build_context,
         feature_extractor=config.feature_extractor,
         torso=config.torso,
         actor_head=config.actor_head,
@@ -291,6 +311,8 @@ def build_standard_program(
         raise TypeError("config must be StandardProgramConfig")
     if not isinstance(env, JAXEnvAdapter):
         raise TypeError("env must be JAXEnvAdapter")
+    if not callable(env.trace_step_fn):
+        raise ValueError("env trace_step_fn must be callable")
     _validate_evaluation(config)
     if not isinstance(config.credit, ExactRTRLConfig):
         raise ValueError("unsupported core-credit composition")
@@ -311,6 +333,8 @@ def build_standard_program(
     parts = _StandardParts(
         env=env.build_context["env"],
         env_params=env.env_params,
+        trace_step_fn=env.trace_step_fn,
+        trace_build_context=env.build_context,
         actor_network=config.actor_network,
         critic_network=config.critic_network,
     )

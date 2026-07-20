@@ -10,7 +10,7 @@ import numpy as np
 import pytest
 
 from memorax.networks import RTUCell
-from memorax.online_ac.types import AgentProgram, EvalSummary
+from memorax.online_ac.types import AgentProgram, EvalSummary, EvalTrace
 
 
 def _make_program(kind, rtrrl_agent_factory, stream_ac_agent_factory):
@@ -307,6 +307,10 @@ def test_jit_lifecycle_has_stable_signatures_and_reuses_fixed_shape_traces(
     _assert_array_state(evaluated_again)
     assert isinstance(summary, EvalSummary)
     assert isinstance(summary_again, EvalSummary)
+    assert isinstance(summary.trace, EvalTrace)
+    assert isinstance(summary_again.trace, EvalTrace)
+    _assert_array_state(summary.trace)
+    _assert_array_state(summary_again.trace)
     assert _signature(evaluated) == initial_signature
     assert _signature(evaluated_again) == initial_signature
     assert _signature(summary_again) == _signature(summary)
@@ -339,3 +343,22 @@ def test_jaxpr_is_host_pure_and_state_contains_only_array_leaves(
     )
     for closed_jaxpr in jaxprs:
         _assert_jaxpr_host_pure(closed_jaxpr)
+
+
+@pytest.mark.parametrize("kind", ["meta", "standard"])
+def test_evaluation_trace_jaxpr_uses_no_host_callbacks(
+    kind,
+    rtrrl_agent_factory,
+    stream_ac_agent_factory,
+):
+    program = _make_program(kind, rtrrl_agent_factory, stream_ac_agent_factory)
+    state = program.init_fn(jax.random.key(14))
+
+    jaxpr = str(
+        jax.make_jaxpr(program.evaluate_fn, static_argnums=(2,))(
+            jax.random.key(15), state, 5
+        )
+    )
+
+    assert "pure_callback" not in jaxpr
+    assert "io_callback" not in jaxpr

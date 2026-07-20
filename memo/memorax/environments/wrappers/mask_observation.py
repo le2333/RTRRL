@@ -38,3 +38,18 @@ class MaskObservationWrapper(GymnaxWrapper):
         lox.log({"mask_observation/mask_rate": self.mask_rate})
         observation = jax.tree.map(lambda o, m: o * m, observation, self.mask)
         return observation, state, reward, done, info
+
+    def trace_step(
+        self,
+        key: Key,
+        state: environment.EnvState,
+        action: Union[int, float],
+        params: environment.EnvParams | None = None,
+    ):
+        """Apply the same observation mask without hiding trace endings."""
+
+        observation, state, reward, terminated, truncated, info = (
+            self._env.trace_step(key, state, action, params)
+        )
+        observation = jax.tree.map(lambda o, m: o * m, observation, self.mask)
+        return observation, state, reward, terminated, truncated, info

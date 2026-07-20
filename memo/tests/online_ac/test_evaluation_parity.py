@@ -296,6 +296,8 @@ def test_meta_legacy_evaluate_matches_leaf_for_leaf(rtrrl_agent_factory):
 
     assert_tree_allclose(actual, expected, rtol=0, atol=0)
     assert_tree_allclose(summary.info, logs["info"], rtol=0, atol=0)
+    assert summary.trace is not None
+    assert summary.trace.observations.shape[0] == 5
     _assert_unchanged_parameters(actual_initial, actual)
 
 
@@ -315,6 +317,8 @@ def test_standard_legacy_evaluate_matches_leaf_for_leaf(stream_ac_agent_factory)
 
     assert_tree_allclose(actual, expected, rtol=0, atol=0)
     assert_tree_allclose(summary.info, logs["info"], rtol=0, atol=0)
+    assert summary.trace is not None
+    assert summary.trace.observations.shape[0] == 5
     _assert_unchanged_parameters(actual_initial, actual)
 
 
