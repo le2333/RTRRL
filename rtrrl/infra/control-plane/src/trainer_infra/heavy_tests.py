@@ -3,6 +3,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 import fcntl
 import hashlib
+import itertools
+import math
 from pathlib import Path, PurePosixPath
 import re
 import shlex
@@ -516,13 +518,18 @@ class HeavyTestRunner:
         self._sleep = sleep
         self._monotonic = monotonic
         self._poll_interval_seconds = poll_interval_seconds
-        self._wait_timeout_seconds = wait_timeout_seconds
+        self._wait_timeout_seconds = self._validate_timeout(wait_timeout_seconds)
         self._evidence_max_attempts = evidence_max_attempts
         self._retry_delay_seconds = retry_delay_seconds
-        if wait_timeout_seconds <= 0:
-            raise ValueError("wait timeout must be positive")
+        self._job_name_sequence = itertools.count()
         if evidence_max_attempts < 1:
             raise ValueError("evidence attempts must be at least one")
+
+    @staticmethod
+    def _validate_timeout(timeout_seconds: float) -> float:
+        if not math.isfinite(timeout_seconds) or timeout_seconds <= 0:
+            raise ValueError("wait timeout must be finite and positive")
+        return timeout_seconds
 
     def _get_or_register_definition(
         self, profile_name: str, profile: HeavyTestProfile, image: str
@@ -604,11 +611,18 @@ class HeavyTestRunner:
             command = _command_text(profile, test_file)
             stem = re.sub(r"[^A-Za-z0-9_-]+", "-", PurePosixPath(test_file).stem)
             unique = hashlib.sha256(
-                f"{time.time_ns()}:{test_file}".encode()
+                (
+                    f"{time.time_ns()}:{next(self._job_name_sequence)}:"
+                    f"{test_file}"
+                ).encode()
             ).hexdigest()[:12]
+            prefix = f"trainer-heavy-test-{profile}-"
+            suffix = f"-{unique}"
+            stem = stem[: 128 - len(prefix) - len(suffix)]
+            job_name = f"{prefix}{stem}{suffix}"
             try:
                 response = self._batch.submit_job(
-                    jobName=f"trainer-heavy-test-{profile}-{stem}-{unique}"[:128],
+                    jobName=job_name,
                     jobQueue=validated.queue_arn,
                     jobDefinition=definition_arn,
                     containerOverrides={"command": ["bash", "-c", command]},
@@ -636,8 +650,11 @@ class HeavyTestRunner:
         return tuple(submitted)
 
     def _describe_job_chunks(
-        self, job_ids: Sequence[str]
-    ) -> tuple[dict[str, Mapping[str, Any]], dict[str, list[str]]]:
+        self,
+        job_ids: Sequence[str],
+        *,
+        deadline: float | None = None,
+    ) -> tuple[dict[str, Mapping[str, Any]], dict[str, list[str]], bool]:
         described: dict[str, Mapping[str, Any]] = {}
         errors: dict[str, list[str]] = {}
         for offset in range(0, len(job_ids), 100):
@@ -645,16 +662,26 @@ class HeavyTestRunner:
             last_error: Exception | None = None
             response: Mapping[str, Any] | None = None
             for attempt in range(self._evidence_max_attempts):
+                if deadline is not None and self._monotonic() >= deadline:
+                    return described, errors, True
                 try:
                     candidate = self._batch.describe_jobs(jobs=chunk)
                     if not isinstance(candidate, Mapping):
                         raise RuntimeError("Batch describe_jobs returned a non-mapping")
                     response = candidate
+                    if deadline is not None and self._monotonic() >= deadline:
+                        return described, errors, True
                     break
                 except Exception as error:
                     last_error = error
                     if attempt + 1 < self._evidence_max_attempts:
-                        self._sleep(self._retry_delay_seconds)
+                        retry_delay = self._retry_delay_seconds
+                        if deadline is not None:
+                            remaining = deadline - self._monotonic()
+                            if remaining <= 0:
+                                return described, errors, True
+                            retry_delay = min(retry_delay, remaining)
+                        self._sleep(retry_delay)
             if response is None:
                 message = f"describe_jobs failed: {last_error}"
                 for job_id in chunk:
@@ -668,7 +695,7 @@ class HeavyTestRunner:
                     errors.setdefault(job_id, []).append(
                         "Batch did not return the requested job"
                     )
-        return described, errors
+        return described, errors, False
 
     def _wait_for_terminal_jobs(
         self, job_ids: Sequence[str], timeout_seconds: float
@@ -678,8 +705,25 @@ class HeavyTestRunner:
         last_seen: dict[str, Mapping[str, Any]] = {}
         evidence_errors: dict[str, list[str]] = {}
         deadline = self._monotonic() + timeout_seconds
+
+        def finish_timeout() -> None:
+            for job_id in pending:
+                evidence_errors.setdefault(job_id, []).append(
+                    f"wait timeout after {timeout_seconds:g} seconds"
+                )
+                terminal[job_id] = last_seen.get(
+                    job_id,
+                    {"jobId": job_id, "status": "UNKNOWN"},
+                )
+            pending.clear()
+
         while pending:
-            described, errors = self._describe_job_chunks(sorted(pending))
+            if self._monotonic() >= deadline:
+                finish_timeout()
+                break
+            described, errors, deadline_reached = self._describe_job_chunks(
+                sorted(pending), deadline=deadline
+            )
             for job_id, messages in errors.items():
                 evidence_errors.setdefault(job_id, []).extend(messages)
             for job_id, job in described.items():
@@ -688,19 +732,15 @@ class HeavyTestRunner:
                 if status in _TERMINAL_JOB_STATES:
                     terminal[job_id] = job
                     pending.discard(job_id)
+            if deadline_reached and pending:
+                finish_timeout()
+                break
             if pending:
-                if self._monotonic() >= deadline:
-                    for job_id in pending:
-                        evidence_errors.setdefault(job_id, []).append(
-                            f"wait timeout after {timeout_seconds:g} seconds"
-                        )
-                        terminal[job_id] = last_seen.get(
-                            job_id,
-                            {"jobId": job_id, "status": "UNKNOWN"},
-                        )
-                    pending.clear()
+                remaining = deadline - self._monotonic()
+                if remaining <= 0:
+                    finish_timeout()
                     break
-                self._sleep(self._poll_interval_seconds)
+                self._sleep(min(self._poll_interval_seconds, remaining))
         return [terminal[job_id] for job_id in job_ids], evidence_errors
 
     def _read_log_lines(self, stream: str | None) -> tuple[str, ...]:
@@ -856,8 +896,7 @@ class HeavyTestRunner:
             if timeout_seconds is None
             else timeout_seconds
         )
-        if effective_timeout <= 0:
-            raise ValueError("wait timeout must be positive")
+        effective_timeout = self._validate_timeout(effective_timeout)
         jobs, initial_errors = self._wait_for_terminal_jobs(
             tuple(job_ids), effective_timeout
         )

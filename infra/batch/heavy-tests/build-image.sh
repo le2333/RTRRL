@@ -97,7 +97,33 @@ PY
 
 ensure_crane() {
   if [ -n "${CRANE_BIN:-}" ]; then
-    CRANE_BIN_RESOLVED="${CRANE_BIN}"
+    [ -n "${CRANE_BIN_SHA256:-}" ] || {
+      echo "ERROR: CRANE_BIN_SHA256 is required when CRANE_BIN is set" >&2
+      return 1
+    }
+    printf '%s\n' "${CRANE_BIN_SHA256}" | /usr/bin/env python3 -c '
+import re
+import sys
+if re.fullmatch(r"[0-9a-f]{64}", sys.stdin.read().strip()) is None:
+    raise SystemExit("CRANE_BIN_SHA256 must be 64 lowercase hexadecimal characters")
+'
+    local override_path
+    override_path="$(command -v -- "${CRANE_BIN}")" || {
+      echo "ERROR: CRANE_BIN is not an executable command: ${CRANE_BIN}" >&2
+      return 1
+    }
+    CRANE_BIN_RESOLVED="$(readlink -f -- "${override_path}")"
+    [ -f "${CRANE_BIN_RESOLVED}" ] && [ -x "${CRANE_BIN_RESOLVED}" ] || {
+      echo "ERROR: resolved CRANE_BIN is not an executable file" >&2
+      return 1
+    }
+    local actual_checksum
+    actual_checksum="$(sha256sum "${CRANE_BIN_RESOLVED}")"
+    actual_checksum="${actual_checksum%% *}"
+    [ "${actual_checksum}" = "${CRANE_BIN_SHA256}" ] || {
+      echo "ERROR: CRANE_BIN checksum mismatch" >&2
+      return 1
+    }
   else
     CRANE_WORK_DIR="$(mktemp -d)"
     local archive="${CRANE_WORK_DIR}/go-containerregistry.tar.gz"

@@ -3,9 +3,11 @@ from __future__ import annotations
 from concurrent.futures import ThreadPoolExecutor
 from copy import deepcopy
 from dataclasses import FrozenInstanceError
+import hashlib
 import json
 import os
 from pathlib import Path
+import re
 import subprocess
 
 import pytest
@@ -635,10 +637,12 @@ case "$1" in
 esac
 """,
     )
+    crane_sha256 = hashlib.sha256((fake_bin / "crane").read_bytes()).hexdigest()
     env = {
         **os.environ,
         "ACCOUNT_ID": "007122174918",
         "CRANE_BIN": str(fake_bin / "crane"),
+        "CRANE_BIN_SHA256": crane_sha256,
         "CRANE_CALLS": str(calls),
         "ECR_RETRY_DELAY_SECONDS": "0",
         "PATH": f"{fake_bin}:{os.environ['PATH']}",
@@ -690,6 +694,70 @@ def test_gpu_rebase_builder_pins_crane_release_and_checksum() -> None:
         'CRANE_ARCHIVE_SHA256="1a57bc98207fa1c0d04bf760699099e26'
         'f8383499bfd55b99c1b919a928a7230"' in builder
     )
+
+
+@pytest.mark.parametrize(
+    ("provided_checksum", "expected_message"),
+    [
+        (None, "CRANE_BIN_SHA256 is required"),
+        ("0" * 64, "checksum mismatch"),
+    ],
+)
+def test_crane_override_requires_matching_executable_checksum(
+    tmp_path: Path,
+    provided_checksum: str | None,
+    expected_message: str,
+) -> None:
+    crane = tmp_path / "crane"
+    _write_executable(crane, "#!/usr/bin/env bash\necho 0.21.7\n")
+    env = {**os.environ, "CRANE_BIN": str(crane)}
+    if provided_checksum is not None:
+        env["CRANE_BIN_SHA256"] = provided_checksum
+
+    result = subprocess.run(
+        [
+            "bash",
+            "-c",
+            f"source {HEAVY_TEST_IMAGE_DIR / 'build-image.sh'}; ensure_crane",
+        ],
+        capture_output=True,
+        text=True,
+        env=env,
+    )
+
+    assert result.returncode != 0
+    assert expected_message in result.stderr
+
+
+def test_crane_override_accepts_checksum_of_resolved_executable(
+    tmp_path: Path,
+) -> None:
+    real_crane = tmp_path / "real-crane"
+    crane_link = tmp_path / "crane"
+    _write_executable(real_crane, "#!/usr/bin/env bash\necho 0.21.7\n")
+    crane_link.symlink_to(real_crane)
+    checksum = hashlib.sha256(real_crane.read_bytes()).hexdigest()
+
+    result = subprocess.run(
+        [
+            "bash",
+            "-c",
+            (
+                f"source {HEAVY_TEST_IMAGE_DIR / 'build-image.sh'}; "
+                'ensure_crane; printf \'%s\\n\' "$CRANE_BIN_RESOLVED"'
+            ),
+        ],
+        capture_output=True,
+        text=True,
+        env={
+            **os.environ,
+            "CRANE_BIN": str(crane_link),
+            "CRANE_BIN_SHA256": checksum,
+        },
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.strip() == str(real_crane)
 
 
 class FakeJobBatch(FakeBatch):
@@ -799,6 +867,37 @@ def test_one_job_per_exact_test_file() -> None:
     assert str(batch.register_job_definition_calls[0]["jobDefinitionName"]).startswith(
         "trainer-heavy-test-c7ax-"
     )
+
+
+def test_long_identical_stems_keep_distinct_suffixes_within_128_chars(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    tests_root = tmp_path / "memo" / "tests"
+    tests_root.mkdir(parents=True)
+    long_name = f"test_{'x' * 180}.py"
+    test_path = tests_root / long_name
+    test_path.write_text("def test_ok(): pass")
+    monkeypatch.setattr("trainer_infra.heavy_tests.time.time_ns", lambda: 1)
+    batch = FakeJobBatch()
+    runner = HeavyTestRunner(
+        batch,
+        FakeLogs({}),
+        repository_root=tmp_path,
+        sleep=lambda _: None,
+    )
+
+    runner.submit(
+        profile="c7ax",
+        image=IMAGE,
+        tests=[f"memo/tests/{long_name}", f"memo/tests/{long_name}"],
+    )
+
+    names = [str(call["jobName"]) for call in batch.submit_job_calls]
+    assert len(names) == 2
+    assert names[0] != names[1]
+    assert all(len(name) == 128 for name in names)
+    assert all(re.search(r"-[0-9a-f]{12}$", name) for name in names)
 
 
 @pytest.mark.parametrize(
@@ -1167,7 +1266,7 @@ def test_wait_timeout_aggregates_every_unfinished_job() -> None:
         "running": {"jobId": "running", "status": "RUNNING"},
         "pending": {"jobId": "pending", "status": "RUNNABLE"},
     }
-    now = iter((0.0, 0.0, 2.0))
+    now = iter((0.0, 0.0, 0.0, 0.0, 2.0))
     runner = HeavyTestRunner(
         batch,
         FakeLogs({}),
@@ -1182,6 +1281,52 @@ def test_wait_timeout_aggregates_every_unfinished_job() -> None:
     assert [item.job_id for item in raised.value.evidence] == ["running", "pending"]
     assert [item.status for item in raised.value.evidence] == ["RUNNING", "RUNNABLE"]
     assert all("timeout" in item.evidence_errors[0] for item in raised.value.evidence)
+
+
+@pytest.mark.parametrize("timeout", [float("nan"), float("inf"), float("-inf")])
+def test_wait_timeout_must_be_finite(timeout: float) -> None:
+    with pytest.raises(ValueError, match="finite.*positive"):
+        HeavyTestRunner(
+            FakeJobBatch(),
+            FakeLogs({}),
+            wait_timeout_seconds=timeout,
+        )
+
+    runner = HeavyTestRunner(FakeJobBatch(), FakeLogs({}))
+    with pytest.raises(ValueError, match="finite.*positive"):
+        runner.wait(["job"], timeout_seconds=timeout)
+
+
+def test_poll_sleep_is_capped_by_remaining_deadline_and_no_extra_aws_call() -> None:
+    batch = FakeJobBatch()
+    batch.jobs = {"running": {"jobId": "running", "status": "RUNNING"}}
+    now = 0.0
+    sleeps: list[float] = []
+
+    def monotonic() -> float:
+        return now
+
+    def sleep(seconds: float) -> None:
+        nonlocal now
+        sleeps.append(seconds)
+        now += seconds
+
+    runner = HeavyTestRunner(
+        batch,
+        FakeLogs({}),
+        monotonic=monotonic,
+        sleep=sleep,
+        poll_interval_seconds=15.0,
+        wait_timeout_seconds=5.0,
+    )
+
+    with pytest.raises(AggregateJobFailure) as raised:
+        runner.wait(["running"])
+
+    assert sleeps == [5.0]
+    assert batch.describe_jobs_calls == [["running"]]
+    assert raised.value.evidence[0].status == "RUNNING"
+    assert "timeout" in raised.value.evidence[0].evidence_errors[0]
 
 
 def test_wait_retries_late_log_stream_without_blocking_other_jobs() -> None:
