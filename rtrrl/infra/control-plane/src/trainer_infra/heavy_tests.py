@@ -69,7 +69,6 @@ _COMPUTE_RESOURCE_FIELDS: Mapping[str, object] = MappingProxyType(
         "type": "EC2",
         "minvCpus": 0,
         "maxvCpus": 16,
-        "desiredvCpus": 0,
     }
 )
 _QUEUE_FIELDS: Mapping[str, object] = MappingProxyType(
@@ -85,6 +84,15 @@ def _require_field(resource: Mapping[str, Any], field: str, expected: object) ->
     actual = resource.get(field)
     if actual != expected:
         raise ProfileDriftError(f"{field}: expected {expected!r}, got {actual!r}")
+
+
+def _require_nonempty_string(resource: Mapping[str, Any], field: str) -> str:
+    value = resource.get(field)
+    if not isinstance(value, str) or not value:
+        raise ProfileDriftError(
+            f"{field}: expected non-empty string, got {value!r}"
+        )
+    return value
 
 
 def _describe_compute_environment(
@@ -104,7 +112,9 @@ def _describe_job_queue(batch: Any, profile: HeavyTestProfile) -> Mapping[str, A
 
 
 def _validate_compute_environment(
-    environment: Mapping[str, Any] | None, profile: HeavyTestProfile
+    environment: Mapping[str, Any] | None,
+    profile: HeavyTestProfile,
+    settings: AwsNetworkSettings,
 ) -> str:
     if environment is None:
         raise ProfileDriftError(
@@ -125,13 +135,13 @@ def _validate_compute_environment(
     for field, expected in _COMPUTE_RESOURCE_FIELDS.items():
         _require_field(resources, field, expected)
     _require_field(resources, "instanceTypes", [profile.instance_type])
+    _require_field(resources, "subnets", list(settings.subnets))
+    _require_field(
+        resources, "securityGroupIds", list(settings.security_group_ids)
+    )
+    _require_field(resources, "instanceRole", settings.instance_role)
 
-    arn = environment.get("computeEnvironmentArn")
-    if not isinstance(arn, str) or not arn:
-        raise ProfileDriftError(
-            f"computeEnvironmentArn: expected non-empty string, got {arn!r}"
-        )
-    return arn
+    return _require_nonempty_string(environment, "computeEnvironmentArn")
 
 
 def _validate_job_queue(
@@ -151,10 +161,7 @@ def _validate_job_queue(
         [{"order": 1, "computeEnvironment": compute_environment_arn}],
     )
 
-    arn = queue.get("jobQueueArn")
-    if not isinstance(arn, str) or not arn:
-        raise ProfileDriftError(f"jobQueueArn: expected non-empty string, got {arn!r}")
-    return arn
+    return _require_nonempty_string(queue, "jobQueueArn")
 
 
 def _get_profile(name: str) -> HeavyTestProfile:
@@ -167,10 +174,12 @@ def _get_profile(name: str) -> HeavyTestProfile:
         ) from error
 
 
-def validate_test_profile(batch: Any, name: str) -> ValidatedTestProfile:
+def validate_test_profile(
+    batch: Any, name: str, settings: AwsNetworkSettings
+) -> ValidatedTestProfile:
     profile = _get_profile(name)
     compute_environment_arn = _validate_compute_environment(
-        _describe_compute_environment(batch, profile), profile
+        _describe_compute_environment(batch, profile), profile, settings
     )
     queue_arn = _validate_job_queue(
         _describe_job_queue(batch, profile),
@@ -203,9 +212,13 @@ def create_c7ax_if_missing(batch: Any, settings: AwsNetworkSettings) -> None:
                 "instanceRole": settings.instance_role,
             },
         )
-        compute_environment_arn = response["computeEnvironmentArn"]
+        compute_environment_arn = _require_nonempty_string(
+            response, "computeEnvironmentArn"
+        )
     else:
-        compute_environment_arn = _validate_compute_environment(environment, profile)
+        compute_environment_arn = _validate_compute_environment(
+            environment, profile, settings
+        )
 
     queue = _describe_job_queue(batch, profile)
     if queue is None:
