@@ -123,7 +123,7 @@ _COMPUTE_RESOURCE_FIELDS: Mapping[str, object] = MappingProxyType(
     {
         "type": "EC2",
         "minvCpus": 0,
-        "maxvCpus": 16,
+        "maxvCpus": 32,
     }
 )
 _QUEUE_FIELDS: Mapping[str, object] = MappingProxyType(
@@ -288,7 +288,7 @@ def create_c7ax_if_missing(batch: Any, settings: AwsNetworkSettings) -> None:
             computeResources={
                 "type": "EC2",
                 "minvCpus": 0,
-                "maxvCpus": 16,
+                "maxvCpus": 32,
                 "desiredvCpus": 0,
                 "instanceTypes": [profile.instance_type],
                 "subnets": list(settings.subnets),

@@ -66,7 +66,7 @@ class FakeBatch:
             "computeResources": {
                 "type": "EC2",
                 "minvCpus": 0,
-                "maxvCpus": 16,
+                "maxvCpus": 32,
                 "desiredvCpus": 0,
                 "instanceTypes": [profile.instance_type],
                 "subnets": list(NETWORK_SETTINGS.subnets),
@@ -258,7 +258,7 @@ def test_network_list_order_is_not_profile_drift(
         ("compute", "status", "INVALID"),
         ("resources", "type", "SPOT"),
         ("resources", "minvCpus", 1),
-        ("resources", "maxvCpus", 32),
+        ("resources", "maxvCpus", 16),
         ("resources", "instanceTypes", ["c7a.large"]),
         ("queue", "jobQueueName", "wrong-queue"),
         ("queue", "state", "DISABLED"),
@@ -359,7 +359,7 @@ def test_missing_c7ax_resources_are_created_exactly() -> None:
             "computeResources": {
                 "type": "EC2",
                 "minvCpus": 0,
-                "maxvCpus": 16,
+                "maxvCpus": 32,
                 "desiredvCpus": 0,
                 "instanceTypes": ["c7a.xlarge"],
                 "subnets": list(NETWORK_SETTINGS.subnets),
