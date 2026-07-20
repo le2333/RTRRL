@@ -48,6 +48,8 @@ def test_metric_event_rejects_non_json_serializable_data():
             event_id="event-1",
             kind="metrics",
             env_steps=5,
+            aim_step=5,
+            stream="metrics",
             data={"metrics": {"eval/reward": object()}},
         )
 

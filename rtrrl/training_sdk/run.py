@@ -16,6 +16,9 @@ class AimSink(Protocol):
 
 class Spool(Protocol):
     @property
+    def events(self) -> tuple[MetricEvent, ...]: ...
+
+    @property
     def unsent_events(self) -> tuple[MetricEvent, ...]: ...
 
     def append(self, event: MetricEvent) -> None: ...
@@ -48,6 +51,14 @@ class TrainingRun:
         self.spool = spool
         self._last_env_steps: int | None = None
         self._last_metric_env_steps: int | None = None
+        self._summary_sequence = max(
+            (
+                event.aim_step
+                for event in spool.events
+                if event.stream == "episode_summary"
+            ),
+            default=0,
+        )
 
         interval = context.logging.get("aim_every_env_steps", 1)
         if type(interval) is not int:
@@ -111,12 +122,15 @@ class TrainingRun:
             raise TypeError("episode_length must be an integer")
         if episode_length < 0:
             raise ValueError("episode_length must be non-negative")
+        next_summary_sequence = self._summary_sequence + 1
         events = MetricEvent.episode_summary(
             env_steps=env_steps,
+            summary_sequence=next_summary_sequence,
             episode_return=episode_return,
             episode_length=episode_length,
         )
         self._validate_env_steps(env_steps)
+        self._summary_sequence = next_summary_sequence
         self._emit_many(events)
 
     def log_episode(self, episode: Episode) -> None:

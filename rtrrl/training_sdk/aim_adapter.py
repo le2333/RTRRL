@@ -7,6 +7,26 @@ from .context import RunContext
 from .spool import AimUnavailable, MetricEvent
 
 
+def _default_run_factory(**kwargs: Any) -> Any:
+    from aim import Run
+    from aim.sdk.repo_utils import get_repo
+
+    run_hash = kwargs["run_hash"]
+    repo = get_repo(kwargs.get("repo"))
+    if not repo.run_exists(run_hash):
+        run_tree = repo.request_tree(
+            "meta",
+            run_hash,
+            read_only=False,
+            from_union=False,
+            no_cache=True,
+        ).subtree(("meta", "chunks", run_hash))
+        run_tree["sdk_precreated"] = True
+        repo._all_run_hashes.cache_clear()
+    kwargs["repo"] = repo
+    return Run(**kwargs)
+
+
 class AimAdapter:
     """Translate SDK events to the Aim API at one explicit boundary."""
 
@@ -21,9 +41,7 @@ class AimAdapter:
         **run_options: Any,
     ) -> None:
         if run_factory is None:
-            from aim import Run
-
-            run_factory = Run
+            run_factory = _default_run_factory
         self._run_factory = run_factory
         self._run_options = run_options
         self._availability_errors = availability_errors
@@ -59,7 +77,9 @@ class AimAdapter:
             self._run.track(
                 event.metric_value,
                 name=event.metric_name,
-                step=event.env_steps,
+                step=event.aim_step,
+                context={"sdk_stream": event.stream},
+                epoch=event.env_steps,
             )
             if event.kind == "final" and event.data["finalized"]:
                 self._run["sdk/objective_metric"] = event.data["objective_metric"]

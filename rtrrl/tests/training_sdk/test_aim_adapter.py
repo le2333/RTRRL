@@ -148,6 +148,65 @@ def test_episode_summary_is_never_throttled_and_has_mandatory_metrics(tmp_path):
     assert all(len(event.metrics) == 1 for event in run.aim.events)
 
 
+def test_same_env_steps_episode_summaries_use_distinct_aim_steps(tmp_path):
+    context = make_context(tmp_path)
+    backend = FakeAimRun(
+        experiment=context.experiment_name,
+        run_hash="a" * 24,
+        force_resume=True,
+    )
+    run = make_training_run(
+        tmp_path,
+        context=context,
+        aim=AimAdapter(run_factory=lambda **_: backend),
+    )
+
+    run.log_episode_summary(
+        env_steps=10, episode_return=2.5, episode_length=10
+    )
+    run.log_episode_summary(
+        env_steps=10, episode_return=3.5, episode_length=8
+    )
+
+    for metric_name in (
+        "train/episode_return",
+        "train/episode_length",
+        "train/env_steps",
+    ):
+        points = [
+            (key, value)
+            for key, value in backend.points.items()
+            if key[0] == metric_name
+        ]
+        assert len(points) == 2
+        assert {key[2] for key, _ in points} == {1, 2}
+    assert [
+        event.metric_value
+        for event in run.spool.events
+        if event.metric_name == "train/env_steps"
+    ] == [10, 10]
+
+
+def test_summary_sequence_resumes_from_reopened_spool(tmp_path):
+    path = tmp_path / "events.jsonl"
+    first = make_training_run(tmp_path, spool=EventSpool(path))
+    first.log_episode_summary(
+        env_steps=10, episode_return=2.5, episode_length=10
+    )
+
+    second = make_training_run(tmp_path, spool=EventSpool(path))
+    second.log_episode_summary(
+        env_steps=10, episode_return=3.5, episode_length=8
+    )
+
+    summary_events = [
+        event
+        for event in EventSpool(path).events
+        if event.stream == "episode_summary"
+    ]
+    assert [event.aim_step for event in summary_events] == [1, 1, 1, 2, 2, 2]
+
+
 def test_env_steps_may_repeat_but_must_not_decrease(tmp_path):
     run = make_training_run(tmp_path)
     run.log_metrics(10, {"train/loss": 1.0})
@@ -258,9 +317,10 @@ class FakeAimRun:
     def get(self, key, default=None):
         return self.values.get(key, default)
 
-    def track(self, value, *, name, step):
-        self.tracked.append((name, value, step))
-        self.points[(name, step)] = value
+    def track(self, value, *, name, step, context, epoch):
+        self.tracked.append((name, value, step, context, epoch))
+        stream_identity = tuple(sorted(context.items()))
+        self.points[(name, stream_identity, step)] = value
 
 
 def test_real_aim_adapter_resumes_stable_run_identity(tmp_path):
@@ -289,7 +349,9 @@ def test_real_aim_adapter_resumes_stable_run_identity(tmp_path):
     assert backend.experiment == context.experiment_name
     assert backend.name == context.run_name
     assert backend.values["hparams"] == context.hparams
-    assert backend.tracked == [("eval/reward", 4.0, 12)]
+    assert backend.tracked == [
+        ("eval/reward", 4.0, 12, {"sdk_stream": "metrics"}, 12)
+    ]
 
 
 def test_cross_adapter_replay_overwrites_same_aim_sequence_point(tmp_path):
@@ -317,11 +379,97 @@ def test_cross_adapter_replay_overwrites_same_aim_sequence_point(tmp_path):
     EventSpool(spool_path).replay(second)
 
     assert backend.tracked == [
-        ("eval/reward", 4.0, 12),
-        ("eval/reward", 4.0, 12),
+        ("eval/reward", 4.0, 12, {"sdk_stream": "metrics"}, 12),
+        ("eval/reward", 4.0, 12, {"sdk_stream": "metrics"}, 12),
     ]
-    assert backend.points == {("eval/reward", 12): 4.0}
+    assert backend.points == {
+        ("eval/reward", (("sdk_stream", "metrics"),), 12): 4.0
+    }
     assert backend.values[f"sdk/event_ids/{event.event_id}"] is True
+
+
+def test_replaying_same_summary_event_overwrites_sequence_point(tmp_path):
+    runs = {}
+
+    def factory(**kwargs):
+        return runs.setdefault(kwargs["run_hash"], FakeAimRun(**kwargs))
+
+    context = make_context(tmp_path)
+    first = AimAdapter(run_factory=factory)
+    first.start(context)
+    event = MetricEvent.episode_summary(
+        env_steps=12,
+        summary_sequence=1,
+        episode_return=4.0,
+        episode_length=12,
+    )[0]
+    path = tmp_path / "summary-events.jsonl"
+    spool = EventSpool(path)
+    spool.append(event)
+    backend = next(iter(runs.values()))
+    backend.fail_event_marker_once = True
+
+    spool.replay(first)
+    second = AimAdapter(run_factory=factory)
+    second.start(context)
+    EventSpool(path).replay(second)
+
+    assert backend.points == {
+        (
+            "train/episode_return",
+            (("sdk_stream", "episode_summary"),),
+            1,
+        ): 4.0
+    }
+    assert len(backend.tracked) == 2
+
+
+@pytest.mark.filterwarnings("ignore:.*declarative_base.*:sqlalchemy.exc.MovedIn20Warning")
+@pytest.mark.filterwarnings(
+    "ignore:datetime.datetime.utcnow.*:DeprecationWarning"
+)
+def test_aim_328_overwrites_replay_and_keeps_distinct_summary_steps(tmp_path):
+    import hashlib
+
+    from aim import Run as AimRun
+    from aim.storage.context import Context
+
+    repo_path = tmp_path / "aim-repo"
+    context = make_context(tmp_path)
+    adapter = AimAdapter(repo=str(repo_path))
+    adapter.start(context)
+    first = MetricEvent.episode_summary(
+        env_steps=12,
+        summary_sequence=1,
+        episode_return=2.5,
+        episode_length=12,
+    )[0]
+    replay = MetricEvent.episode_summary(
+        env_steps=12,
+        summary_sequence=1,
+        episode_return=2.5,
+        episode_length=12,
+    )[0]
+    second = MetricEvent.episode_summary(
+        env_steps=12,
+        summary_sequence=2,
+        episode_return=3.5,
+        episode_length=8,
+    )[0]
+
+    adapter.send(first)
+    adapter.send(replay)
+    adapter.send(second)
+
+    run_hash = hashlib.sha256(context.run_id.encode("utf-8")).hexdigest()[:24]
+    stored_run = AimRun(run_hash=run_hash, repo=str(repo_path), read_only=True)
+    metric = stored_run.get_metric(
+        "train/episode_return",
+        Context({"sdk_stream": "episode_summary"}),
+    )
+    assert metric is not None
+    assert metric.data.items_list()[0] == [1, 2]
+    assert metric.data.values_list()[0] == [2.5, 3.5]
 
 
 def test_real_aim_adapter_marks_finalized_only_after_metrics(tmp_path):
@@ -341,7 +489,9 @@ def test_real_aim_adapter_marks_finalized_only_after_metrics(tmp_path):
 
     adapter.send(event)
 
-    assert backend.tracked == [("eval/reward", 4.0, 50)]
+    assert backend.tracked == [
+        ("eval/reward", 4.0, 50, {"sdk_stream": "final"}, 50)
+    ]
     assert backend.values["sdk/objective_metric"] == "eval/reward"
     assert backend.values["sdk/finalized"] is True
 

@@ -65,6 +65,8 @@ class MetricEvent:
     event_id: str
     kind: str
     env_steps: int
+    aim_step: int
+    stream: str
     data: Mapping[str, Any] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
@@ -76,6 +78,16 @@ class MetricEvent:
             raise TypeError("env_steps must be an integer")
         if self.env_steps < 0:
             raise ValueError("env_steps must be non-negative")
+        if type(self.aim_step) is not int:
+            raise TypeError("aim_step must be an integer")
+        if self.aim_step < 0:
+            raise ValueError("aim_step must be non-negative")
+        if self.stream != self.kind:
+            raise ValueError("MetricEvent stream must match its stable event kind")
+        if self.stream == "episode_summary" and self.aim_step < 1:
+            raise ValueError("episode summary aim_step must be one-based")
+        if self.stream != "episode_summary" and self.aim_step != self.env_steps:
+            raise ValueError("non-summary aim_step must equal native env_steps")
 
         copied = dict(self.data)
         metrics = copied.get("metrics")
@@ -106,6 +118,8 @@ class MetricEvent:
             "event_id": self.event_id,
             "kind": self.kind,
             "env_steps": self.env_steps,
+            "aim_step": self.aim_step,
+            "stream": self.stream,
             "data": _thaw(self.data),
         }
 
@@ -116,6 +130,8 @@ class MetricEvent:
                 event_id=payload["event_id"],
                 kind=payload["kind"],
                 env_steps=payload["env_steps"],
+                aim_step=payload["aim_step"],
+                stream=payload["stream"],
                 data=payload["data"],
             )
         except KeyError as exc:
@@ -129,6 +145,8 @@ class MetricEvent:
             event_id=str(uuid4()),
             kind="metrics",
             env_steps=env_steps,
+            aim_step=env_steps,
+            stream="metrics",
             data={"metrics": dict(metrics)},
         )
 
@@ -137,6 +155,7 @@ class MetricEvent:
         cls,
         *,
         env_steps: int,
+        summary_sequence: int,
         episode_return: int | float,
         episode_length: int,
     ) -> tuple[MetricEvent, ...]:
@@ -145,6 +164,8 @@ class MetricEvent:
                 event_id=str(uuid4()),
                 kind="episode_summary",
                 env_steps=env_steps,
+                aim_step=summary_sequence,
+                stream="episode_summary",
                 data={"metrics": {name: value}},
             )
             for name, value in (
@@ -169,6 +190,8 @@ class MetricEvent:
             event_id=str(uuid4()),
             kind="final",
             env_steps=env_steps,
+            aim_step=env_steps,
+            stream="final",
             data={
                 "metrics": dict(metrics),
                 "objective_metric": objective_metric,

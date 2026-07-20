@@ -90,3 +90,46 @@
 - 首次创建父目录时 fsync 其目录项，首次创建 spool 时 fsync spool 父目录；
   helper 通过 monkeypatch 测试，无平台相关 mock 细节。
 - 公共包不再导出 Aim backend 类型；内部 adapter/spool 继续共享异常类型。
+
+## Summary Sequence Fix RED
+
+- 新增同 native env step 双 summary、summary replay 和 spool 重开恢复测试后：
+  `6 failed, 21 passed`。
+- 新增真实 Aim 3.28 聚焦测试后：`1 failed, 65 passed`；该失败暴露 Aim 3.28
+  不会直接用指定 hash 创建首次 run，需要 adapter 先建立稳定 hash 的 metadata
+  entry，再以 `force_resume=True` 打开。
+
+## Summary Sequence Fix GREEN
+
+- Task 1+2 SDK 测试：`66 passed`，其中包含真实 Aim 3.28 tmp repo 集成测试。
+- Ruff：`All checks passed!`
+- `git diff --check`：通过。
+
+## Summary Sequence Fix Files
+
+- `rtrrl/training_sdk/aim_adapter.py`
+- `rtrrl/training_sdk/run.py`
+- `rtrrl/training_sdk/spool.py`
+- `rtrrl/tests/training_sdk/test_aim_adapter.py`
+- `rtrrl/tests/training_sdk/test_spool.py`
+- `.superpowers/sdd/sdk-task-2-report.md`
+
+## Summary Sequence Fix Commit
+
+- 本节所在的 Task 2 summary sequence 修复提交（最终回复提供提交哈希）。
+- Subject: `fix(sdk): preserve same-step summaries`
+
+## Summary Sequence Fix Self-review
+
+- `MetricEvent` 现在分别持久化 native `env_steps`、Aim `aim_step` 与稳定
+  `stream`；一般 metrics/final 使用 native env step，summary 使用独立 sequence。
+- 每次 summary 分配单调一基 sequence，三个 mandatory events 共享同一
+  `aim_step`；`train/env_steps` 的 value 和 Aim epoch 均保留真实 native step。
+- `TrainingRun` 从 spool 全部历史 summary events 恢复最大 sequence，进程重启
+  后继续递增；同一 event replay 保持相同 stream/step 并 overwrite。
+- Aim context 仅使用固定低基数 `sdk_stream`，不包含 event ID；一般 metrics、
+  episode summary 与 final 使用不同 stream。
+- fake 边界验证同 native step 的两个 summary 在三个 series 中各保留两个点，
+  并验证 marker 前故障后的 replay 不增加点。
+- 真实 Aim 3.28 tmp repo 测试验证同 name/context/summary step overwrite、不同
+  summary step 均保留，并验证 `epoch` 参数合法。
