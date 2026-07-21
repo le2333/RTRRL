@@ -143,6 +143,7 @@ def test_descriptor_resolve_materialize_loads_exact_nested_concrete_yaml(tmp_pat
         "seed": 7,
     }
     context = build_run_context(
+        "facility",
         "exp-1",
         resolved.name,
         concrete,

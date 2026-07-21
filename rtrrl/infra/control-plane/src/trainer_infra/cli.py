@@ -20,7 +20,7 @@ from trainer_infra.adapters.aws_batch import (
 )
 from trainer_infra.adapters.s3 import S3ObjectStore
 from trainer_infra.aim_reader import AimReader
-from trainer_infra.controller import ExperimentController
+from trainer_infra.controller import ExperimentController, ExperimentRunError
 from trainer_infra.ecr import BotoEcrCatalogReader
 from trainer_infra.identities import canonical_json
 
@@ -197,6 +197,34 @@ def main(
         report = getattr(controller, args.command)(args.experiment)
         print(report.to_json())
         return 0
+    except ExperimentRunError as error:
+        cause = error.original_cause
+        error_payload = (
+            {
+                "message": str(cause),
+                "type": type(cause).__name__,
+            }
+            if cause is not None
+            else {
+                "message": "final experiment persistence failed",
+                "type": "PersistenceError",
+            }
+        )
+        payload = {
+            "status": "failed",
+            "error": error_payload,
+            "report": error.report.model_dump(mode="json"),
+            "submitted_job_ids": list(error.report.submitted_job_ids),
+            "persistence_errors": [
+                {
+                    "message": str(persistence_error),
+                    "type": type(persistence_error).__name__,
+                }
+                for persistence_error in error.persistence_errors
+            ],
+        }
+        print(canonical_json(payload), file=sys.stderr)
+        return 1
     except BaseException as error:
         payload = {
             "error": {

@@ -3,11 +3,13 @@ from __future__ import annotations
 from collections.abc import Callable, Mapping
 from dataclasses import fields, replace
 import hashlib
+from itertools import product
 from pathlib import Path
 import time
 from typing import Any, Literal
 from uuid import uuid4
 
+from optuna.trial import TrialState
 from pydantic import ConfigDict
 
 from trainer_infra.aws_profiles import profile
@@ -22,7 +24,10 @@ from trainer_infra.loaders import load_experiment
 from trainer_infra.materialize import materialize_run
 from trainer_infra.models import (
     ContractModel,
+    ContinuousSearch,
+    DiscreteSearch,
     ExperimentSpec,
+    JsonScalar,
     ResolvedExperiment,
     ResolvedGroup,
     thaw_json,
@@ -71,9 +76,37 @@ class ExperimentReport(ContractModel):
 
 
 class ExperimentRunError(RuntimeError):
-    def __init__(self, report: ExperimentReport) -> None:
-        super().__init__(report.error or "experiment failed")
+    def __init__(
+        self,
+        report: ExperimentReport,
+        *,
+        original_cause: BaseException | None,
+        persistence_errors: tuple[BaseException, ...] = (),
+    ) -> None:
+        message = (
+            str(original_cause)
+            if original_cause is not None
+            else "final experiment persistence failed"
+        )
+        super().__init__(message)
         self.report = report
+        self.original_cause = original_cause
+        self.persistence_errors = persistence_errors
+
+
+_MAX_DUPLICATE_ATTEMPTS = 32
+
+
+def _estimated_jobs(group: ResolvedGroup) -> int:
+    remaining = group.hpo.total_trials
+    result = 0
+    while remaining:
+        round_configs = min(group.hpo.configs_per_batch, remaining)
+        result += (
+            round_configs + group.execution.runs_per_job - 1
+        ) // group.execution.runs_per_job
+        remaining -= round_configs
+    return result
 
 
 class ExperimentController:
@@ -171,10 +204,7 @@ class ExperimentController:
                 total_trials=group.hpo.total_trials,
                 configs_per_batch=group.hpo.configs_per_batch,
                 runs_per_job=group.execution.runs_per_job,
-                estimated_jobs=(
-                    group.hpo.total_trials + group.execution.runs_per_job - 1
-                )
-                // group.execution.runs_per_job,
+                estimated_jobs=_estimated_jobs(group),
             )
             for group in resolved.groups
         )
@@ -198,6 +228,7 @@ class ExperimentController:
 
     def _run_bundle(
         self,
+        experiment_name: str,
         experiment_id: str,
         group: ResolvedGroup,
         concrete: Any,
@@ -208,6 +239,7 @@ class ExperimentController:
         )
         input_prefix = f"{key_root}input/"
         context = build_run_context(
+            experiment_name,
             experiment_id,
             group.name,
             concrete,
@@ -264,15 +296,184 @@ class ExperimentController:
             )
         return marker
 
-    def _persist(self, store: Any, prefix: str, report: ExperimentReport) -> None:
+    @staticmethod
+    def _tell_once(
+        study: Any,
+        trial: Any,
+        terminal_trials: set[int],
+        *,
+        value: float | None = None,
+        state: TrialState | None = None,
+    ) -> None:
+        if trial.number in terminal_trials:
+            return
+        study.tell(trial, values=value, state=state)
+        terminal_trials.add(trial.number)
+
+    @classmethod
+    def _fail_pending(
+        cls,
+        study: Any,
+        trials: list[Any],
+        terminal_trials: set[int],
+    ) -> tuple[BaseException, ...]:
+        errors: list[BaseException] = []
+        for trial in trials:
+            try:
+                cls._tell_once(
+                    study,
+                    trial,
+                    terminal_trials,
+                    state=TrialState.FAIL,
+                )
+            except BaseException as error:
+                errors.append(error)
+        return tuple(errors)
+
+    @staticmethod
+    def _finite_candidates(
+        group: ResolvedGroup,
+    ) -> tuple[dict[str, JsonScalar], ...] | None:
+        searchable = group.searchable_parameters()
+        if not all(
+            isinstance(domain, DiscreteSearch)
+            or isinstance(domain, ContinuousSearch)
+            and domain.integer
+            for domain in searchable.values()
+        ):
+            return None
+        names = tuple(searchable)
+        domains: list[tuple[JsonScalar, ...]] = []
+        for domain in searchable.values():
+            if isinstance(domain, DiscreteSearch):
+                domains.append(domain.values)
+            elif isinstance(domain, ContinuousSearch) and domain.integer:
+                domains.append(
+                    tuple(
+                        range(
+                            int(domain.low),
+                            int(domain.high) + 1,
+                            int(domain.step or 1),
+                        )
+                    )
+                )
+        unique: dict[str, dict[str, JsonScalar]] = {}
+        for values in product(*domains):
+            candidate = dict(zip(names, values, strict=True))
+            unique.setdefault(canonical_json(candidate), candidate)
+        return tuple(unique.values())
+
+    @classmethod
+    def _ask_unique(
+        cls,
+        study: Any,
+        group: ResolvedGroup,
+        tracker: FiniteSpaceTracker,
+        seen: set[str],
+        terminal_trials: set[int],
+        finite_candidates: tuple[dict[str, JsonScalar], ...] | None,
+    ) -> tuple[Any, dict[str, JsonScalar]] | None:
+        duplicate_attempts = 0
+        while duplicate_attempts < _MAX_DUPLICATE_ATTEMPTS:
+            trial = study.ask()
+            try:
+                sampled = sample_parameters(trial, group, tracker=tracker)
+            except DuplicateConfigurationError:
+                cls._tell_once(
+                    study,
+                    trial,
+                    terminal_trials,
+                    state=TrialState.PRUNED,
+                )
+                duplicate_attempts += 1
+                if finite_candidates is None:
+                    continue
+                remaining = next(
+                    (
+                        candidate
+                        for candidate in finite_candidates
+                        if canonical_json(candidate) not in seen
+                    ),
+                    None,
+                )
+                if remaining is None:
+                    return None
+                study.enqueue_trial(remaining)
+                fallback = study.ask()
+                try:
+                    sampled = sample_parameters(fallback, group, tracker=tracker)
+                except (DuplicateConfigurationError, SpaceExhaustedError) as error:
+                    cls._tell_once(
+                        study,
+                        fallback,
+                        terminal_trials,
+                        state=TrialState.FAIL,
+                    )
+                    raise RuntimeError(
+                        "deterministic discrete fallback was not honored by the study"
+                    ) from error
+                except BaseException:
+                    cls._tell_once(
+                        study,
+                        fallback,
+                        terminal_trials,
+                        state=TrialState.FAIL,
+                    )
+                    raise
+                key = canonical_json(
+                    {
+                        name: sampled[name]
+                        for name in group.searchable_parameters()
+                    }
+                )
+                seen.add(key)
+                return fallback, sampled
+            except SpaceExhaustedError:
+                cls._tell_once(
+                    study,
+                    trial,
+                    terminal_trials,
+                    state=TrialState.PRUNED,
+                )
+                return None
+            except BaseException:
+                cls._tell_once(
+                    study,
+                    trial,
+                    terminal_trials,
+                    state=TrialState.FAIL,
+                )
+                raise
+
+            key = canonical_json(
+                {name: sampled[name] for name in group.searchable_parameters()}
+            )
+            seen.add(key)
+            return trial, sampled
+        raise RuntimeError(
+            f"duplicate sampling limit ({_MAX_DUPLICATE_ATTEMPTS}) reached "
+            f"for group {group.name!r}"
+        )
+
+    def _persist(
+        self, store: Any, prefix: str, report: ExperimentReport
+    ) -> tuple[BaseException, ...]:
         state = {
             "experiment_id": report.experiment_id,
             "status": report.status,
             "submitted_job_ids": list(report.submitted_job_ids),
             "completed_runs": report.completed_runs,
         }
-        store.put_json(f"{prefix}state/final.json", state)
-        store.put_json(f"{prefix}report.json", report.model_dump(mode="json"))
+        errors: list[BaseException] = []
+        for uri, payload in (
+            (f"{prefix}state/final.json", state),
+            (f"{prefix}report.json", report.model_dump(mode="json")),
+        ):
+            try:
+                store.put_json(uri, payload)
+            except BaseException as error:
+                errors.append(error)
+        return tuple(errors)
 
     def run(self, path: str | Path) -> ExperimentReport:
         resolved, definitions, _ = self._prepare(Path(path))
@@ -297,6 +498,9 @@ class ExperimentController:
                     load_if_exists=False,
                 )
                 tracker = FiniteSpaceTracker(group)
+                finite_candidates = self._finite_candidates(group)
+                seen: set[str] = set()
+                terminal_trials: set[int] = set()
                 allocated = 0
                 round_number = 0
                 while allocated < group.hpo.total_trials and not tracker.exhausted:
@@ -304,73 +508,103 @@ class ExperimentController:
                         group.hpo.configs_per_batch,
                         group.hpo.total_trials - allocated,
                     )
-                    trials_and_runs = []
-                    while len(trials_and_runs) < wanted and not tracker.exhausted:
-                        trial = study.ask()
-                        try:
-                            sampled = sample_parameters(trial, group, tracker=tracker)
-                        except DuplicateConfigurationError:
-                            try:
-                                from optuna.trial import TrialState
-
-                                study.tell(trial, state=TrialState.PRUNED)
-                            except TypeError:
-                                study.tell(trial, float("nan"))
-                            continue
-                        except SpaceExhaustedError:
-                            break
-                        allocated += 1
-                        concrete = materialize_run(
-                            group,
-                            trial,
-                            sampled,
-                            run_number=allocated,
-                        )
-                        trials_and_runs.append(
-                            (trial, self._run_bundle(experiment_id, group, concrete))
-                        )
-                    if not trials_and_runs:
-                        break
-                    round_number += 1
-                    round_jobs: list[tuple[Any, list[tuple[Any, RunBundle]]]] = []
-                    runs_per_job = group.execution.runs_per_job
-                    for offset in range(0, len(trials_and_runs), runs_per_job):
-                        children = trials_and_runs[offset : offset + runs_per_job]
-                        for _, child in children:
-                            self._upload_run(store, child)
-                        job = JobBundle(
-                            job_id=(
-                                f"{experiment_id}-{group.name}-r{round_number}-"
-                                f"j{offset // runs_per_job + 1}"
-                            ),
-                            image_digest=group.image,
-                            resource_profile=group.resources.profile,
-                            runs=tuple(child for _, child in children),
-                        )
-                        store.put_json(
-                            f"{experiment_prefix}jobs/{job.job_id}/bundle.json",
-                            job.model_dump(mode="json"),
-                        )
-                        submitted = batch.submit(
-                            job,
-                            profile(group.resources.profile),
-                            definitions[group.resources.profile],
-                        )
-                        submitted_ids.append(submitted.job_id)
-                        round_jobs.append((submitted, children))
-                    self._wait_jobs(
-                        batch, [submitted.job_id for submitted, _ in round_jobs]
-                    )
-                    for _, children in round_jobs:
-                        for trial, run in children:
-                            self._collect_marker(store, run)
-                            value = self._aim_reader.wait_for_result(
-                                run.run_id,
-                                group.objective.metric,
-                                group.execution.aim_result_timeout_seconds,
+                    round_trials: list[Any] = []
+                    trials_and_runs: list[tuple[Any, RunBundle]] = []
+                    try:
+                        while len(trials_and_runs) < wanted and not tracker.exhausted:
+                            allocation = self._ask_unique(
+                                study,
+                                group,
+                                tracker,
+                                seen,
+                                terminal_trials,
+                                finite_candidates,
                             )
-                            study.tell(trial, value)
-                            completed_runs += 1
+                            if allocation is None:
+                                break
+                            trial, sampled = allocation
+                            round_trials.append(trial)
+                            allocated += 1
+                            concrete = materialize_run(
+                                group,
+                                trial,
+                                sampled,
+                                run_number=allocated,
+                            )
+                            trials_and_runs.append(
+                                (
+                                    trial,
+                                    self._run_bundle(
+                                        resolved.name,
+                                        experiment_id,
+                                        group,
+                                        concrete,
+                                    ),
+                                )
+                            )
+                        if not trials_and_runs:
+                            break
+
+                        round_number += 1
+                        round_jobs: list[
+                            tuple[Any, list[tuple[Any, RunBundle]]]
+                        ] = []
+                        runs_per_job = group.execution.runs_per_job
+                        for offset in range(0, len(trials_and_runs), runs_per_job):
+                            children = trials_and_runs[offset : offset + runs_per_job]
+                            for _, child in children:
+                                self._upload_run(store, child)
+                            job = JobBundle(
+                                job_id=(
+                                    f"{experiment_id}-{group.name}-r{round_number}-"
+                                    f"j{offset // runs_per_job + 1}"
+                                ),
+                                image_digest=group.image,
+                                resource_profile=group.resources.profile,
+                                runs=tuple(child for _, child in children),
+                            )
+                            store.put_json(
+                                f"{experiment_prefix}jobs/{job.job_id}/bundle.json",
+                                job.model_dump(mode="json"),
+                            )
+                            submitted = batch.submit(
+                                job,
+                                profile(group.resources.profile),
+                                definitions[group.resources.profile],
+                            )
+                            submitted_ids.append(submitted.job_id)
+                            round_jobs.append((submitted, children))
+                        self._wait_jobs(
+                            batch,
+                            [submitted.job_id for submitted, _ in round_jobs],
+                        )
+                        for _, children in round_jobs:
+                            for trial, run in children:
+                                self._collect_marker(store, run)
+                                value = self._aim_reader.wait_for_result(
+                                    run.run_id,
+                                    group.objective.metric,
+                                    group.execution.aim_result_timeout_seconds,
+                                )
+                                self._tell_once(
+                                    study,
+                                    trial,
+                                    terminal_trials,
+                                    value=value,
+                                )
+                                completed_runs += 1
+                    except BaseException as error:
+                        lifecycle_errors = self._fail_pending(
+                            study,
+                            round_trials,
+                            terminal_trials,
+                        )
+                        for lifecycle_error in lifecycle_errors:
+                            error.add_note(
+                                "failed to terminate pending Optuna trial: "
+                                f"{type(lifecycle_error).__name__}: {lifecycle_error}"
+                            )
+                        raise
             report = ExperimentReport(
                 status="succeeded",
                 experiment_id=experiment_id,
@@ -387,8 +621,24 @@ class ExperimentController:
                 completed_runs=completed_runs,
                 error=f"{type(error).__name__}: {error}",
             )
-            self._persist(store, experiment_prefix, report)
-            raise ExperimentRunError(report) from error
+            persistence_errors = self._persist(store, experiment_prefix, report)
+            raise ExperimentRunError(
+                report,
+                original_cause=error,
+                persistence_errors=persistence_errors,
+            ) from error
 
-        self._persist(store, experiment_prefix, report)
+        persistence_errors = self._persist(store, experiment_prefix, report)
+        if persistence_errors:
+            failed_report = report.model_copy(
+                update={
+                    "status": "failed",
+                    "error": "PersistenceError: final experiment persistence failed",
+                }
+            )
+            raise ExperimentRunError(
+                failed_report,
+                original_cause=None,
+                persistence_errors=persistence_errors,
+            )
         return report

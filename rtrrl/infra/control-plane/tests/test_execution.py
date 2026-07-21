@@ -313,6 +313,7 @@ def test_build_run_context_populates_every_sdk_field() -> None:
     )
 
     context = build_run_context(
+        "user-facing-experiment",
         "facility-456",
         "shared",
         concrete,
@@ -320,7 +321,7 @@ def test_build_run_context_populates_every_sdk_field() -> None:
     )
 
     assert isinstance(context, RunContext)
-    assert context.experiment_name == "experiment-123"
+    assert context.experiment_name == "user-facing-experiment"
     assert context.experiment_id == "facility-456"
     assert context.group == "shared"
     assert context.script == concrete.script
@@ -359,11 +360,23 @@ def test_build_run_context_rejects_group_and_identity_mismatches() -> None:
         run_number=3,
     )
     with pytest.raises(ValueError, match="group"):
-        build_run_context("facility-456", "other", concrete, Path("/tmp/artifacts"))
+        build_run_context(
+            "user-facing-experiment",
+            "facility-456",
+            "other",
+            concrete,
+            Path("/tmp/artifacts"),
+        )
 
     object.__setattr__(concrete, "run_id", "experiment-123:other:0003")
     with pytest.raises(ValueError, match="run_id"):
-        build_run_context("facility-456", "shared", concrete, Path("/tmp/artifacts"))
+        build_run_context(
+            "user-facing-experiment",
+            "facility-456",
+            "shared",
+            concrete,
+            Path("/tmp/artifacts"),
+        )
 
 
 def test_build_run_context_rejects_tagged_image_reference() -> None:
@@ -380,4 +393,10 @@ def test_build_run_context_rejects_tagged_image_reference() -> None:
     )
 
     with pytest.raises(ValueError, match="canonical immutable"):
-        build_run_context("facility-456", "shared", concrete, Path("/tmp/artifacts"))
+        build_run_context(
+            "user-facing-experiment",
+            "facility-456",
+            "shared",
+            concrete,
+            Path("/tmp/artifacts"),
+        )

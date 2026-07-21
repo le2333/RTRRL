@@ -119,21 +119,23 @@ def _to_search(
         raise ValueError(
             f"group '{group_name}' field '{field_name}' cannot use a continuous domain"
         )
-    _validate_value(
-        domain.min,
-        descriptor,
-        group_name=group_name,
-        field_name=field_name,
-    )
-    _validate_value(
-        domain.max,
-        descriptor,
-        group_name=group_name,
-        field_name=field_name,
-    )
     integer = descriptor.type == "int"
     if integer and (not domain.min.is_integer() or not domain.max.is_integer()):
         raise ValueError(f"group '{group_name}' field '{field_name}' requires integer bounds")
+    low: JsonScalar = int(domain.min) if integer else domain.min
+    high: JsonScalar = int(domain.max) if integer else domain.max
+    _validate_value(
+        low,
+        descriptor,
+        group_name=group_name,
+        field_name=field_name,
+    )
+    _validate_value(
+        high,
+        descriptor,
+        group_name=group_name,
+        field_name=field_name,
+    )
     return ContinuousSearch(
         low=domain.min,
         high=domain.max,

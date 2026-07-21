@@ -6,6 +6,7 @@ from pathlib import Path
 from trainer_infra.cli import main
 from trainer_infra.controller import (
     ExperimentReport,
+    ExperimentRunError,
     GroupValidation,
     ValidationReport,
 )
@@ -84,6 +85,47 @@ def test_errors_use_stderr_and_nonzero_exit(tmp_path: Path, capsys: object) -> N
     assert captured.out == ""
     assert json.loads(captured.err) == {
         "error": {"message": "invalid experiment", "type": "ValueError"}
+    }
+
+
+def test_experiment_error_prints_complete_structured_failure(
+    tmp_path: Path, capsys: object
+) -> None:
+    experiment = tmp_path / "bad.yaml"
+    report = ExperimentReport(
+        status="failed",
+        experiment_id="fresh",
+        experiment_name="test",
+        submitted_job_ids=("aws-1", "aws-2"),
+        completed_runs=1,
+        error="RuntimeError: Batch failed",
+    )
+    original = RuntimeError("Batch failed")
+    error = ExperimentRunError(
+        report,
+        original_cause=original,
+        persistence_errors=(OSError("state write failed"),),
+    )
+
+    class FailedController:
+        def run(self, path: Path) -> ExperimentReport:
+            del path
+            raise error
+
+    code = main(["run", str(experiment)], lambda _: FailedController())
+
+    captured = capsys.readouterr()  # type: ignore[attr-defined]
+    payload = json.loads(captured.err)
+    assert code == 1
+    assert captured.out == ""
+    assert payload == {
+        "status": "failed",
+        "error": {"message": "Batch failed", "type": "RuntimeError"},
+        "report": report.model_dump(mode="json"),
+        "submitted_job_ids": ["aws-1", "aws-2"],
+        "persistence_errors": [
+            {"message": "state write failed", "type": "OSError"}
+        ],
     }
 
 

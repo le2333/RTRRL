@@ -25,17 +25,20 @@ __all__ = [
 
 
 def build_run_context(
+    experiment_name: str,
     experiment_id: str,
     group: str,
     concrete_run: ConcreteRun,
     artifact_prefix: str | Path,
 ) -> RunContext:
     try:
-        experiment_name, derived_group = concrete_run.study_key.rsplit(":", 1)
+        _, derived_group = concrete_run.study_key.rsplit(":", 1)
     except ValueError as error:
-        raise ValueError("study_key must contain experiment and group identity") from error
-    if not experiment_name or not derived_group:
-        raise ValueError("study_key must contain nonempty experiment and group identity")
+        raise ValueError("study_key must contain isolated study and group identity") from error
+    if not experiment_name or not experiment_id:
+        raise ValueError("experiment_name and experiment_id must be nonempty")
+    if not derived_group:
+        raise ValueError("study_key must contain a nonempty group identity")
     if group != derived_group:
         raise ValueError(
             f"group {group!r} does not match concrete run group {derived_group!r}"
