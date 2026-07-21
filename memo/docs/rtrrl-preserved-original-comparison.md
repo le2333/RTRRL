@@ -38,7 +38,7 @@ within-runtime semantic delta and the cross-runtime same-semantic delta
 separately. The comparison is performed by
 `preserved_original_compare.py`.
 
-Final Batch job `f2a0d8ba-bdc2-44fb-85c2-890cfc99989f` measures exact equality
+Final Batch job `8c9035b9-ad43-444b-9564-614c5edf96e8` measures exact equality
 for explicit parameters, initial carry, both forward carries/outputs,
 accumulated trace, and trace-derived update. In both pinned runtimes, changing
 only actor semantics produces these maximum absolute gradient deltas:

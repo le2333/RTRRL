@@ -23,15 +23,15 @@ Commit identities are intentionally distinct:
 - initial docs-only feature root: `ffa90b5ae50b67bae1cbfe84c85eb0e21325eac3`;
 - Task 10-local comparison base: `5a89953b5d09909b35c5016118dc11a1adb0dec2`;
 - tested committed parent and evidence `functional_head_sha`:
-  `517e07377b94df2018b0addfb2d99582a139aaf4`;
+  `8e9dbace42dc9e75d4fb40505a66a78382a25e30`;
 - tested implementation manifest applied over that parent:
-  SHA-256 `cacf405d88a42563c2d0ff6bb3ae269017867ccef4fc002e44b5ad138d1197f2`;
+  SHA-256 `f33468f9e451a8a298716f9e896fb3e0944c70198384d30c78b99702e50acd20`;
 - exact uploaded overlay archive:
-  SHA-256 `a26da0cfe8a41d56db7114a2b163bb126309147c936460d003c520bf37fbe6a6`;
+  SHA-256 `04138a897ad7cdc0e037a2b3ca212c602f1611ab77ff0ced271e517ddb070317`;
 - executed orchestration script:
-  SHA-256 `ce93c2cfbc991c9cdb7298bc4a0646662c6f6b0e7f5058b927656143764cf90e`;
+  SHA-256 `cfe60c0b8d4b4b76f9686a329a33ab849966fcc8ff10e211cac8d01e0375630b`;
 - resulting evidence JSON:
-  SHA-256 `fef9419edf3d31bdd354bfa4d7c1da67cf7ed14fc9c3658a041b7f6180d87ce8`.
+  SHA-256 `fe6fb72f000a03f0cf5b4b09f1796f052f6161a7ded4a87b84b3bb7b061c945a`.
 
 The tested implementation is therefore the committed parent plus the pinned
 manifest/archive, not the parent SHA alone. The final evidence/report commit
@@ -40,34 +40,39 @@ task handoff rather than embedded recursively in its own contents.
 
 Before extraction, submitted expected and downloaded actual SHA-256 values
 matched for head
-`a26da0cfe8a41d56db7114a2b163bb126309147c936460d003c520bf37fbe6a6`,
+`04138a897ad7cdc0e037a2b3ca212c602f1611ab77ff0ced271e517ddb070317`,
 base
 `702ff4fdd485cd537ffeef599046b93fcc1510268adbaa7ec24665bb008a3a5f`,
 and oracle
 `f9a97fd54cb2786324ea83dc10078b4f9dbcc6e83bc2becf51c0d62d497b9740`.
+The submitted Batch command first binds the downloaded orchestration script to
+its committed SHA-256 with system `sha256sum -c`. That script then computes all
+three archive digests with system `sha256sum`, compares them in shell before
+the first `tar -xf`, and uses literal inline Python only to serialize evidence.
+No mutable external verifier is downloaded or executed.
 
 ## Final Batch runtime and resources
 
-Superseding acceptance job `f2a0d8ba-bdc2-44fb-85c2-890cfc99989f`
+Superseding acceptance job `8c9035b9-ad43-444b-9564-614c5edf96e8`
 succeeded with exit 0.
 It used queue `rtrrl-cpu2-queue`, definition `rtrrl-cpu-job:14`, 4 vCPUs,
 8,192 MiB, and compute environment `rtrrl-cpu2-ce` (`c7a.2xlarge`). Overall
-container runtime was 770.829 seconds. Runtime versions were Python 3.12.13,
+container runtime was 768.091 seconds. Runtime versions were Python 3.12.13,
 JAX/JAXLIB 0.10.0, Flax 0.12.7, Brax 0.14.2, backend `cpu`, device `cpu:0`.
 
 | Workload | Result | Wall time | Peak RSS |
 | --- | --- | ---: | ---: |
-| strict parity, accelerated cases enabled | 225 passed | 41.74 s | 2,146,508 KiB |
-| five directional finite differences | 5 passed | 4.82 s | 466,348 KiB |
-| selected RTRRL/meta/legacy-builder `online_ac` | 36 passed | 84.63 s | 3,194,652 KiB |
-| independent RTRRL | 11 passed | 22.64 s | 1,473,480 KiB |
-| full head `online_ac` | 112 passed, 1 failed | 216.66 s | 5,128,076 KiB |
-| full true-base `online_ac` | 105 passed, 1 failed | 214.74 s | 5,038,164 KiB |
-| eager/JIT/oracle harness | succeeded | 12.28 s | 1,074,156 KiB |
-| preserved/oracle probes, 2×2 comparison, source audit | succeeded | 4.76 s | 367,512 KiB |
-| strict real Brax smoke | succeeded | 22.07 s | 1,379,832 KiB |
-| ruff | passed | 0.13 s | 24,040 KiB |
-| compileall | passed | 0.12 s | 16,296 KiB |
+| strict parity, accelerated cases enabled | 226 passed | 41.72 s | 2,142,944 KiB |
+| five directional finite differences | 5 passed | 4.81 s | 466,476 KiB |
+| selected RTRRL/meta/legacy-builder `online_ac` | 36 passed | 85.35 s | 3,200,744 KiB |
+| independent RTRRL | 11 passed | 22.61 s | 1,476,600 KiB |
+| full head `online_ac` | 112 passed, 1 failed | 216.60 s | 5,124,492 KiB |
+| full true-base `online_ac` | 105 passed, 1 failed | 212.72 s | 5,038,128 KiB |
+| eager/JIT/oracle harness | succeeded | 12.38 s | 1,079,596 KiB |
+| preserved/oracle probes, 2×2 comparison, source audit | succeeded | 5.00 s | 367,180 KiB |
+| strict real Brax smoke | succeeded | 22.25 s | 1,382,480 KiB |
+| ruff | passed | 0.16 s | 23,896 KiB |
+| compileall | passed | 0.12 s | 16,292 KiB |
 
 The maximum measured RSS was 4.89 GiB. The existing 8-GiB allocation remains
 appropriate; compilation did not demonstrate a need to increase memory.

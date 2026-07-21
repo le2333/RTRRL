@@ -4,7 +4,9 @@ from __future__ import annotations
 
 from hashlib import sha256
 import json
+import os
 from pathlib import Path
+import subprocess
 from types import SimpleNamespace
 
 import pytest
@@ -16,7 +18,6 @@ from .task12_collect_evidence import (
     _junit_artifact,
     evaluate_gates,
 )
-from .task12_verify_archives import verify_archives
 
 
 def _pyright_log(*diagnostics: dict[str, object]) -> str:
@@ -367,24 +368,63 @@ def test_collector_exits_nonzero_after_emitting_failed_gate_evidence(
     assert json.loads(capsys.readouterr().out) == payload
 
 
-def test_archive_verifier_records_expected_actual_and_mismatch(tmp_path):
-    archive = tmp_path / "archive.tar"
-    archive.write_bytes(b"verified archive")
-    expected = "0" * 64
+def test_batch_archive_verification_has_no_external_trust_dependency():
+    script = (
+        Path(__file__).with_name("task12_batch_verification.sh").read_text()
+    )
 
-    result = verify_archives({"head": (archive, expected)})
+    assert "ARCHIVE_VERIFIER_URI" not in script
+    assert "task12_verify_archives.py" not in script
+    assert "sha256sum" in script
+    verify_call = script.index(
+        "verify_archives /tmp/head.tar /tmp/base.tar /tmp/oracle.tar"
+    )
+    first_extraction = script.index("tar -xf /tmp/head.tar")
+    assert verify_call < first_extraction
 
-    assert result == {
-        "all_verified": False,
-        "archives": {
-            "head": {
-                "path": str(archive),
-                "expected_sha256": expected,
-                "actual_sha256": sha256(b"verified archive").hexdigest(),
-                "verified": False,
-            }
-        },
+
+def test_batch_archive_mismatch_aborts_before_extraction(tmp_path):
+    script = Path(__file__).with_name("task12_batch_verification.sh")
+    script_text = script.read_text()
+    assert "--verify-archives-only" in script_text
+    archives = {}
+    for name in ("head", "base", "oracle"):
+        path = tmp_path / f"{name}.tar"
+        path.write_bytes(f"{name} archive".encode())
+        archives[name] = path
+    output = tmp_path / "archive_hashes.json"
+    environment = {
+        **os.environ,
+        "TASK12_EXPECTED_HEAD_ARCHIVE_SHA256": "0" * 64,
+        "TASK12_EXPECTED_BASE_ARCHIVE_SHA256": sha256(
+            archives["base"].read_bytes()
+        ).hexdigest(),
+        "TASK12_EXPECTED_ORACLE_ARCHIVE_SHA256": sha256(
+            archives["oracle"].read_bytes()
+        ).hexdigest(),
     }
+
+    completed = subprocess.run(
+        [
+            "bash",
+            str(script),
+            "--verify-archives-only",
+            str(archives["head"]),
+            str(archives["base"]),
+            str(archives["oracle"]),
+            str(output),
+        ],
+        check=False,
+        capture_output=True,
+        text=True,
+        env=environment,
+    )
+
+    assert completed.returncode != 0
+    evidence = json.loads(output.read_text())
+    assert evidence["all_verified"] is False
+    assert evidence["archives"]["head"]["verified"] is False
+    assert set(tmp_path.iterdir()) == {*archives.values(), output}
 
 
 def test_archive_verification_is_part_of_overall_gate():

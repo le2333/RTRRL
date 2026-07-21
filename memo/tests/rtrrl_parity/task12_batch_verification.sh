@@ -3,43 +3,82 @@ set -uo pipefail
 
 export DEBIAN_FRONTEND=noninteractive
 export TASK12_RESULTS_DIR=/tmp/task12-results
-export TASK12_FUNCTIONAL_HEAD_SHA=517e07377b94df2018b0addfb2d99582a139aaf4
+export TASK12_FUNCTIONAL_HEAD_SHA=8e9dbace42dc9e75d4fb40505a66a78382a25e30
 export TASK12_FEATURE_BASE_SHA=5f7ff4e40e66da0b7df4f3edc9a928185ad73ae6
 export TASK12_TASK10_BASE_SHA=5a89953b5d09909b35c5016118dc11a1adb0dec2
-export TASK12_REPORT_PARENT_SHA=517e07377b94df2018b0addfb2d99582a139aaf4
-export TASK12_REVIEW_PATCH_SHA256=cacf405d88a42563c2d0ff6bb3ae269017867ccef4fc002e44b5ad138d1197f2
+export TASK12_REPORT_PARENT_SHA=8e9dbace42dc9e75d4fb40505a66a78382a25e30
+export TASK12_REVIEW_PATCH_SHA256=f33468f9e451a8a298716f9e896fb3e0944c70198384d30c78b99702e50acd20
 export NODE_OPTIONS=--max-old-space-size=4096
 
 : "${TASK12_EXPECTED_HEAD_ARCHIVE_SHA256:?submitted head archive SHA is required}"
 : "${TASK12_EXPECTED_BASE_ARCHIVE_SHA256:?submitted base archive SHA is required}"
 : "${TASK12_EXPECTED_ORACLE_ARCHIVE_SHA256:?submitted oracle archive SHA is required}"
 
-HEAD_URI=s3://rtrrl-artifacts-007122174918/oracle/task12-preserved/head-517e073-hardened-gates-overlay.tar
+HEAD_URI=s3://rtrrl-artifacts-007122174918/oracle/task12-preserved/head-8e9dbac-direct-trust-overlay.tar
 BASE_URI=s3://rtrrl-artifacts-007122174918/oracle/task12-review/base-5f7ff4e.tar
 ORACLE_URI=s3://rtrrl-artifacts-007122174918/oracle/task12-preserved/aaai25-4301943.tar
-ARCHIVE_VERIFIER_URI=s3://rtrrl-artifacts-007122174918/oracle/task12-preserved/task12_verify_archives.py
 RESULT_URI=s3://rtrrl-artifacts-007122174918/oracle/task12-preserved/results
+
+verify_archives() {
+  local head_path="$1"
+  local base_path="$2"
+  local oracle_path="$3"
+  local output_path="$4"
+  local head_actual
+  local base_actual
+  local oracle_actual
+  head_actual="$(sha256sum "$head_path" | cut -d' ' -f1)"
+  base_actual="$(sha256sum "$base_path" | cut -d' ' -f1)"
+  oracle_actual="$(sha256sum "$oracle_path" | cut -d' ' -f1)"
+  python3 - "$output_path" \
+    "$head_path" "$TASK12_EXPECTED_HEAD_ARCHIVE_SHA256" "$head_actual" \
+    "$base_path" "$TASK12_EXPECTED_BASE_ARCHIVE_SHA256" "$base_actual" \
+    "$oracle_path" "$TASK12_EXPECTED_ORACLE_ARCHIVE_SHA256" "$oracle_actual" <<'PY'
+import json
+from pathlib import Path
+import sys
+
+output = Path(sys.argv[1])
+arguments = sys.argv[2:]
+archives = {}
+for name, offset in zip(("head", "base", "oracle"), range(0, 9, 3)):
+    path, expected, actual = arguments[offset : offset + 3]
+    archives[name] = {
+        "path": path,
+        "expected_sha256": expected,
+        "actual_sha256": actual,
+        "verified": actual == expected,
+    }
+payload = {
+    "all_verified": all(record["verified"] for record in archives.values()),
+    "archives": archives,
+}
+output.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n")
+PY
+  [[ "$head_actual" == "$TASK12_EXPECTED_HEAD_ARCHIVE_SHA256" ]] &&
+    [[ "$base_actual" == "$TASK12_EXPECTED_BASE_ARCHIVE_SHA256" ]] &&
+    [[ "$oracle_actual" == "$TASK12_EXPECTED_ORACLE_ARCHIVE_SHA256" ]]
+}
+
+if [[ "${1:-}" == "--verify-archives-only" ]]; then
+  verify_archives "$2" "$3" "$4" "$5"
+  exit $?
+fi
 
 rm -rf /tmp/head /tmp/base /tmp/oracle /tmp/venv /tmp/preserved-venv \
   /tmp/oracle-venv "$TASK12_RESULTS_DIR"
 mkdir -p /tmp/head /tmp/base /tmp/oracle "$TASK12_RESULTS_DIR"
 apt-get update -qq
 apt-get install -y -qq git python3-venv build-essential time >/dev/null
-aws s3 cp "$ARCHIVE_VERIFIER_URI" /tmp/task12_verify_archives.py >/dev/null
 aws s3 cp "$HEAD_URI" /tmp/head.tar >/dev/null
 aws s3 cp "$BASE_URI" /tmp/base.tar >/dev/null
 aws s3 cp "$ORACLE_URI" /tmp/oracle.tar >/dev/null
-archive_status=0
-python3 /tmp/task12_verify_archives.py \
-  --archive head /tmp/head.tar "$TASK12_EXPECTED_HEAD_ARCHIVE_SHA256" \
-  --archive base /tmp/base.tar "$TASK12_EXPECTED_BASE_ARCHIVE_SHA256" \
-  --archive oracle /tmp/oracle.tar "$TASK12_EXPECTED_ORACLE_ARCHIVE_SHA256" \
-  --output "$TASK12_RESULTS_DIR/archive_hashes.json" || archive_status=$?
-if [[ "$archive_status" != "0" ]]; then
+if ! verify_archives /tmp/head.tar /tmp/base.tar /tmp/oracle.tar \
+  "$TASK12_RESULTS_DIR/archive_hashes.json"; then
   aws s3 cp --recursive "$TASK12_RESULTS_DIR/" \
     "$RESULT_URI/$AWS_BATCH_JOB_ID/" >/dev/null
-  echo "TASK12_ARCHIVE_VERIFICATION_FAILED $archive_status"
-  exit "$archive_status"
+  echo "TASK12_ARCHIVE_VERIFICATION_FAILED"
+  exit 1
 fi
 tar -xf /tmp/head.tar -C /tmp/head
 tar -xf /tmp/base.tar -C /tmp/base
@@ -192,7 +231,6 @@ paths = {
         "task12_numerical_evidence.py",
         "task12_brax_smoke.py",
         "task12_collect_evidence.py",
-        "task12_verify_archives.py",
         "task12_nodeids.py",
         "preserved_original_probe.py",
         "preserved_original_compare.py",

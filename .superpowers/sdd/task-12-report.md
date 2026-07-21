@@ -9,7 +9,7 @@
 ## Status
 
 Review blockers are resolved. Superseding acceptance job
-`f2a0d8ba-bdc2-44fb-85c2-890cfc99989f` succeeded with exit 0 on authorized
+`8c9035b9-ad43-444b-9564-614c5edf96e8` succeeded with exit 0 on authorized
 Batch. Strict parity, all five accelerated finite differences, selected
 RTRRL/meta/legacy-builder tests, independent RTRRL, numerical harness, Brax
 smoke, ruff, and compileall passed.
@@ -24,11 +24,18 @@ report is `memo/docs/rtrrl-numerical-parity-report.md`; exact evidence is
 - feature functional base: `5f7ff4e40e66da0b7df4f3edc9a928185ad73ae6`;
 - docs-only feature root: `ffa90b5ae50b67bae1cbfe84c85eb0e21325eac3`;
 - Task 10 comparison base only: `5a89953b5d09909b35c5016118dc11a1adb0dec2`;
-- tested committed parent: `517e07377b94df2018b0addfb2d99582a139aaf4`;
+- tested committed parent: `8e9dbace42dc9e75d4fb40505a66a78382a25e30`;
 - tested implementation manifest SHA-256:
-  `cacf405d88a42563c2d0ff6bb3ae269017867ccef4fc002e44b5ad138d1197f2`;
+  `f33468f9e451a8a298716f9e896fb3e0944c70198384d30c78b99702e50acd20`;
 - uploaded overlay archive SHA-256:
-  `a26da0cfe8a41d56db7114a2b163bb126309147c936460d003c520bf37fbe6a6`.
+  `04138a897ad7cdc0e037a2b3ca212c602f1611ab77ff0ced271e517ddb070317`;
+- orchestration script SHA-256:
+  `cfe60c0b8d4b4b76f9686a329a33ab849966fcc8ff10e211cac8d01e0375630b`.
+
+The submitted command verifies the downloaded orchestration script with
+system `sha256sum -c`. The bound script hashes all archives with system
+`sha256sum` and aborts before `tar -xf` on any mismatch. No external verifier
+is downloaded.
 
 The evidence/report commit contains the tested overlay. Its SHA is returned by
 the task handoff; embedding it in the file contained by that commit would be
@@ -45,16 +52,16 @@ Final Batch resources: `rtrrl-cpu2-queue`, `rtrrl-cpu-job:14`, 4 vCPU,
 8,192 MiB, `rtrrl-cpu2-ce` on `c7a.2xlarge`. Runtime: Python 3.12.13,
 JAX/JAXLIB 0.10.0, Flax 0.12.7, CPU.
 
-- strict parity with `RTRRL_RUN_ACCELERATED_NUMERICS=1`: 225 passed,
-  41.74 s, 2,146,508 KiB;
-- separate five-case finite differences: 5 passed, 4.82 s, 466,348 KiB;
-- selected online_ac: 36 passed, 84.63 s, 3,194,652 KiB;
-- independent RTRRL: 11 passed, 22.64 s, 1,473,480 KiB;
-- full head online_ac: 112 passed, 1 failed, 216.66 s, 5,128,076 KiB;
-- full base online_ac: 105 passed, 1 failed, 214.74 s, 5,038,164 KiB;
-- eager/JIT/oracle harness: exit 0, 12.28 s, 1,074,156 KiB;
+- strict parity with `RTRRL_RUN_ACCELERATED_NUMERICS=1`: 226 passed,
+  41.72 s, 2,142,944 KiB;
+- separate five-case finite differences: 5 passed, 4.81 s, 466,476 KiB;
+- selected online_ac: 36 passed, 85.35 s, 3,200,744 KiB;
+- independent RTRRL: 11 passed, 22.61 s, 1,476,600 KiB;
+- full head online_ac: 112 passed, 1 failed, 216.60 s, 5,124,492 KiB;
+- full base online_ac: 105 passed, 1 failed, 212.72 s, 5,038,128 KiB;
+- eager/JIT/oracle harness: exit 0, 12.38 s, 1,079,596 KiB;
 - isolated preserved/oracle 2×2 comparison and source audit: exit 0;
-- direct Memo strict Brax smoke: exit 0, 22.07 s, 1,379,832 KiB;
+- direct Memo strict Brax smoke: exit 0, 22.25 s, 1,382,480 KiB;
 - ruff and compileall: exit 0.
 
 Finite-difference cosine/relative-error pairs:

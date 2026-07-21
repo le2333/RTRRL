@@ -5,7 +5,7 @@
 The superseding decision is implemented. `rtrrl/rtrrl.py` is restored exactly
 from functional base `5f7ff4e`; Memo owns all maintained compatibility helpers
 and runtime execution. Authorized Batch job
-`f2a0d8ba-bdc2-44fb-85c2-890cfc99989f` succeeded with exit 0. No complete RL
+`8c9035b9-ad43-444b-9564-614c5edf96e8` succeeded with exit 0. No complete RL
 environment ran locally.
 
 ## RED / GREEN preservation contract
@@ -76,7 +76,7 @@ The review contracts were added before their implementations:
 
 The local focused set covering audit, provenance, program, logging, and
 preservation produced 48 passed. `git diff --check` and focused Ruff passed.
-The final hardened-gate focused command produced 23 passed; no RL environment
+The final direct-trust focused command produced 24 passed; no RL environment
 was executed locally.
 
 ## Runtime and smoke decision
@@ -178,16 +178,17 @@ Complete-step parity is not claimed. Detailed evidence and verdict:
 Final orchestration is committed as
 `memo/tests/rtrrl_parity/task12_batch_verification.sh`. The implementation
 manifest SHA-256 embedded in evidence is
-`cacf405d88a42563c2d0ff6bb3ae269017867ccef4fc002e44b5ad138d1197f2`;
+`f33468f9e451a8a298716f9e896fb3e0944c70198384d30c78b99702e50acd20`;
 the script SHA-256 is
-`ce93c2cfbc991c9cdb7298bc4a0646662c6f6b0e7f5058b927656143764cf90e`.
-The separately downloaded pre-extraction verifier SHA-256 is
-`5c3fe3c09e309a60e400a5b5c28bc027c27f267c3a8fe9fde413e907de73e62c`.
+`cfe60c0b8d4b4b76f9686a329a33ab849966fcc8ff10e211cac8d01e0375630b`.
+The submitted command verifies that script hash with system `sha256sum -c`;
+the bound script computes archive hashes with system `sha256sum` and compares
+them in shell before extraction. No external verifier is downloaded.
 
 Inputs:
 
 - head overlay archive SHA-256:
-  `a26da0cfe8a41d56db7114a2b163bb126309147c936460d003c520bf37fbe6a6`;
+  `04138a897ad7cdc0e037a2b3ca212c602f1611ab77ff0ced271e517ddb070317`;
 - true-base archive SHA-256:
   `702ff4fdd485cd537ffeef599046b93fcc1510268adbaa7ec24665bb008a3a5f`;
 - corrected AAAI25 archive SHA-256:
@@ -197,13 +198,13 @@ Final submission:
 
 ```text
 aws batch submit-job
-  --job-name rtrrl-hardened-machine-gates-final-20260721
+  --job-name rtrrl-direct-trust-anchor-final-20260721
   --job-queue rtrrl-cpu2-queue
   --job-definition rtrrl-cpu-job:14
   --container-overrides <bash orchestration; 4 vCPU; 8192 MiB>
 ```
 
-Final job `f2a0d8ba-bdc2-44fb-85c2-890cfc99989f` succeeded. Earlier attempts
+Final job `8c9035b9-ad43-444b-9564-614c5edf96e8` succeeded. Earlier attempts
 are retained as diagnostic history:
 
 - `0dc0aa1b-54c1-43cc-bfeb-e5694ed5bff9`: failed because the uploaded oracle
@@ -223,14 +224,17 @@ are retained as diagnostic history:
 - `17ab0a34-baf3-40c1-8b20-ff58d009ff97`: all hardened gates and archive
   checks passed, but the evidence identity still named the prior committed
   parent. The identity was corrected to `517e073` before final job `f2a0d8ba`.
+- `f2a0d8ba-bdc2-44fb-85c2-890cfc99989f`: gates and identities passed, but
+  archive validation depended on a mutable downloaded verifier. The final job
+  removes that dependency and anchors both orchestration and archive hashes.
 
 ## Final Batch tests
 
-- strict parity: 225 passed, 0 failed, 41.74 s, 2,146,508 KiB peak RSS;
-- finite differences: 5 passed, 0 failed, 4.82 s, 466,348 KiB;
-- selected RTRRL/meta/independent online AC: 36 passed, 0 failed, 84.63 s,
-  3,194,652 KiB;
-- independent RTRRL: 11 passed, 0 failed, 22.64 s, 1,473,480 KiB;
+- strict parity: 226 passed, 0 failed, 41.72 s, 2,142,944 KiB peak RSS;
+- finite differences: 5 passed, 0 failed, 4.81 s, 466,476 KiB;
+- selected RTRRL/meta/independent online AC: 36 passed, 0 failed, 85.35 s,
+  3,200,744 KiB;
+- independent RTRRL: 11 passed, 0 failed, 22.61 s, 1,476,600 KiB;
 - numerical complete-state harness: exit 0;
 - preserved/oracle probes, 2×2 semantic comparison, and source audit: exit 0;
 - direct Memo real Brax smoke: exit 0;
@@ -249,7 +253,7 @@ present at base after path/message canonicalization.
 
 Machine-readable evidence:
 `memo/docs/rtrrl-task12-evidence.json`, SHA-256
-`fef9419edf3d31bdd354bfa4d7c1da67cf7ed14fc9c3658a041b7f6180d87ce8`.
+`fe6fb72f000a03f0cf5b4b09f1796f052f6161a7ded4a87b84b3bb7b061c945a`.
 
 ## Concerns
 

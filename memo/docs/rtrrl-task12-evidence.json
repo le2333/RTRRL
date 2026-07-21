@@ -9,8 +9,8 @@
         "verified": true
       },
       "head": {
-        "actual_sha256": "a26da0cfe8a41d56db7114a2b163bb126309147c936460d003c520bf37fbe6a6",
-        "expected_sha256": "a26da0cfe8a41d56db7114a2b163bb126309147c936460d003c520bf37fbe6a6",
+        "actual_sha256": "04138a897ad7cdc0e037a2b3ca212c602f1611ab77ff0ced271e517ddb070317",
+        "expected_sha256": "04138a897ad7cdc0e037a2b3ca212c602f1611ab77ff0ced271e517ddb070317",
         "path": "/tmp/head.tar",
         "verified": true
       },
@@ -22,7 +22,7 @@
       }
     }
   },
-  "batch_job_id": "f2a0d8ba-bdc2-44fb-85c2-890cfc99989f",
+  "batch_job_id": "8c9035b9-ad43-444b-9564-614c5edf96e8",
   "brax_smoke": {
     "best_reward": 49.92558288574219,
     "config_payload": {
@@ -117,7 +117,7 @@
       "relative_error": 7.30149404e-05
     }
   },
-  "functional_head_sha": "517e07377b94df2018b0addfb2d99582a139aaf4",
+  "functional_head_sha": "8e9dbace42dc9e75d4fb40505a66a78382a25e30",
   "gates": {
     "all_passed": true,
     "archive_verification": {
@@ -129,8 +129,8 @@
           "verified": true
         },
         "head": {
-          "actual_sha256": "a26da0cfe8a41d56db7114a2b163bb126309147c936460d003c520bf37fbe6a6",
-          "expected_sha256": "a26da0cfe8a41d56db7114a2b163bb126309147c936460d003c520bf37fbe6a6",
+          "actual_sha256": "04138a897ad7cdc0e037a2b3ca212c602f1611ab77ff0ced271e517ddb070317",
+          "expected_sha256": "04138a897ad7cdc0e037a2b3ca212c602f1611ab77ff0ced271e517ddb070317",
           "path": "/tmp/head.tar",
           "verified": true
         },
@@ -1120,8 +1120,8 @@
     "interpretation": "structural AST evidence only; controlled objectives separately measure the numerical effect",
     "schema_version": 1
   },
-  "report_parent_sha": "517e07377b94df2018b0addfb2d99582a139aaf4",
-  "review_fix_patch_sha256": "cacf405d88a42563c2d0ff6bb3ae269017867ccef4fc002e44b5ad138d1197f2",
+  "report_parent_sha": "8e9dbace42dc9e75d4fb40505a66a78382a25e30",
+  "review_fix_patch_sha256": "f33468f9e451a8a298716f9e896fb3e0944c70198384d30c78b99702e50acd20",
   "runs": {
     "brax_smoke": {
       "command": "PYTHONPATH=/tmp/head/memo /tmp/venv/bin/python -m tests.rtrrl_parity.task12_brax_smoke > /tmp/task12-results/brax_smoke.stdout.json",
@@ -1140,10 +1140,10 @@
         "valid": false
       },
       "time": {
-        "elapsed": "0:22.07",
-        "peak_rss_kib": 1379832,
-        "system_seconds": 2.22,
-        "user_seconds": 33.27
+        "elapsed": "0:22.25",
+        "peak_rss_kib": 1382480,
+        "system_seconds": 2.31,
+        "user_seconds": 33.08
       },
       "working_directory": "/tmp/head/memo"
     },
@@ -1163,9 +1163,9 @@
       },
       "time": {
         "elapsed": "0:00.12",
-        "peak_rss_kib": 16296,
-        "system_seconds": 0.0,
-        "user_seconds": 0.11
+        "peak_rss_kib": 16292,
+        "system_seconds": 0.03,
+        "user_seconds": 0.08
       },
       "working_directory": "/tmp/head"
     },
@@ -1197,10 +1197,10 @@
         "valid": true
       },
       "time": {
-        "elapsed": "0:04.82",
-        "peak_rss_kib": 466348,
-        "system_seconds": 0.42,
-        "user_seconds": 5.74
+        "elapsed": "0:04.81",
+        "peak_rss_kib": 466476,
+        "system_seconds": 0.43,
+        "user_seconds": 5.72
       },
       "working_directory": "/tmp/head/memo"
     },
@@ -1231,10 +1231,10 @@
         "valid": true
       },
       "time": {
-        "elapsed": "0:22.64",
-        "peak_rss_kib": 1473480,
-        "system_seconds": 2.07,
-        "user_seconds": 24.04
+        "elapsed": "0:22.61",
+        "peak_rss_kib": 1476600,
+        "system_seconds": 2.17,
+        "user_seconds": 23.93
       },
       "working_directory": "/tmp/head/memo"
     },
@@ -1255,10 +1255,10 @@
         "valid": false
       },
       "time": {
-        "elapsed": "0:12.28",
-        "peak_rss_kib": 1074156,
-        "system_seconds": 0.95,
-        "user_seconds": 14.94
+        "elapsed": "0:12.38",
+        "peak_rss_kib": 1079596,
+        "system_seconds": 0.96,
+        "user_seconds": 15.04
       },
       "working_directory": "/tmp/head/memo"
     },
@@ -1293,10 +1293,10 @@
         "valid": true
       },
       "time": {
-        "elapsed": "3:34.74",
-        "peak_rss_kib": 5038164,
-        "system_seconds": 23.02,
-        "user_seconds": 314.61
+        "elapsed": "3:32.72",
+        "peak_rss_kib": 5038128,
+        "system_seconds": 23.5,
+        "user_seconds": 312.39
       },
       "working_directory": "/tmp/base/memo"
     },
@@ -1331,10 +1331,10 @@
         "valid": true
       },
       "time": {
-        "elapsed": "3:36.66",
-        "peak_rss_kib": 5128076,
-        "system_seconds": 23.37,
-        "user_seconds": 325.63
+        "elapsed": "3:36.60",
+        "peak_rss_kib": 5124492,
+        "system_seconds": 23.27,
+        "user_seconds": 325.64
       },
       "working_directory": "/tmp/head/memo"
     },
@@ -1356,10 +1356,10 @@
         "valid": false
       },
       "time": {
-        "elapsed": "0:02.27",
-        "peak_rss_kib": 363200,
-        "system_seconds": 0.2,
-        "user_seconds": 3.76
+        "elapsed": "0:02.37",
+        "peak_rss_kib": 362496,
+        "system_seconds": 0.25,
+        "user_seconds": 3.65
       },
       "working_directory": "/tmp/head"
     },
@@ -1378,10 +1378,10 @@
         "valid": false
       },
       "time": {
-        "elapsed": "0:00.08",
-        "peak_rss_kib": 29580,
-        "system_seconds": 0.01,
-        "user_seconds": 0.42
+        "elapsed": "0:00.13",
+        "peak_rss_kib": 29656,
+        "system_seconds": 0.02,
+        "user_seconds": 0.72
       },
       "working_directory": "/tmp/head"
     },
@@ -1403,10 +1403,10 @@
         "valid": false
       },
       "time": {
-        "elapsed": "0:02.32",
-        "peak_rss_kib": 367512,
-        "system_seconds": 0.29,
-        "user_seconds": 3.75
+        "elapsed": "0:02.41",
+        "peak_rss_kib": 367180,
+        "system_seconds": 0.26,
+        "user_seconds": 3.77
       },
       "working_directory": "/tmp/head"
     },
@@ -1429,10 +1429,10 @@
         "valid": false
       },
       "time": {
-        "elapsed": "0:06.91",
-        "peak_rss_kib": 877788,
-        "system_seconds": 0.59,
-        "user_seconds": 11.61
+        "elapsed": "0:06.67",
+        "peak_rss_kib": 865096,
+        "system_seconds": 0.61,
+        "user_seconds": 11.24
       },
       "working_directory": "/tmp/base/memo"
     },
@@ -1455,10 +1455,10 @@
         "valid": false
       },
       "time": {
-        "elapsed": "0:12.35",
-        "peak_rss_kib": 969184,
-        "system_seconds": 2.08,
-        "user_seconds": 15.36
+        "elapsed": "0:12.03",
+        "peak_rss_kib": 964784,
+        "system_seconds": 2.21,
+        "user_seconds": 14.88
       },
       "working_directory": "/tmp/head/memo"
     },
@@ -1481,10 +1481,10 @@
         "valid": false
       },
       "time": {
-        "elapsed": "0:03.43",
-        "peak_rss_kib": 601768,
-        "system_seconds": 0.35,
-        "user_seconds": 5.74
+        "elapsed": "0:03.42",
+        "peak_rss_kib": 602336,
+        "system_seconds": 0.41,
+        "user_seconds": 5.69
       },
       "working_directory": "/tmp/base/memo"
     },
@@ -1507,10 +1507,10 @@
         "valid": false
       },
       "time": {
-        "elapsed": "0:03.76",
-        "peak_rss_kib": 647520,
-        "system_seconds": 0.52,
-        "user_seconds": 6.06
+        "elapsed": "0:03.77",
+        "peak_rss_kib": 643724,
+        "system_seconds": 0.49,
+        "user_seconds": 6.12
       },
       "working_directory": "/tmp/head/memo"
     },
@@ -1529,9 +1529,9 @@
         "valid": false
       },
       "time": {
-        "elapsed": "0:00.13",
-        "peak_rss_kib": 24040,
-        "system_seconds": 0.03,
+        "elapsed": "0:00.16",
+        "peak_rss_kib": 23896,
+        "system_seconds": 0.04,
         "user_seconds": 0.0
       },
       "working_directory": "/tmp/head/memo"
@@ -1563,10 +1563,10 @@
         "valid": true
       },
       "time": {
-        "elapsed": "1:24.63",
-        "peak_rss_kib": 3194652,
-        "system_seconds": 6.45,
-        "user_seconds": 140.82
+        "elapsed": "1:25.35",
+        "peak_rss_kib": 3200744,
+        "system_seconds": 7.04,
+        "user_seconds": 140.52
       },
       "working_directory": "/tmp/head/memo"
     },
@@ -1586,7 +1586,7 @@
       },
       "time": {
         "elapsed": "0:00.09",
-        "peak_rss_kib": 17260,
+        "peak_rss_kib": 17256,
         "system_seconds": 0.0,
         "user_seconds": 0.09
       },
@@ -1598,7 +1598,7 @@
         "errors": 0,
         "failures": 0,
         "skipped": 0,
-        "tests": 225
+        "tests": 226
       },
       "diagnostic_summary": null,
       "environment": {
@@ -1613,7 +1613,7 @@
           "errors": 0,
           "failures": 0,
           "skipped": 0,
-          "tests": 225
+          "tests": 226
         },
         "error": null,
         "error_nodeids": [],
@@ -1621,10 +1621,10 @@
         "valid": true
       },
       "time": {
-        "elapsed": "0:41.74",
-        "peak_rss_kib": 2146508,
-        "system_seconds": 2.7,
-        "user_seconds": 51.01
+        "elapsed": "0:41.72",
+        "peak_rss_kib": 2142944,
+        "system_seconds": 2.98,
+        "user_seconds": 50.73
       },
       "working_directory": "/tmp/head/memo"
     }
@@ -1653,13 +1653,12 @@
     "preserved_original_compare.py": "b32bd1da5707d49fd061da43ba27136a18442f85a3778d7cb925c8c1f4daac98",
     "preserved_original_probe.py": "0b00dddbe2d8ac9c0efeb0332cc363f8f7e8596c014af097fd75cc3e85ce836c",
     "preserved_original_source_audit.py": "6bc9848b8faa89a2d31bdc59e749f1154180d38cd79e750103b09db37b9a561e",
-    "task12_batch_verification.sh": "ce93c2cfbc991c9cdb7298bc4a0646662c6f6b0e7f5058b927656143764cf90e",
+    "task12_batch_verification.sh": "cfe60c0b8d4b4b76f9686a329a33ab849966fcc8ff10e211cac8d01e0375630b",
     "task12_brax_smoke.py": "cfd0928688874c2fc4ed31c183121276797aa379191e2f4928e2b653b1cb0e0f",
     "task12_collect_evidence.py": "1e8a4316528dcfa282c9ca96421164adfb02bb48a076960e96f62a8c4baf0e6a",
     "task12_nodeids.py": "c29892d9bae3472989afaac0541187bba57db7848331ae67955c7c957d155003",
     "task12_numerical_evidence.py": "a6ee7ccb2e7ef2010868d912b87bc5bac4b67e23c78757fefc44fbbcf094099c",
-    "task12_verify_archives.py": "5c3fe3c09e309a60e400a5b5c28bc027c27f267c3a8fe9fde413e907de73e62c",
-    "test_task12_evidence_gates.py": "9d4b4cdb64f5c0875df6fd19e7472361424bf2685110b8b8281d74534d815fcc"
+    "test_task12_evidence_gates.py": "c997aaa237c7356035ccb4b839927c3a31b8ba0d3f35e44f6bc4d9d43772810d"
   },
   "task10_comparison_base_sha": "5a89953b5d09909b35c5016118dc11a1adb0dec2"
 }
