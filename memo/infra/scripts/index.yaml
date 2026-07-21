@@ -1,0 +1,4 @@
+protocol_version: "1"
+scripts:
+  - memo_stream_ac.yaml
+  - memo_rtrrl.yaml

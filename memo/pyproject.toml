@@ -50,6 +50,8 @@ Documentation = "https://memorax.readthedocs.io"
 
 [project.optional-dependencies]
 brax      = ["brax>=0.12.4"]
+facility = ["boto3"]
+cuda12 = ["jax[cuda12]==0.10.0"]
 jumanji   = ["jumanji>=1.1.1"]
 navix     = ["navix>=0.7.0"]
 craftax   = ["craftax>=1.5.0"]

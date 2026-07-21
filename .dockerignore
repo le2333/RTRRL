@@ -1,0 +1,43 @@
+# Version-control metadata and linked worktree markers.
+.git
+**/.git
+**/.git/**
+
+# Local environments, package outputs, and tool caches.
+**/.venv
+**/.venv/**
+**/__pycache__
+**/__pycache__/**
+**/*.py[cod]
+**/*.egg-info
+**/*.egg-info/**
+**/.pytest_cache
+**/.pytest_cache/**
+**/.ruff_cache
+**/.ruff_cache/**
+**/.mypy_cache
+**/.mypy_cache/**
+**/.cache
+**/.cache/**
+
+# Agent/session history and local experiment state.
+.superpowers
+**/.superpowers
+**/history
+**/history/**
+**/Aim
+**/Aim/**
+**/aim
+**/aim/**
+**/Optuna
+**/Optuna/**
+**/optuna
+**/optuna/**
+**/artifacts
+**/artifacts/**
+**/logs
+**/logs/**
+**/_runlogs
+**/_runlogs/**
+**/wandb
+**/wandb/**
