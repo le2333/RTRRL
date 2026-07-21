@@ -173,7 +173,7 @@ def resolve_one_group(
             "experiment": {"name": "hopper"},
             "defaults": {
                 "image": IMAGE,
-                "resources": {"profile": "g6x"},
+                "resources": {"profile": "gpu"},
                 "hpo": {
                     "total_trials": 5,
                     "configs_per_batch": 2,
@@ -193,7 +193,7 @@ def test_group_is_independent_and_defaults_are_resolved(catalog: ScriptCatalog) 
             "experiment": {"name": "hopper"},
             "defaults": {
                 "image": IMAGE,
-                "resources": {"profile": "g6x"},
+                "resources": {"profile": "gpu"},
                 "hpo": {"total_trials": 5, "configs_per_batch": 2},
                 "execution": {"runs_per_job": 2},
                 "parameters": {"seed": {"values": [7]}},
@@ -227,7 +227,7 @@ def test_descriptor_rejects_unlisted_environment(catalog: ScriptCatalog) -> None
             "experiment": {"name": "hopper"},
             "defaults": {
                 "image": IMAGE,
-                "resources": {"profile": "g6x"},
+                "resources": {"profile": "gpu"},
                 "hpo": {"total_trials": 1, "configs_per_batch": 1},
                 "execution": {"runs_per_job": 1},
             },
@@ -345,7 +345,7 @@ def test_catalog_lookup_requires_exact_image_reference(catalog: ScriptCatalog) -
             "experiment": {"name": "hopper"},
             "defaults": {
                 "image": IMAGE,
-                "resources": {"profile": "g6x"},
+                "resources": {"profile": "gpu"},
                 "hpo": {"total_trials": 1, "configs_per_batch": 1},
                 "execution": {"runs_per_job": 1},
             },
@@ -363,7 +363,7 @@ def test_group_override_image_selects_matching_catalog(catalog: ScriptCatalog) -
             "experiment": {"name": "hopper"},
             "defaults": {
                 "image": IMAGE,
-                "resources": {"profile": "g6x"},
+                "resources": {"profile": "gpu"},
                 "hpo": {"total_trials": 1, "configs_per_batch": 1},
                 "execution": {"runs_per_job": 1},
             },
@@ -392,7 +392,7 @@ def test_resolved_metadata_is_recursively_immutable_and_json_serializable(
             },
             "defaults": {
                 "image": IMAGE,
-                "resources": {"profile": "g6x"},
+                "resources": {"profile": "gpu"},
                 "hpo": {"total_trials": 1, "configs_per_batch": 1},
                 "execution": {"runs_per_job": 1},
             },

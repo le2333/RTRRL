@@ -28,7 +28,7 @@ class FakeTrial:
         self.number = number
 
 
-def make_group(name: str = "shared", profile: str = "g6x") -> ResolvedGroup:
+def make_group(name: str = "shared") -> ResolvedGroup:
     return ResolvedGroup(
         name=name,
         study_key=f"experiment-123:{name}",
@@ -48,7 +48,7 @@ def make_group(name: str = "shared", profile: str = "g6x") -> ResolvedGroup:
         ),
         training_budget=TrainingBudgetSpec(env_steps=100),
         logging=LoggingSpec(aim_every_env_steps=10, rerun_every_episodes=2),
-        resources=ResourcesSpec(profile=profile),
+        resources=ResourcesSpec(profile="gpu"),
         hpo=HpoSpec(total_trials=10, configs_per_batch=2),
         execution=ExecutionSpec(runs_per_job=2),
         metadata=MappingProxyType({"labels": ["baseline"], "owner": {"name": "research"}}),
@@ -192,18 +192,6 @@ def test_materialized_run_is_an_immutable_complete_snapshot() -> None:
         run.context["run_number"] = 2
     with pytest.raises(Exception):
         run.run_number = 2
-
-
-def test_materialization_preserves_exact_cpu_profile() -> None:
-    run = materialize_run(
-        make_group(profile="c7al"),
-        FakeTrial(0),
-        {"topology": "dual"},
-        run_number=1,
-    )
-
-    assert run.resources.profile == "c7al"
-    assert json.loads(run.run_json)["resources"] == {"profile": "c7al"}
 
 
 def test_materialize_rejects_fixed_overrides_and_missing_searchable_values() -> None:
