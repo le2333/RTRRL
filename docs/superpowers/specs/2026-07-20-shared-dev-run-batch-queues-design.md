@@ -11,11 +11,12 @@ The migration:
 
 1. creates or reuses four exact-instance compute environments;
 2. creates or reuses eight dev/run queues;
-3. updates the heavy-test profile mapping to dev queues;
-4. removes idle superseded queues and their now-unreferenced environments.
+3. removes idle superseded queues and their now-unreferenced environments.
 
-No smoke jobs are submitted. Normal training and test commands never create,
-update, or delete Batch infrastructure.
+No smoke jobs are submitted. This task does not develop or modify a heavy-test
+runner, formal Batch adapter, controller, or other runtime infrastructure. It
+only makes the dev queues available for tests and the run queues available for
+later formal submission work.
 
 ## Fixed AWS Resources
 
@@ -48,9 +49,9 @@ configuration. G6f is not supported.
 Each queue binds exactly one environment. Dev and run queues share capacity;
 priority affects waiting jobs but does not preempt running jobs.
 
-## Resource Profiles and Routing
+## Intended Queue Use
 
-Profiles remain:
+The queues are sized for these profiles:
 
 | Profile | Request |
 | --- | --- |
@@ -59,10 +60,10 @@ Profiles remain:
 | `c7ax` | 4 vCPU, 7168 MiB, 0 GPU |
 | `g6x` | 4 vCPU, 12000 MiB, 1 GPU |
 
-Users select a profile, never a queue name. `trainer-heavy-test` maps the four
-profiles to the corresponding dev queues. The same mapping helper exposes run
-queues for the formal Batch adapter when that separate control-plane task is
-implemented; this migration does not implement that adapter.
+Dev queues are reserved for tests and run queues for formal experiments. This
+specification records the intended profile-to-queue relationship but does not
+add routing code or modify `trainer-heavy-test`. Runtime submission integration
+belongs to separate tasks.
 
 ## One-Time Migration Script
 
@@ -124,8 +125,6 @@ references are skipped while cleanup continues for independent idle resources.
 Local tests use fake AWS clients and cover:
 
 - the four environment and eight queue constants;
-- profile-to-dev/run routing;
-- c7al support in the heavy-test path;
 - read-only default behavior;
 - creation of missing resources;
 - reuse of matching resources;
@@ -149,6 +148,7 @@ The final code does not retain the earlier:
 - smoke job-definition, ECR tag, or log cleanup;
 - cross-process definition locking;
 - automatic rollback or partial-submission recovery;
-- generalized retry and exception hierarchy.
+- generalized retry and exception hierarchy;
+- changes to the heavy-test runner or formal Batch adapter.
 
 These features are outside the migration requirement.
