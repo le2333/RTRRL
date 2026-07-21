@@ -48,7 +48,7 @@ def make_group(name: str = "shared") -> ResolvedGroup:
         ),
         training_budget=TrainingBudgetSpec(env_steps=100),
         logging=LoggingSpec(aim_every_env_steps=10, rerun_every_episodes=2),
-        resources=ResourcesSpec(profile="gpu"),
+        resources=ResourcesSpec(profile="g6x"),
         hpo=HpoSpec(total_trials=10, configs_per_batch=2),
         execution=ExecutionSpec(runs_per_job=2),
         metadata=MappingProxyType({"labels": ["baseline"], "owner": {"name": "research"}}),

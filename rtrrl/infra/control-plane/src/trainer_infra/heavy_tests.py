@@ -185,7 +185,7 @@ _QUEUE_FIELDS: Mapping[str, object] = MappingProxyType(
     {
         "state": "ENABLED",
         "status": "VALID",
-        "priority": 1,
+        "priority": 10,
     }
 )
 _IMAGE_COMPONENT = r"[a-z0-9]+(?:[._-][a-z0-9]+)*"
@@ -389,7 +389,7 @@ def create_c7ax_if_missing(batch: Any, settings: AwsNetworkSettings) -> None:
         batch.create_job_queue(
             jobQueueName=profile.queue,
             state="ENABLED",
-            priority=1,
+            priority=10,
             computeEnvironmentOrder=[
                 {
                     "order": 1,

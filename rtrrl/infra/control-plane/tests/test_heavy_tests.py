@@ -90,7 +90,7 @@ class FakeBatch:
             ),
             "state": "ENABLED",
             "status": "VALID",
-            "priority": 1,
+            "priority": 10,
             "computeEnvironmentOrder": [
                 {
                     "order": 1,
@@ -307,7 +307,7 @@ def test_network_list_order_is_not_profile_drift(
         ("queue", "jobQueueName", "wrong-queue"),
         ("queue", "state", "DISABLED"),
         ("queue", "status", "INVALID"),
-        ("queue", "priority", 2),
+        ("queue", "priority", 1),
         ("queue", "computeEnvironmentOrder", []),
     ],
 )
@@ -419,7 +419,7 @@ def test_missing_c7ax_resources_are_created_exactly() -> None:
         {
             "jobQueueName": "dev-cpu-c7ax-queue",
             "state": "ENABLED",
-            "priority": 1,
+            "priority": 10,
             "computeEnvironmentOrder": [
                 {"order": 1, "computeEnvironment": compute_environment_arn}
             ],

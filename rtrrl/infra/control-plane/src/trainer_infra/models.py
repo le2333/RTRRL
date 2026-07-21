@@ -11,7 +11,6 @@ from pydantic import (
     BaseModel,
     ConfigDict,
     Field,
-    NonNegativeInt,
     PositiveInt,
     field_validator,
     model_validator,
@@ -19,6 +18,7 @@ from pydantic import (
 from typing_extensions import TypeAliasType
 
 JsonScalar: TypeAlias = str | int | float | bool | None
+ResourceProfileName: TypeAlias = Literal["c7am", "c7al", "c7ax", "g6x"]
 JsonValue = TypeAliasType(
     "JsonValue",
     JsonScalar | list["JsonValue"] | dict[str, "JsonValue"],
@@ -141,9 +141,6 @@ class HpoSpec(ContractModel):
 
 class ExecutionSpec(ContractModel):
     runs_per_job: PositiveInt
-    max_infra_retries: NonNegativeInt = 2
-    max_algorithm_retries: NonNegativeInt = 0
-    retry_backoff_seconds: PositiveInt = 30
     aim_result_timeout_seconds: PositiveInt = 600
 
 
@@ -184,7 +181,7 @@ class LoggingSpec(ContractModel):
 
 
 class ResourcesSpec(ContractModel):
-    profile: str
+    profile: ResourceProfileName
 
 
 class ExperimentDefaults(ContractModel):
