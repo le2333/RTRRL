@@ -3,18 +3,18 @@ set -uo pipefail
 
 export DEBIAN_FRONTEND=noninteractive
 export TASK12_RESULTS_DIR=/tmp/task12-results
-export TASK12_FUNCTIONAL_HEAD_SHA=8e9dbace42dc9e75d4fb40505a66a78382a25e30
+export TASK12_FUNCTIONAL_HEAD_SHA=ca9f80f76c1b7df7a804eeba656fb02ca1ad11f3
 export TASK12_FEATURE_BASE_SHA=5f7ff4e40e66da0b7df4f3edc9a928185ad73ae6
 export TASK12_TASK10_BASE_SHA=5a89953b5d09909b35c5016118dc11a1adb0dec2
-export TASK12_REPORT_PARENT_SHA=8e9dbace42dc9e75d4fb40505a66a78382a25e30
-export TASK12_REVIEW_PATCH_SHA256=f33468f9e451a8a298716f9e896fb3e0944c70198384d30c78b99702e50acd20
+export TASK12_REPORT_PARENT_SHA=ca9f80f76c1b7df7a804eeba656fb02ca1ad11f3
+export TASK12_REVIEW_PATCH_SHA256=aeabbe826618b49b6228412a40e5b5b978cebef6ffa91b256689201913245c92
 export NODE_OPTIONS=--max-old-space-size=4096
 
 : "${TASK12_EXPECTED_HEAD_ARCHIVE_SHA256:?submitted head archive SHA is required}"
 : "${TASK12_EXPECTED_BASE_ARCHIVE_SHA256:?submitted base archive SHA is required}"
 : "${TASK12_EXPECTED_ORACLE_ARCHIVE_SHA256:?submitted oracle archive SHA is required}"
 
-HEAD_URI=s3://rtrrl-artifacts-007122174918/oracle/task12-preserved/head-8e9dbac-direct-trust-overlay.tar
+HEAD_URI=s3://rtrrl-artifacts-007122174918/oracle/task12-preserved/head-ca9f80f-pr26-ci-fix.tar
 BASE_URI=s3://rtrrl-artifacts-007122174918/oracle/task12-review/base-5f7ff4e.tar
 ORACLE_URI=s3://rtrrl-artifacts-007122174918/oracle/task12-preserved/aaai25-4301943.tar
 RESULT_URI=s3://rtrrl-artifacts-007122174918/oracle/task12-preserved/results
