@@ -125,15 +125,24 @@ def _environment_mismatch(
             list(SECURITY_GROUPS),
         ),
         ("instanceRole", resources.get("instanceRole"), INSTANCE_ROLE),
-        (
-            "ec2Configuration",
-            resources.get("ec2Configuration"),
-            [{"imageType": expected["image_type"]}],
-        ),
     )
     for field, actual, wanted in resource_fields:
         if actual != wanted:
             return f"{field}: expected {wanted!r}, got {actual!r}"
+    ec2_configuration = resources.get("ec2Configuration")
+    if not isinstance(ec2_configuration, list) or len(ec2_configuration) != 1:
+        return (
+            "ec2Configuration: expected exactly one image configuration, "
+            f"got {ec2_configuration!r}"
+        )
+    image = ec2_configuration[0]
+    if not isinstance(image, dict) or image.get("imageType") != expected["image_type"]:
+        return (
+            f"ec2Configuration: expected imageType {expected['image_type']!r}, "
+            f"got {image!r}"
+        )
+    if image.get("imageIdOverride") not in (None, ""):
+        return f"ec2Configuration: imageIdOverride must be empty, got {image!r}"
     return None
 
 
