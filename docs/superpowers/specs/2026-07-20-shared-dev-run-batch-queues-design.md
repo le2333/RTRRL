@@ -11,12 +11,13 @@ The migration:
 
 1. creates or reuses four exact-instance compute environments;
 2. creates or reuses eight dev/run queues;
-3. removes idle superseded queues and their now-unreferenced environments.
+3. changes only the three existing heavy-test queue mappings;
+4. removes idle superseded queues and their now-unreferenced environments.
 
-No smoke jobs are submitted. This task does not develop or modify a heavy-test
-runner, formal Batch adapter, controller, or other runtime infrastructure. It
-only makes the dev queues available for tests and the run queues available for
-later formal submission work.
+No smoke jobs are submitted. Heavy-test behavior remains unchanged except that
+existing c7am, c7ax, and g6x submissions use the corresponding dev queues. This
+task does not add c7al to the heavy-test CLI and does not develop a formal Batch
+adapter, controller, or other runtime infrastructure.
 
 ## Fixed AWS Resources
 
@@ -60,10 +61,15 @@ The queues are sized for these profiles:
 | `c7ax` | 4 vCPU, 7168 MiB, 0 GPU |
 | `g6x` | 4 vCPU, 12000 MiB, 1 GPU |
 
-Dev queues are reserved for tests and run queues for formal experiments. This
-specification records the intended profile-to-queue relationship but does not
-add routing code or modify `trainer-heavy-test`. Runtime submission integration
-belongs to separate tasks.
+Dev queues are reserved for tests and run queues for formal experiments.
+`trainer-heavy-test` changes only these existing mappings:
+
+- c7am: `rtrrl-cpu-c7am-queue` → `dev-cpu-c7am-queue`;
+- c7ax: `rtrrl-cpu-c7ax-queue` → `dev-cpu-c7ax-queue`;
+- g6x: `rtrrl-gpu-g6x-queue` → `dev-gpu-queue`.
+
+No new heavy-test profile or behavior is introduced. Formal run-queue
+integration belongs to a separate task.
 
 ## One-Time Migration Script
 
@@ -125,6 +131,7 @@ references are skipped while cleanup continues for independent idle resources.
 Local tests use fake AWS clients and cover:
 
 - the four environment and eight queue constants;
+- the three existing heavy-test queue-name substitutions;
 - read-only default behavior;
 - creation of missing resources;
 - reuse of matching resources;
@@ -149,6 +156,7 @@ The final code does not retain the earlier:
 - cross-process definition locking;
 - automatic rollback or partial-submission recovery;
 - generalized retry and exception hierarchy;
-- changes to the heavy-test runner or formal Batch adapter.
+- heavy-test changes beyond the three queue-name substitutions;
+- changes to the formal Batch adapter.
 
 These features are outside the migration requirement.
