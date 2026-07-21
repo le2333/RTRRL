@@ -288,6 +288,7 @@ def migrate(*, batch: Any, sts: Any, execute: bool) -> tuple[str, ...]:
                 raise ValueError(f"queue {name} mismatch: {mismatch}")
             actions.append(f"reuse queue {name}")
 
+    planned_queue_deletions: set[str] = set()
     for name in OLD_QUEUES:
         queue = _describe_queue(batch, name)
         if queue is None:
@@ -296,6 +297,7 @@ def migrate(*, batch: Any, sts: Any, execute: bool) -> tuple[str, ...]:
             actions.append(f"skip active queue {name}")
             continue
         actions.append(f"delete queue {name}")
+        planned_queue_deletions.add(name)
         if execute:
             if queue.get("state") != "DISABLED":
                 batch.update_job_queue(jobQueue=name, state="DISABLED")
@@ -316,6 +318,7 @@ def migrate(*, batch: Any, sts: Any, execute: bool) -> tuple[str, ...]:
     referenced_environments = {
         binding.get("computeEnvironment")
         for queue in _all_queues(batch)
+        if execute or queue.get("jobQueueName") not in planned_queue_deletions
         for binding in queue.get("computeEnvironmentOrder", [])
     }
     for name in OLD_ENVIRONMENTS:

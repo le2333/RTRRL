@@ -458,6 +458,37 @@ def test_each_active_state_skips_only_that_old_queue(
     assert "rtrrl-cpu2-ce" in matching_aws.batch.deleted_environments
 
 
+def test_dry_run_reports_idle_queue_and_its_unreferenced_environment_deletion(
+    migration: Any, matching_aws: Any
+) -> None:
+    actions = migration.migrate(
+        batch=matching_aws.batch,
+        sts=matching_aws.sts,
+        execute=False,
+    )
+
+    assert "delete queue rtrrl-cpu2-queue" in actions
+    assert "delete environment rtrrl-cpu2-ce" in actions
+    assert matching_aws.batch.mutations == []
+
+
+def test_dry_run_active_queue_preserves_its_referenced_environment(
+    migration: Any, matching_aws: Any
+) -> None:
+    matching_aws.batch.jobs[("rtrrl-cpu2-queue", "RUNNING")] = ["job-1"]
+
+    actions = migration.migrate(
+        batch=matching_aws.batch,
+        sts=matching_aws.sts,
+        execute=False,
+    )
+
+    assert "skip active queue rtrrl-cpu2-queue" in actions
+    assert "skip referenced environment rtrrl-cpu2-ce" in actions
+    assert "delete environment rtrrl-cpu2-ce" not in actions
+    assert matching_aws.batch.mutations == []
+
+
 def test_referenced_old_environment_is_preserved(
     migration: Any, matching_aws: Any
 ) -> None:
