@@ -27,6 +27,9 @@ control configuration, examples, and failure-boundary coverage.
   pending trial in a failed round is marked `FAIL` before the experiment exits.
   Fully discrete choices and integer ranges use a deterministic remaining-space
   fallback through `enqueue_trial`; continuous collisions have a hard bound.
+  Finite cardinality uses O(1) per-dimension lengths and overflow-safe
+  multiplication. Spaces above 10,000 are never enumerated, while smaller
+  spaces use one lazy product iterator and materialize only the next fallback.
 - Batch rounds submit each prepared concurrent job once and never retry,
   resubmit, cancel, or start a later HPO round after failure. Batch failure,
   nonzero child exit, missing/tampered marker, Aim failure/timeout/nonfinite
@@ -42,6 +45,8 @@ control configuration, examples, and failure-boundary coverage.
   construction is lazy and explicit.
 - SDK run contexts receive the YAML experiment name explicitly while study and
   run identity remain isolated by the fresh internal experiment ID.
+  `build_run_context` requires the concrete study key to equal exactly
+  `<experiment_id>:<group>`.
 - The control example includes region, account, bucket, exact prefix, Aim repo,
   poll/timeout settings, network contract, IAM roles, and all four digest-bound
   job definitions. The experiment example covers both memo launchers.
@@ -66,10 +71,17 @@ failure JSON. GREEN coverage includes real Optuna `2+2+1`, real `FAIL` states,
 deterministic categorical and integer-range fallback, bounded continuous
 collision failure, and state/report each-or-both write failures.
 
+Final closure coverage proves a trillion-value integer range and a
+million-combination categorical space are classified without iterating or
+allocating their products. A real Optuna repeating sampler verifies each
+fallback value is identical across `trial.params`, `ConcreteRun` sampled/final
+parameters, `RunBundle` context, and canonical config YAML.
+
 ## Verification
 
 - Review targeted suite: 58 passed.
-- Full control-plane suite: 444 passed.
+- Final closure related suite: 91 passed.
+- Full control-plane suite: 446 passed.
 - Full training SDK suite: 129 passed.
 - Ruff over control-plane `src` and `tests`: passed.
 - Control-plane lock check: passed.

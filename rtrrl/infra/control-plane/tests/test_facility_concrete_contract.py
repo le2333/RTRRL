@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from dataclasses import replace
 import sys
 from pathlib import Path
 from types import MappingProxyType
@@ -115,6 +116,7 @@ def test_descriptor_resolve_materialize_loads_exact_nested_concrete_yaml(tmp_pat
             )
         },
     ).groups[0]
+    resolved = replace(resolved, study_key="exp-1:stream")
 
     concrete = materialize_run(
         resolved,

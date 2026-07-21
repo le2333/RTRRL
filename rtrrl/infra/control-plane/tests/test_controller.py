@@ -1,21 +1,38 @@
 from __future__ import annotations
 
+from dataclasses import replace
 from datetime import datetime, timezone
 import json
 from pathlib import Path
 import threading
+from types import MappingProxyType
 from typing import Any
 
 import pytest
 import optuna
+from optuna.distributions import (
+    CategoricalDistribution,
+    FloatDistribution,
+    IntDistribution,
+)
 from optuna.trial import TrialState
 import yaml
 
 from trainer_infra.adapters.aws_batch import SubmittedJob, ValidatedJobDefinition
-from trainer_infra.controller import ExperimentController, ExperimentRunError
+from trainer_infra.controller import (
+    ExperimentController,
+    ExperimentRunError,
+    SamplingExhaustedError,
+)
 from trainer_infra.execution import CompletionMarker, JobQuery
 from trainer_infra.image_catalog import ResolvedImage
-from trainer_infra.models import ScriptCatalog
+from trainer_infra.models import (
+    DiscreteSearch,
+    ResolvedParameter,
+    ScriptCatalog,
+)
+from trainer_infra.materialize import materialize_run as real_materialize_run
+from test_materialize import make_group
 from test_resolve import catalog_data
 
 IMAGE_TAG = "123456789012.dkr.ecr.eu-north-1.amazonaws.com/memo:latest"
@@ -260,6 +277,38 @@ class Aim:
         if self.mode == "aim-failed":
             raise RuntimeError("Aim failed")
         return float(len(self.calls))
+
+
+class RepeatingSampler(optuna.samplers.BaseSampler):
+    def infer_relative_search_space(
+        self, study: optuna.Study, trial: optuna.trial.FrozenTrial
+    ) -> dict[str, optuna.distributions.BaseDistribution]:
+        del study, trial
+        return {}
+
+    def sample_relative(
+        self,
+        study: optuna.Study,
+        trial: optuna.trial.FrozenTrial,
+        search_space: dict[str, optuna.distributions.BaseDistribution],
+    ) -> dict[str, object]:
+        del study, trial, search_space
+        return {}
+
+    def sample_independent(
+        self,
+        study: optuna.Study,
+        trial: optuna.trial.FrozenTrial,
+        param_name: str,
+        param_distribution: optuna.distributions.BaseDistribution,
+    ) -> object:
+        del study, trial, param_name
+        if isinstance(param_distribution, CategoricalDistribution):
+            return param_distribution.choices[0]
+        if isinstance(param_distribution, IntDistribution):
+            return param_distribution.low
+        assert isinstance(param_distribution, FloatDistribution)
+        return param_distribution.low
 
 
 def make_controller(
@@ -548,16 +597,27 @@ def test_real_optuna_marks_current_failed_round_once(tmp_path: Path) -> None:
     assert TrialState.RUNNING not in states
 
 
-def test_discrete_duplicate_uses_deterministic_remaining_fallback(
+def test_real_optuna_fallback_preserves_values_through_every_execution_record(
     tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     experiment = tmp_path / "experiment.yaml"
     write_experiment(experiment)
+    payload = yaml.safe_load(experiment.read_text())
+    payload["groups"] = {"first": payload["groups"]["first"]}
+    experiment.write_text(yaml.safe_dump(payload))
     calls: list[str] = []
-    owner = threading.get_ident()
+    concrete_runs: list[Any] = []
 
-    def repeating_study(**kwargs: object) -> Study:
-        return Study(str(kwargs["study_name"]), owner, repeat=True)
+    def recording_materialize(*args: Any, **kwargs: Any) -> Any:
+        concrete = real_materialize_run(*args, **kwargs)
+        concrete_runs.append(concrete)
+        return concrete
+
+    monkeypatch.setattr("trainer_infra.controller.materialize_run", recording_materialize)
+
+    def repeating_study(**kwargs: object) -> optuna.Study:
+        return optuna.create_study(**kwargs, sampler=RepeatingSampler())
 
     controller, _, batches, studies = make_controller(
         calls, custom_study_factory=repeating_study
@@ -565,13 +625,28 @@ def test_discrete_duplicate_uses_deterministic_remaining_fallback(
 
     report = controller.run(experiment)
 
-    assert report.completed_runs == 10
-    assert batches[0].round_sizes == {"first": [2, 2, 1], "second": [2, 2, 1]}
-    for study in studies:
-        completed = [item for item in study.told if item[2] is None]
-        pruned = [item for item in study.told if item[2] == TrialState.PRUNED]
-        assert len(completed) == 5
-        assert pruned
+    assert report.completed_runs == 5
+    study = studies[0]
+    complete = {
+        trial.number: trial
+        for trial in study.trials
+        if trial.state == TrialState.COMPLETE
+    }
+    assert len(complete) == 5
+    assert any(trial.state == TrialState.PRUNED for trial in study.trials)
+    bundles = [bundle for bundle in batches[0].submitted]
+    run_bundles = [run for bundle in bundles for run in bundle.runs]
+    assert len(concrete_runs) == len(run_bundles) == 5
+    for concrete, run_bundle in zip(concrete_runs, run_bundles, strict=True):
+        topology = complete[concrete.trial_number].params["topology"]
+        config = yaml.safe_load(run_bundle.config_yaml)
+        assert concrete.sampled_parameters == {"topology": topology}
+        assert concrete.final_parameters["topology"] == topology
+        assert run_bundle.run_context["sampled_parameters"] == {
+            "topology": topology
+        }
+        assert run_bundle.run_context["final_parameters"]["topology"] == topology
+        assert config["parameters"]["topology"] == topology
 
 
 def test_continuous_duplicate_limit_fails_without_hanging_or_running_trials(
@@ -644,3 +719,94 @@ def test_integer_range_is_enumerated_as_finite_fallback(tmp_path: Path) -> None:
 
     assert report.completed_runs == 3
     assert len([item for item in studies[0].told if item[2] is None]) == 3
+
+
+def test_trillion_integer_range_is_never_iterated_or_materialized(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    experiment = tmp_path / "experiment.yaml"
+    write_experiment(experiment)
+    payload = yaml.safe_load(experiment.read_text())
+    payload["groups"] = {
+        "first": {
+            "script": "rtrrl",
+            "parameters": {
+                "topology": {"values": ["one"]},
+                "width": {
+                    "min": 1,
+                    "max": 1_000_000_000_000,
+                    "scale": "linear",
+                },
+            },
+        }
+    }
+    payload["defaults"]["hpo"]["total_trials"] = 2
+    experiment.write_text(yaml.safe_dump(payload))
+    real_range = range
+
+    class NeverIterateHugeRange:
+        def __len__(self) -> int:
+            return 1_000_000_000_000
+
+        def __iter__(self) -> object:
+            raise AssertionError("huge integer range was iterated")
+
+    def guarded_range(*args: int) -> object:
+        candidate = real_range(*args)
+        if len(candidate) > 10_000:
+            return NeverIterateHugeRange()
+        return candidate
+
+    monkeypatch.setattr("trainer_infra.controller.range", guarded_range, raising=False)
+    monkeypatch.setattr(
+        "trainer_infra.controller.product",
+        lambda *_: (_ for _ in ()).throw(AssertionError("product was created")),
+    )
+    calls: list[str] = []
+    owner = threading.get_ident()
+
+    def repeating_study(**kwargs: object) -> Study:
+        return Study(str(kwargs["study_name"]), owner, repeat=True)
+
+    controller, _, batches, studies = make_controller(
+        calls, custom_study_factory=repeating_study
+    )
+
+    with pytest.raises(ExperimentRunError, match="too large|32") as raised:
+        controller.run(experiment)
+
+    assert isinstance(raised.value.original_cause, SamplingExhaustedError)
+    assert batches[0].submitted == []
+    assert len(studies[0].told) == 33
+
+
+def test_huge_multidimensional_choices_compute_cardinality_without_product(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    choices = tuple(range(1_001))
+    group = replace(
+        make_group(),
+        parameters=MappingProxyType(
+            {
+                "first": ResolvedParameter(
+                    fixed_value=None,
+                    search_domain=DiscreteSearch(choices),
+                ),
+                "second": ResolvedParameter(
+                    fixed_value=None,
+                    search_domain=DiscreteSearch(choices),
+                ),
+            }
+        ),
+    )
+    monkeypatch.setattr(
+        "trainer_infra.controller.product",
+        lambda *_: (_ for _ in ()).throw(AssertionError("product was created")),
+    )
+
+    finite = ExperimentController._finite_space(group)
+
+    assert finite is not None
+    assert finite.too_large is True
+    assert finite.cardinality > 10_000

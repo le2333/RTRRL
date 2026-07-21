@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from collections.abc import Iterator, Mapping
-from dataclasses import FrozenInstanceError
+from dataclasses import FrozenInstanceError, replace
 from datetime import datetime, timezone
 import hashlib
 from pathlib import Path
@@ -306,7 +306,7 @@ def test_completion_marker_and_job_query_are_strict_round_trip_records() -> None
 
 def test_build_run_context_populates_every_sdk_field() -> None:
     concrete = materialize_run(
-        make_group(),
+        replace(make_group(), study_key="facility-456:shared"),
         FakeTrial(11),
         {"topology": "shared"},
         run_number=3,
@@ -354,7 +354,7 @@ def test_build_run_context_populates_every_sdk_field() -> None:
 
 def test_build_run_context_rejects_group_and_identity_mismatches() -> None:
     concrete = materialize_run(
-        make_group(),
+        replace(make_group(), study_key="facility-456:shared"),
         FakeTrial(11),
         {"topology": "shared"},
         run_number=3,
@@ -365,6 +365,21 @@ def test_build_run_context_rejects_group_and_identity_mismatches() -> None:
             "facility-456",
             "other",
             concrete,
+            Path("/tmp/artifacts"),
+        )
+
+    wrong_study = materialize_run(
+        replace(make_group(), study_key="other-experiment:shared"),
+        FakeTrial(11),
+        {"topology": "shared"},
+        run_number=3,
+    )
+    with pytest.raises(ValueError, match="study_key.*experiment_id"):
+        build_run_context(
+            "user-facing-experiment",
+            "facility-456",
+            "shared",
+            wrong_study,
             Path("/tmp/artifacts"),
         )
 
@@ -381,7 +396,7 @@ def test_build_run_context_rejects_group_and_identity_mismatches() -> None:
 
 def test_build_run_context_rejects_tagged_image_reference() -> None:
     concrete = materialize_run(
-        make_group(),
+        replace(make_group(), study_key="facility-456:shared"),
         FakeTrial(11),
         {"topology": "shared"},
         run_number=3,

@@ -31,17 +31,15 @@ def build_run_context(
     concrete_run: ConcreteRun,
     artifact_prefix: str | Path,
 ) -> RunContext:
-    try:
-        _, derived_group = concrete_run.study_key.rsplit(":", 1)
-    except ValueError as error:
-        raise ValueError("study_key must contain isolated study and group identity") from error
     if not experiment_name or not experiment_id:
         raise ValueError("experiment_name and experiment_id must be nonempty")
-    if not derived_group:
-        raise ValueError("study_key must contain a nonempty group identity")
-    if group != derived_group:
+    if not group:
+        raise ValueError("group must be nonempty")
+    expected_study_key = f"{experiment_id}:{group}"
+    if concrete_run.study_key != expected_study_key:
         raise ValueError(
-            f"group {group!r} does not match concrete run group {derived_group!r}"
+            f"study_key {concrete_run.study_key!r} does not match experiment_id/group "
+            f"identity {expected_study_key!r}"
         )
     expected_run_id = f"{concrete_run.study_key}:{concrete_run.run_number:04d}"
     if concrete_run.run_id != expected_run_id:
@@ -50,7 +48,7 @@ def build_run_context(
         )
     context_group = concrete_run.context.get("group")
     context_run_id = concrete_run.context.get("run_id")
-    if context_group != derived_group or context_run_id != concrete_run.run_id:
+    if context_group != group or context_run_id != concrete_run.run_id:
         raise ValueError("concrete run context identity does not match study_key/run_id")
     seed = concrete_run.final_parameters.get("seed")
     if type(seed) is not int:

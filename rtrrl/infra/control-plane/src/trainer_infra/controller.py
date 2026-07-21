@@ -1,7 +1,7 @@
 from __future__ import annotations
 
-from collections.abc import Callable, Mapping
-from dataclasses import fields, replace
+from collections.abc import Callable, Iterable, Iterator, Mapping
+from dataclasses import dataclass, fields, replace
 import hashlib
 from itertools import product
 from pathlib import Path
@@ -95,6 +95,19 @@ class ExperimentRunError(RuntimeError):
 
 
 _MAX_DUPLICATE_ATTEMPTS = 32
+_MAX_ENUMERATED_SPACE = 10_000
+
+
+class SamplingExhaustedError(RuntimeError):
+    """Sampling repeatedly collided and no safe fallback was available."""
+
+
+@dataclass(frozen=True)
+class _FiniteSpace:
+    cardinality: int
+    too_large: bool
+    names: tuple[str, ...] = ()
+    domains: tuple[Iterable[JsonScalar], ...] = ()
 
 
 def _estimated_jobs(group: ResolvedGroup) -> int:
@@ -331,37 +344,58 @@ class ExperimentController:
         return tuple(errors)
 
     @staticmethod
-    def _finite_candidates(
+    def _finite_space(
         group: ResolvedGroup,
-    ) -> tuple[dict[str, JsonScalar], ...] | None:
+    ) -> _FiniteSpace | None:
         searchable = group.searchable_parameters()
-        if not all(
-            isinstance(domain, DiscreteSearch)
-            or isinstance(domain, ContinuousSearch)
-            and domain.integer
-            for domain in searchable.values()
-        ):
-            return None
-        names = tuple(searchable)
-        domains: list[tuple[JsonScalar, ...]] = []
-        for domain in searchable.values():
+        names: list[str] = []
+        domains: list[Iterable[JsonScalar]] = []
+        cardinality = 1
+        for name, domain in searchable.items():
             if isinstance(domain, DiscreteSearch):
-                domains.append(domain.values)
+                size = len(domain.values)
+                values: Iterable[JsonScalar] = domain.values
             elif isinstance(domain, ContinuousSearch) and domain.integer:
-                domains.append(
-                    tuple(
-                        range(
-                            int(domain.low),
-                            int(domain.high) + 1,
-                            int(domain.step or 1),
-                        )
-                    )
+                step = int(domain.step or 1)
+                size = (int(domain.high) - int(domain.low)) // step + 1
+                values = range(
+                    int(domain.low),
+                    int(domain.high) + 1,
+                    step,
                 )
-        unique: dict[str, dict[str, JsonScalar]] = {}
-        for values in product(*domains):
-            candidate = dict(zip(names, values, strict=True))
-            unique.setdefault(canonical_json(candidate), candidate)
-        return tuple(unique.values())
+            else:
+                return None
+            if size <= 0:
+                raise ValueError(f"search domain {name!r} is empty")
+            if cardinality > _MAX_ENUMERATED_SPACE // size:
+                return _FiniteSpace(
+                    cardinality=_MAX_ENUMERATED_SPACE + 1,
+                    too_large=True,
+                )
+            cardinality *= size
+            names.append(name)
+            domains.append(values)
+        return _FiniteSpace(
+            cardinality=cardinality,
+            too_large=False,
+            names=tuple(names),
+            domains=tuple(domains),
+        )
+
+    @staticmethod
+    def _iter_finite_candidates(
+        finite_space: _FiniteSpace,
+    ) -> Iterator[dict[str, JsonScalar]]:
+        if finite_space.too_large:
+            raise ValueError("too-large finite spaces cannot be enumerated")
+        for values in product(*finite_space.domains):
+            yield dict(
+                zip(
+                    finite_space.names,
+                    values,
+                    strict=True,
+                )
+            )
 
     @classmethod
     def _ask_unique(
@@ -371,7 +405,9 @@ class ExperimentController:
         tracker: FiniteSpaceTracker,
         seen: set[str],
         terminal_trials: set[int],
-        finite_candidates: tuple[dict[str, JsonScalar], ...] | None,
+        finite_candidates: Iterator[dict[str, JsonScalar]] | None,
+        *,
+        finite_space_too_large: bool,
     ) -> tuple[Any, dict[str, JsonScalar]] | None:
         duplicate_attempts = 0
         while duplicate_attempts < _MAX_DUPLICATE_ATTEMPTS:
@@ -450,9 +486,14 @@ class ExperimentController:
             )
             seen.add(key)
             return trial, sampled
-        raise RuntimeError(
+        reason = (
+            f"finite space exceeds {_MAX_ENUMERATED_SPACE}"
+            if finite_space_too_large
+            else "no enumerable finite fallback"
+        )
+        raise SamplingExhaustedError(
             f"duplicate sampling limit ({_MAX_DUPLICATE_ATTEMPTS}) reached "
-            f"for group {group.name!r}"
+            f"for group {group.name!r}: {reason}"
         )
 
     def _persist(
@@ -498,7 +539,12 @@ class ExperimentController:
                     load_if_exists=False,
                 )
                 tracker = FiniteSpaceTracker(group)
-                finite_candidates = self._finite_candidates(group)
+                finite_space = self._finite_space(group)
+                finite_candidates = (
+                    self._iter_finite_candidates(finite_space)
+                    if finite_space is not None and not finite_space.too_large
+                    else None
+                )
                 seen: set[str] = set()
                 terminal_trials: set[int] = set()
                 allocated = 0
@@ -519,6 +565,10 @@ class ExperimentController:
                                 seen,
                                 terminal_trials,
                                 finite_candidates,
+                                finite_space_too_large=(
+                                    finite_space is not None
+                                    and finite_space.too_large
+                                ),
                             )
                             if allocation is None:
                                 break
