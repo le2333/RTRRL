@@ -269,7 +269,7 @@ def test_execution_attempt_is_exact_integer_zero(attempt: object) -> None:
         RunBundle.model_validate(payload)
 
 
-@pytest.mark.parametrize("attempt", [1, False, 0.0])
+@pytest.mark.parametrize("attempt", [-1, 1, 2, False, 0.0, "0"])
 def test_completion_marker_attempt_is_exact_integer_zero(attempt: object) -> None:
     with pytest.raises(ValidationError):
         CompletionMarker(
@@ -358,4 +358,21 @@ def test_build_run_context_rejects_group_and_identity_mismatches() -> None:
 
     object.__setattr__(concrete, "run_id", "experiment-123:other:0003")
     with pytest.raises(ValueError, match="run_id"):
+        build_run_context("facility-456", "shared", concrete, Path("/tmp/artifacts"))
+
+
+def test_build_run_context_rejects_tagged_image_reference() -> None:
+    concrete = materialize_run(
+        make_group(),
+        FakeTrial(11),
+        {"topology": "shared"},
+        run_number=3,
+    )
+    object.__setattr__(
+        concrete,
+        "image",
+        "registry.example/repository/image:latest@sha256:" + "a" * 64,
+    )
+
+    with pytest.raises(ValueError, match="canonical immutable"):
         build_run_context("facility-456", "shared", concrete, Path("/tmp/artifacts"))

@@ -116,6 +116,8 @@ def test_resolve_image_accepts_only_immutable_digest() -> None:
 
     with pytest.raises(ValueError, match="immutable digest"):
         resolve_image("registry.example/repo/image:dev")
+    with pytest.raises(ValueError, match="immutable"):
+        resolve_image(f"https://registry.example/repo/image@{DIGEST}")
 
 
 def test_resolved_image_constructor_rejects_forged_mutable_reference() -> None:

@@ -76,7 +76,11 @@ def _parse_digest_reference(reference: str) -> tuple[str, str, str]:
     if "@" not in reference:
         raise ValueError(f"image {reference!r} is not an immutable digest reference")
     repository, digest = reference.rsplit("@", 1)
-    if not repository or not _DIGEST_PATTERN.fullmatch(digest):
+    if (
+        not repository
+        or "://" in repository
+        or not _DIGEST_PATTERN.fullmatch(digest)
+    ):
         raise ValueError(f"image {reference!r} is not an immutable sha256 digest reference")
     last_slash = repository.rfind("/")
     last_colon = repository.rfind(":")

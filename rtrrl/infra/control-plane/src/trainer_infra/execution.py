@@ -4,13 +4,13 @@ from dataclasses import fields
 from datetime import datetime
 import json
 from pathlib import Path
-import re
 from typing import Any, ClassVar, Literal, Self
 
 from pydantic import field_validator, model_validator
 from training_sdk import RunContext
 import yaml
 
+from trainer_infra.image_catalog import resolve_image
 from trainer_infra.identities import canonical_json, canonical_yaml, sha256_text
 from trainer_infra.models import (
     ConcreteRun,
@@ -19,13 +19,6 @@ from trainer_infra.models import (
     _require_json_value,
     freeze_json,
     thaw_json,
-)
-
-_IMAGE_COMPONENT = r"[a-z0-9]+(?:[._-][a-z0-9]+)*"
-_REGISTRY_COMPONENT = r"[a-z0-9]+(?:[.-][a-z0-9]+)*(?::[0-9]+)?"
-_IMAGE_DIGEST_RE = re.compile(
-    rf"{_REGISTRY_COMPONENT}/{_IMAGE_COMPONENT}(?:/{_IMAGE_COMPONENT})*"
-    r"@sha256:[0-9a-f]{64}"
 )
 _RUN_CONTEXT_FIELDS = frozenset(field.name for field in fields(RunContext))
 
@@ -36,12 +29,13 @@ def _require_exact_zero(value: Any) -> Any:
     return value
 
 
-def _require_image_digest(value: str) -> str:
-    if _IMAGE_DIGEST_RE.fullmatch(value) is None:
+def _canonical_image_digest(value: str) -> str:
+    resolved = resolve_image(value)
+    if resolved.reference != value:
         raise ValueError(
-            "image_digest must be registry/repository@sha256:<64 lowercase hex>"
+            "image_digest must be a canonical immutable reference without a tag"
         )
-    return value
+    return resolved.reference
 
 
 class CanonicalRecord(ContractModel):
@@ -75,7 +69,7 @@ class RunBundle(CanonicalRecord):
     artifact_prefix: str
 
     _validate_attempt = field_validator("attempt", mode="before")(_require_exact_zero)
-    _validate_image_digest = field_validator("image_digest")(_require_image_digest)
+    _validate_image_digest = field_validator("image_digest")(_canonical_image_digest)
 
     @field_validator("run_context", mode="before")
     @classmethod
@@ -143,7 +137,7 @@ class JobBundle(CanonicalRecord):
     resource_profile: ResourceProfileName
     runs: tuple[RunBundle, ...]
 
-    _validate_image_digest = field_validator("image_digest")(_require_image_digest)
+    _validate_image_digest = field_validator("image_digest")(_canonical_image_digest)
 
     @model_validator(mode="after")
     def require_identity_and_runs(self) -> JobBundle:
@@ -238,6 +232,7 @@ def build_run_context(
     seed = concrete_run.final_parameters.get("seed")
     if type(seed) is not int:
         raise ValueError("concrete run requires an integer seed")
+    image_digest = _canonical_image_digest(concrete_run.image)
     return RunContext(
         experiment_name=experiment_name,
         experiment_id=experiment_id,
@@ -253,7 +248,7 @@ def build_run_context(
         fixed_parameters=thaw_json(concrete_run.fixed_parameters),
         sampled_parameters=thaw_json(concrete_run.sampled_parameters),
         final_parameters=thaw_json(concrete_run.final_parameters),
-        image_digest=concrete_run.image,
+        image_digest=image_digest,
         resource_profile=concrete_run.resources.profile,
         artifact_directory=Path(artifact_prefix),
         logging=concrete_run.logging.model_dump(mode="json"),
