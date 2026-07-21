@@ -1,36 +1,28 @@
-# Shared Dev/Run AWS Batch Queues Design
+# Simple Dev/Run AWS Batch Migration Design
 
-## Status and Scope
+## Scope
 
-This specification replaces the fixed single-CPU/single-GPU queue topology in
-`2026-07-20-aws-batch-migration-design.md` and the queue mapping in
-`2026-07-20-batch-heavy-test-runner-design.md`. Image digest identity, immutable
-job-definition revisions, observability, S3 exchange, and experiment semantics
-remain unchanged.
+This revision replaces the earlier deployment, smoke-evidence, and artifact-
+cleanup framework. The task is a one-time AWS Batch resource migration plus a
+small routing change. It does not redesign the control plane, HPO,
+observability SDK, training scripts, or their failure policies.
 
-The migration creates eight purpose-and-profile-specific queues while reusing
-four validated compute environments. Development tests and formal experiments
-share the same elastic capacity pools but use different queues and scheduling
-priorities. Each CPU queue binds exactly one environment so a selected profile
-guarantees its EC2 instance type. Fractional G6f instances are explicitly
-outside this version.
+The migration:
 
-## Region and Account
+1. creates or reuses four exact-instance compute environments;
+2. creates or reuses eight dev/run queues;
+3. updates the heavy-test profile mapping to dev queues;
+4. removes idle superseded queues and their now-unreferenced environments.
 
-All resources are fixed to:
+No smoke jobs are submitted. Normal training and test commands never create,
+update, or delete Batch infrastructure.
 
-- AWS account `007122174918`;
-- region `eu-north-1`;
-- On-Demand managed EC2 compute environments;
-- the existing VPC subnets, security group, ECS instance profile, Batch job
-  role, and Batch execution role.
+## Fixed AWS Resources
 
-The deployment and runtime preflight fail closed if region, account, networking,
-roles, AMI family, or any resource identity differs.
-
-## Compute Environments
-
-The following existing environments are retained and reused:
+Account and region are fixed to `007122174918` and `eu-north-1`. Compute
+environments use the existing VPC subnets, security group, ECS instance
+profile, On-Demand managed EC2 provisioning, and approved ECS AL2023 image
+families.
 
 | Environment | Instance type | max vCPU | AMI family |
 | --- | --- | ---: | --- |
@@ -39,46 +31,26 @@ The following existing environments are retained and reused:
 | `rtrrl-cpu-c7ax-ce` | `c7a.xlarge` | 16 | ECS AL2023 |
 | `rtrrl-gpu-g6x-ce` | `g6.xlarge` | 32 | ECS AL2023 NVIDIA |
 
-Every environment has `minvCpus=0` and normally returns to
-`desiredvCpus=0`. `desiredvCpus` is dynamic runtime state and is not treated as
-configuration drift. The three CPU pools expose a combined maximum of 64
-vCPUs. The GPU pool exposes at most 32 vCPUs, corresponding to approximately
-eight `g6.xlarge` instances with one full NVIDIA L4 each.
+All environments have `minvCpus=0`. `desiredvCpus` is runtime state, not fixed
+configuration. G6f is not supported.
 
-Multiple queues may share one compute environment. The environment is both the
-instance-provisioning definition and the shared autoscaling capacity pool; it
-is not merely a launch template. Capacity already occupied by one queue is not
-reserved for or preempted by another queue.
-
-## Job Queues
-
-The migration creates exactly eight queues:
-
-| Queue | Priority | Compute environment |
+| Queue | Priority | Environment |
 | --- | ---: | --- |
-| `dev-cpu-c7am-queue` | 10 | c7am |
-| `dev-cpu-c7al-queue` | 10 | c7al |
-| `dev-cpu-c7ax-queue` | 10 | c7ax |
-| `run-cpu-c7am-queue` | 100 | c7am |
-| `run-cpu-c7al-queue` | 100 | c7al |
-| `run-cpu-c7ax-queue` | 100 | c7ax |
-| `dev-gpu-queue` | 10 | g6x |
-| `run-gpu-queue` | 100 | g6x |
+| `dev-cpu-c7am-queue` | 10 | `rtrrl-cpu-c7am-ce` |
+| `dev-cpu-c7al-queue` | 10 | `rtrrl-cpu-c7al-ce` |
+| `dev-cpu-c7ax-queue` | 10 | `rtrrl-cpu-c7ax-ce` |
+| `run-cpu-c7am-queue` | 100 | `rtrrl-cpu-c7am-ce` |
+| `run-cpu-c7al-queue` | 100 | `rtrrl-cpu-c7al-ce` |
+| `run-cpu-c7ax-queue` | 100 | `rtrrl-cpu-c7ax-ce` |
+| `dev-gpu-queue` | 10 | `rtrrl-gpu-g6x-ce` |
+| `run-gpu-queue` | 100 | `rtrrl-gpu-g6x-ce` |
 
-The complete compute-environment ARNs are stored and validated. Queue
-separation is required because AWS Batch jobs can request vCPU and memory but
-cannot select one compute environment from a multi-environment queue. Binding
-one environment per queue prevents a c7am request from falling back to c7al or
-c7ax and makes the resource profile an exact instance-type contract.
-
-Queue priority applies only while jobs are waiting to be scheduled. A pending
-run job is preferred over a pending dev job when they compete for a shared
-environment, but AWS Batch does not preempt a running dev job and this design
-does not reserve fixed run capacity.
+Each queue binds exactly one environment. Dev and run queues share capacity;
+priority affects waiting jobs but does not preempt running jobs.
 
 ## Resource Profiles and Routing
 
-The facility exposes four resource profiles:
+Profiles remain:
 
 | Profile | Request |
 | --- | --- |
@@ -87,176 +59,96 @@ The facility exposes four resource profiles:
 | `c7ax` | 4 vCPU, 7168 MiB, 0 GPU |
 | `g6x` | 4 vCPU, 12000 MiB, 1 GPU |
 
-Users select a resource profile, not an AWS queue name.
+Users select a profile, never a queue name. `trainer-heavy-test` maps the four
+profiles to the corresponding dev queues. The same mapping helper exposes run
+queues for the formal Batch adapter when that separate control-plane task is
+implemented; this migration does not implement that adapter.
 
-- `trainer-heavy-test` routes c7am/c7al/c7ax to
-  `dev-cpu-c7am-queue`/`dev-cpu-c7al-queue`/`dev-cpu-c7ax-queue`
-  respectively, and g6x to `dev-gpu-queue`.
-- Formal `trainerctl run` routes c7am/c7al/c7ax to
-  `run-cpu-c7am-queue`/`run-cpu-c7al-queue`/`run-cpu-c7ax-queue`
-  respectively, and g6x to `run-gpu-queue`.
+## One-Time Migration Script
 
-Queue identity is not part of an AWS Batch job definition. A job-definition
-revision remains keyed by image digest, resource profile, worker protocol,
-roles, and logging configuration, and the same exact revision may be submitted
-to the corresponding dev or run queue.
+A short repository script contains the fixed resource tables and uses boto3
+directly. It is not a reusable deployment framework.
 
-Runtime commands contain no queue or compute-environment create, update, scale,
-disable, or delete APIs. They validate exact topology before submitting.
+The default mode is read-only and prints the actions it would take. `--execute`
+performs them:
 
-## G6f Exclusion
+1. confirm the account and region;
+2. describe each target compute environment;
+3. reuse an existing exact match or create a missing environment;
+4. wait for created environments to become `VALID/ENABLED`;
+5. reuse an exact matching queue or create a missing queue;
+6. wait for created queues to become `VALID/ENABLED`;
+7. inspect the exact old-resource allowlist;
+8. skip each old queue with a job in `SUBMITTED`, `PENDING`, `RUNNABLE`,
+   `STARTING`, or `RUNNING`;
+9. disable and delete each other old queue;
+10. delete an old compute environment only after no remaining queue references
+    it.
 
-G6f is not used in this design. G6f exposes a fractional L4 and the standard
-ECS/Batch integer `GPU=1` resource requirement reports no complete allocatable
-GPU. Supporting it would require a separate no-GPU-resource job contract, a
-custom launch template with NVIDIA as the default runtime, and full-instance
-CPU/memory reservation to prevent accidental sharing. That is a separate future
-design and must not be introduced as a fallback for `g6x`.
+An existing target resource with different instance type, capacity, priority,
+or binding is reported and left unchanged.
 
-## Deployment and Cutover
+The script performs no automatic retries, rollback, error classification,
+partial-artifact recovery, or cleanup outside the fixed allowlist. boto3/AWS
+errors stop the command and remain visible. Creation and deletion require
+short state waits because Batch changes are asynchronous; rerunning the script
+continues from the resulting AWS state.
 
-The migration is an explicit deployment command, separate from normal
-experiment submission:
+## Old Resource Scope
 
-1. Capture a read-only inventory of queues, compute environments, bindings, and
-   all nonterminal job IDs.
-2. Validate the four retained compute environments exactly.
-3. Create each missing dev/run profile queue with its approved priority and
-   single exact environment binding.
-4. If a same-named queue exists, reuse it only when every field matches;
-   otherwise stop without updating it.
-5. Register digest-bound smoke job definitions and run the acceptance matrix.
-6. Switch the heavy-test runner and formal controller to the new queue names
-   only after every smoke assertion succeeds.
-7. Re-inventory old resources immediately before each cleanup action.
+Only these exact superseded queue names may be removed:
 
-Creation and validation are idempotent. Partial failure does not switch runtime
-routing and does not delete pre-existing resources.
+- `rtrrl-cpu-c7am-queue`;
+- `rtrrl-cpu-c7al-queue`;
+- `rtrrl-cpu-c7ax-queue`;
+- `rtrrl-gpu-g6x-queue`;
+- `rtrrl-cpu-queue`;
+- `rtrrl-cpu2-queue`;
+- `rtrrl-gpu-queue`.
 
-## Smoke Acceptance Matrix
-
-Use a unique, test-labelled image tag resolved to a digest and submit eight
-independent jobs:
-
-| Queue | Profile |
-| --- | --- |
-| `dev-cpu-c7am-queue` | c7am |
-| `dev-cpu-c7al-queue` | c7al |
-| `dev-cpu-c7ax-queue` | c7ax |
-| `run-cpu-c7am-queue` | c7am |
-| `run-cpu-c7al-queue` | c7al |
-| `run-cpu-c7ax-queue` | c7ax |
-| `dev-gpu-queue` | g6x |
-| `run-gpu-queue` | g6x |
-
-Each job must prove:
-
-- exact queue ARN;
-- exact job-definition ARN and revision;
-- exact image digest;
-- exact resource requirements;
-- successful container exit;
-- actual EC2 instance type.
-
-Both GPU jobs must also show a JAX CUDA device and `NVIDIA L4` in the job log.
-Smoke jobs do not create Aim runs or write formal experiment S3 prefixes.
-
-Successful acceptance additionally requires:
-
-- all eight queues are `VALID` and `ENABLED`;
-- queue priorities and single exact environment bindings match this
-  specification;
-- all four retained environments remain `VALID` and `ENABLED`;
-- run priority is represented in AWS configuration without claiming
-  preemption;
-- every temporary artifact has an exact cleanup identity.
-
-## Old Resource Cleanup
-
-Cleanup operates on explicit resource names, never a broad prefix.
-
-For every old queue:
-
-1. Query `SUBMITTED`, `PENDING`, `RUNNABLE`, `STARTING`, and `RUNNING`.
-2. If all five sets are empty, disable the queue, wait for stable state, delete
-   it, and verify absence.
-3. If any set is nonempty, keep the queue enabled so existing work can finish,
-   stop all new facility submissions to it, and record the queue and job IDs as
-   deferred cleanup.
-
-After queue cleanup, consider these unneeded environments:
+Only these exact obsolete environment names may be removed:
 
 - `rtrrl-cpu-ce`;
 - `rtrrl-cpu2-ce`;
 - `rtrrl-gpu-ce`.
 
-An environment may be disabled and deleted only when it has no nonterminal
-jobs and no remaining queue reference. Any query error is treated as
-not-safe-to-delete. The four retained c7am/c7al/c7ax/g6x environments are never
-cleanup candidates in this migration.
+The four target environments are never cleanup candidates. Job definitions,
+ECR repositories or images, CloudWatch logs, S3 data, Aim data, IAM resources,
+and networking are not cleaned by this migration.
 
-Old job-definition revisions, formal ECR digests, S3 data, Aim data, IAM roles,
-and networking are not deleted. Temporary smoke image tags, smoke
-job-definition revisions, and exactly identified smoke log streams are removed
-after evidence capture.
+If one old queue has nonterminal work, that queue and any environment it still
+references are skipped while cleanup continues for independent idle resources.
 
-The controller role currently lacks `batch:TagResource`. Isolation therefore
-uses deterministic `trainer-smoke-*` names rather than expanding IAM
-permissions.
+## Verification
 
-## Failure Handling
+Local tests use fake AWS clients and cover:
 
-- Existing target resource drift: stop before paid compute.
-- Partial queue creation: retain exact created-resource identities; remove only
-  newly created resources with no job references.
-- Smoke failure: retain diagnostic evidence, do not switch routing, and do not
-  clean old resources.
-- AWS read error during cleanup: skip deletion.
-- Active old job: keep its queue and required environment until a later,
-  separately authorized cleanup.
-- Capacity shortage: keep the logical job identity and apply bounded
-  infrastructure retries; do not change instance type or queue.
-
-## Testing
-
-Unit and fake-AWS tests cover:
-
-- exact eight-queue topology and priorities;
-- both queues sharing each approved environment;
-- every queue having one exact environment binding;
+- the four environment and eight queue constants;
 - profile-to-dev/run routing;
-- c7al profile support in both runner and controller;
-- exact region/account/network/role/AMI/capacity validation;
-- no runtime mutation APIs;
-- existing-resource drift rejection;
+- c7al support in the heavy-test path;
+- read-only default behavior;
+- creation of missing resources;
+- reuse of matching resources;
+- refusal to update mismatched resources;
 - all five nonterminal states blocking deletion;
-- exact-name cleanup scope;
-- partial creation rollback boundaries;
-- job-definition reuse across dev/run queues;
-- smoke evidence identity and GPU L4 assertions.
+- deletion only from the exact old-resource allowlist;
+- preservation of referenced environments.
 
-Real validation uses the eight-job matrix and records queue, environment,
-instance, digest, resource, log, and cleanup evidence.
+There is no Batch smoke-job matrix. After local tests, the operator first runs
+the script without `--execute` and reviews its output. Real AWS mutation occurs
+only after separate authorization. After execution, direct read-only AWS CLI
+commands verify the four environments and eight queues are `VALID/ENABLED` and
+have the specified instance types, capacities, priorities, and bindings.
 
-## User and Operator Usage
+## Removed Complexity
 
-User documentation must provide copyable examples for:
+The final code does not retain the earlier:
 
-- selecting each of `c7am`, `c7al`, `c7ax`, and `g6x` in an experiment;
-- running formal experiments without specifying queue names;
-- running a heavy test on a dev resource profile;
-- inspecting queue and job status;
-- understanding that run priority is non-preemptive;
-- understanding the shared 64-vCPU CPU and 32-vCPU GPU caps;
-- diagnosing preflight drift and capacity errors;
-- showing that G6f is unsupported in this version.
+- general inventory/report model;
+- eight-job smoke runner or ECS/EC2 evidence chain;
+- smoke job-definition, ECR tag, or log cleanup;
+- cross-process definition locking;
+- automatic rollback or partial-submission recovery;
+- generalized retry and exception hierarchy.
 
-Operator documentation must provide:
-
-- a read-only inventory command;
-- the explicit deployment command;
-- the eight-job smoke command;
-- evidence collection;
-- dry-run cleanup output;
-- explicitly authorized cleanup execution;
-- the deferred-cleanup report format for resources with active jobs.
+These features are outside the migration requirement.
