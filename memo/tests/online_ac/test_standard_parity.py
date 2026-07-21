@@ -600,9 +600,11 @@ def test_standard_one_step_matches_legacy_every_exposed_leaf(
     from memorax.online_ac.standard import make_standard_program
 
     legacy = stream_ac_agent_factory(adaptive=False)
+    debug_sink = []
     program = make_standard_program(
         stream_ac_agent_factory(adaptive=False),
         legacy.cfg,
+        _debug_sink=debug_sink,
     )
     base_key = jax.random.key(7)
     init_key = jax.random.fold_in(base_key, 0)
@@ -611,17 +613,16 @@ def test_standard_one_step_matches_legacy_every_exposed_leaf(
     actual_initial = program.init_fn(init_key)
     oracle_key = jax.random.split(train_key, 1)[0]
     agent_attributes = {name: id(value) for name, value in vars(legacy).items()}
-    live_state, captures, _ = _capture_legacy_step(
+    expected, captures, _ = _capture_legacy_step(
         legacy,
         expected_initial,
         oracle_key,
     )
     assert {name: id(value) for name, value in vars(legacy).items()} == agent_attributes
-    expected = live_state
-    actual, metrics = program.train_epoch_fn(
-        train_key,
-        actual_initial,
-        num_steps=1,
+    actual, step_metrics = debug_sink[0].step(actual_initial, oracle_key)
+    metrics = jax.tree.map(
+        lambda leaf: jnp.expand_dims(leaf, axis=0),
+        step_metrics,
     )
 
     debug = _legacy_one_step_debug(legacy, expected_initial, oracle_key)
@@ -710,10 +711,14 @@ def test_standard_one_step_matches_legacy_every_exposed_leaf(
             assert_tree_allclose(
                 capture["outputs"][field],
                 metric_domain[field],
+                rtol=0.0,
+                atol=0.0,
             )
     assert_tree_allclose(
         metrics.action_decision.sampled_action[0],
         debug["sampled_action"],
+        rtol=0.0,
+        atol=0.0,
     )
     for field in (
         "log_prob",
@@ -738,7 +743,12 @@ def test_standard_one_step_matches_legacy_every_exposed_leaf(
         "info",
     ):
         try:
-            assert_tree_allclose(_tree_at(getattr(metrics, field), 0), debug[field])
+            assert_tree_allclose(
+                _tree_at(getattr(metrics, field), 0),
+                debug[field],
+                rtol=0.0,
+                atol=0.0,
+            )
         except AssertionError as error:
             raise AssertionError(f"mismatch in {field}") from error
     for field, state_field in (
@@ -748,27 +758,57 @@ def test_standard_one_step_matches_legacy_every_exposed_leaf(
         assert_tree_allclose(
             _tree_at(getattr(metrics, field), 0),
             getattr(expected_initial, state_field),
+            rtol=0.0,
+            atol=0.0,
         )
     for field in ("actor_traces", "critic_traces"):
-        assert_tree_allclose(_tree_at(getattr(metrics, field), 0), debug[field])
+        assert_tree_allclose(
+            _tree_at(getattr(metrics, field), 0),
+            debug[field],
+            rtol=0.0,
+            atol=0.0,
+        )
         assert_tree_allclose(
             _tree_at(getattr(metrics, f"update_{field}"), 0),
             debug[field],
+            rtol=0.0,
+            atol=0.0,
         )
-    assert_tree_allclose(_tree_at(metrics.actor_params, 0), actual.actor_params)
-    assert_tree_allclose(_tree_at(metrics.critic_params, 0), actual.critic_params)
-    assert_tree_allclose(_tree_at(metrics.state_after, 0), actual)
+    assert_tree_allclose(
+        _tree_at(metrics.actor_params, 0),
+        actual.actor_params,
+        rtol=0.0,
+        atol=0.0,
+    )
+    assert_tree_allclose(
+        _tree_at(metrics.critic_params, 0),
+        actual.critic_params,
+        rtol=0.0,
+        atol=0.0,
+    )
+    assert_tree_allclose(
+        _tree_at(metrics.state_after, 0),
+        actual,
+        rtol=0.0,
+        atol=0.0,
+    )
     assert_tree_allclose(
         metrics.action_decision.logprob_action[0],
         debug["sampled_action"],
+        rtol=0.0,
+        atol=0.0,
     )
     assert_tree_allclose(
         metrics.action_decision.env_action[0],
         debug["sampled_action"],
+        rtol=0.0,
+        atol=0.0,
     )
     assert_tree_allclose(
         metrics.action_decision.bootstrap_feedback_action[0],
         debug["sampled_action"],
+        rtol=0.0,
+        atol=0.0,
     )
     assert any(
         np.any(np.asarray(moment) != 0)
@@ -782,7 +822,7 @@ def test_standard_one_step_matches_legacy_every_exposed_leaf(
             expected_initial.actor_params,
         ),
     )
-    assert_tree_allclose(actual, expected)
+    assert_tree_allclose(actual, expected, rtol=0.0, atol=0.0)
 
 
 def test_standard_continuous_wrapper_clip_does_not_replace_feedback(

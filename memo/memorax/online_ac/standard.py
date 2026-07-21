@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import replace
+from dataclasses import dataclass, replace
 from typing import Any
 
 import flax.linen as nn
@@ -113,6 +113,13 @@ class StandardStepMetrics:
     state_after: Any = None
 
 
+@dataclass(frozen=True)
+class StandardDebugInterface:
+    """Exact kernel hook used by parity tests, never by traced control flow."""
+
+    step: Any
+
+
 def make_standard_program(
     parts,
     static_config,
@@ -120,6 +127,7 @@ def make_standard_program(
     *,
     reset_on_start=None,
     update_during_eval=None,
+    _debug_sink=None,
 ) -> AgentProgram:
     """Build a concrete StreamAC-RTRL kernel with independent network state."""
 
@@ -658,6 +666,8 @@ def make_standard_program(
         eval_state, summary = jax.lax.scan(eval_step, eval_state, step_keys)
         return eval_state, summary
 
+    if _debug_sink is not None:
+        _debug_sink.append(StandardDebugInterface(step=step_fn))
     return AgentProgram(
         init_fn=init_fn,
         train_epoch_fn=train_epoch_fn,

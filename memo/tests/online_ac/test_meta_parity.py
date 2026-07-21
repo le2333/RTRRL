@@ -20,7 +20,7 @@ from memorax.algorithms.rtrrl.components import (
     RecurrentComponent,
     select_memorax_components,
 )
-from memorax.networks import Memoroid, RNN, heads
+from memorax.networks import RNN, Memoroid, heads
 from memorax.networks.sequence_models.lru import LRUCell
 from memorax.networks.sequence_models.rtu import RTUCell
 from memorax.utils import Timestep
@@ -66,9 +66,7 @@ def _exact_gradients(agent, state, sampled_action):
         _, (dist, value, _) = agent._forward(
             p, obs, action, reward, done, carry, sensitivity
         )
-        log_prob = remove_time_axis(
-            dist.log_prob(add_time_axis(sampled_action))
-        )
+        log_prob = remove_time_axis(dist.log_prob(add_time_axis(sampled_action)))
         value = remove_feature_axis(remove_time_axis(value))
         return agent.cfg.eta_pi * agent.cfg.logprob_scale * log_prob + value
 
@@ -129,20 +127,12 @@ def _legacy_oracle_step(agent, state, key):
             jax.lax.stop_gradient(carry),
             jax.lax.stop_gradient(sensitivity),
         )
-        return bootstrap_state, remove_feature_axis(
-            remove_time_axis(next_value_raw)
-        )
+        return bootstrap_state, remove_feature_axis(remove_time_axis(next_value_raw))
 
-    bootstrap_state, next_value = bootstrap(
-        acting_carry, acting_sensitivity
-    )
+    bootstrap_state, next_value = bootstrap(acting_carry, acting_sensitivity)
     wrong_bootstrap, _ = bootstrap(state.carry, state.sensitivity)
-    td_error = (
-        next_reward + agent.cfg.gamma * (1 - next_done) * next_value - value
-    )
-    traced_grads, direct_grads = _exact_gradients(
-        agent, state, sampled_action
-    )
+    td_error = next_reward + agent.cfg.gamma * (1 - next_done) * next_value - value
+    traced_grads, direct_grads = _exact_gradients(agent, state, sampled_action)
     trace_decays = {
         "actor": agent.cfg.gamma * agent.cfg.lambda_pi,
         "critic": agent.cfg.gamma * agent.cfg.lambda_v,
@@ -153,29 +143,19 @@ def _legacy_oracle_step(agent, state, key):
 
     def carry_trace(old, gradient, decay):
         trailing = old.ndim - 1
-        continues = (1 - next_done)[
-            (slice(None),) + (None,) * trailing
-        ]
-        emphasis = state.I[
-            (slice(None),) + (None,) * (gradient.ndim - 1)
-        ]
+        continues = (1 - next_done)[(slice(None),) + (None,) * trailing]
+        emphasis = state.I[(slice(None),) + (None,) * (gradient.ndim - 1)]
         return decay * continues * old + emphasis * gradient
 
     carried_traces = {
         name: jax.tree.map(
-            lambda old, gradient: carry_trace(
-                old, gradient, trace_decays[name]
-            ),
+            lambda old, gradient: carry_trace(old, gradient, trace_decays[name]),
             state.traces[name],
             traced_grads[name],
         )
         for name in state.traces
     }
-    update_traces = (
-        carried_traces
-        if agent.cfg.update_trace_before_td
-        else state.traces
-    )
+    update_traces = carried_traces if agent.cfg.update_trace_before_td else state.traces
 
     def apply_delta(trace, scale):
         delta = td_error[(slice(None),) + (None,) * (trace.ndim - 1)]
@@ -183,11 +163,7 @@ def _legacy_oracle_step(agent, state, key):
 
     ascent_updates = {}
     for name in state.params:
-        scale = (
-            agent.cfg.eta_f
-            if name in ("feature_extractor", "torso")
-            else 1.0
-        )
+        scale = agent.cfg.eta_f if name in ("feature_extractor", "torso") else 1.0
         combined = jax.tree.map(
             lambda trace, direct: apply_delta(trace, scale) + direct,
             update_traces[name],
@@ -199,9 +175,7 @@ def _legacy_oracle_step(agent, state, key):
     adam_updates, adam_state = agent.optimizer.update(
         ascent_updates, state.opt_state, state.params
     )
-    fast_params = cast(
-        Any, optax.apply_updates(state.params, adam_updates)
-    )
+    fast_params = cast(Any, optax.apply_updates(state.params, adam_updates))
     slow_torso = (
         fast_params["torso"]
         if agent.cfg.update_period == 1.0
@@ -211,9 +185,7 @@ def _legacy_oracle_step(agent, state, key):
             agent.cfg.update_period,
         )
     )
-    broadcast_dims = tuple(
-        range(state.timestep.done.ndim, state.timestep.action.ndim)
-    )
+    broadcast_dims = tuple(range(state.timestep.done.ndim, state.timestep.action.ndim))
     persisted_action = jnp.where(
         jnp.expand_dims(next_done, axis=broadcast_dims),
         jnp.zeros_like(env_action),
@@ -275,9 +247,7 @@ def _exact_prediction_gradients(agent, state, target):
             jax.lax.stop_gradient(state.sensitivity),
         )
         error = remove_time_axis(prediction) - jax.lax.stop_gradient(target)
-        return -agent.cfg.pred_coeff * 0.5 * jnp.sum(
-            jnp.square(error), axis=-1
-        )
+        return -agent.cfg.pred_coeff * 0.5 * jnp.sum(jnp.square(error), axis=-1)
 
     return jax.jacobian(loss)(params)
 
@@ -337,9 +307,7 @@ def _exact_prediction_gradients(agent, state, target):
 def test_memorax_component_selection_records_every_retained_shared_branch(
     monkeypatch, overrides, recurrent_type, cell_type, expected
 ):
-    legacy = normalize_legacy_config(
-        {"profile": "memo_experimental", **overrides}
-    )
+    legacy = normalize_legacy_config({"profile": "memo_experimental", **overrides})
     monkeypatch.setattr(
         jax,
         "jit",
@@ -362,9 +330,7 @@ def test_memorax_component_selection_records_every_retained_shared_branch(
     assert {
         key: getattr(selected.effective_config, key) for key in expected
     } == expected
-    assert (selected.prediction_head is not None) == bool(
-        overrides.get("pred_obs")
-    )
+    assert (selected.prediction_head is not None) == bool(overrides.get("pred_obs"))
 
 
 def test_experimental_facade_exposes_the_one_composed_program(
@@ -386,9 +352,7 @@ def test_composed_program_selects_trace_timing_before_scan(
     agent = rtrrl_agent_factory(fresh_trace=fresh_trace)
     state = agent.program.init_fn(jax.random.key(7))
 
-    final_state, metrics = agent.program.train_epoch_fn(
-        jax.random.key(11), state, 1
-    )
+    final_state, metrics = agent.program.train_epoch_fn(jax.random.key(11), state, 1)
 
     selected = (
         _tree_at(metrics.carried_traces, 0)
@@ -430,9 +394,7 @@ def test_composed_program_routes_prediction_head_direct_gradient(
     _, metrics = agent.program.train_epoch_fn(jax.random.key(23), state, 1)
 
     prediction = metrics.prediction_direct_grads
-    assert any(
-        np.any(np.asarray(leaf) != 0) for leaf in jax.tree.leaves(prediction)
-    )
+    assert any(np.any(np.asarray(leaf) != 0) for leaf in jax.tree.leaves(prediction))
 
 
 def test_composed_init_matches_versioned_legacy_golden_leaf_for_leaf(
@@ -461,9 +423,7 @@ def test_composed_one_step_preserves_exact_update_domain_and_adam(
     init_key = jax.random.fold_in(jax.random.key(7), 0)
     train_key = jax.random.fold_in(jax.random.key(7), 1)
     initial = agent.init(init_key)
-    final, metrics = agent.program.train_epoch_fn(
-        train_key, initial, num_steps=1
-    )
+    final, metrics = agent.program.train_epoch_fn(train_key, initial, num_steps=1)
     oracle_key = jax.random.split(train_key, 1)[0]
     observables = _rtrrl_observables(agent, initial, oracle_key)
     oracle_state, debug = _legacy_oracle_step(agent, initial, oracle_key)
@@ -492,13 +452,9 @@ def test_composed_one_step_preserves_exact_update_domain_and_adam(
     assert_tree_allclose(metrics.next_value[0], observables["next_value"])
     assert_tree_allclose(metrics.td_error[0], observables["td"])
     assert_tree_allclose(metrics.log_prob[0], observables["logprob"])
-    assert_tree_allclose(
-        _tree_at(metrics.differentiation_grads, 0), expected_traced
-    )
+    assert_tree_allclose(_tree_at(metrics.differentiation_grads, 0), expected_traced)
     assert_tree_allclose(_tree_at(metrics.direct_grads, 0), expected_direct)
-    assert_tree_allclose(
-        _tree_at(metrics.bootstrap_carry, 0), debug["bootstrap_carry"]
-    )
+    assert_tree_allclose(_tree_at(metrics.bootstrap_carry, 0), debug["bootstrap_carry"])
     assert_tree_allclose(
         _tree_at(metrics.bootstrap_sensitivity, 0),
         debug["bootstrap_sensitivity"],
@@ -537,13 +493,9 @@ def test_composed_one_step_preserves_exact_update_domain_and_adam(
             agent.cfg.update_period,
         )
     )
-    assert_tree_allclose(
-        _tree_at(metrics.fast_params, 0), expected_fast_params
-    )
+    assert_tree_allclose(_tree_at(metrics.fast_params, 0), expected_fast_params)
     assert_tree_allclose(final.params, expected_fast_params)
-    assert_tree_allclose(
-        _tree_at(metrics.slow_torso, 0), expected_slow_torso
-    )
+    assert_tree_allclose(_tree_at(metrics.slow_torso, 0), expected_slow_torso)
     assert_tree_allclose(final.slow_torso, expected_slow_torso)
 
     wrong_sign = jax.tree.map(lambda update: -update, debug["ascent_updates"])
@@ -551,9 +503,7 @@ def test_composed_one_step_preserves_exact_update_domain_and_adam(
         wrong_sign, initial.opt_state, initial.params
     )
     with pytest.raises(AssertionError):
-        assert_tree_allclose(
-            _tree_at(metrics.adam_updates, 0), wrong_adam_sign
-        )
+        assert_tree_allclose(_tree_at(metrics.adam_updates, 0), wrong_adam_sign)
 
     if fresh_trace:
         wrong_domain = {
@@ -568,16 +518,12 @@ def test_composed_one_step_preserves_exact_update_domain_and_adam(
             ),
         }
         with pytest.raises(AssertionError):
-            assert_tree_allclose(
-                _tree_at(metrics.ascent_updates, 0), wrong_domain
-            )
+            assert_tree_allclose(_tree_at(metrics.ascent_updates, 0), wrong_domain)
         wrong_trace_timing = debug["incoming_traces"]
     else:
         wrong_trace_timing = debug["carried_traces"]
     with pytest.raises(AssertionError):
-        assert_tree_allclose(
-            _tree_at(metrics.update_traces, 0), wrong_trace_timing
-        )
+        assert_tree_allclose(_tree_at(metrics.update_traces, 0), wrong_trace_timing)
 
 
 def test_composed_terminal_step_preserves_exact_intermediate_states(
@@ -587,9 +533,7 @@ def test_composed_terminal_step_preserves_exact_intermediate_states(
     init_key = jax.random.fold_in(jax.random.key(7), 0)
     train_key = jax.random.fold_in(jax.random.key(7), 2)
     initial = agent.init(init_key)
-    actual, metrics = agent.program.train_epoch_fn(
-        train_key, initial, num_steps=3
-    )
+    actual, metrics = agent.program.train_epoch_fn(train_key, initial, num_steps=3)
     golden, _ = load_golden("rtrrl_lru")
     expected = initial
     expected_states = []
@@ -604,13 +548,9 @@ def test_composed_terminal_step_preserves_exact_intermediate_states(
         _golden_section(golden["trace_timing/incoming"], "train"),
     )
     assert_tree_allclose(actual, expected_states[-1])
-    mutated_first = expected_states[0].replace(
-        step=expected_states[0].step + 1
-    )
+    mutated_first = expected_states[0].replace(step=expected_states[0].step + 1)
     with pytest.raises(AssertionError):
-        assert_tree_allclose(
-            _tree_at(metrics.state_after, 0), mutated_first
-        )
+        assert_tree_allclose(_tree_at(metrics.state_after, 0), mutated_first)
     np.testing.assert_array_equal(
         metrics.action_decision.persisted_feedback_action[-1],
         np.zeros((1, 2), np.float32),
@@ -637,19 +577,11 @@ def test_composed_prediction_gradient_matches_exact_objective(
     init_key = jax.random.fold_in(jax.random.key(7), 0)
     train_key = jax.random.fold_in(jax.random.key(7), 1)
     initial = agent.init(init_key)
-    final, metrics = agent.program.train_epoch_fn(
-        train_key, initial, num_steps=1
-    )
-    _, debug = _legacy_oracle_step(
-        agent, initial, jax.random.split(train_key, 1)[0]
-    )
-    expected = _exact_prediction_gradients(
-        agent, initial, debug["prediction_target"]
-    )
+    final, metrics = agent.program.train_epoch_fn(train_key, initial, num_steps=1)
+    _, debug = _legacy_oracle_step(agent, initial, jax.random.split(train_key, 1)[0])
+    expected = _exact_prediction_gradients(agent, initial, debug["prediction_target"])
     actual = _tree_at(metrics.prediction_direct_grads, 0)
 
     assert_tree_allclose(actual, expected)
     with pytest.raises(AssertionError):
-        assert_tree_allclose(
-            actual, jax.tree.map(lambda gradient: -gradient, expected)
-        )
+        assert_tree_allclose(actual, jax.tree.map(lambda gradient: -gradient, expected))
