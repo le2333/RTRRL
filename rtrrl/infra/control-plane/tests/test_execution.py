@@ -9,6 +9,7 @@ from pathlib import Path
 import pytest
 from pydantic import ValidationError
 from training_sdk import RunContext
+from training_sdk.execution import RunBundle as SdkRunBundle
 
 from trainer_infra.aws_profiles import PROFILES, profile
 from trainer_infra.execution import (
@@ -95,7 +96,7 @@ def make_run_bundle(
     return RunBundle(
         run_id="experiment-123:shared:0001",
         attempt=0,
-        argv=("python", "-m", "train", "--config", "/input/config.yaml"),
+        argv=("python", "-m", "train", "--config", "{config_path}"),
         image_digest=image_digest,
         resource_profile=resource_profile,
         config_yaml=config_yaml,
@@ -104,6 +105,10 @@ def make_run_bundle(
         run_context_sha256=hashlib.sha256(context_json.encode()).hexdigest(),
         artifact_prefix="experiments/e/groups/shared/runs/r/input/",
     )
+
+
+def test_control_plane_reexports_sdk_execution_protocol() -> None:
+    assert RunBundle is SdkRunBundle
 
 
 def test_run_and_job_bundles_round_trip_with_canonical_hashes_and_deep_freeze() -> None:

@@ -25,31 +25,41 @@ the serial fail-fast image worker.
   profile's exact run queue, a validated preconfigured definition, the worker
   bundle URI command, exact resource requirements, and AWS retry attempts one.
   Queries are chunked at 100 IDs and preserve raw `FAILED` status and reason.
-- The standalone worker imports the Task 1 contracts from the control-plane
-  package, verifies canonical bundle/input hashes, writes each complete SDK
-  context to a temporary JSON file, exports `TRAINER_RUN_CONTEXT_PATH`, invokes
-  children with `shell=False`, uploads sorted Aim/Rerun/checkpoint artifacts
-  and completion markers, and stops after the first nonzero child.
+- Execution records and strict canonical/hash parsing live in
+  `training_sdk.execution`; `trainer_infra.execution` re-exports them and keeps
+  only the `ConcreteRun` to `RunContext` bridge.
+- One strict `training_sdk.storage` S3 parser is shared by the control-plane
+  S3/Batch paths and the worker.
+- The standalone worker imports only `training_sdk` contracts, generates both
+  config and context paths inside a per-run temporary directory, invokes
+  children with `shell=False`, rejects escaping/symlink/nonregular artifacts,
+  uploads sorted artifacts and completion markers, and stops after the first
+  failure. Artifact upload failures still cause one failed marker write; marker
+  write failures remain visible as the original storage exception.
+- ECR reads bind every call to the expected registry account/region, verify the
+  digest response identity, and verify downloaded config bytes against the
+  manifest digest.
+- Batch preflight uses an explicit expected contract and fail-closed checks for
+  queue priority, complete compute shape/network/AMI, and active job-definition
+  worker protocol, roles, logging, image, and resources.
 
 ## TDD Evidence
 
-RED was observed before implementation for each new module and again for
-stored S3 metadata verification, canonical ECR config digests, digest-bound
-Batch definition identity, and deterministic worker artifact upload order.
+RED was observed for SDK protocol extraction, control-plane re-export identity,
+shared URI parsing, canonical JSON reads, ECR registry/digest/blob checks,
+strict Batch infrastructure contracts, isolated worker imports, generated
+temporary paths, artifact failure markers, and unsafe artifact rejection.
 
 ## Verification
 
-- Task 2 targeted suite: 30 passed.
-- Full control-plane suite: 326 passed.
+- Review-fix targeted suite: 106 passed.
+- Full training-sdk suite: 120 passed.
+- Full control-plane suite: 370 passed.
 - Ruff: passed.
 - `git diff --check`: passed.
 - IDE lint for changed implementation and tests: no findings.
 
 No memo, JAX, Docker, or real AWS command was run.
 
-## Follow-up Integration Note
-
-The formal memo image must install the control-plane package alongside
-`training-sdk` before copying `/opt/trainer/worker.py`; the worker intentionally
-reuses `JobBundle`, `RunBundle`, and `CompletionMarker` instead of copying Task
-1 contract types.
+The formal worker image requires `training-sdk` and boto3 only; an isolated
+subprocess import test blocks every `trainer_infra` import.

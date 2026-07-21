@@ -27,13 +27,6 @@ class FakeS3:
             "Metadata": self.metadata[(kwargs["Bucket"], kwargs["Key"])],
         }
 
-    def upload_file(
-        self, filename: str, bucket: str, key: str, ExtraArgs: dict[str, Any]
-    ) -> None:
-        self.objects[(bucket, key)] = Path(filename).read_bytes()
-        self.metadata[(bucket, key)] = ExtraArgs["Metadata"]
-
-
 class FakeBody:
     def __init__(self, data: bytes) -> None:
         self._data = data
@@ -121,3 +114,13 @@ def test_download_rejects_tampering_and_aws_errors_propagate_unchanged() -> None
     with pytest.raises(RuntimeError) as caught:
         store.get_bytes(uri)
     assert caught.value is error
+
+
+def test_get_json_rejects_noncanonical_bytes() -> None:
+    client = FakeS3()
+    store = S3ObjectStore(client, "s3://bucket/experiments/exp-1/")
+    uri = "s3://bucket/experiments/exp-1/object.json"
+    store.put_bytes(uri, b'{"z": 1, "a": 2}')
+
+    with pytest.raises(ValueError, match="canonical"):
+        store.get_json(uri)

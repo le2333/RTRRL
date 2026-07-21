@@ -3,78 +3,133 @@ from __future__ import annotations
 import argparse
 from collections.abc import Callable, Sequence
 from datetime import datetime, timezone
+import hashlib
 import os
 from pathlib import Path
+import stat
 import subprocess
 import tempfile
-from typing import Any
-from urllib.parse import urlsplit
+from typing import Any, Protocol
 
 import boto3
 
-from trainer_infra.adapters.protocols import ObjectStore
-from trainer_infra.adapters.s3 import S3ObjectStore
-from trainer_infra.execution import CompletionMarker, JobBundle, RunBundle
-from trainer_infra.identities import canonical_json
+from training_sdk.execution import (
+    CompletionMarker,
+    JobBundle,
+    RunBundle,
+    canonical_json,
+    thaw_json,
+)
+from training_sdk.storage import ExperimentS3Namespace
 
 
-def _bundle_location(bundle_uri: str) -> tuple[str, str]:
-    parsed = urlsplit(bundle_uri)
-    if parsed.scheme != "s3" or not parsed.netloc or not parsed.path.startswith("/"):
-        raise ValueError("bundle URI must be an s3://bucket/key URI")
-    key = parsed.path[1:]
-    marker = "/jobs/"
-    if marker not in key:
-        raise ValueError("bundle URI must be below an experiment jobs prefix")
-    experiment_key = key.split(marker, 1)[0] + "/"
-    return parsed.netloc, experiment_key
+class ObjectStore(Protocol):
+    def get_bytes(self, uri: str, *, expected_sha256: str | None = None) -> bytes: ...
+
+    def put_json(self, uri: str, value: Any) -> str: ...
+
+    def put_file(self, uri: str, path: Path) -> str: ...
 
 
-def _input_prefix_uri(bundle_uri: str, run: RunBundle) -> str:
-    bucket, experiment_key = _bundle_location(bundle_uri)
-    prefix = run.artifact_prefix
-    if prefix.startswith("s3://"):
-        parsed = urlsplit(prefix)
-        if parsed.scheme != "s3" or parsed.netloc != bucket:
-            raise ValueError("run input prefix must use the bundle bucket")
-        key = parsed.path.removeprefix("/")
-    else:
-        key = prefix
-    if not key.startswith(experiment_key) or not key.endswith("/input/"):
+class BotoS3ObjectStore:
+    def __init__(self, client: Any, namespace: ExperimentS3Namespace) -> None:
+        self._client = client
+        self._namespace = namespace
+
+    def _location(self, uri: str) -> tuple[str, str]:
+        parsed = self._namespace.require_uri(uri)
+        return parsed.bucket, parsed.key
+
+    def get_bytes(self, uri: str, *, expected_sha256: str | None = None) -> bytes:
+        bucket, key = self._location(uri)
+        response = self._client.get_object(Bucket=bucket, Key=key)
+        data = response["Body"].read()
+        metadata = response.get("Metadata")
+        stored = metadata.get("sha256") if isinstance(metadata, dict) else None
+        actual = hashlib.sha256(data).hexdigest()
+        if not isinstance(stored, str):
+            raise ValueError(f"SHA-256 metadata is missing for {uri!r}")
+        if actual != stored or (expected_sha256 is not None and actual != expected_sha256):
+            raise ValueError(f"SHA-256 mismatch for {uri!r}")
+        return data
+
+    def _put_bytes(self, uri: str, data: bytes) -> str:
+        bucket, key = self._location(uri)
+        digest = hashlib.sha256(data).hexdigest()
+        self._client.put_object(
+            Bucket=bucket,
+            Key=key,
+            Body=data,
+            Metadata={"sha256": digest},
+        )
+        return digest
+
+    def put_json(self, uri: str, value: Any) -> str:
+        return self._put_bytes(uri, canonical_json(value).encode())
+
+    def put_file(self, uri: str, path: Path) -> str:
+        return self._put_bytes(uri, path.read_bytes())
+
+
+def _input_prefix_uri(
+    namespace: ExperimentS3Namespace,
+    run: RunBundle,
+) -> str:
+    parsed = namespace.require_key(run.artifact_prefix)
+    parts = parsed.key.split("/")
+    if (
+        len(parts) != 8
+        or parts[0] != "experiments"
+        or parts[1] != namespace.experiment_id
+        or parts[2] != "groups"
+        or parts[4] != "runs"
+        or parts[6] != "input"
+        or parts[7] != ""
+    ):
         raise ValueError("run artifact_prefix must be its exact experiment input prefix")
-    return f"s3://{bucket}/{key}"
+    return f"s3://{parsed.bucket}/{parsed.key}"
 
 
-def _config_path(argv: Sequence[str]) -> Path:
-    for option in ("--config", "--config_path"):
-        if option in argv:
-            index = argv.index(option)
-            if index + 1 >= len(argv):
-                break
-            return Path(argv[index + 1])
-    raise ValueError("run argv must contain --config or --config_path")
-
-
-def _upload_artifacts(
+def _safe_artifacts(
     store: ObjectStore,
     run_root_uri: str,
-    artifact_directory: Path,
+    artifact_root: Path,
 ) -> tuple[str, ...]:
-    uploaded: list[str] = []
-    paths: list[Path] = []
-    for directory_name in ("aim-buffer", "rerun", "checkpoints"):
-        directory = artifact_directory / directory_name
-        if not directory.exists():
+    root = artifact_root.resolve(strict=True)
+    candidates: list[Path] = []
+    for name in ("aim-buffer", "rerun", "checkpoints"):
+        directory = artifact_root / name
+        if not directory.exists() and not directory.is_symlink():
             continue
-        if not directory.is_dir():
-            raise ValueError(f"artifact path is not a directory: {directory}")
-        paths.extend(item for item in directory.rglob("*") if item.is_file())
-    for path in sorted(paths, key=lambda item: item.relative_to(artifact_directory).as_posix()):
-        relative = path.relative_to(artifact_directory).as_posix()
+        mode = directory.lstat().st_mode
+        if stat.S_ISLNK(mode) or not stat.S_ISDIR(mode):
+            raise ValueError(f"artifact path is not a safe directory: {directory}")
+        for current, directories, files in os.walk(directory, followlinks=False):
+            current_path = Path(current)
+            for entry_name in directories:
+                entry = current_path / entry_name
+                entry_mode = entry.lstat().st_mode
+                if stat.S_ISLNK(entry_mode) or not stat.S_ISDIR(entry_mode):
+                    raise ValueError(f"artifact entry is not a safe directory: {entry}")
+                entry.resolve(strict=True).relative_to(root)
+            for entry_name in files:
+                entry = current_path / entry_name
+                entry_mode = entry.lstat().st_mode
+                if stat.S_ISLNK(entry_mode) or not stat.S_ISREG(entry_mode):
+                    raise ValueError(f"artifact entry is not a regular file: {entry}")
+                entry.resolve(strict=True).relative_to(root)
+                candidates.append(entry)
+    uploaded: list[str] = []
+    for path in sorted(candidates, key=lambda item: item.relative_to(root).as_posix()):
+        relative = path.relative_to(root).as_posix()
         uri = f"{run_root_uri}{relative}"
         store.put_file(uri, path)
         uploaded.append(uri)
     return tuple(uploaded)
+
+
+def _runtime_argv(run: RunBundle, config_path: Path) -> list[str]:
+    return [str(config_path) if item == "{config_path}" else item for item in run.argv]
 
 
 def execute_bundle(
@@ -84,64 +139,75 @@ def execute_bundle(
     run_command: Callable[..., subprocess.CompletedProcess[Any]] = subprocess.run,
     now: Callable[[], datetime] = lambda: datetime.now(timezone.utc),
 ) -> int:
-    raw_bundle = store.get_bytes(bundle_s3_uri)
-    bundle = JobBundle.from_json(raw_bundle.decode("utf-8"))
-    if raw_bundle != bundle.to_json().encode("utf-8"):
-        raise ValueError("job bundle must use canonical JSON serialization")
+    namespace, bundle_id = ExperimentS3Namespace.from_bundle_uri(bundle_s3_uri)
+    bundle = JobBundle.from_json(store.get_bytes(bundle_s3_uri).decode())
+    if bundle.job_id != bundle_id:
+        raise ValueError("bundle job_id does not match its S3 URI")
 
     for run in bundle.runs:
-        input_prefix = _input_prefix_uri(bundle_s3_uri, run)
+        input_prefix = _input_prefix_uri(namespace, run)
         config = store.get_bytes(
             f"{input_prefix}config.yaml",
             expected_sha256=run.config_sha256,
         )
-        context = store.get_bytes(
+        stored_context = store.get_bytes(
             f"{input_prefix}run-context.json",
             expected_sha256=run.run_context_sha256,
         )
-        expected_context = canonical_json(run.run_context).encode("utf-8")
-        if context != expected_context:
+        if stored_context != canonical_json(run.run_context).encode():
             raise ValueError("run-context input does not match canonical bundle context")
-
-        config_path = _config_path(run.argv)
-        config_path.parent.mkdir(parents=True, exist_ok=True)
-        config_path.write_bytes(config)
-        artifact_directory = Path(str(run.run_context["artifact_directory"]))
-        artifact_directory.mkdir(parents=True, exist_ok=True)
         run_root_uri = input_prefix.removesuffix("input/")
-
         started_at = now()
-        with tempfile.TemporaryDirectory(prefix="trainer-run-context-") as temporary:
-            context_path = Path(temporary) / "run-context.json"
-            context_path.write_bytes(context)
+
+        with tempfile.TemporaryDirectory(prefix="trainer-run-") as temporary:
+            temporary_root = Path(temporary)
+            input_root = temporary_root / "input"
+            artifact_root = temporary_root / "artifacts"
+            input_root.mkdir()
+            artifact_root.mkdir()
+            config_path = input_root / "config.yaml"
+            context_path = input_root / "run-context.json"
+            config_path.write_bytes(config)
+            runtime_context = thaw_json(run.run_context)
+            runtime_context["artifact_directory"] = str(artifact_root)
+            context_path.write_text(canonical_json(runtime_context))
             environment = dict(os.environ)
             environment["TRAINER_RUN_CONTEXT_PATH"] = str(context_path)
             completed = run_command(
-                list(run.argv),
+                _runtime_argv(run, config_path),
                 env=environment,
                 shell=False,
                 check=False,
             )
-        finished_at = now()
-        artifacts = _upload_artifacts(
-            store,
-            run_root_uri,
-            artifact_directory,
-        )
-        marker = CompletionMarker(
-            run_id=run.run_id,
-            attempt=0,
-            exit_code=completed.returncode,
-            started_at=started_at,
-            finished_at=finished_at,
-            artifacts=artifacts,
-        )
-        store.put_json(
-            f"{run_root_uri}status/attempt-0.json",
-            marker.model_dump(mode="json"),
-        )
-        if completed.returncode != 0:
-            return completed.returncode
+
+            artifacts: tuple[str, ...] = ()
+            artifact_error: Exception | None = None
+            try:
+                artifacts = _safe_artifacts(store, run_root_uri, artifact_root)
+            except Exception as error:
+                artifact_error = error
+            marker = CompletionMarker(
+                run_id=run.run_id,
+                attempt=0,
+                exit_code=completed.returncode,
+                started_at=started_at,
+                finished_at=now(),
+                artifacts=artifacts,
+                error=(
+                    f"artifact upload failed: {type(artifact_error).__name__}: "
+                    f"{artifact_error}"
+                    if artifact_error is not None
+                    else None
+                ),
+            )
+            store.put_json(
+                f"{run_root_uri}status/attempt-0.json",
+                marker.model_dump(mode="json"),
+            )
+            if artifact_error is not None:
+                return completed.returncode if completed.returncode != 0 else 1
+            if completed.returncode != 0:
+                return completed.returncode
     return 0
 
 
@@ -149,11 +215,8 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Execute one immutable trainer job bundle.")
     parser.add_argument("--bundle-s3-uri", required=True)
     args = parser.parse_args(argv)
-    bucket, experiment_key = _bundle_location(args.bundle_s3_uri)
-    store = S3ObjectStore(
-        boto3.client("s3"),
-        f"s3://{bucket}/{experiment_key}",
-    )
+    namespace, _ = ExperimentS3Namespace.from_bundle_uri(args.bundle_s3_uri)
+    store = BotoS3ObjectStore(boto3.client("s3"), namespace)
     return execute_bundle(args.bundle_s3_uri, store)
 
 

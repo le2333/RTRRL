@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import hashlib
 from typing import Any
 
 import pytest
@@ -11,7 +12,6 @@ from trainer_infra.models import ScriptCatalog
 from test_image_catalog import catalog_data
 
 DIGEST = "sha256:" + "a" * 64
-CONFIG_DIGEST = "sha256:" + "b" * 64
 REGISTRY = "123456789012.dkr.ecr.eu-north-1.amazonaws.com"
 REPOSITORY = "team/trainer"
 
@@ -20,6 +20,10 @@ class FakeEcr:
     def __init__(self, catalog: ScriptCatalog) -> None:
         self.calls: list[dict[str, Any]] = []
         self.catalog = catalog
+        self.config_bytes = json.dumps(
+            {"config": {"Labels": {LABEL: encode_catalog(catalog)}}}
+        ).encode()
+        self.config_digest = "sha256:" + hashlib.sha256(self.config_bytes).hexdigest()
         self.failures: list[dict[str, str]] = []
         self.ambiguous = False
 
@@ -28,7 +32,7 @@ class FakeEcr:
         image_id = kwargs["imageIds"][0]
         if self.failures:
             return {"images": [], "failures": self.failures}
-        manifest = json.dumps({"config": {"digest": CONFIG_DIGEST}})
+        manifest = json.dumps({"config": {"digest": self.config_digest}})
         image = {
             "imageId": {"imageDigest": DIGEST, **image_id},
             "imageManifest": manifest,
@@ -37,15 +41,20 @@ class FakeEcr:
         return {"images": images, "failures": []}
 
     def get_download_url_for_layer(self, **kwargs: Any) -> dict[str, str]:
-        assert kwargs == {"repositoryName": REPOSITORY, "layerDigest": CONFIG_DIGEST}
+        assert kwargs == {
+            "registryId": "123456789012",
+            "repositoryName": REPOSITORY,
+            "layerDigest": self.config_digest,
+        }
         return {"downloadUrl": "https://example.invalid/config"}
 
 
 def make_reader(client: FakeEcr) -> BotoEcrCatalogReader:
-    config = {"config": {"Labels": {LABEL: encode_catalog(client.catalog)}}}
     return BotoEcrCatalogReader(
         client,
-        read_url=lambda url: json.dumps(config).encode(),
+        account_id="123456789012",
+        region="eu-north-1",
+        read_url=lambda url: client.config_bytes,
     )
 
 
@@ -63,6 +72,7 @@ def test_tag_resolution_happens_once_then_all_reads_use_canonical_digest() -> No
         [{"imageDigest": DIGEST}],
     ]
     assert all(call["repositoryName"] == REPOSITORY for call in client.calls)
+    assert all(call["registryId"] == "123456789012" for call in client.calls)
 
 
 def test_digest_reference_never_performs_a_tag_lookup() -> None:
@@ -93,7 +103,10 @@ def test_missing_ambiguous_and_failed_ecr_reads_fail_closed(mode: str) -> None:
 def test_malformed_manifest_or_missing_catalog_label_fails_closed() -> None:
     catalog = ScriptCatalog.model_validate(catalog_data())
     client = FakeEcr(catalog)
-    reader = BotoEcrCatalogReader(client, read_url=lambda _url: b'{"config":{"Labels":{}}}')
+    missing = b'{"config":{"Labels":{}}}'
+    client.config_bytes = missing
+    client.config_digest = "sha256:" + hashlib.sha256(missing).hexdigest()
+    reader = make_reader(client)
     with pytest.raises(ValueError, match=LABEL):
         reader.resolve_and_fetch(f"{REGISTRY}/{REPOSITORY}@{DIGEST}")
 
@@ -124,6 +137,43 @@ def test_manifest_requires_canonical_config_digest() -> None:
     client.batch_get_image = malformed  # type: ignore[method-assign]
     with pytest.raises(ValueError, match="invalid config digest"):
         make_reader(client).resolve_and_fetch(f"{REGISTRY}/{REPOSITORY}@{DIGEST}")
+
+
+def test_digest_response_and_config_blob_hash_must_match() -> None:
+    catalog = ScriptCatalog.model_validate(catalog_data())
+    client = FakeEcr(catalog)
+    original = client.batch_get_image
+
+    def wrong_digest(**kwargs: Any) -> dict[str, Any]:
+        response = original(**kwargs)
+        if "imageDigest" in kwargs["imageIds"][0]:
+            response["images"][0]["imageId"]["imageDigest"] = "sha256:" + "c" * 64
+        return response
+
+    client.batch_get_image = wrong_digest  # type: ignore[method-assign]
+    with pytest.raises(ValueError, match="requested digest"):
+        make_reader(client).resolve_and_fetch(f"{REGISTRY}/{REPOSITORY}@{DIGEST}")
+
+    client = FakeEcr(catalog)
+    client.config_bytes += b"tampered"
+    with pytest.raises(ValueError, match="config blob digest"):
+        make_reader(client).resolve_and_fetch(f"{REGISTRY}/{REPOSITORY}@{DIGEST}")
+
+
+@pytest.mark.parametrize(
+    "reference",
+    [
+        f"999999999999.dkr.ecr.eu-north-1.amazonaws.com/{REPOSITORY}:release",
+        f"123456789012.dkr.ecr.us-east-1.amazonaws.com/{REPOSITORY}:release",
+        f"registry.example/{REPOSITORY}:release",
+    ],
+)
+def test_registry_host_must_match_expected_account_and_region(reference: str) -> None:
+    catalog = ScriptCatalog.model_validate(catalog_data())
+    client = FakeEcr(catalog)
+    with pytest.raises(ValueError, match="registry"):
+        make_reader(client).resolve_and_fetch(reference)
+    assert client.calls == []
 
 
 def test_raw_boto_error_propagates_and_reader_has_no_mutation_api() -> None:

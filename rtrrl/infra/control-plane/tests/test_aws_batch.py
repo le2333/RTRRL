@@ -7,6 +7,8 @@ import pytest
 from trainer_infra.adapters.aws_batch import (
     AwsBatchAdapter,
     AwsBatchPreflight,
+    AwsBatchPreflightContract,
+    JobDefinitionExpectation,
     SubmittedJob,
     ValidatedJobDefinition,
 )
@@ -126,6 +128,31 @@ def test_submit_rejects_bundle_profile_image_or_unvalidated_definition_drift() -
         )
 
 
+@pytest.mark.parametrize(
+    "prefix",
+    [
+        "s3://bucket/other/experiments/e/",
+        "s3://bucket/experiments/e/../x/",
+        "s3://bucket/experiments/e/?version=x",
+        "s3://bucket/experiments/e/#fragment",
+    ],
+)
+def test_adapter_rejects_noncanonical_experiment_prefix(prefix: str) -> None:
+    with pytest.raises(ValueError, match="experiment|S3 URI"):
+        AwsBatchAdapter(FakeBatch(), prefix)
+
+
+@pytest.mark.parametrize("job_id", ["../escape", "nested/id", "id?query", "id#fragment"])
+def test_submit_rejects_job_ids_that_cannot_form_one_s3_key(job_id: str) -> None:
+    payload = make_job().model_dump(mode="json")
+    payload["job_id"] = job_id
+    bundle = JobBundle.model_validate(payload)
+    with pytest.raises(ValueError, match="S3|key|job"):
+        AwsBatchAdapter(FakeBatch(), "s3://bucket/experiments/e/").submit(
+            bundle, PROFILES["g6x"], definition()
+        )
+
+
 def test_query_chunks_at_100_and_preserves_raw_failed_state() -> None:
     client = FakeBatch()
     adapter = AwsBatchAdapter(client, "s3://bucket/experiments/e/")
@@ -147,13 +174,33 @@ class FakePreflightBatch:
     def describe_compute_environments(self, **kwargs: Any) -> dict[str, Any]:
         self.calls.append(("describe_compute_environments", kwargs))
         name = kwargs["computeEnvironments"][0]
+        profile_name = next(
+            key for key, item in PROFILES.items() if item.compute_environment == name
+        )
+        instance_type, max_vcpus, image_type = {
+            "c7am": ("c7a.medium", 16, "ECS_AL2023"),
+            "c7al": ("c7a.large", 32, "ECS_AL2023"),
+            "c7ax": ("c7a.xlarge", 16, "ECS_AL2023"),
+            "g6x": ("g6.xlarge", 32, "ECS_AL2023_NVIDIA"),
+        }[profile_name]
         return {
             "computeEnvironments": [
                 {
                     "computeEnvironmentName": name,
                     "computeEnvironmentArn": f"arn:ce:{name}",
+                    "type": "MANAGED",
                     "state": "ENABLED",
                     "status": "VALID",
+                    "computeResources": {
+                        "type": "EC2",
+                        "instanceTypes": [instance_type],
+                        "minvCpus": 0,
+                        "maxvCpus": max_vcpus,
+                        "subnets": ["subnet-a", "subnet-b"],
+                        "securityGroupIds": ["sg-a"],
+                        "instanceRole": "arn:aws:iam::123456789012:instance-profile/ecs",
+                        "ec2Configuration": [{"imageType": image_type}],
+                    },
                 }
             ]
         }
@@ -168,6 +215,7 @@ class FakePreflightBatch:
                     "jobQueueName": name,
                     "state": "ENABLED",
                     "status": "VALID",
+                    "priority": 100,
                     "computeEnvironmentOrder": [
                         {"order": 1, "computeEnvironment": f"arn:ce:{profile.compute_environment}"}
                     ],
@@ -195,9 +243,18 @@ class FakePreflightBatch:
                 {
                     "jobDefinitionArn": arn,
                     "status": "ACTIVE",
+                    "type": "container",
+                    "platformCapabilities": ["EC2"],
                     "containerProperties": {
                         "image": IMAGE,
                         "resourceRequirements": resources,
+                        "command": ["python", "/opt/trainer/worker.py"],
+                        "environment": [
+                            {"name": "TRAINER_WORKER_PROTOCOL_VERSION", "value": "1"}
+                        ],
+                        "jobRoleArn": "arn:aws:iam::123456789012:role/job",
+                        "executionRoleArn": "arn:aws:iam::123456789012:role/execution",
+                        "logConfiguration": {"logDriver": "awslogs"},
                     },
                 }
             ]
@@ -206,9 +263,24 @@ class FakePreflightBatch:
 
 def test_read_only_preflight_validates_all_four_profiles_and_definitions() -> None:
     client = FakePreflightBatch()
-    definitions = {name: definition(name).arn for name in PROFILES}
+    definitions = {
+        name: JobDefinitionExpectation(
+            arn=definition(name).arn,
+            job_role_arn="arn:aws:iam::123456789012:role/job",
+            execution_role_arn="arn:aws:iam::123456789012:role/execution",
+            worker_protocol_version="1",
+            log_configuration={"logDriver": "awslogs"},
+        )
+        for name in PROFILES
+    }
+    contract = AwsBatchPreflightContract(
+        subnets=("subnet-a", "subnet-b"),
+        security_group_ids=("sg-a",),
+        instance_role="arn:aws:iam::123456789012:instance-profile/ecs",
+        job_definitions=definitions,
+    )
 
-    validated = AwsBatchPreflight(client).validate(definitions)
+    validated = AwsBatchPreflight(client).validate(contract)
 
     assert {item.resource_profile for item in validated} == set(PROFILES)
     assert {name for name, _ in client.calls} == {
@@ -219,3 +291,100 @@ def test_read_only_preflight_validates_all_four_profiles_and_definitions() -> No
     for forbidden in ("register", "update", "delete", "cancel", "retry", "cleanup"):
         assert not hasattr(AwsBatchAdapter, forbidden)
         assert not hasattr(AwsBatchPreflight, forbidden)
+
+
+def make_preflight_contract() -> AwsBatchPreflightContract:
+    return AwsBatchPreflightContract(
+        subnets=("subnet-a", "subnet-b"),
+        security_group_ids=("sg-a",),
+        instance_role="arn:aws:iam::123456789012:instance-profile/ecs",
+        job_definitions={
+            name: JobDefinitionExpectation(
+                arn=definition(name).arn,
+                job_role_arn="arn:aws:iam::123456789012:role/job",
+                execution_role_arn="arn:aws:iam::123456789012:role/execution",
+                worker_protocol_version="1",
+                log_configuration={"logDriver": "awslogs"},
+            )
+            for name in PROFILES
+        },
+    )
+
+
+def test_preflight_accepts_aws_image_status_but_rejects_ami_override() -> None:
+    client = FakePreflightBatch()
+    original = client.describe_compute_environments
+
+    def with_status(**kwargs: Any) -> dict[str, Any]:
+        response = original(**kwargs)
+        response["computeEnvironments"][0]["computeResources"]["ec2Configuration"][0][
+            "batchImageStatus"
+        ] = "LATEST"
+        return response
+
+    client.describe_compute_environments = with_status  # type: ignore[method-assign]
+    assert len(AwsBatchPreflight(client).validate(make_preflight_contract())) == 4
+
+    def with_override(**kwargs: Any) -> dict[str, Any]:
+        response = original(**kwargs)
+        response["computeEnvironments"][0]["computeResources"]["ec2Configuration"][0][
+            "imageIdOverride"
+        ] = "ami-unapproved"
+        return response
+
+    client.describe_compute_environments = with_override  # type: ignore[method-assign]
+    with pytest.raises(ValueError, match="ec2Configuration"):
+        AwsBatchPreflight(client).validate(make_preflight_contract())
+
+
+@pytest.mark.parametrize(
+    ("target", "path", "value"),
+    [
+        ("ce", ("type",), "UNMANAGED"),
+        ("ce", ("state",), "DISABLED"),
+        ("ce", ("status",), "INVALID"),
+        ("ce", ("computeResources", "instanceTypes"), ["c7a.48xlarge"]),
+        ("ce", ("computeResources", "minvCpus"), 1),
+        ("ce", ("computeResources", "maxvCpus"), 999),
+        ("ce", ("computeResources", "subnets"), ["subnet-other"]),
+        ("ce", ("computeResources", "securityGroupIds"), ["sg-other"]),
+        ("ce", ("computeResources", "instanceRole"), "wrong"),
+        ("queue", ("priority",), 10),
+        ("definition", ("status",), "INACTIVE"),
+        ("definition", ("type",), "multinode"),
+        ("definition", ("platformCapabilities",), ["FARGATE"]),
+        ("definition", ("containerProperties", "image"), "repo/image@sha256:" + "b" * 64),
+        ("definition", ("containerProperties", "resourceRequirements"), []),
+        ("definition", ("containerProperties", "environment"), []),
+        ("definition", ("containerProperties", "jobRoleArn"), "wrong"),
+        ("definition", ("containerProperties", "executionRoleArn"), "wrong"),
+        ("definition", ("containerProperties", "logConfiguration"), {}),
+    ],
+)
+def test_preflight_fails_closed_on_contract_drift(
+    target: str, path: tuple[str, ...], value: Any
+) -> None:
+    client = FakePreflightBatch()
+    method_name = {
+        "ce": "describe_compute_environments",
+        "queue": "describe_job_queues",
+        "definition": "describe_job_definitions",
+    }[target]
+    collection = {
+        "ce": "computeEnvironments",
+        "queue": "jobQueues",
+        "definition": "jobDefinitions",
+    }[target]
+    original = getattr(client, method_name)
+
+    def drift(**kwargs: Any) -> dict[str, Any]:
+        response = original(**kwargs)
+        current = response[collection][0]
+        for key in path[:-1]:
+            current = current[key]
+        current[path[-1]] = value
+        return response
+
+    setattr(client, method_name, drift)
+    with pytest.raises(ValueError):
+        AwsBatchPreflight(client).validate(make_preflight_contract())

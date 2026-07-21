@@ -5,6 +5,7 @@ import re
 from typing import Any, Mapping, Sequence
 
 from pydantic import model_validator
+from training_sdk.storage import ExperimentS3Namespace
 
 from trainer_infra.aws_profiles import PROFILES, AwsProfile
 from trainer_infra.execution import JobBundle, JobQuery
@@ -41,6 +42,29 @@ class SubmittedJob:
     bundle_id: str
 
 
+class JobDefinitionExpectation(ContractModel):
+    arn: str
+    job_role_arn: str
+    execution_role_arn: str
+    worker_protocol_version: str
+    log_configuration: dict[str, Any]
+
+
+class AwsBatchPreflightContract(ContractModel):
+    subnets: tuple[str, ...]
+    security_group_ids: tuple[str, ...]
+    instance_role: str
+    job_definitions: dict[ResourceProfileName, JobDefinitionExpectation]
+
+
+_COMPUTE_EXPECTATIONS = {
+    "c7am": ("c7a.medium", 16, "ECS_AL2023"),
+    "c7al": ("c7a.large", 32, "ECS_AL2023"),
+    "c7ax": ("c7a.xlarge", 16, "ECS_AL2023"),
+    "g6x": ("g6.xlarge", 32, "ECS_AL2023_NVIDIA"),
+}
+
+
 def _resources(profile: AwsProfile) -> list[dict[str, str]]:
     result = [
         {"type": "VCPU", "value": str(profile.vcpus)},
@@ -63,7 +87,12 @@ class AwsBatchPreflight:
     def __init__(self, client: Any) -> None:
         self._client = client
 
-    def _definition(self, arn: str, profile: AwsProfile) -> ValidatedJobDefinition:
+    def _definition(
+        self,
+        expected: JobDefinitionExpectation,
+        profile: AwsProfile,
+    ) -> ValidatedJobDefinition:
+        arn = expected.arn
         match = _DEFINITION_ARN.fullmatch(arn)
         if match is None or match.group(2) != profile.name:
             raise ValueError(f"job definition is not digest-bound for profile {profile.name!r}")
@@ -90,6 +119,11 @@ class AwsBatchPreflight:
         definition = _one(definitions, context=f"job definition {arn!r}")
         if definition.get("status") != "ACTIVE":
             raise ValueError(f"job definition {arn!r} is not ACTIVE")
+        if (
+            definition.get("type") != "container"
+            or definition.get("platformCapabilities") != ["EC2"]
+        ):
+            raise ValueError(f"job definition {arn!r} is not an EC2 container definition")
         container = definition.get("containerProperties")
         if not isinstance(container, Mapping):
             raise ValueError(f"job definition {arn!r} has no container properties")
@@ -101,6 +135,23 @@ class AwsBatchPreflight:
             raise ValueError(f"job definition {arn!r} image digest does not match its name")
         if container.get("resourceRequirements") != _resources(profile):
             raise ValueError(f"job definition {arn!r} resources do not match profile")
+        expected_container_fields = {
+            "command": ["python", "/opt/trainer/worker.py"],
+            "environment": [
+                {
+                    "name": "TRAINER_WORKER_PROTOCOL_VERSION",
+                    "value": expected.worker_protocol_version,
+                }
+            ],
+            "jobRoleArn": expected.job_role_arn,
+            "executionRoleArn": expected.execution_role_arn,
+            "logConfiguration": expected.log_configuration,
+        }
+        for field, wanted in expected_container_fields.items():
+            if container.get(field) != wanted:
+                raise ValueError(
+                    f"job definition {arn!r} {field} does not match expected contract"
+                )
         return ValidatedJobDefinition(
             arn=arn,
             image_digest=resolved.reference,
@@ -109,9 +160,9 @@ class AwsBatchPreflight:
 
     def validate(
         self,
-        job_definitions: Mapping[ResourceProfileName, str],
+        contract: AwsBatchPreflightContract,
     ) -> tuple[ValidatedJobDefinition, ...]:
-        if set(job_definitions) != set(PROFILES):
+        if set(contract.job_definitions) != set(PROFILES):
             raise ValueError("preflight requires job definitions for all four profiles")
         result = []
         for name, profile in PROFILES.items():
@@ -124,6 +175,7 @@ class AwsBatchPreflight:
             )
             if (
                 environment.get("computeEnvironmentName") != profile.compute_environment
+                or environment.get("type") != "MANAGED"
                 or environment.get("state") != "ENABLED"
                 or environment.get("status") != "VALID"
             ):
@@ -131,6 +183,37 @@ class AwsBatchPreflight:
             environment_arn = environment.get("computeEnvironmentArn")
             if not isinstance(environment_arn, str) or not environment_arn:
                 raise ValueError("compute environment ARN is missing")
+            resources = environment.get("computeResources")
+            if not isinstance(resources, Mapping):
+                raise ValueError("compute environment resources are missing")
+            instance_type, max_vcpus, image_type = _COMPUTE_EXPECTATIONS[name]
+            expected_resource_fields = {
+                "type": "EC2",
+                "instanceTypes": [instance_type],
+                "minvCpus": 0,
+                "maxvCpus": max_vcpus,
+                "subnets": list(contract.subnets),
+                "securityGroupIds": list(contract.security_group_ids),
+                "instanceRole": contract.instance_role,
+            }
+            for field, wanted in expected_resource_fields.items():
+                if resources.get(field) != wanted:
+                    raise ValueError(
+                        f"compute environment {profile.compute_environment!r} "
+                        f"{field} does not match expected contract"
+                    )
+            image_configurations = resources.get("ec2Configuration")
+            if (
+                not isinstance(image_configurations, list)
+                or len(image_configurations) != 1
+                or not isinstance(image_configurations[0], Mapping)
+                or image_configurations[0].get("imageType") != image_type
+                or image_configurations[0].get("imageIdOverride") not in (None, "")
+            ):
+                raise ValueError(
+                    f"compute environment {profile.compute_environment!r} "
+                    "ec2Configuration does not match expected contract"
+                )
 
             queue_response = self._client.describe_job_queues(jobQueues=[profile.run_queue])
             queue = _one(
@@ -141,11 +224,12 @@ class AwsBatchPreflight:
                 queue.get("jobQueueName") != profile.run_queue
                 or queue.get("state") != "ENABLED"
                 or queue.get("status") != "VALID"
+                or queue.get("priority") != 100
                 or queue.get("computeEnvironmentOrder")
                 != [{"order": 1, "computeEnvironment": environment_arn}]
             ):
                 raise ValueError(f"job queue {profile.run_queue!r} is invalid")
-            result.append(self._definition(job_definitions[name], profile))
+            result.append(self._definition(contract.job_definitions[name], profile))
         return tuple(result)
 
 
@@ -153,14 +237,8 @@ class AwsBatchAdapter:
     """Runtime-only Batch adapter: submit once and query."""
 
     def __init__(self, client: Any, experiment_s3_prefix: str) -> None:
-        if (
-            not experiment_s3_prefix.startswith("s3://")
-            or "/experiments/" not in experiment_s3_prefix
-            or not experiment_s3_prefix.endswith("/")
-        ):
-            raise ValueError("experiment_s3_prefix must be an S3 experiment prefix")
         self._client = client
-        self._experiment_s3_prefix = experiment_s3_prefix
+        self._namespace = ExperimentS3Namespace.from_prefix(experiment_s3_prefix)
 
     def submit(
         self,
@@ -174,9 +252,10 @@ class AwsBatchAdapter:
             raise ValueError("job definition resource profile does not match submission profile")
         if job_definition.image_digest != job_bundle.image_digest:
             raise ValueError("job definition image does not match job bundle image")
-        bundle_uri = (
-            f"{self._experiment_s3_prefix}jobs/{job_bundle.job_id}/bundle.json"
-        )
+        bundle_uri = self._namespace.uri(f"jobs/{job_bundle.job_id}/bundle.json")
+        namespace, parsed_job_id = ExperimentS3Namespace.from_bundle_uri(bundle_uri)
+        if namespace != self._namespace or parsed_job_id != job_bundle.job_id:
+            raise ValueError("job ID does not form one canonical S3 key segment")
         job_name = re.sub(r"[^A-Za-z0-9_-]", "-", f"trainer-{job_bundle.job_id}")[:128]
         response = self._client.submit_job(
             jobName=job_name,

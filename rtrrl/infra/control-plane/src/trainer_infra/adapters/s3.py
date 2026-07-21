@@ -2,53 +2,21 @@ from __future__ import annotations
 
 import hashlib
 import json
-from pathlib import Path, PurePosixPath
+from pathlib import Path
 from typing import Any
-from urllib.parse import urlsplit
 
-from trainer_infra.identities import canonical_json
+from training_sdk.execution import canonical_json
+from training_sdk.storage import ExperimentS3Namespace
 
 
 class S3ObjectStore:
     def __init__(self, client: Any, experiment_prefix: str) -> None:
         self._client = client
-        bucket, key = self._parse_uri(experiment_prefix, require_object=False)
-        if not key.startswith("experiments/") or not key.endswith("/"):
-            raise ValueError("experiment prefix must be experiments/<experiment-id>/")
-        parts = PurePosixPath(key).parts
-        if len(parts) != 2 or not parts[1]:
-            raise ValueError("experiment prefix must be experiments/<experiment-id>/")
-        self._bucket = bucket
-        self._prefix = key
-
-    @staticmethod
-    def _parse_uri(uri: str, *, require_object: bool = True) -> tuple[str, str]:
-        parsed = urlsplit(uri)
-        if (
-            parsed.scheme != "s3"
-            or not parsed.netloc
-            or parsed.query
-            or parsed.fragment
-            or not parsed.path.startswith("/")
-        ):
-            raise ValueError(f"invalid S3 URI: {uri!r}")
-        key = parsed.path[1:]
-        parts = key.split("/")
-        normalized_parts = [part for part in parts if part]
-        if (
-            not key
-            or "." in parts
-            or ".." in parts
-            or (require_object and (not normalized_parts or "" in parts))
-        ):
-            raise ValueError(f"invalid S3 URI: {uri!r}")
-        return parsed.netloc, key
+        self._namespace = ExperimentS3Namespace.from_prefix(experiment_prefix)
 
     def _location(self, uri: str) -> tuple[str, str]:
-        bucket, key = self._parse_uri(uri)
-        if bucket != self._bucket or not key.startswith(self._prefix):
-            raise ValueError(f"S3 URI is outside configured experiment prefix: {uri!r}")
-        return bucket, key
+        parsed = self._namespace.require_uri(uri)
+        return parsed.bucket, parsed.key
 
     def put_bytes(self, uri: str, data: bytes) -> str:
         bucket, key = self._location(uri)
@@ -83,15 +51,15 @@ class S3ObjectStore:
         return self.put_bytes(uri, canonical_json(value).encode("utf-8"))
 
     def get_json(self, uri: str, *, expected_sha256: str | None = None) -> Any:
-        return json.loads(self.get_bytes(uri, expected_sha256=expected_sha256))
+        data = self.get_bytes(uri, expected_sha256=expected_sha256)
+        try:
+            value = json.loads(data)
+        except (json.JSONDecodeError, UnicodeDecodeError) as error:
+            raise ValueError(f"object {uri!r} is not valid JSON") from error
+        if data != canonical_json(value).encode("utf-8"):
+            raise ValueError(f"object {uri!r} does not use canonical JSON")
+        return value
 
     def put_file(self, uri: str, path: Path) -> str:
-        bucket, key = self._location(uri)
-        digest = hashlib.sha256(path.read_bytes()).hexdigest()
-        self._client.upload_file(
-            str(path),
-            bucket,
-            key,
-            ExtraArgs={"Metadata": {"sha256": digest}},
-        )
-        return digest
+        data = path.read_bytes()
+        return self.put_bytes(uri, data)
