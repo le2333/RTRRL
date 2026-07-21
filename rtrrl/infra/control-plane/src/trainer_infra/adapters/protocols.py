@@ -1,0 +1,16 @@
+from __future__ import annotations
+
+from pathlib import Path
+from typing import Any, Protocol
+
+
+class ObjectStore(Protocol):
+    def put_bytes(self, uri: str, data: bytes) -> str: ...
+
+    def get_bytes(self, uri: str, *, expected_sha256: str | None = None) -> bytes: ...
+
+    def put_json(self, uri: str, value: Any) -> str: ...
+
+    def get_json(self, uri: str, *, expected_sha256: str | None = None) -> Any: ...
+
+    def put_file(self, uri: str, path: Path) -> str: ...
