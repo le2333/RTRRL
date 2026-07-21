@@ -145,7 +145,7 @@ DEFAULT_AWS_NETWORK_SETTINGS = AwsNetworkSettings(
 TEST_PROFILES: Mapping[str, HeavyTestProfile] = MappingProxyType(
     {
         "c7am": HeavyTestProfile(
-            queue="rtrrl-cpu-c7am-queue",
+            queue="dev-cpu-c7am-queue",
             compute_environment="rtrrl-cpu-c7am-ce",
             instance_type="c7a.medium",
             max_vcpus=16,
@@ -154,7 +154,7 @@ TEST_PROFILES: Mapping[str, HeavyTestProfile] = MappingProxyType(
             gpus=0,
         ),
         "c7ax": HeavyTestProfile(
-            queue="rtrrl-cpu-c7ax-queue",
+            queue="dev-cpu-c7ax-queue",
             compute_environment="rtrrl-cpu-c7ax-ce",
             instance_type="c7a.xlarge",
             max_vcpus=16,
@@ -163,7 +163,7 @@ TEST_PROFILES: Mapping[str, HeavyTestProfile] = MappingProxyType(
             gpus=0,
         ),
         "g6x": HeavyTestProfile(
-            queue="rtrrl-gpu-g6x-queue",
+            queue="dev-gpu-queue",
             compute_environment="rtrrl-gpu-g6x-ce",
             instance_type="g6.xlarge",
             max_vcpus=32,

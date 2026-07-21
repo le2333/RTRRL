@@ -156,7 +156,7 @@ def fake_batch() -> FakeBatch:
 
 def test_profiles_are_exact_and_immutable() -> None:
     assert set(TEST_PROFILES) == {"c7am", "c7ax", "g6x"}
-    assert TEST_PROFILES["c7am"].queue == "rtrrl-cpu-c7am-queue"
+    assert TEST_PROFILES["c7am"].queue == "dev-cpu-c7am-queue"
     assert TEST_PROFILES["c7am"].compute_environment == "rtrrl-cpu-c7am-ce"
     assert TEST_PROFILES["c7am"].instance_type == "c7a.medium"
     assert TEST_PROFILES["c7am"].vcpus == 1
@@ -164,7 +164,7 @@ def test_profiles_are_exact_and_immutable() -> None:
     assert TEST_PROFILES["c7am"].memory_mib == 1600
     assert TEST_PROFILES["c7am"].gpus == 0
     assert TEST_PROFILES["c7am"].gpu_model is None
-    assert TEST_PROFILES["c7ax"].queue == "rtrrl-cpu-c7ax-queue"
+    assert TEST_PROFILES["c7ax"].queue == "dev-cpu-c7ax-queue"
     assert TEST_PROFILES["c7ax"].compute_environment == "rtrrl-cpu-c7ax-ce"
     assert TEST_PROFILES["c7ax"].instance_type == "c7a.xlarge"
     assert TEST_PROFILES["c7ax"].vcpus == 4
@@ -172,7 +172,7 @@ def test_profiles_are_exact_and_immutable() -> None:
     assert TEST_PROFILES["c7ax"].memory_mib == 7168
     assert TEST_PROFILES["c7ax"].gpus == 0
     assert TEST_PROFILES["c7ax"].gpu_model is None
-    assert TEST_PROFILES["g6x"].queue == "rtrrl-gpu-g6x-queue"
+    assert TEST_PROFILES["g6x"].queue == "dev-gpu-queue"
     assert TEST_PROFILES["g6x"].compute_environment == "rtrrl-gpu-g6x-ce"
     assert TEST_PROFILES["g6x"].instance_type == "g6.xlarge"
     assert TEST_PROFILES["g6x"].vcpus == 4
@@ -226,7 +226,7 @@ def test_validate_returns_exact_profile_and_resource_arns(fake_batch: FakeBatch)
     validated = validate_test_profile(fake_batch, "g6x")
 
     assert validated.profile is TEST_PROFILES["g6x"]
-    assert validated.queue_arn.endswith("/rtrrl-gpu-g6x-queue")
+    assert validated.queue_arn.endswith("/dev-gpu-queue")
     assert validated.compute_environment_arn.endswith("/rtrrl-gpu-g6x-ce")
     assert fake_batch.update_calls == []
 
@@ -417,7 +417,7 @@ def test_missing_c7ax_resources_are_created_exactly() -> None:
     ]
     assert fake_batch.create_job_queue_calls == [
         {
-            "jobQueueName": "rtrrl-cpu-c7ax-queue",
+            "jobQueueName": "dev-cpu-c7ax-queue",
             "state": "ENABLED",
             "priority": 1,
             "computeEnvironmentOrder": [
@@ -958,7 +958,7 @@ def test_one_job_per_exact_test_file() -> None:
     )
     assert "test_eval_trace.py -q" in jobs[0].command_text
     assert "test_jit_contract.py -q" in jobs[1].command_text
-    assert jobs[0].queue_name == "rtrrl-cpu-c7ax-queue"
+    assert jobs[0].queue_name == "dev-cpu-c7ax-queue"
     assert jobs[0].queue_arn == batch.job_queues["c7ax"]["jobQueueArn"]
     assert jobs[0].resource_requirements == (
         ResourceRequirement(type="MEMORY", value="7168"),
@@ -1298,7 +1298,7 @@ def test_wait_collects_log_stream_rss_and_gpu_evidence() -> None:
     )
     assert evidence[1].gpu_lines == ("NVIDIA L4, 23034 MiB",)
     assert evidence[0].profile == "c7ax"
-    assert evidence[0].queue_name == "rtrrl-cpu-c7ax-queue"
+    assert evidence[0].queue_name == "dev-cpu-c7ax-queue"
     assert evidence[0].queue_arn == batch.job_queues["c7ax"]["jobQueueArn"]
     assert evidence[0].job_definition_revision == 1
     assert evidence[0].image == IMAGE
@@ -1343,7 +1343,7 @@ def test_wait_rejects_unclosed_aws_job_identity(
     elif drift == "queue-region":
         wrong_queue_arn = (
             "arn:aws:batch:us-east-1:123456789012:job-queue/"
-            "rtrrl-cpu-c7ax-queue"
+            "dev-cpu-c7ax-queue"
         )
         batch.job_queues["c7ax"]["jobQueueArn"] = wrong_queue_arn
         job["jobQueue"] = wrong_queue_arn
