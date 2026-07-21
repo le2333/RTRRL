@@ -30,6 +30,7 @@ class SmokeBatch(FakeBatch):
         super().__init__()
         self.fail_submission_number: int | None = None
         self.malformed_register_response = False
+        self.untrusted_register_arn = False
         self.actual_queue_override: str | None = None
         self.multiple_success_attempts = False
         self.no_success_attempt = False
@@ -41,6 +42,10 @@ class SmokeBatch(FakeBatch):
 
     def register_job_definition(self, **kwargs: object) -> dict[str, object]:
         response = super().register_job_definition(**kwargs)
+        if self.untrusted_register_arn:
+            response["jobDefinitionArn"] = str(
+                response["jobDefinitionArn"]
+            ).replace(REGION, "us-east-1")
         if self.malformed_register_response:
             return {"jobDefinitionArn": response["jobDefinitionArn"]}
         return response
@@ -295,8 +300,11 @@ def test_execute_collects_all_evidence_and_reuses_definition_revisions(
         execute=True,
         sleep=lambda _: None,
     )
-    assert report.passed
-    assert report.definition_scope.startswith("s")
+    assert report.passed, report.failure_text
+    assert len(report.execution_scope) == 32
+    assert report.execution_scope[12] == "4"
+    assert report.execution_scope[16] in "89ab"
+    assert all(character in "0123456789abcdef" for character in report.execution_scope)
     assert len(report.cases) == 8
     assert len(fake_services.batch.submit_job_calls) == 8
     assert len(fake_services.batch.register_job_definition_calls) == 4
@@ -343,7 +351,7 @@ def test_execute_collects_all_evidence_and_reuses_definition_revisions(
     path = tmp_path / ".trainer/smoke/trainer-smoke-shared-queues.json"
     payload = json.loads(path.read_text())
     assert payload["passed"] is True
-    assert payload["definition_scope"] == report.definition_scope
+    assert payload["execution_scope"] == report.execution_scope
     assert payload["owned_job_definition_arns"] == list(
         report.owned_job_definition_arns
     )
@@ -496,14 +504,96 @@ def test_each_execution_uses_a_unique_definition_scope(
         gpu_image=GPU_IMAGE,
         execute=True,
     )
-    assert first.definition_scope != second.definition_scope
+    assert first.execution_scope != second.execution_scope
     assert set(first.job_definition_arns).isdisjoint(second.job_definition_arns)
     for report in (first, second):
         assert len(report.owned_job_definition_arns) == 4
         assert all(
-            f"trainer-smoke-{report.definition_scope}-" in arn
+            f"trainer-smoke-{report.execution_scope}-" in arn
             for arn in report.owned_job_definition_arns
         )
+
+
+def test_scope_collision_is_retried_before_registration(
+    fake_services: SmokeServices,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    first_scope = "11111111111141118111111111111111"
+    second_scope = "22222222222242228222222222222222"
+    digest = CPU_IMAGE.rsplit("@sha256:", 1)[1]
+    assert isinstance(fake_services.batch, SmokeBatch)
+    family = f"trainer-smoke-{first_scope}-c7am-{digest}"
+    original_describe = fake_services.batch.describe_job_definitions
+    collision_tokens: list[object] = []
+
+    def paginated_describe(**kwargs: object) -> dict[str, object]:
+        if kwargs["jobDefinitionName"] != family:
+            return original_describe(**kwargs)
+        collision_tokens.append(kwargs.get("nextToken"))
+        if "nextToken" not in kwargs:
+            return {"jobDefinitions": [], "nextToken": "collision-page"}
+        assert kwargs["nextToken"] == "collision-page"
+        return {"jobDefinitions": [{"jobDefinitionName": family}]}
+
+    monkeypatch.setattr(
+        fake_services.batch,
+        "describe_job_definitions",
+        paginated_describe,
+    )
+    scopes = iter((first_scope, second_scope))
+    monkeypatch.setattr(
+        batch_smoke, "_new_execution_scope", lambda: next(scopes)
+    )
+    report = run_smoke(
+        fake_services,
+        cpu_image=CPU_IMAGE,
+        gpu_image=GPU_IMAGE,
+        execute=True,
+    )
+    assert report.passed, report.failure_text
+    assert report.execution_scope == second_scope
+    assert collision_tokens == [None, "collision-page"]
+    assert all(
+        f"trainer-smoke-{second_scope}-" in str(call["jobDefinitionName"])
+        for call in fake_services.batch.register_job_definition_calls
+    )
+
+
+def test_scope_collision_retry_is_bounded_before_mutation(
+    fake_services: SmokeServices,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    colliding_scope = "11111111111141118111111111111111"
+    digest = CPU_IMAGE.rsplit("@sha256:", 1)[1]
+    assert isinstance(fake_services.batch, SmokeBatch)
+    fake_services.batch.job_definitions.append(
+        {
+            "jobDefinitionName": (
+                f"trainer-smoke-{colliding_scope}-c7am-{digest}"
+            ),
+            "jobDefinitionArn": (
+                f"arn:aws:batch:{REGION}:{ACCOUNT_ID}:job-definition/"
+                f"trainer-smoke-{colliding_scope}-c7am-{digest}:1"
+            ),
+        }
+    )
+    monkeypatch.setattr(
+        batch_smoke, "_new_execution_scope", lambda: colliding_scope
+    )
+    report = run_smoke(
+        fake_services,
+        cpu_image=CPU_IMAGE,
+        gpu_image=GPU_IMAGE,
+        execute=True,
+    )
+    assert not report.passed
+    assert "collision" in report.failure_text
+    assert fake_services.batch.register_job_definition_calls == []
+    assert fake_services.batch.submit_job_calls == []
 
 
 def test_actual_queue_drift_is_recorded_not_replaced_by_plan(
@@ -571,7 +661,33 @@ def test_malformed_register_response_fails_before_submit_and_writes_report(
     assert not report.passed
     assert fake_services.batch.submit_job_calls == []
     assert "revision" in report.failure_text
+    assert len(report.job_definition_arns) == 1
+    assert report.job_definition_arns == report.owned_job_definition_arns
+    assert report.cases[0].job_definition_arn == report.job_definition_arns[0]
+    assert report.cases[0].job_definition_revision == 1
+    assert report.untrusted_job_definition_identifiers == ()
     assert (tmp_path / ".trainer/smoke/trainer-smoke-shared-queues.json").is_file()
+
+
+def test_untrusted_registration_arn_is_audit_only(
+    fake_services: SmokeServices,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    assert isinstance(fake_services.batch, SmokeBatch)
+    fake_services.batch.untrusted_register_arn = True
+    report = run_smoke(
+        fake_services,
+        cpu_image=CPU_IMAGE,
+        gpu_image=GPU_IMAGE,
+        execute=True,
+    )
+    assert not report.passed
+    assert report.job_definition_arns == ()
+    assert report.owned_job_definition_arns == ()
+    assert len(report.untrusted_job_definition_identifiers) == 1
+    assert "us-east-1" in report.untrusted_job_definition_identifiers[0]
 
 
 @pytest.mark.parametrize("attempt_mode", ("none", "multiple"))

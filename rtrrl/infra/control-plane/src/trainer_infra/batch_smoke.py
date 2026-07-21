@@ -8,10 +8,10 @@ import math
 import os
 from pathlib import Path
 import re
-import secrets
 import tempfile
 import time
 from typing import Any
+import uuid
 
 from trainer_infra.batch_topology import (
     ACCOUNT_ID,
@@ -40,9 +40,11 @@ _QUEUE_ARN_RE = re.compile(
 )
 _DEFINITION_ARN_RE = re.compile(
     rf"arn:aws:batch:{REGION}:{ACCOUNT_ID}:job-definition/"
-    r"(trainer-smoke-(s[a-z0-9]{12})-(c7am|c7al|c7ax|g6x)-"
+    r"(trainer-smoke-([0-9a-f]{32})-(c7am|c7al|c7ax|g6x)-"
     r"([0-9a-f]{64})):([1-9][0-9]*)"
 )
+_EXECUTION_SCOPE_RE = re.compile(r"[0-9a-f]{32}")
+_SCOPE_COLLISION_ATTEMPTS = 5
 _SMOKE_TEST = "memo/tests/test_logging_compat.py"
 _REPORT_PATH = Path(".trainer/smoke/trainer-smoke-shared-queues.json")
 _MATRIX = (
@@ -116,7 +118,7 @@ class SmokeEvidence:
 @dataclass(frozen=True)
 class SmokeReport:
     smoke_id: str
-    definition_scope: str
+    execution_scope: str
     account_id: str
     region: str
     captured_at: datetime
@@ -127,14 +129,16 @@ class SmokeReport:
     cases: tuple[SmokeEvidence, ...]
     job_definition_arns: tuple[str, ...]
     owned_job_definition_arns: tuple[str, ...]
+    untrusted_job_definition_identifiers: tuple[str, ...]
     temporary_image_tags: tuple[tuple[str, str], ...]
     log_stream_names: tuple[str, ...]
 
 
 @dataclass
 class _ExecutionState:
-    definition_scope: str
+    execution_scope: str
     owned_definitions: dict[str, RegisteredJobDefinition]
+    untrusted_definition_identifiers: list[str]
 
 
 class _Deadline:
@@ -203,30 +207,35 @@ class _DeadlineClient:
         if not isinstance(response, Mapping):
             return
         name = arguments.get("jobDefinitionName")
-        response_name = response.get("jobDefinitionName")
         arn = response.get("jobDefinitionArn")
-        revision = response.get("revision")
-        if (
-            type(name) is not str
-            or response_name != name
-            or type(arn) is not str
-            or type(revision) is not int
-            or revision < 1
-        ):
+        if type(name) is not str:
             return
-        expected = (
-            f"arn:aws:batch:{REGION}:{ACCOUNT_ID}:job-definition/"
-            f"{name}:{revision}"
+        if type(arn) is not str:
+            if arn is not None:
+                self._record_untrusted_identifier(repr(arn))
+            return
+        match = re.fullmatch(
+            re.escape(
+                f"arn:aws:batch:{REGION}:{ACCOUNT_ID}:job-definition/{name}:"
+            )
+            + r"([1-9][0-9]*)",
+            arn,
         )
-        if arn != expected:
+        if match is None:
+            self._record_untrusted_identifier(arn)
             return
+        revision = int(match.group(1))
         self._state.owned_definitions[arn] = RegisteredJobDefinition(
             name=name,
             arn=arn,
             revision=revision,
             owned=True,
-            scope=self._state.definition_scope,
+            scope=self._state.execution_scope,
         )
+
+    def _record_untrusted_identifier(self, identifier: str) -> None:
+        if identifier not in self._state.untrusted_definition_identifiers:
+            self._state.untrusted_definition_identifiers.append(identifier)
 
 
 def _utc_now() -> datetime:
@@ -242,6 +251,89 @@ def _validate_timeout(timeout_seconds: float) -> float:
     ):
         raise ValueError("timeout_seconds must be finite and positive")
     return float(timeout_seconds)
+
+
+def _new_execution_scope() -> str:
+    return uuid.uuid4().hex
+
+
+def _scope_families(
+    scope: str,
+    cases: Sequence[SmokeCase],
+) -> tuple[str, ...]:
+    if _EXECUTION_SCOPE_RE.fullmatch(scope) is None:
+        raise RuntimeError("execution scope must be a full UUID4 hex")
+    parsed_scope = uuid.UUID(hex=scope)
+    if parsed_scope.version != 4 or parsed_scope.variant != uuid.RFC_4122:
+        raise RuntimeError("execution scope must be a full UUID4 hex")
+    return tuple(
+        dict.fromkeys(
+            f"trainer-smoke-{scope}-{case.profile}-"
+            f"{case.image.rsplit('@sha256:', 1)[1]}"
+            for case in cases
+        )
+    )
+
+
+def _definition_family_exists(batch: Any, family: str) -> bool:
+    token: str | None = None
+    seen_tokens: set[str] = set()
+    found = False
+    while True:
+        arguments: dict[str, object] = {"jobDefinitionName": family}
+        if token is not None:
+            arguments["nextToken"] = token
+        response = batch.describe_job_definitions(**arguments)
+        if not isinstance(response, Mapping):
+            raise RuntimeError(
+                "describe_job_definitions response must be a mapping"
+            )
+        definitions = response.get("jobDefinitions")
+        if not isinstance(definitions, list):
+            raise RuntimeError(
+                "describe_job_definitions jobDefinitions must be a list"
+            )
+        for definition in definitions:
+            if not isinstance(definition, Mapping):
+                raise RuntimeError("job definition entry must be a mapping")
+            if definition.get("jobDefinitionName") != family:
+                raise RuntimeError(
+                    "describe_job_definitions returned an unexpected family"
+                )
+            found = True
+        next_token = response.get("nextToken")
+        if next_token is None:
+            return found
+        if type(next_token) is not str or not next_token:
+            raise RuntimeError(
+                "describe_job_definitions nextToken must be a non-empty string"
+            )
+        if next_token in seen_tokens:
+            raise RuntimeError("describe_job_definitions token cycle detected")
+        seen_tokens.add(next_token)
+        token = next_token
+
+
+def _select_execution_scope(
+    batch: Any,
+    cases: Sequence[SmokeCase],
+    *,
+    first_scope: str,
+) -> str:
+    scope = first_scope
+    for attempt in range(_SCOPE_COLLISION_ATTEMPTS):
+        collision = any(
+            _definition_family_exists(batch, family)
+            for family in _scope_families(scope, cases)
+        )
+        if not collision:
+            return scope
+        if attempt + 1 < _SCOPE_COLLISION_ATTEMPTS:
+            scope = _new_execution_scope()
+    raise RuntimeError(
+        "execution scope collision persisted after "
+        f"{_SCOPE_COLLISION_ATTEMPTS} attempts"
+    )
 
 
 def _validate_digest_image(image: str) -> None:
@@ -658,6 +750,7 @@ def _make_report(
     execute: bool,
     cases: Sequence[SmokeEvidence],
     owned_definitions: Mapping[str, RegisteredJobDefinition],
+    untrusted_definition_identifiers: Sequence[str],
 ) -> SmokeReport:
     finalized = list(cases)
     if execute:
@@ -679,9 +772,14 @@ def _make_report(
         )
     definitions = tuple(
         dict.fromkeys(
-            case.job_definition_arn
-            for case in finalized
-            if case.job_definition_arn is not None
+            (
+                *(
+                    case.job_definition_arn
+                    for case in finalized
+                    if case.job_definition_arn is not None
+                ),
+                *owned_definitions,
+            )
         )
     )
     streams = tuple(
@@ -693,7 +791,7 @@ def _make_report(
     )
     return SmokeReport(
         smoke_id=f"trainer-smoke-{scope}",
-        definition_scope=scope,
+        execution_scope=scope,
         account_id=ACCOUNT_ID,
         region=REGION,
         captured_at=captured_at,
@@ -704,6 +802,9 @@ def _make_report(
         cases=tuple(finalized),
         job_definition_arns=definitions,
         owned_job_definition_arns=tuple(owned_definitions),
+        untrusted_job_definition_identifiers=tuple(
+            dict.fromkeys(untrusted_definition_identifiers)
+        ),
         temporary_image_tags=(),
         log_stream_names=streams,
     )
@@ -803,7 +904,7 @@ def run_smoke(
     timeout = _validate_timeout(timeout_seconds)
     cases = smoke_plan(cpu_image, gpu_image)
     captured_at = _utc_now()
-    scope = f"s{secrets.token_hex(6)}"
+    scope = _new_execution_scope()
     evidence = [_planned_evidence(case) for case in cases]
     if not execute:
         return _make_report(
@@ -813,9 +914,10 @@ def run_smoke(
             execute=False,
             cases=evidence,
             owned_definitions={},
+            untrusted_definition_identifiers=(),
         )
 
-    state = _ExecutionState(scope, {})
+    state = _ExecutionState(scope, {}, [])
     deadline = _Deadline(
         timeout_seconds=timeout,
         monotonic=monotonic,
@@ -828,6 +930,12 @@ def run_smoke(
         BatchTopologyValidator(scoped.batch, scoped.sts).validate()
         deadline.check("topology validation")
         topology_observed_at = _utc_now()
+        scope = _select_execution_scope(
+            scoped.batch,
+            cases,
+            first_scope=scope,
+        )
+        state.execution_scope = scope
         runner = HeavyTestRunner(
             scoped.batch,
             scoped.logs,
@@ -853,6 +961,9 @@ def run_smoke(
                 evidence[index] = _retain_submission(evidence[index], jobs[0])
                 submitted_indexes.append(index)
             except PartialSubmissionError as error:
+                for identifier in error.untrusted_definition_identifiers:
+                    if identifier not in state.untrusted_definition_identifiers:
+                        state.untrusted_definition_identifiers.append(identifier)
                 retained_definitions = list(error.registered_definitions)
                 if not retained_definitions:
                     retained_definitions = [
@@ -944,6 +1055,9 @@ def run_smoke(
         execute=True,
         cases=evidence,
         owned_definitions=state.owned_definitions,
+        untrusted_definition_identifiers=(
+            state.untrusted_definition_identifiers
+        ),
     )
     _write_report_atomically(report)
     return report

@@ -467,7 +467,7 @@ def test_scoped_smoke_definition_is_shared_only_within_scope() -> None:
         image=IMAGE,
         tests=["memo/tests/online_ac/test_eval_trace.py"],
         name_prefix="trainer-smoke",
-        definition_scope="sabc123",
+        definition_scope="a" * 32,
     )[0]
     paired = runner.submit(
         purpose=ExecutionPurpose.RUN,
@@ -475,7 +475,7 @@ def test_scoped_smoke_definition_is_shared_only_within_scope() -> None:
         image=IMAGE,
         tests=["memo/tests/online_ac/test_eval_trace.py"],
         name_prefix="trainer-smoke",
-        definition_scope="sabc123",
+        definition_scope="a" * 32,
     )[0]
     other = runner.submit(
         purpose=ExecutionPurpose.DEV,
@@ -483,11 +483,11 @@ def test_scoped_smoke_definition_is_shared_only_within_scope() -> None:
         image=IMAGE,
         tests=["memo/tests/online_ac/test_eval_trace.py"],
         name_prefix="trainer-smoke",
-        definition_scope="sdef456",
+        definition_scope="b" * 32,
     )[0]
     assert first.job_definition_arn == paired.job_definition_arn
     assert first.job_definition_arn != other.job_definition_arn
-    assert "trainer-smoke-sabc123-c7al-" in first.job_definition_arn
+    assert f"trainer-smoke-{'a' * 32}-c7al-" in first.job_definition_arn
     assert len(batch.register_job_definition_calls) == 2
 
 
@@ -728,7 +728,7 @@ def test_submit_failure_retains_registered_definition_ownership() -> None:
             image=IMAGE,
             tests=["memo/tests/online_ac/test_eval_trace.py"],
             name_prefix="trainer-smoke",
-            definition_scope="sabc123",
+            definition_scope="a" * 32,
         )
     assert raised.value.submitted == ()
     assert len(raised.value.registered_definitions) == 1
@@ -737,7 +737,7 @@ def test_submit_failure_retains_registered_definition_ownership() -> None:
     assert definition.revision == 1
     assert definition.arn.startswith(
         f"arn:aws:batch:{REGION}:{ACCOUNT_ID}:job-definition/"
-        "trainer-smoke-sabc123-c7ax-"
+        f"trainer-smoke-{'a' * 32}-c7ax-"
     )
 
 
@@ -749,14 +749,20 @@ def test_malformed_registration_response_fails_before_submit() -> None:
 
     batch = MalformedRegister()
     runner = HeavyTestRunner(batch, FakeLogs(), FakeSts(), sleep=lambda _: None)
-    with pytest.raises(PartialSubmissionError, match="revision"):
+    with pytest.raises(PartialSubmissionError, match="revision") as raised:
         runner.submit(
             profile="c7ax",
             image=IMAGE,
             tests=["memo/tests/online_ac/test_eval_trace.py"],
             name_prefix="trainer-smoke",
-            definition_scope="sabc123",
+            definition_scope="a" * 32,
         )
+    assert len(raised.value.registered_definitions) == 1
+    definition = raised.value.registered_definitions[0]
+    assert definition.owned
+    assert definition.revision == 1
+    assert definition.arn == batch.job_definitions[0]["jobDefinitionArn"]
+    assert raised.value.untrusted_definition_identifiers == ()
     assert batch.submit_job_calls == []
 
 
@@ -775,8 +781,33 @@ def test_registration_response_requires_exact_definition_name() -> None:
             image=IMAGE,
             tests=["memo/tests/online_ac/test_eval_trace.py"],
             name_prefix="trainer-smoke",
-            definition_scope="sabc123",
+            definition_scope="a" * 32,
         )
+    assert batch.submit_job_calls == []
+
+
+def test_untrusted_registration_arn_is_not_cleanup_ownership() -> None:
+    class WrongRegionArn(FakeBatch):
+        def register_job_definition(self, **kwargs: object) -> dict[str, object]:
+            response = super().register_job_definition(**kwargs)
+            response["jobDefinitionArn"] = str(
+                response["jobDefinitionArn"]
+            ).replace(REGION, "us-east-1")
+            return response
+
+    batch = WrongRegionArn()
+    runner = HeavyTestRunner(batch, FakeLogs(), FakeSts(), sleep=lambda _: None)
+    with pytest.raises(PartialSubmissionError) as raised:
+        runner.submit(
+            profile="c7ax",
+            image=IMAGE,
+            tests=["memo/tests/online_ac/test_eval_trace.py"],
+            name_prefix="trainer-smoke",
+            definition_scope="a" * 32,
+        )
+    assert raised.value.registered_definitions == ()
+    assert len(raised.value.untrusted_definition_identifiers) == 1
+    assert "us-east-1" in raised.value.untrusted_definition_identifiers[0]
     assert batch.submit_job_calls == []
 
 

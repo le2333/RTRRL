@@ -132,6 +132,15 @@ class _RegisteredDefinitionFailure(RuntimeError):
         )
 
 
+class _UntrustedDefinitionFailure(RuntimeError):
+    def __init__(self, identifier: str, cause: Exception) -> None:
+        self.identifier = identifier
+        super().__init__(
+            "job definition registration returned an untrusted identifier: "
+            f"{type(cause).__name__}: {cause}"
+        )
+
+
 class AggregateJobFailure(RuntimeError):
     """Raised after all requested jobs finish when at least one did not succeed."""
 
@@ -155,9 +164,13 @@ class PartialSubmissionError(RuntimeError):
         registered_definitions: Sequence[RegisteredJobDefinition],
         failed_test: str,
         cause: Exception,
+        untrusted_definition_identifiers: Sequence[str] = (),
     ) -> None:
         self.submitted = tuple(submitted)
         self.registered_definitions = tuple(registered_definitions)
+        self.untrusted_definition_identifiers = tuple(
+            untrusted_definition_identifiers
+        )
         self.failed_test = failed_test
         self.cause = f"{type(cause).__name__}: {cause}"
         super().__init__(
@@ -184,11 +197,11 @@ _JOB_NAME_RE = re.compile(
 )
 _JOB_DEFINITION_ARN_RE = re.compile(
     rf"arn:aws:batch:{REGION}:({ACCOUNT_ID}):job-definition/"
-    r"((trainer-(heavy-test|smoke))-(?:(s[a-z0-9]{6,24})-)?"
+    r"((trainer-(heavy-test|smoke))-(?:([0-9a-f]{32})-)?"
     r"(c7am|c7al|c7ax|g6x)-"
     r"([0-9a-f]{64})):([1-9][0-9]*)"
 )
-_DEFINITION_SCOPE_RE = re.compile(r"s[a-z0-9]{6,24}")
+_DEFINITION_SCOPE_RE = re.compile(r"[0-9a-f]{32}")
 _TERMINAL_JOB_STATES = frozenset({"SUCCEEDED", "FAILED"})
 _LOG_GROUP = "/aws/batch/job"
 _JOB_DEFINITION_COMMAND = ["bash", "-lc", "exit 64"]
@@ -344,7 +357,7 @@ def _validate_definition_scope(
         type(definition_scope) is not str
         or _DEFINITION_SCOPE_RE.fullmatch(definition_scope) is None
     ):
-        raise ValueError("definition_scope must match s[a-z0-9]{6,24}")
+        raise ValueError("definition_scope must be a UUID4 hex string")
     return definition_scope
 
 
@@ -377,32 +390,48 @@ def _canonical_container(container: Mapping[str, Any]) -> dict[str, Any]:
     return canonical
 
 
+def _trusted_definition_arn(
+    value: object,
+    *,
+    expected_name: str,
+) -> tuple[str, int]:
+    if type(value) is not str or not value:
+        raise RuntimeError("Batch returned a job definition without an ARN")
+    match = re.fullmatch(
+        re.escape(
+            f"arn:aws:batch:{REGION}:{ACCOUNT_ID}:"
+            f"job-definition/{expected_name}:"
+        )
+        + r"([1-9][0-9]*)",
+        value,
+    )
+    if match is None:
+        raise RuntimeError(f"Batch returned untrusted job definition ARN {value!r}")
+    return value, int(match.group(1))
+
+
 def _job_definition_identity(
     definition: Mapping[str, Any],
     *,
-    expected_name: str | None = None,
+    expected_name: str,
 ) -> tuple[str, int]:
-    arn = definition.get("jobDefinitionArn")
+    arn, arn_revision = _trusted_definition_arn(
+        definition.get("jobDefinitionArn"),
+        expected_name=expected_name,
+    )
     revision = definition.get("revision")
-    if type(arn) is not str or not arn:
-        raise RuntimeError("Batch returned a job definition without an ARN")
     if type(revision) is not int or revision < 1:
         raise RuntimeError("Batch returned a job definition without a revision")
-    if expected_name is not None:
-        expected_arn = (
-            f"arn:aws:batch:{REGION}:{ACCOUNT_ID}:"
-            f"job-definition/{expected_name}:{revision}"
+    if revision != arn_revision:
+        raise RuntimeError(
+            "Batch job definition revision contradicts its ARN revision"
         )
-        if arn != expected_arn:
-            raise RuntimeError(
-                f"Batch returned unexpected job definition ARN {arn!r}"
-            )
-        response_name = definition.get("jobDefinitionName")
-        if type(response_name) is not str or response_name != expected_name:
-            raise RuntimeError(
-                "Batch returned unexpected job definition name "
-                f"{response_name!r}"
-            )
+    response_name = definition.get("jobDefinitionName")
+    if type(response_name) is not str or response_name != expected_name:
+        raise RuntimeError(
+            "Batch returned unexpected job definition name "
+            f"{response_name!r}"
+        )
     return arn, revision
 
 
@@ -533,7 +562,15 @@ class HeavyTestRunner:
         )
         if not isinstance(response, Mapping):
             raise RuntimeError("register_job_definition response must be a mapping")
-        arn, revision = _job_definition_identity(response, expected_name=name)
+        raw_arn = response.get("jobDefinitionArn")
+        try:
+            arn, revision = _trusted_definition_arn(
+                raw_arn,
+                expected_name=name,
+            )
+        except Exception as error:
+            identifier = raw_arn if type(raw_arn) is str else repr(raw_arn)
+            raise _UntrustedDefinitionFailure(identifier, error) from error
         registered = RegisteredJobDefinition(
             name=name,
             arn=arn,
@@ -541,6 +578,10 @@ class HeavyTestRunner:
             owned=True,
             scope=scope,
         )
+        try:
+            _job_definition_identity(response, expected_name=name)
+        except Exception as error:
+            raise _RegisteredDefinitionFailure(registered, error) from error
         last_error: Exception = RuntimeError(
             "registered job definition is not visible"
         )
@@ -649,6 +690,14 @@ class HeavyTestRunner:
                 registered_definitions=(error.definition,),
                 failed_test=test_files[0],
                 cause=error,
+            ) from error
+        except _UntrustedDefinitionFailure as error:
+            raise PartialSubmissionError(
+                submitted=(),
+                registered_definitions=(),
+                failed_test=test_files[0],
+                cause=error,
+                untrusted_definition_identifiers=(error.identifier,),
             ) from error
         except Exception as error:
             raise PartialSubmissionError(
