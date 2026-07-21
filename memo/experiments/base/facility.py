@@ -83,6 +83,21 @@ class FacilityInput:
                         f"environment.options.{field} must be one of "
                         f"{sorted(choices)!r}"
                     )
+        if self.environment["name"] == "hopper":
+            options = self.environment["options"]
+            assert isinstance(options, Mapping)
+            supported = {
+                "env_name": {"hopper"},
+                "mode": {"F", "P", "V"},
+                "backend": {"generalized", "spring", "positional", "mjx"},
+            }
+            for field, choices in supported.items():
+                value = options.get(field, "hopper" if field == "env_name" else None)
+                if value not in choices:
+                    raise ValueError(
+                        f"environment.options.{field} must be one of "
+                        f"{sorted(choices)!r}"
+                    )
         _require_exact(
             self.logging,
             {"aim_every_env_steps", "rerun_every_episodes"},
@@ -149,6 +164,7 @@ def _stream_configs():
         "mujoco_masked": StreamACMujocoMaskedConfig,
     }
 _RTRRL_OPTIONS = {
+    "env_name": "env_name",
     "mode": "mode",
     "backend": "backend",
     "max_episode_steps": "max_episode_steps",
@@ -157,24 +173,87 @@ _RTRRL_OPTIONS = {
 }
 
 
+_NETWORK_FIELDS = {
+    "hidden_dim",
+    "encoder_dim",
+    "meta_rl",
+    "use_encoder",
+    "lru_output_dim",
+    "backbone",
+}
+_RUNTIME_FIELDS = {
+    "seed",
+    "num_envs",
+    "num_epochs",
+    "eval_every",
+    "eval_steps",
+    "log_every",
+}
+
+
+def _parameter_updates(config_type, parameters: Mapping[str, JsonValue]) -> dict:
+    """Resolve FieldDescriptor paths relative to the concrete parameters root."""
+
+    allowed = {field.name for field in fields(config_type)}
+    updates = {}
+    for key, value in parameters.items():
+        if isinstance(value, Mapping):
+            if key not in {"algorithm", "network", "runtime"}:
+                raise ValueError(f"unknown parameter namespace: {key!r}")
+            for nested_key, nested_value in value.items():
+                if isinstance(nested_value, Mapping):
+                    raise ValueError(
+                        f"unknown nested parameter path: {key}.{nested_key}"
+                    )
+                if nested_key not in allowed:
+                    raise ValueError(
+                        f"unknown nested parameter path: {key}.{nested_key}"
+                    )
+                if key == "network" and nested_key not in _NETWORK_FIELDS:
+                    raise ValueError(
+                        f"parameter path network.{nested_key} is not a network field"
+                    )
+                if key == "runtime" and nested_key not in _RUNTIME_FIELDS:
+                    raise ValueError(
+                        f"parameter path runtime.{nested_key} is not a runtime field"
+                    )
+                if key == "algorithm" and nested_key in (
+                    _NETWORK_FIELDS | _RUNTIME_FIELDS
+                ):
+                    raise ValueError(
+                        f"parameter path algorithm.{nested_key} is not an algorithm field"
+                    )
+                if nested_key in updates:
+                    raise ValueError(f"parameter path conflict for {nested_key!r}")
+                updates[nested_key] = nested_value
+            continue
+        if key not in allowed:
+            raise ValueError(f"unknown parameters: {[key]!r}")
+        if key in updates:
+            raise ValueError(f"parameter path conflict for {key!r}")
+        updates[key] = value
+    return updates
+
+
 def _build(config_type, value: FacilityInput, option_fields: Mapping[str, str]):
     options = value.environment["options"]
     assert isinstance(options, Mapping)
     unknown_options = set(options) - set(option_fields)
     if unknown_options:
         raise ValueError(f"unknown environment options: {sorted(unknown_options)!r}")
-    allowed_parameters = {field.name for field in fields(config_type)}
-    unknown_parameters = set(value.parameters) - allowed_parameters
-    if unknown_parameters:
-        raise ValueError(f"unknown parameters: {sorted(unknown_parameters)!r}")
-    conflicting = set(value.parameters) & set(option_fields.values())
+    parameter_updates = _parameter_updates(config_type, value.parameters)
+    conflicting = set(parameter_updates) & set(option_fields.values())
     if conflicting:
         raise ValueError(
             f"environment fields must be set through environment.options: {sorted(conflicting)!r}"
         )
-    updates = dict(value.parameters)
+    updates = parameter_updates
     updates.update({option_fields[name]: item for name, item in options.items()})
     updates["total_timesteps"] = value.training_budget["env_steps"]
+    if updates.get("patience", 0) not in (0, None):
+        raise ValueError("facility training does not allow early stopping")
+    updates["patience"] = 0
+    updates["require_full_budget"] = True
     config = config_type(**updates)
     epoch_quantum = config.num_envs * config.num_epochs
     if config.total_timesteps % epoch_quantum:
@@ -194,9 +273,9 @@ def build_stream_ac_config(value: FacilityInput):
             f"memo_stream_ac does not support environment {name!r}; "
             f"use {sorted(configs)!r}"
         )
-    if value.parameters.get("agent_type") != "rtu_rtrl":
-        raise ValueError("memo_stream_ac requires agent_type='rtu_rtrl'")
     config = _build(configs[name], value, _STREAM_OPTIONS[name])
+    if config.agent_type != "rtu_rtrl":
+        raise ValueError("memo_stream_ac requires agent_type='rtu_rtrl'")
     if name in ("memory_chain", "kmemory_chain"):
         if config.max_episode_steps != config.chain_length:
             raise ValueError("max_episode_steps must equal length for memory-chain tasks")
@@ -208,6 +287,7 @@ def build_rtrrl_config(value: FacilityInput):
 
     if value.environment["name"] != "hopper":
         raise ValueError("memo_rtrrl supports only the 'hopper' environment")
-    if value.parameters.get("rtrrl_topology") != "shared":
+    config = _build(RTRRLHopperConfig, value, _RTRRL_OPTIONS)
+    if config.rtrrl_topology != "shared":
         raise ValueError("memo_rtrrl requires rtrrl_topology='shared'")
-    return _build(RTRRLHopperConfig, value, _RTRRL_OPTIONS)
+    return config

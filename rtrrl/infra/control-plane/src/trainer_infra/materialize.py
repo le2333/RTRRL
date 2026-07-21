@@ -70,10 +70,6 @@ def materialize_run(
             raise ValueError(f"missing searchable parameter '{name}'")
         sampled_values[name] = sampled[name]
     final = {**fixed, **sampled_values}
-    fixed_config = _materialized_parameters(fixed, group.parameter_paths)
-    sampled_config = _materialized_parameters(
-        sampled_values, group.parameter_paths
-    )
     final_config = _materialized_parameters(final, group.parameter_paths)
     run_name = f"{group.name}-{run_number:04d}"
     run_id = f"{group.study_key}:{run_number:04d}"
@@ -114,9 +110,9 @@ def materialize_run(
         "metadata": group.metadata,
         "objective": group.objective.model_dump(mode="json"),
         "parameters": {
-            "final": final_config,
-            "fixed": fixed_config,
-            "sampled": sampled_config,
+            "final": final,
+            "fixed": fixed,
+            "sampled": sampled_values,
         },
         "resources": group.resources.model_dump(mode="json"),
         "sdk_protocol_version": group.sdk_protocol_version,
@@ -142,9 +138,9 @@ def materialize_run(
         hpo=group.hpo,
         execution=group.execution,
         metadata=freeze_json(dict(group.metadata)),
-        fixed_parameters=freeze_json(fixed_config),
-        sampled_parameters=freeze_json(sampled_config),
-        final_parameters=freeze_json(final_config),
+        fixed_parameters=freeze_json(fixed),
+        sampled_parameters=freeze_json(sampled_values),
+        final_parameters=freeze_json(final),
         context=freeze_json(context),
         config_yaml=config_yaml,
         config_sha256=config_sha256,

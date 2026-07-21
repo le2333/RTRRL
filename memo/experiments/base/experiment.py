@@ -81,6 +81,7 @@ class ExperimentConfig:
     num_epochs: int = 50
     num_envs: int = 16
     max_episode_steps: int = 1000
+    require_full_budget: bool = False
 
     # Validation
     eval_every: int = 10
@@ -737,6 +738,8 @@ def train_loop(agent, cfg: ExperimentConfig, logger=DummyLogger()):
     epoch_env_steps = _epoch_env_steps(
         cfg.total_timesteps, cfg.num_epochs, cfg.num_envs
     )
+    if cfg.require_full_budget and cfg.patience:
+        raise ValueError("full-budget facility runs cannot enable early stopping")
 
     logger["best_eval_reward"] = -jnp.inf
     steps_since_best = 0
@@ -821,6 +824,10 @@ def train_loop(agent, cfg: ExperimentConfig, logger=DummyLogger()):
             if cfg.patience and steps_since_best >= cfg.patience:
                 print(f"Early stopping patience {cfg.patience}")
                 break
+        if cfg.require_full_budget and int(state.step) != cfg.total_timesteps:
+            raise RuntimeError(
+                "training ended before exhausting training_budget.env_steps"
+            )
     except Exception as e:
         print("Exception in training loop!")
         try:

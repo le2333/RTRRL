@@ -6,7 +6,8 @@ Implemented Task 3 on baseline `f96df6a` and completed the Critical/Important
 review follow-up: strict concrete protocol materialization, explicit success
 and failure lifecycles, exact per-completion environment steps, the two
 supported launchers, configurable Brax horizons, host-only
-training/evaluation observability, and trace exposure.
+training/evaluation observability, trace exposure, and the remaining Task 3
+state-machine/contract corrections.
 
 ## Delivered
 
@@ -16,9 +17,15 @@ training/evaluation observability, and trace exposure.
   finite JSON values.
 - Control-plane materialization emits that protocol version and applies every
   `FieldDescriptor.path` as a safe nested path. Unsafe, duplicate, and
-  scalar/object prefix conflicts fail closed. A descriptor-to-resolve-to-
-  materialize-to-`FacilityInput` test covers nested environment options and
-  nested parameters without depending on Task 4 descriptors.
+  scalar/object prefix conflicts fail closed. Paths remain relative to
+  `parameters`; `EnvironmentSpec.options` is copied directly and is never an
+  HPO field path. `ConcreteRun.final_parameters` remains a flat immutable
+  descriptor-name-to-value mapping for seed and identity, while only concrete
+  YAML `parameters` is nested.
+- Real descriptor-to-resolve-to-materialize-to-`FacilityInput` tests feed
+  `algorithm.*`, `network.*`, and `runtime.*` paths through both real memo
+  config builders and assert values on the real config dataclasses. Unknown
+  nested paths fail before training.
 - `memo_stream_ac` statically supports only `memory_chain`, `kmemory_chain`,
   and `mujoco_masked` with `agent_type=rtu_rtrl`.
 - `memo_rtrrl` statically supports only Hopper with
@@ -48,8 +55,15 @@ training/evaluation observability, and trace exposure.
   and best-effort closes Aim, Rerun, and spool resources. Bootstrap closes
   partially created resources. Failure is idempotent and cannot replace the
   original training exception.
+- `TrainingRun` now enters `finishing` before final emission. A partial final
+  send, `mark_sent`, or close failure propagates unchanged, and a later
+  launcher `fail()` cannot append contradictory failed metadata. A dedicated
+  successful-Aim-send/failed-spool-mark test covers this boundary.
 - Masked MuJoCo `env_name`, `mode`, and `backend` values are validated while
-  loading the concrete config.
+  loading the concrete config. Hopper validates the same option tuple at load.
+- Facility builders force `patience=0`, reject explicit early stopping, mark
+  the config as full-budget, and assert successful final `state.step` equals
+  `training_budget.env_steps`.
 - Added focused concrete YAML fixtures and launcher/observability tests.
 - Updated the memo lock with the already-declared standalone training SDK
   Pydantic and PyYAML dependencies; `uv lock --check` passes.
@@ -65,8 +79,8 @@ closed. Each was observed failing before its implementation change.
 
 ## Verification
 
-- Facility launcher/observability/logger targets: `52 passed`.
-- Standalone training SDK suite: `124 passed`.
+- Facility launcher/observability targets: `36 passed`.
+- Standalone training SDK suite: `125 passed`.
 - Full fake-only control-plane suite: `376 passed`.
 - Evaluation trace fixture tests without optional real Brax:
   `16 passed, 2 deselected`.

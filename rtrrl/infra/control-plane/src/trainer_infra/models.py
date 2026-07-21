@@ -436,9 +436,9 @@ class ConcreteRun:
     hpo: HpoSpec
     execution: ExecutionSpec
     metadata: Mapping[str, Any]
-    fixed_parameters: Mapping[str, Any]
-    sampled_parameters: Mapping[str, Any]
-    final_parameters: Mapping[str, Any]
+    fixed_parameters: Mapping[str, JsonScalar]
+    sampled_parameters: Mapping[str, JsonScalar]
+    final_parameters: Mapping[str, JsonScalar]
     context: Mapping[str, Any]
     config_yaml: str
     config_sha256: str

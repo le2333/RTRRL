@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import subprocess
 import sys
+import types
 from importlib import import_module
 from pathlib import Path
 
@@ -9,14 +10,46 @@ import pytest
 import yaml
 
 MEMO_ROOT = Path(__file__).parents[1]
+REPOSITORY_ROOT = MEMO_ROOT.parent
 sys.path.insert(0, str(MEMO_ROOT))
 sys.path.insert(0, str(MEMO_ROOT / "experiments"))
+sys.path.insert(
+    0,
+    str(REPOSITORY_ROOT / "rtrrl" / "infra" / "control-plane" / "src"),
+)
+
+if "optuna" not in sys.modules:
+    optuna_module = types.ModuleType("optuna")
+    optuna_trial_module = types.ModuleType("optuna.trial")
+    optuna_trial_module.Trial = object
+    optuna_module.trial = optuna_trial_module
+    sys.modules["optuna"] = optuna_module
+    sys.modules["optuna.trial"] = optuna_trial_module
 
 from base.facility import (  # noqa: E402
     FacilityInput,
     build_rtrrl_config,
     build_stream_ac_config,
 )
+from trainer_infra.materialize import materialize_run  # noqa: E402
+from trainer_infra.models import (  # noqa: E402
+    DescriptorDefaults,
+    EnvironmentSpec,
+    ExecutionSpec,
+    ExperimentDefaults,
+    ExperimentIdentity,
+    ExperimentSpec,
+    FieldDescriptor,
+    GroupSpec,
+    HpoSpec,
+    LoggingSpec,
+    ObjectiveSpec,
+    ResourcesSpec,
+    ScriptCatalog,
+    ScriptDescriptor,
+    TrainingBudgetSpec,
+)
+from trainer_infra.resolve import resolve_experiment  # noqa: E402
 
 
 def _write(tmp_path: Path, **updates) -> Path:
@@ -93,6 +126,8 @@ def test_stream_launcher_accepts_only_registered_environments(tmp_path, environm
     assert config.agent_type == "rtu_rtrl"
     assert config.total_timesteps == 8
     assert config.max_episode_steps == options["max_episode_steps"]
+    assert config.patience == 0
+    assert config.require_full_budget is True
 
 
 @pytest.mark.parametrize("agent_type", ["rtu_tbptt", "lru_rtrl"])
@@ -159,11 +194,62 @@ def test_rtrrl_launcher_requires_hopper_and_shared(tmp_path):
     assert config.rtrrl_topology == "shared"
     assert config.env_name == "hopper"
     assert config.max_episode_steps == 19
+    assert config.patience == 0
+    assert config.require_full_budget is True
 
     value = FacilityInput.load(path)
-    object.__setattr__(value, "parameters", {"rtrrl_topology": "independent"})
+    object.__setattr__(
+        value,
+        "parameters",
+        {"rtrrl_topology": "independent", "num_envs": 1, "num_epochs": 2},
+    )
     with pytest.raises(ValueError, match="shared"):
         build_rtrrl_config(value)
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [("env_name", "ant"), ("mode", "bad"), ("backend", "bad")],
+)
+def test_hopper_options_reject_unsupported_values_at_load(tmp_path, field, value):
+    options = {
+        "env_name": "hopper",
+        "mode": "F",
+        "backend": "spring",
+        "max_episode_steps": 8,
+        "normalize_obs": True,
+        "normalize_reward": True,
+    }
+    options[field] = value
+    path = _write(
+        tmp_path,
+        environment={"name": "hopper", "options": options},
+        parameters={
+            "rtrrl_topology": "shared",
+            "num_envs": 1,
+            "num_epochs": 2,
+        },
+    )
+
+    with pytest.raises(ValueError, match=field):
+        FacilityInput.load(path)
+
+
+def test_nested_parameter_paths_reject_unknown_leaf_early(tmp_path):
+    value = FacilityInput.load(
+        _write(
+            tmp_path,
+            parameters={
+                "algorithm": {"agent_type": "rtu_rtrl"},
+                "network": {"not_a_real_field": 32},
+                "num_envs": 1,
+                "num_epochs": 2,
+            },
+        )
+    )
+
+    with pytest.raises(ValueError, match="network.not_a_real_field"):
+        build_stream_ac_config(value)
 
 
 @pytest.mark.parametrize("launcher", ["memo_stream_ac", "memo_rtrrl"])
@@ -287,3 +373,120 @@ def test_launcher_main_failure_fails_once_without_finish(tmp_path, monkeypatch):
     assert raised.value is error
     assert run.failed == [error]
     assert run.finished == 0
+
+
+@pytest.mark.parametrize("kind", ["stream", "rtrrl"])
+def test_real_descriptor_paths_reach_real_memo_config_dataclass(tmp_path, kind):
+    image = "repo/memo@sha256:" + "a" * 64
+    is_stream = kind == "stream"
+    environment = (
+        EnvironmentSpec(
+            name="memory_chain",
+            options={"length": 8, "max_episode_steps": 8},
+        )
+        if is_stream
+        else EnvironmentSpec(
+            name="hopper",
+            options={
+                "env_name": "hopper",
+                "mode": "F",
+                "backend": "spring",
+                "max_episode_steps": 8,
+                "normalize_obs": True,
+                "normalize_reward": True,
+            },
+        )
+    )
+    topology_name = "agent_type" if is_stream else "rtrrl_topology"
+    topology_value = "rtu_rtrl" if is_stream else "shared"
+    script_name = "memo_stream_ac" if is_stream else "memo_rtrrl"
+    descriptor = ScriptDescriptor(
+        name=script_name,
+        argv=("python", "run.py", "--config", "{config_path}"),
+        sdk_protocol_version="1",
+        defaults=DescriptorDefaults(
+            environment=environment,
+            training_budget=TrainingBudgetSpec(env_steps=8),
+            logging=LoggingSpec(
+                aim_every_env_steps=4,
+                rerun_every_episodes=1,
+            ),
+        ),
+        objective=ObjectiveSpec(
+            metric="eval/rewards",
+            direction="maximize",
+            reduction="last",
+        ),
+        environments=(environment.name,),
+        fields={
+            topology_name: FieldDescriptor(
+                path=f"algorithm.{topology_name}",
+                type="str",
+                default=topology_value,
+                choices=(topology_value,),
+            ),
+            "hidden_dim": FieldDescriptor(
+                path="network.hidden_dim",
+                type="int",
+                default=32,
+            ),
+            "seed": FieldDescriptor(
+                path="runtime.seed",
+                type="int",
+                default=11,
+            ),
+            "num_envs": FieldDescriptor(
+                path="runtime.num_envs",
+                type="int",
+                default=1,
+            ),
+            "num_epochs": FieldDescriptor(
+                path="runtime.num_epochs",
+                type="int",
+                default=2,
+            ),
+        },
+    )
+    spec = ExperimentSpec(
+        experiment=ExperimentIdentity(name=f"{kind}-contract"),
+        defaults=ExperimentDefaults(
+            image=image,
+            resources=ResourcesSpec(profile="c7am"),
+            hpo=HpoSpec(total_trials=1, configs_per_batch=1),
+            execution=ExecutionSpec(runs_per_job=1),
+        ),
+        groups={"group": GroupSpec(script=script_name)},
+    )
+    group = resolve_experiment(
+        spec,
+        {
+            image: ScriptCatalog(
+                protocol_version="1",
+                scripts={script_name: descriptor},
+            )
+        },
+    ).groups[0]
+    trial = types.SimpleNamespace(number=0)
+    concrete = materialize_run(group, trial, {}, run_number=1)
+    path = tmp_path / f"{kind}.yaml"
+    path.write_text(concrete.config_yaml)
+    facility = FacilityInput.load(path)
+
+    config = (
+        build_stream_ac_config(facility)
+        if is_stream
+        else build_rtrrl_config(facility)
+    )
+
+    assert config.hidden_dim == 32
+    assert config.seed == 11
+    assert config.num_envs == 1
+    assert config.num_epochs == 2
+    assert getattr(config, topology_name) == topology_value
+    assert concrete.final_parameters == {
+        topology_name: topology_value,
+        "hidden_dim": 32,
+        "seed": 11,
+        "num_envs": 1,
+        "num_epochs": 2,
+    }

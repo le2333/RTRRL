@@ -68,8 +68,7 @@ class TrainingRun:
         )
         self._last_env_steps: int | None = None
         self._last_metric_env_steps: int | None = None
-        self._finished = False
-        self._failed = False
+        self._terminal_state = "active"
         self._closed = False
         self._summary_sequence = max(
             (
@@ -173,26 +172,29 @@ class TrainingRun:
         del path
 
     def finish(self, final_metrics: Mapping[str, int | float]) -> None:
-        if self._failed or self._finished:
+        if self._terminal_state != "active":
             return
-        objective_metric = self.context.objective.get("metric")
-        if not self.context.objective:
-            self._finished = True
-            self._close_resources()
-            return
-        if not isinstance(objective_metric, str) or not objective_metric:
-            raise ValueError("objective.metric must be a non-empty string")
-        if objective_metric not in final_metrics:
-            raise ValueError(
-                f"final_metrics must contain objective metric {objective_metric!r}"
-            )
-        ordered_metrics = [
-            (name, value)
-            for name, value in final_metrics.items()
-            if name != objective_metric
-        ]
-        ordered_metrics.append((objective_metric, final_metrics[objective_metric]))
+        self._terminal_state = "finishing"
         try:
+            objective_metric = self.context.objective.get("metric")
+            if not self.context.objective:
+                self._terminal_state = "finished"
+                self._close_resources(suppress_errors=False)
+                return
+            if not isinstance(objective_metric, str) or not objective_metric:
+                raise ValueError("objective.metric must be a non-empty string")
+            if objective_metric not in final_metrics:
+                raise ValueError(
+                    f"final_metrics must contain objective metric {objective_metric!r}"
+                )
+            ordered_metrics = [
+                (name, value)
+                for name, value in final_metrics.items()
+                if name != objective_metric
+            ]
+            ordered_metrics.append(
+                (objective_metric, final_metrics[objective_metric])
+            )
             events = tuple(
                 MetricEvent.final(
                     env_steps=self._last_env_steps or 0,
@@ -202,18 +204,22 @@ class TrainingRun:
                 )
                 for name, value in ordered_metrics
             )
+            self._emit_many(events)
         except (TypeError, ValueError) as exc:
+            self._close_resources(suppress_errors=True)
             raise type(exc)(f"invalid final_metrics: {exc}") from exc
-        self._emit_many(events)
-        self._finished = True
-        self._close_resources()
+        except BaseException:
+            self._close_resources(suppress_errors=True)
+            raise
+        self._terminal_state = "finished"
+        self._close_resources(suppress_errors=False)
 
     def fail(self, error: BaseException) -> None:
         """Mark the run failed without publishing an objective or finalized marker."""
 
-        if self._failed or self._finished:
+        if self._terminal_state != "active":
             return
-        self._failed = True
+        self._terminal_state = "failed"
         metadata = {"type": type(error).__name__}
         try:
             fail = getattr(self.aim, "fail", None)
@@ -221,19 +227,22 @@ class TrainingRun:
                 fail(metadata)
         except BaseException:
             pass
-        self._close_resources()
+        self._close_resources(suppress_errors=True)
 
     def abort(self, error: BaseException) -> None:
         self.fail(error)
 
-    def _close_resources(self) -> None:
+    def _close_resources(self, *, suppress_errors: bool) -> None:
         if self._closed:
             return
         self._closed = True
+        errors = []
         for resource in (self.rerun, self.spool, self.aim):
             try:
                 close = getattr(resource, "close", None)
                 if callable(close):
                     close()
-            except BaseException:
-                pass
+            except BaseException as error:
+                errors.append(error)
+        if errors and not suppress_errors:
+            raise errors[0]

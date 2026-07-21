@@ -359,6 +359,39 @@ def test_fail_never_emits_objective_or_finalized_even_after_objective_metric(tmp
     assert aim.closed == rerun.closed == spool.closed == 1
 
 
+def test_finish_mark_sent_failure_cannot_transition_to_failed(tmp_path):
+    class MarkSentFailure(MemorySpool):
+        def mark_sent(self, event_id):
+            raise OSError("mark sent failed")
+
+    class LifecycleAim(FakeAim):
+        def __init__(self):
+            super().__init__()
+            self.failure = None
+
+        def fail(self, metadata):
+            self.failure = metadata
+
+    aim = LifecycleAim()
+    run = TrainingRun(
+        make_context(tmp_path),
+        aim,
+        NullRerun(),
+        MarkSentFailure(),
+    )
+    run.start()
+
+    with pytest.raises(OSError, match="mark sent failed") as raised:
+        run.finish({"eval/reward": 4.0})
+    run.fail(raised.value)
+
+    assert aim.failure is None
+    assert any(
+        event.kind == "final" and event.data["finalized"]
+        for event in aim.events
+    )
+
+
 def test_finish_without_descriptor_objective_is_a_noop(tmp_path):
     context = make_context(tmp_path, objective={})
     run = make_training_run(tmp_path, context=context)

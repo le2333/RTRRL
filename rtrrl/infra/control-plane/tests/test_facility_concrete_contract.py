@@ -8,6 +8,7 @@ import pytest
 import yaml
 
 from trainer_infra.materialize import materialize_run
+from trainer_infra.execution import build_run_context
 from trainer_infra.models import (
     DescriptorDefaults,
     EnvironmentSpec,
@@ -64,7 +65,7 @@ def _descriptor() -> ScriptDescriptor:
         environments=("memory_chain",),
         fields={
             "agent_type": FieldDescriptor(
-                path="agent.type",
+                path="algorithm.agent_type",
                 type="str",
                 default="rtu_rtrl",
                 choices=("rtu_rtrl",),
@@ -75,6 +76,11 @@ def _descriptor() -> ScriptDescriptor:
                 default=32,
                 searchable=True,
                 default_search={"values": [32, 64]},
+            ),
+            "seed": FieldDescriptor(
+                path="runtime.seed",
+                type="int",
+                default=7,
             ),
         },
     )
@@ -126,10 +132,24 @@ def test_descriptor_resolve_materialize_loads_exact_nested_concrete_yaml(tmp_pat
         "observe": ["query"]
     }
     assert payload["parameters"] == {
-        "agent": {"type": "rtu_rtrl"},
+        "algorithm": {"agent_type": "rtu_rtrl"},
         "network": {"hidden_dim": 64},
+        "runtime": {"seed": 7},
     }
     assert facility.parameters["network"]["hidden_dim"] == 64
+    assert concrete.final_parameters == {
+        "agent_type": "rtu_rtrl",
+        "hidden_dim": 64,
+        "seed": 7,
+    }
+    context = build_run_context(
+        "exp-1",
+        resolved.name,
+        concrete,
+        tmp_path / "artifacts",
+    )
+    assert context.seed == 7
+    assert context.final_parameters["seed"] == 7
 
 
 def test_materialize_rejects_parameter_path_prefix_conflicts():
