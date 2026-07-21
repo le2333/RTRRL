@@ -125,7 +125,10 @@ class RTRRLHopperConfig(ExperimentConfig):
 
 def make_env(cfg: RTRRLHopperConfig):
     env, env_params = environment.make(
-        f"brax::{cfg.env_name}", mode=cfg.mode, backend=cfg.backend
+        f"brax::{cfg.env_name}",
+        mode=cfg.mode,
+        backend=cfg.backend,
+        max_episode_steps=cfg.max_episode_steps,
     )
     env = RecordEpisodeStatistics(env)
     if cfg.normalize_obs:

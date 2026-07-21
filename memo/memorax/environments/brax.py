@@ -31,15 +31,16 @@ masks = {
 
 
 class BraxGymnaxWrapper(GymnaxWrapper):
-    def __init__(self, env, *, trace_env=None):
+    def __init__(self, env, *, trace_env=None, max_episode_steps=1000):
         super().__init__(env)
         self._trace_env = trace_env if trace_env is not None else env
+        self._max_episode_steps = max_episode_steps
         self.action_size = env.action_size
         self.observation_size = (env.observation_size,)
 
     @property
     def default_params(self) -> EnvParams:
-        return EnvParams(max_steps_in_episode=1000)
+        return EnvParams(max_steps_in_episode=self._max_episode_steps)
 
     def reset(self, key: Key, params) -> tuple[Array, Any]:
         state = self._env.reset(key)
@@ -92,16 +93,27 @@ class BraxGymnaxWrapper(GymnaxWrapper):
         )
 
 
-def make(env_id: str, mode="F", backend="generalized", **kwargs) -> tuple:
+def make(
+    env_id: str,
+    mode="F",
+    backend="generalized",
+    max_episode_steps=1000,
+    **kwargs,
+) -> tuple:
     from brax import envs
     from brax.envs.wrappers.training import AutoResetWrapper, EpisodeWrapper
 
     env = envs.get_environment(env_name=env_id, backend=backend, **kwargs)
-    trace_env = EpisodeWrapper(env, episode_length=1000, action_repeat=1)
+    if type(max_episode_steps) is not int or max_episode_steps <= 0:
+        raise ValueError("max_episode_steps must be a positive integer")
+    trace_env = EpisodeWrapper(
+        env, episode_length=max_episode_steps, action_repeat=1
+    )
     env = AutoResetWrapper(trace_env)
     env = BraxGymnaxWrapper(
         env,
         trace_env=trace_env,
+        max_episode_steps=max_episode_steps,
     )
     env = MaskObservationWrapper(env, mask=masks[env_id][mode])
 

@@ -87,7 +87,7 @@ class LegacyProgram:
                 **_normalization_legacy_logs(summary.normalization),
             }
         )
-        return state
+        return state, summary.trace
 
 
 def _emit_step_logs(logs):

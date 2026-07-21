@@ -22,6 +22,7 @@ import lox
 import numpy as np
 import optax
 from logging_util import DummyLogger, with_logger
+from training_sdk import Episode
 from memorax.algorithms import (
     QRC,
     RTRRL,
@@ -79,6 +80,7 @@ class ExperimentConfig:
     total_timesteps: int = 500_000
     num_epochs: int = 50
     num_envs: int = 16
+    max_episode_steps: int = 1000
 
     # Validation
     eval_every: int = 10
@@ -552,6 +554,129 @@ def _episode_stats(info: dict) -> tuple[float, float]:
     return returns, lengths
 
 
+def emit_training_summaries(
+    training_run, completed_stats: dict, env_steps: int
+) -> None:
+    """Emit one mandatory host record for every completed training episode."""
+
+    if type(env_steps) is not int:
+        raise TypeError("env_steps must be a host integer")
+    completed = np.asarray(completed_stats.get("returned_episode", ()), dtype=bool)
+    returns = np.asarray(completed_stats.get("returned_episode_returns", ()))
+    lengths = np.asarray(completed_stats.get("returned_episode_lengths", ()))
+    if completed.shape != returns.shape or completed.shape != lengths.shape:
+        raise ValueError("completed episode statistic arrays must have equal shapes")
+    for index in np.flatnonzero(completed.reshape(-1)):
+        training_run.log_episode_summary(
+            env_steps=env_steps,
+            episode_return=float(returns.reshape(-1)[index]),
+            episode_length=int(lengths.reshape(-1)[index]),
+        )
+
+
+def _environment_states(trace, environment_index: int, count: int):
+    if trace.environment_states is None:
+        return None
+    return tuple(
+        jax.tree.map(
+            lambda leaf: np.asarray(leaf)[step, environment_index],
+            trace.environment_states,
+        )
+        for step in range(count)
+    )
+
+
+def episode_from_trace(
+    trace,
+    environment_index: int,
+    *,
+    episode_number: int = 1,
+    env_steps: int = 0,
+) -> Episode:
+    """Convert one complete fixed-shape JAX trace on the host."""
+
+    counts = np.asarray(trace.valid_transitions)
+    if counts.ndim != 1 or not 0 <= environment_index < counts.shape[0]:
+        raise ValueError("environment_index is outside valid_transitions")
+    count = int(counts[environment_index])
+    if count <= 0:
+        raise ValueError("valid_transitions must be positive for a complete episode")
+    observations = np.asarray(trace.observations)
+    actions = np.asarray(trace.actions)
+    rewards = np.asarray(trace.rewards)
+    terminals = np.asarray(trace.terminals, dtype=bool)
+    truncations = np.asarray(trace.truncations, dtype=bool)
+    if (
+        observations.shape[0] < count + 1
+        or actions.shape[0] < count
+        or rewards.shape[0] < count
+        or terminals.shape[0] < count
+        or truncations.shape[0] < count
+    ):
+        raise ValueError("evaluation trace is shorter than valid_transitions")
+    final_terminal = bool(terminals[count - 1, environment_index])
+    final_truncation = bool(truncations[count - 1, environment_index])
+    if not (final_terminal or final_truncation):
+        raise ValueError("evaluation trace is not complete")
+    return Episode(
+        number=episode_number,
+        phase="eval",
+        start_env_steps=max(0, env_steps - count),
+        end_env_steps=env_steps,
+        observations=observations[: count + 1, environment_index],
+        actions=actions[:count, environment_index],
+        rewards=rewards[:count, environment_index],
+        terminals=[
+            bool(value) for value in terminals[:count, environment_index]
+        ],
+        truncations=[
+            bool(value) for value in truncations[:count, environment_index]
+        ],
+        environment_states=_environment_states(trace, environment_index, count),
+    )
+
+
+def emit_evaluation_episodes(
+    training_run,
+    trace,
+    *,
+    first_episode_number: int,
+    env_steps: int,
+) -> int:
+    """Submit every complete environment trace; incomplete windows are skipped."""
+
+    next_number = first_episode_number
+    for environment_index, count in enumerate(
+        np.asarray(trace.valid_transitions).reshape(-1)
+    ):
+        if int(count) <= 0:
+            continue
+        episode = episode_from_trace(
+            trace,
+            environment_index,
+            episode_number=next_number,
+            env_steps=env_steps,
+        )
+        training_run.log_episode(episode)
+        next_number += 1
+    return next_number
+
+
+def _epoch_env_steps(total: int, epochs: int, num_envs: int) -> tuple[int, ...]:
+    if type(total) is not int or total <= 0:
+        raise ValueError("total_timesteps must be a positive integer")
+    if type(epochs) is not int or epochs <= 0:
+        raise ValueError("num_epochs must be a positive integer")
+    if type(num_envs) is not int or num_envs <= 0:
+        raise ValueError("num_envs must be a positive integer")
+    if total % num_envs:
+        raise ValueError("total_timesteps must be divisible by num_envs")
+    updates = total // num_envs
+    active_epochs = min(epochs, updates)
+    base, extra = divmod(updates, active_epochs)
+    return tuple((base + (index < extra)) * num_envs for index in range(active_epochs))
+
+
 def train_loop(agent, cfg: ExperimentConfig, logger=DummyLogger()):
     """Epoch loop: train -> eval -> Aim logger, with early stopping.
 
@@ -584,14 +709,18 @@ def train_loop(agent, cfg: ExperimentConfig, logger=DummyLogger()):
     key, init_key = jax.random.split(key)
     state = init(init_key)
 
-    num_steps = cfg.total_timesteps // cfg.num_epochs
+    epoch_env_steps = _epoch_env_steps(
+        cfg.total_timesteps, cfg.num_epochs, cfg.num_envs
+    )
 
     logger["best_eval_reward"] = -jnp.inf
     steps_since_best = 0
-    pbar = trange(cfg.num_epochs, mininterval=1)
+    pbar = trange(len(epoch_env_steps), mininterval=1)
+    evaluation_episode_number = 1
+    primary_error = None
 
     try:
-        for i in pbar:
+        for i, num_steps in zip(pbar, epoch_env_steps):
             key, train_key, eval_key = jax.random.split(key, 3)
             start = time.perf_counter()
             state, logs = train(train_key, state, num_steps)
@@ -600,11 +729,14 @@ def train_loop(agent, cfg: ExperimentConfig, logger=DummyLogger()):
 
             info = logs.pop("info", {})
             avg_r, avg_len = _episode_stats(info)
+            global_step = int(state.step)
+            emit_training_summaries(logger, info, global_step)
 
             metrics = {
                 "train/SPS": sps,
                 "train/episode_returns": avg_r,
                 "train/episode_lengths": avg_len,
+                "train/env_steps": global_step,
             }
             # Forward remaining logs (critic/td_error, actor/entropy, diag/*, ...).
             # lox stacks per-step scalars over the scan -> shape (num_steps,); we
@@ -620,22 +752,29 @@ def train_loop(agent, cfg: ExperimentConfig, logger=DummyLogger()):
                     metrics[f"train/{k}"] = float(jnp.mean(v))
                     metrics[f"train/{k}_max"] = float(jnp.max(jnp.abs(v)))
 
-            # Aim step: use the loop-derived env-step count, NOT state.step.
-            # state.step has been observed to read back as int64 garbage
-            # (~±2^63) once training diverges, which scrambles metric ordering
-            # in Aim. The loop counter is always a clean multiple of num_steps.
-            global_step = (i + 1) * num_steps
-            # Keep the raw counter as a metric so we can still see WHEN it goes
-            # bad (a canary for state corruption during divergence).
-            metrics["debug/state_step"] = float(state.step)
+            metrics["debug/state_step"] = float(global_step)
 
             pbar.set_description(f"ep{i} R={avg_r:.2f}", refresh=False)
 
             # EVAL ------------------------------------------------------------
-            if cfg.eval_every and (i % cfg.eval_every == 0 or i == cfg.num_epochs - 1):
-                _, eval_logs = eval_fn(eval_key, state, cfg.eval_steps)
+            if cfg.eval_every and (
+                i % cfg.eval_every == 0 or i == len(epoch_env_steps) - 1
+            ):
+                eval_result, eval_logs = eval_fn(eval_key, state, cfg.eval_steps)
+                eval_trace = (
+                    eval_result[1]
+                    if isinstance(eval_result, tuple) and len(eval_result) == 2
+                    else None
+                )
                 eval_info = eval_logs.get("info", {})
                 eval_avg, _ = _episode_stats(eval_info)
+                if eval_trace is not None:
+                    evaluation_episode_number = emit_evaluation_episodes(
+                        logger,
+                        eval_trace,
+                        first_episode_number=evaluation_episode_number,
+                        env_steps=global_step,
+                    )
                 if eval_avg == eval_avg:  # not NaN
                     metrics["eval/rewards"] = eval_avg
                     pbar.write(f"Eval reward: {eval_avg:.2f}")
@@ -653,10 +792,16 @@ def train_loop(agent, cfg: ExperimentConfig, logger=DummyLogger()):
                 print(f"Early stopping patience {cfg.patience}")
                 break
     except Exception as e:
+        primary_error = e
         print("Exception in training loop!")
-        raise e
+        raise
     finally:
-        logger.finalize()
+        try:
+            logger.finalize()
+        except Exception:
+            if primary_error is None:
+                raise
+            print("Exception while finalizing failed training run!")
 
     return logger["best_eval_reward"]
 

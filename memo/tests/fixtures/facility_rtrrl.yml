@@ -1,0 +1,19 @@
+environment:
+  name: hopper
+  options:
+    mode: F
+    backend: spring
+    max_episode_steps: 4
+    normalize_obs: true
+    normalize_reward: true
+logging:
+  aim_every_env_steps: 4
+  rerun_every_episodes: 1
+parameters:
+  rtrrl_topology: shared
+  num_envs: 1
+  num_epochs: 1
+  eval_every: 1
+  eval_steps: 4
+training_budget:
+  env_steps: 4
