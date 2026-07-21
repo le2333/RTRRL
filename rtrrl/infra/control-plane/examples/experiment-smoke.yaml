@@ -1,0 +1,64 @@
+experiment:
+  name: memo-facility-smoke
+  description: Small foreground facility experiment
+  metadata:
+    purpose: smoke
+defaults:
+  image: 123456789012.dkr.ecr.eu-north-1.amazonaws.com/memo:approved
+  resources:
+    profile: c7am
+  hpo:
+    total_trials: 5
+    configs_per_batch: 2
+    parameter_policy: explicit_scan
+  execution:
+    runs_per_job: 2
+    aim_result_timeout_seconds: 600
+  parameters:
+    seed:
+      values: [7]
+groups:
+  stream:
+    script: memo_stream_ac
+    environment:
+      name: memory_chain
+      options:
+        length: 16
+        max_episode_steps: 16
+    training_budget:
+      env_steps: 10000
+    logging:
+      aim_every_env_steps: 1000
+      rerun_every_episodes: 10
+    parameters:
+      agent_type:
+        values: [rtu_rtrl]
+      hidden_dim:
+        values: [64, 128, 192]
+      gamma:
+        values: [0.95, 0.97, 0.98, 0.99, 1.0]
+  rtrrl:
+    script: memo_rtrrl
+    resources:
+      profile: g6x
+    environment:
+      name: hopper
+      options:
+        env_name: hopper
+        mode: F
+        backend: spring
+        max_episode_steps: 1000
+        normalize_obs: true
+        normalize_reward: true
+    training_budget:
+      env_steps: 10000
+    logging:
+      aim_every_env_steps: 1000
+      rerun_every_episodes: 5
+    parameters:
+      rtrrl_topology:
+        values: [shared]
+      hidden_dim:
+        values: [16, 32, 64]
+      gamma:
+        values: [0.95, 0.97, 0.98, 0.99, 1.0]
