@@ -46,7 +46,34 @@ def _failures(log: str) -> list[str]:
     return sorted(set(re.findall(r"FAILED (tests/\S+)", log)))
 
 
+def _pyright_payload(log: str) -> dict[str, object]:
+    decoder = json.JSONDecoder()
+    for match in re.finditer(r"\{", log):
+        try:
+            payload, _ = decoder.raw_decode(log, match.start())
+        except json.JSONDecodeError:
+            continue
+        if (
+            isinstance(payload, dict)
+            and "generalDiagnostics" in payload
+            and "summary" in payload
+        ):
+            return payload
+    raise ValueError("no Pyright JSON payload found")
+
+
 def _diagnostic_summary(log: str) -> dict[str, int] | None:
+    try:
+        payload = _pyright_payload(log)
+    except ValueError:
+        payload = None
+    if isinstance(payload, dict) and isinstance(payload.get("summary"), dict):
+        summary = payload["summary"]
+        return {
+            "errors": int(summary.get("errorCount", 0)),
+            "warnings": int(summary.get("warningCount", 0)),
+            "informations": int(summary.get("informationCount", 0)),
+        }
     matches = re.findall(
         r"(\d+) errors?, (\d+) warnings?, (\d+) informations?", log
     )
@@ -88,7 +115,88 @@ def _run(name: str) -> dict[str, object]:
     }
 
 
-def main() -> None:
+def _canonical_diagnostic(diagnostic: dict[str, object]) -> str:
+    path = str(diagnostic.get("file", "")).replace("\\", "/")
+    if "/memo/" in path:
+        path = path.split("/memo/", 1)[1]
+    if path in {
+        "memorax/algorithms/rtrrl.py",
+        "memorax/algorithms/rtrrl/__init__.py",
+    }:
+        path = "memorax/algorithms/rtrrl"
+    message = re.sub(r"\s+", " ", str(diagnostic.get("message", ""))).strip()
+    return "|".join(
+        (
+            path,
+            str(diagnostic.get("severity", "")),
+            str(diagnostic.get("rule", "")),
+            message,
+        )
+    )
+
+
+def _pyright_diagnostics(log: str) -> list[str]:
+    payload = _pyright_payload(log)
+    diagnostics = payload.get("generalDiagnostics")
+    if not isinstance(diagnostics, list):
+        raise ValueError("pyright JSON lacks generalDiagnostics")
+    return sorted(
+        {
+            _canonical_diagnostic(diagnostic)
+            for diagnostic in diagnostics
+            if isinstance(diagnostic, dict)
+        }
+    )
+
+
+def evaluate_gates(
+    runs: dict[str, dict[str, object]],
+    pyright_review_head_log: str,
+    pyright_review_base_log: str,
+) -> dict[str, object]:
+    head_failures = sorted(set(runs["online_ac_head"]["failures"]))
+    base_failures = sorted(set(runs["online_ac_base"]["failures"]))
+    head_only_failures = sorted(set(head_failures) - set(base_failures))
+    base_only_failures = sorted(set(base_failures) - set(head_failures))
+    head_diagnostics = _pyright_diagnostics(pyright_review_head_log)
+    base_diagnostics = _pyright_diagnostics(pyright_review_base_log)
+    head_only_diagnostics = sorted(
+        set(head_diagnostics) - set(base_diagnostics)
+    )
+    base_only_diagnostics = sorted(
+        set(base_diagnostics) - set(head_diagnostics)
+    )
+    gates: dict[str, object] = {
+        "selected_online_ac": {
+            "passed": runs["selected_online_ac"]["exit_code"] == 0,
+            "exit_code": runs["selected_online_ac"]["exit_code"],
+        },
+        "online_ac_regression": {
+            "passed": not head_only_failures,
+            "condition": "no_head_only_failure_nodeids",
+            "head_failures": head_failures,
+            "base_failures": base_failures,
+            "head_only_failures": head_only_failures,
+            "base_only_failures": base_only_failures,
+        },
+        "pyright_review_regression": {
+            "passed": not head_only_diagnostics,
+            "condition": "no_head_only_canonical_diagnostics",
+            "head_diagnostics": head_diagnostics,
+            "base_diagnostics": base_diagnostics,
+            "head_only_diagnostics": head_only_diagnostics,
+            "base_only_diagnostics": base_only_diagnostics,
+        },
+    }
+    gates["all_passed"] = all(
+        bool(gate["passed"])
+        for gate in gates.values()
+        if isinstance(gate, dict)
+    )
+    return gates
+
+
+def collect_evidence() -> dict[str, object]:
     names = [
         "finite_differences",
         "strict_parity",
@@ -122,8 +230,9 @@ def main() -> None:
             finite_log,
         )
     }
+    runs = {name: _run(name) for name in names}
     payload = {
-        "schema_version": 1,
+        "schema_version": 2,
         "batch_job_id": os.environ.get("AWS_BATCH_JOB_ID", ""),
         "functional_head_sha": os.environ["TASK12_FUNCTIONAL_HEAD_SHA"],
         "feature_base_sha": os.environ["TASK12_FEATURE_BASE_SHA"],
@@ -133,7 +242,12 @@ def main() -> None:
             "TASK12_REVIEW_PATCH_SHA256"
         ],
         "runtime": json.loads(_text(RESULTS / "runtime.json")),
-        "runs": {name: _run(name) for name in names},
+        "runs": runs,
+        "gates": evaluate_gates(
+            runs,
+            _text(RESULTS / "pyright_review_head.log"),
+            _text(RESULTS / "pyright_review_base.log"),
+        ),
         "finite_difference_metrics": finite_metrics,
         "online_ac_collection": {
             "head_nodeids": head_nodes,
@@ -153,7 +267,14 @@ def main() -> None:
         "brax_smoke": _last_json(RESULTS / "brax_smoke.stdout.json"),
         "source_hashes": json.loads(_text(RESULTS / "source_hashes.json")),
     }
+    return payload
+
+
+def main() -> None:
+    payload = collect_evidence()
     print(json.dumps(payload, allow_nan=False, indent=2, sort_keys=True))
+    if not payload["gates"]["all_passed"]:
+        raise SystemExit(1)
 
 
 if __name__ == "__main__":

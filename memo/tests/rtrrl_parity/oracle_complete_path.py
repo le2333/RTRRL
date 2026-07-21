@@ -590,4 +590,3 @@ def capture_complete_state_machine(
             jax,
         )
     return arrays, {"one_env": one_metadata, "two_env": two_metadata}
-

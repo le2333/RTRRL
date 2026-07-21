@@ -4,8 +4,10 @@ from __future__ import annotations
 
 import importlib.metadata as metadata
 import json
+from pathlib import Path
 import platform
-from typing import Any
+import sys
+from typing import Any, Mapping
 
 import jax
 import numpy as np
@@ -35,6 +37,46 @@ CONFIG_PAYLOAD: dict[str, Any] = {
         "render": False,
     },
 }
+
+
+def assert_module_provenance(
+    modules: Mapping[str, Any],
+    memo_root: Path,
+) -> dict[str, object]:
+    memo_root = memo_root.resolve()
+    external_root = (memo_root.parent / "rtrrl").resolve()
+    origins = {}
+    for name, module in modules.items():
+        filename = getattr(module, "__file__", None)
+        if filename:
+            origins[name] = Path(filename).resolve()
+    external = {
+        name: str(path)
+        for name, path in origins.items()
+        if path.is_relative_to(external_root)
+    }
+    if external:
+        raise AssertionError(f"loaded modules originate under external rtrrl: {external}")
+
+    required = (
+        "memorax",
+        "memorax.algorithms.rtrrl.entrypoint",
+        "experiments.rtrrl_hopper.run",
+    )
+    checked = {}
+    for name in required:
+        path = origins.get(name)
+        if path is None or not path.is_relative_to(memo_root):
+            raise AssertionError(
+                f"Memo module {name} did not resolve under {memo_root}: {path}"
+            )
+        checked[name] = str(path)
+    return {
+        "memo_root": str(memo_root),
+        "external_rtrrl_root": str(external_root),
+        "external_modules": external,
+        "memo_modules": checked,
+    }
 
 
 class RecordingLogger(dict):
@@ -106,6 +148,7 @@ def main() -> None:
             raise AssertionError(f"missing historical evaluation metric: {name}")
     if not np.isfinite(np.asarray(list(metrics.values()), dtype=np.float64)).all():
         raise AssertionError(f"non-finite smoke metrics: {metrics}")
+    provenance = assert_module_provenance(sys.modules, Path.cwd())
     print(
         json.dumps(
             {
@@ -129,6 +172,7 @@ def main() -> None:
                 "record": record,
                 "best_reward": float(best_reward),
                 "logger_finalized": logger.finalized,
+                "module_provenance": provenance,
             },
             allow_nan=False,
             sort_keys=True,

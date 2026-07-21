@@ -3,14 +3,14 @@ set -uo pipefail
 
 export DEBIAN_FRONTEND=noninteractive
 export TASK12_RESULTS_DIR=/tmp/task12-results
-export TASK12_FUNCTIONAL_HEAD_SHA=64c24a27371b5327fc742b28b9993d3c52eafcad
+export TASK12_FUNCTIONAL_HEAD_SHA=b50100dc66305e4005bed93f3d1750df8b474862
 export TASK12_FEATURE_BASE_SHA=5f7ff4e40e66da0b7df4f3edc9a928185ad73ae6
 export TASK12_TASK10_BASE_SHA=5a89953b5d09909b35c5016118dc11a1adb0dec2
-export TASK12_REPORT_PARENT_SHA=64c24a27371b5327fc742b28b9993d3c52eafcad
-export TASK12_REVIEW_PATCH_SHA256=5d9a6af579ce55215cd2f12d2e652ae7f43cc10f4d7eccf694ebac89bb64f269
+export TASK12_REPORT_PARENT_SHA=b50100dc66305e4005bed93f3d1750df8b474862
+export TASK12_REVIEW_PATCH_SHA256=3ece46030ffd747a13d884273bac5b62b0e39c0c6b61f42c6697fc776625fdda
 export NODE_OPTIONS=--max-old-space-size=4096
 
-HEAD_URI=s3://rtrrl-artifacts-007122174918/oracle/task12-preserved/head-64c24a2-review-overlay.tar
+HEAD_URI=s3://rtrrl-artifacts-007122174918/oracle/task12-preserved/head-b50100d-final-gates-overlay.tar
 BASE_URI=s3://rtrrl-artifacts-007122174918/oracle/task12-review/base-5f7ff4e.tar
 ORACLE_URI=s3://rtrrl-artifacts-007122174918/oracle/task12-preserved/aaai25-4301943.tar
 RESULT_URI=s3://rtrrl-artifacts-007122174918/oracle/task12-preserved/results
@@ -134,7 +134,7 @@ run_cmd source_audit /tmp/head \
   '{}' \
   "/tmp/venv/bin/python memo/tests/rtrrl_parity/preserved_original_source_audit.py --preserved-root /tmp/head/rtrrl --oracle-root /tmp/oracle > $TASK12_RESULTS_DIR/source_audit.stdout.json"
 
-run_cmd brax_smoke /tmp/head \
+run_cmd brax_smoke /tmp/head/memo \
   '{"PYTHONPATH":"/tmp/head/memo"}' \
   "PYTHONPATH=$HEAD_PYTHONPATH /tmp/venv/bin/python -m tests.rtrrl_parity.task12_brax_smoke > $TASK12_RESULTS_DIR/brax_smoke.stdout.json"
 
@@ -144,19 +144,19 @@ run_cmd ruff /tmp/head/memo \
 
 run_cmd pyright_head /tmp/head/memo \
   '{}' \
-  "/tmp/venv/bin/pyright"
+  "/tmp/venv/bin/pyright --outputjson"
 
 run_cmd pyright_base /tmp/base/memo \
   '{}' \
-  "/tmp/venv/bin/pyright"
+  "/tmp/venv/bin/pyright --outputjson"
 
 run_cmd pyright_review_head /tmp/head/memo \
   '{}' \
-  "/tmp/venv/bin/pyright experiments/base/experiment.py memorax/__init__.py memorax/algorithms/__init__.py memorax/algorithms/rtrrl/__init__.py tests/test_independent_rtrrl.py"
+  "/tmp/venv/bin/pyright --outputjson experiments/base/experiment.py memorax/__init__.py memorax/algorithms/__init__.py memorax/algorithms/rtrrl/__init__.py tests/test_independent_rtrrl.py"
 
 run_cmd pyright_review_base /tmp/base/memo \
   '{}' \
-  "/tmp/venv/bin/pyright experiments/base/experiment.py memorax/__init__.py memorax/algorithms/__init__.py tests/test_independent_rtrrl.py"
+  "/tmp/venv/bin/pyright --outputjson experiments/base/experiment.py memorax/__init__.py memorax/algorithms/__init__.py memorax/algorithms/rtrrl.py tests/test_independent_rtrrl.py"
 
 run_cmd compileall /tmp/head \
   '{}' \
@@ -178,6 +178,7 @@ paths = {
         "preserved_original_probe.py",
         "preserved_original_compare.py",
         "preserved_original_source_audit.py",
+        "test_task12_evidence_gates.py",
     )
 }
 paths["task12_batch_verification.sh"] = Path(

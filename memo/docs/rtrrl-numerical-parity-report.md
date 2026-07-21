@@ -22,40 +22,46 @@ Commit identities are intentionally distinct:
 - true feature functional base: `5f7ff4e40e66da0b7df4f3edc9a928185ad73ae6`;
 - initial docs-only feature root: `ffa90b5ae50b67bae1cbfe84c85eb0e21325eac3`;
 - Task 10-local comparison base: `5a89953b5d09909b35c5016118dc11a1adb0dec2`;
-- pre-report functional head: `33448c2a12ef93edf4389b9286b1da60d8a8a17f`;
-- first Task 12 report commit / review parent:
-  `62246110d39256dba5641293920cebbb0b626a65`;
-- reviewed functional overlay applied to `33448c2`:
-  SHA-256 `9452b8661b2de7ee2afb09ab80a30dc8f94ec5527021e43d46192f8e45770052`.
+- tested committed parent and evidence `functional_head_sha`:
+  `b50100dc66305e4005bed93f3d1750df8b474862`;
+- tested implementation manifest applied over that parent:
+  SHA-256 `3ece46030ffd747a13d884273bac5b62b0e39c0c6b61f42c6697fc776625fdda`;
+- exact uploaded overlay archive:
+  SHA-256 `4d6a1978b4c76c1433d02ec2d949e192a417529c665b3f4392d08f7c5e3b53ad`;
+- executed orchestration script:
+  SHA-256 `5c392283d83789323ce626b4d94cbdfc2dde37fdfbca1e1fb59fd8067db5b709`;
+- resulting evidence JSON:
+  SHA-256 `eddb4a4f6206593fa39f7e240f3a8340deacfc4546fb6c9714cc9b0dac5ce054`.
 
-The final report commit is the commit containing this document. Its SHA is
-reported by the task handoff rather than embedded recursively in its own
-contents.
+The tested implementation is therefore the committed parent plus the pinned
+manifest/archive, not the parent SHA alone. The final evidence/report commit
+contains that tested overlay and this document; its SHA is reported by the
+task handoff rather than embedded recursively in its own contents.
 
 ## Final Batch runtime and resources
 
-Superseding acceptance job `98ce6669-9be8-49f5-a66e-d57b09985f42`
+Superseding acceptance job `ee678a9a-f600-403b-b4a8-c801b37abf22`
 succeeded with exit 0.
 It used queue `rtrrl-cpu2-queue`, definition `rtrrl-cpu-job:14`, 4 vCPUs,
 8,192 MiB, and compute environment `rtrrl-cpu2-ce` (`c7a.2xlarge`). Overall
-container runtime was 834.444 seconds. Runtime versions were Python 3.12.13,
+container runtime was 769.076 seconds. Runtime versions were Python 3.12.13,
 JAX/JAXLIB 0.10.0, Flax 0.12.7, Brax 0.14.2, backend `cpu`, device `cpu:0`.
 
 | Workload | Result | Wall time | Peak RSS |
 | --- | --- | ---: | ---: |
-| strict parity, accelerated cases enabled | 207 passed | 42.22 s | 2,145,452 KiB |
-| five directional finite differences | 5 passed | 4.85 s | 466,616 KiB |
-| selected RTRRL/meta/legacy-builder `online_ac` | 36 passed | 85.41 s | 3,196,132 KiB |
-| independent RTRRL | 11 passed | 22.51 s | 1,477,888 KiB |
-| full head `online_ac` | 112 passed, 1 failed | 216.03 s | 5,126,928 KiB |
-| full true-base `online_ac` | 105 passed, 1 failed | 213.45 s | 5,045,192 KiB |
-| eager/JIT/oracle harness | succeeded | 12.34 s | 1,073,608 KiB |
-| preserved/oracle probes, 2×2 comparison, source audit | succeeded | 4.87 s | 367,016 KiB |
-| strict real Brax smoke | succeeded | 22.15 s | 1,373,084 KiB |
-| ruff | passed | 0.13 s | 24,044 KiB |
-| compileall | passed | 0.11 s | 16,300 KiB |
+| strict parity, accelerated cases enabled | 214 passed | 41.92 s | 2,148,048 KiB |
+| five directional finite differences | 5 passed | 4.80 s | 466,508 KiB |
+| selected RTRRL/meta/legacy-builder `online_ac` | 36 passed | 85.22 s | 3,201,080 KiB |
+| independent RTRRL | 11 passed | 22.64 s | 1,480,832 KiB |
+| full head `online_ac` | 112 passed, 1 failed | 217.24 s | 5,126,092 KiB |
+| full true-base `online_ac` | 105 passed, 1 failed | 215.59 s | 5,041,708 KiB |
+| eager/JIT/oracle harness | succeeded | 12.41 s | 1,080,152 KiB |
+| preserved/oracle probes, 2×2 comparison, source audit | succeeded | 4.93 s | 367,352 KiB |
+| strict real Brax smoke | succeeded | 22.34 s | 1,376,552 KiB |
+| ruff | passed | 0.14 s | 24,068 KiB |
+| compileall | passed | 0.12 s | 16,352 KiB |
 
-The maximum measured RSS was 4.91 GiB. The existing 8-GiB allocation remains
+The maximum measured RSS was 4.89 GiB. The existing 8-GiB allocation remains
 appropriate; compilation did not demonstrate a need to increase memory.
 
 ## Fixture provenance
@@ -145,12 +151,33 @@ lazy-export warnings were branch-introduced; only
 `tests/test_independent_rtrrl.py`’s dynamic `base.experiment` import was present
 at true base. The branch-introduced diagnostics were fixed.
 
-The final review-scope pyright command reports 1 error, 0 warnings at head: the
-same dynamic test import. The corresponding base command reports 34 errors,
-0 warnings because the base experiment annotations have additional debt.
-Full-project pyright remains non-green: head 465 errors/2 warnings versus base
-653 errors/2 warnings. This report does not relabel full-project debt as green.
-Exact commands and exits are in the evidence JSON. Ruff and compileall pass.
+The final review-scope Pyright command reports 1 error, 0 warnings at head: the
+same dynamic test import. The corresponding base command reports 133 errors,
+0 warnings after adding the true-base `memorax/algorithms/rtrrl.py` monolith to
+the compared scope. Diagnostics are canonicalized by normalized relative path,
+severity, rule, and whitespace-normalized message; the moved
+`rtrrl.py`/`rtrrl/__init__.py` paths share one logical identity. The
+machine-enforced result has zero head-only canonical diagnostics.
+
+Full-project Pyright remains non-green: head 480 errors/2 warnings versus base
+653 errors/2 warnings. These raw totals are evidence only and do not decide the
+regression gate. Exact commands, diagnostics, and exits are in the evidence
+JSON. Ruff and compileall pass.
+
+## Machine-enforced final gates
+
+The collector emits gate details and exits nonzero when any gate fails; the
+orchestration propagates that failure to `TASK12_OVERALL`. Final results:
+
+- selected `online_ac`: exit 0, 36 passed;
+- complete `online_ac`: head and base each fail only
+  `tests/online_ac/test_standard_parity.py::test_standard_one_step_matches_legacy_every_exposed_leaf`;
+  head-only failure nodeids: none;
+- review-scope Pyright: head-only canonical diagnostics: none.
+
+All three gates passed, so `TASK12_OVERALL=0`. The complete suites and
+full-project Pyright remain visible rather than being treated as raw-success
+requirements.
 
 ## Configuration, logging, and unsupported branches
 
@@ -194,6 +221,11 @@ transition/update, and 1,000 evaluation transitions. It emitted one logger
 record at historical step 1, finalized the logger, and produced
 `eval/rewards = eval/best_eval_reward = 49.92558288574219`. Rendering was
 disabled, so `env/video` was intentionally not requested.
+
+The command ran with working directory `/tmp/head/memo`. Its runtime provenance
+gate found no loaded module under `/tmp/head/rtrrl` and confirmed
+`memorax`, `memorax.algorithms.rtrrl.entrypoint`, and
+`experiments.rtrrl_hopper.run` all resolved under `/tmp/head/memo`.
 
 ## Isolation and acceptance boundary
 
