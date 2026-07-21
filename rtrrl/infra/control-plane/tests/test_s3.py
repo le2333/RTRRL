@@ -27,6 +27,13 @@ class FakeS3:
             "Metadata": self.metadata[(kwargs["Bucket"], kwargs["Key"])],
         }
 
+    def upload_fileobj(self, fileobj: Any, bucket: str, key: str, ExtraArgs: Any) -> None:
+        chunks = []
+        while chunk := fileobj.read(64 * 1024):
+            chunks.append(chunk)
+        self.objects[(bucket, key)] = b"".join(chunks)
+        self.metadata[(bucket, key)] = ExtraArgs["Metadata"]
+
 class FakeBody:
     def __init__(self, data: bytes) -> None:
         self._data = data
@@ -124,3 +131,37 @@ def test_get_json_rejects_noncanonical_bytes() -> None:
 
     with pytest.raises(ValueError, match="canonical"):
         store.get_json(uri)
+
+
+def test_put_file_streams_large_snapshot_without_path_read_bytes(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    client = FakeS3()
+    store = S3ObjectStore(client, "s3://bucket/experiments/exp-1/")
+    source = tmp_path / "large.bin"
+    content = b"0123456789abcdef" * (256 * 1024)
+    source.write_bytes(content)
+
+    def forbidden(_path: Path) -> bytes:
+        raise AssertionError("put_file must not use Path.read_bytes")
+
+    monkeypatch.setattr(Path, "read_bytes", forbidden)
+    uri = "s3://bucket/experiments/exp-1/artifacts/large.bin"
+    digest = store.put_file(uri, source)
+
+    assert digest == hashlib.sha256(content).hexdigest()
+    assert client.objects[("bucket", "experiments/exp-1/artifacts/large.bin")] == content
+    assert client.metadata[("bucket", "experiments/exp-1/artifacts/large.bin")] == {
+        "sha256": digest
+    }
+
+
+def test_put_file_rejects_symlink_source(tmp_path: Path) -> None:
+    target = tmp_path / "target"
+    target.write_bytes(b"secret")
+    source = tmp_path / "source"
+    source.symlink_to(target)
+    store = S3ObjectStore(FakeS3(), "s3://bucket/experiments/exp-1/")
+
+    with pytest.raises(OSError):
+        store.put_file("s3://bucket/experiments/exp-1/artifact", source)

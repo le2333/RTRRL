@@ -6,6 +6,7 @@ from datetime import datetime, timezone
 import hashlib
 import os
 from pathlib import Path
+import shutil
 import stat
 import subprocess
 import tempfile
@@ -68,7 +69,26 @@ class BotoS3ObjectStore:
         return self._put_bytes(uri, canonical_json(value).encode())
 
     def put_file(self, uri: str, path: Path) -> str:
-        return self._put_bytes(uri, path.read_bytes())
+        bucket, key = self._location(uri)
+        source_fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+        try:
+            if not stat.S_ISREG(os.fstat(source_fd).st_mode):
+                raise ValueError(f"upload source is not a regular file: {path}")
+            with os.fdopen(os.dup(source_fd), "rb") as source:
+                digest = hashlib.sha256()
+                while chunk := source.read(1024 * 1024):
+                    digest.update(chunk)
+                hexdigest = digest.hexdigest()
+                source.seek(0)
+                self._client.upload_fileobj(
+                    source,
+                    bucket,
+                    key,
+                    ExtraArgs={"Metadata": {"sha256": hexdigest}},
+                )
+        finally:
+            os.close(source_fd)
+        return hexdigest
 
 
 def _input_prefix_uri(
@@ -93,39 +113,62 @@ def _input_prefix_uri(
 def _safe_artifacts(
     store: ObjectStore,
     run_root_uri: str,
-    artifact_root: Path,
-) -> tuple[str, ...]:
-    root = artifact_root.resolve(strict=True)
-    candidates: list[Path] = []
-    for name in ("aim-buffer", "rerun", "checkpoints"):
-        directory = artifact_root / name
-        if not directory.exists() and not directory.is_symlink():
+    artifact_root_fd: int,
+    staging_root: Path,
+    uploaded: list[str],
+) -> None:
+    def stage_tree(directory_fd: int, relative_parts: tuple[str, ...]) -> None:
+        for name in sorted(os.listdir(directory_fd)):
+            info = os.stat(name, dir_fd=directory_fd, follow_symlinks=False)
+            relative = (*relative_parts, name)
+            if stat.S_ISDIR(info.st_mode):
+                child_fd = os.open(
+                    name,
+                    os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW,
+                    dir_fd=directory_fd,
+                )
+                try:
+                    stage_tree(child_fd, relative)
+                finally:
+                    os.close(child_fd)
+                continue
+            if not stat.S_ISREG(info.st_mode):
+                raise ValueError(
+                    f"artifact entry is not a regular file: {'/'.join(relative)}"
+                )
+            source_fd = os.open(
+                name,
+                os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK,
+                dir_fd=directory_fd,
+            )
+            try:
+                if not stat.S_ISREG(os.fstat(source_fd).st_mode):
+                    raise ValueError(
+                        f"artifact entry changed type: {'/'.join(relative)}"
+                    )
+                staged = staging_root.joinpath(*relative)
+                staged.parent.mkdir(parents=True, exist_ok=True)
+                with os.fdopen(os.dup(source_fd), "rb") as source, staged.open("xb") as target:
+                    shutil.copyfileobj(source, target, length=1024 * 1024)
+            finally:
+                os.close(source_fd)
+            uri = f"{run_root_uri}{'/'.join(relative)}"
+            store.put_file(uri, staged)
+            uploaded.append(uri)
+
+    for name in sorted(("aim-buffer", "rerun", "checkpoints")):
+        try:
+            directory_fd = os.open(
+                name,
+                os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW,
+                dir_fd=artifact_root_fd,
+            )
+        except FileNotFoundError:
             continue
-        mode = directory.lstat().st_mode
-        if stat.S_ISLNK(mode) or not stat.S_ISDIR(mode):
-            raise ValueError(f"artifact path is not a safe directory: {directory}")
-        for current, directories, files in os.walk(directory, followlinks=False):
-            current_path = Path(current)
-            for entry_name in directories:
-                entry = current_path / entry_name
-                entry_mode = entry.lstat().st_mode
-                if stat.S_ISLNK(entry_mode) or not stat.S_ISDIR(entry_mode):
-                    raise ValueError(f"artifact entry is not a safe directory: {entry}")
-                entry.resolve(strict=True).relative_to(root)
-            for entry_name in files:
-                entry = current_path / entry_name
-                entry_mode = entry.lstat().st_mode
-                if stat.S_ISLNK(entry_mode) or not stat.S_ISREG(entry_mode):
-                    raise ValueError(f"artifact entry is not a regular file: {entry}")
-                entry.resolve(strict=True).relative_to(root)
-                candidates.append(entry)
-    uploaded: list[str] = []
-    for path in sorted(candidates, key=lambda item: item.relative_to(root).as_posix()):
-        relative = path.relative_to(root).as_posix()
-        uri = f"{run_root_uri}{relative}"
-        store.put_file(uri, path)
-        uploaded.append(uri)
-    return tuple(uploaded)
+        try:
+            stage_tree(directory_fd, (name,))
+        finally:
+            os.close(directory_fd)
 
 
 def _runtime_argv(run: RunBundle, config_path: Path) -> list[str]:
@@ -159,12 +202,19 @@ def execute_bundle(
         run_root_uri = input_prefix.removesuffix("input/")
         started_at = now()
 
-        with tempfile.TemporaryDirectory(prefix="trainer-run-") as temporary:
+        with (
+            tempfile.TemporaryDirectory(prefix="trainer-run-") as temporary,
+            tempfile.TemporaryDirectory(prefix="trainer-stage-") as staging,
+        ):
             temporary_root = Path(temporary)
             input_root = temporary_root / "input"
             artifact_root = temporary_root / "artifacts"
             input_root.mkdir()
             artifact_root.mkdir()
+            artifact_root_fd = os.open(
+                artifact_root,
+                os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW,
+            )
             config_path = input_root / "config.yaml"
             context_path = input_root / "run-context.json"
             config_path.write_bytes(config)
@@ -173,39 +223,61 @@ def execute_bundle(
             context_path.write_text(canonical_json(runtime_context))
             environment = dict(os.environ)
             environment["TRAINER_RUN_CONTEXT_PATH"] = str(context_path)
-            completed = run_command(
-                _runtime_argv(run, config_path),
-                env=environment,
-                shell=False,
-                check=False,
-            )
-
-            artifacts: tuple[str, ...] = ()
-            artifact_error: Exception | None = None
             try:
-                artifacts = _safe_artifacts(store, run_root_uri, artifact_root)
-            except Exception as error:
-                artifact_error = error
+                completed = run_command(
+                    _runtime_argv(run, config_path),
+                    env=environment,
+                    shell=False,
+                    check=False,
+                )
+                artifacts: list[str] = []
+                try:
+                    _safe_artifacts(
+                        store,
+                        run_root_uri,
+                        artifact_root_fd,
+                        Path(staging),
+                        artifacts,
+                    )
+                except Exception as artifact_error:
+                    marker = CompletionMarker(
+                        run_id=run.run_id,
+                        attempt=0,
+                        exit_code=completed.returncode,
+                        started_at=started_at,
+                        finished_at=now(),
+                        artifacts=tuple(artifacts),
+                        error=(
+                            f"artifact upload failed: {type(artifact_error).__name__}: "
+                            f"{artifact_error}"
+                        ),
+                    )
+                    try:
+                        store.put_json(
+                            f"{run_root_uri}status/attempt-0.json",
+                            marker.model_dump(mode="json"),
+                        )
+                    except Exception as marker_error:
+                        artifact_error.add_note(
+                            "completion marker write also failed: "
+                            f"{type(marker_error).__name__}: {marker_error}"
+                        )
+                        raise artifact_error from marker_error
+                    raise
+            finally:
+                os.close(artifact_root_fd)
             marker = CompletionMarker(
                 run_id=run.run_id,
                 attempt=0,
                 exit_code=completed.returncode,
                 started_at=started_at,
                 finished_at=now(),
-                artifacts=artifacts,
-                error=(
-                    f"artifact upload failed: {type(artifact_error).__name__}: "
-                    f"{artifact_error}"
-                    if artifact_error is not None
-                    else None
-                ),
+                artifacts=tuple(artifacts),
             )
             store.put_json(
                 f"{run_root_uri}status/attempt-0.json",
                 marker.model_dump(mode="json"),
             )
-            if artifact_error is not None:
-                return completed.returncode if completed.returncode != 0 else 1
             if completed.returncode != 0:
                 return completed.returncode
     return 0

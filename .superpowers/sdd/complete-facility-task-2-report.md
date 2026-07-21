@@ -32,10 +32,15 @@ the serial fail-fast image worker.
   S3/Batch paths and the worker.
 - The standalone worker imports only `training_sdk` contracts, generates both
   config and context paths inside a per-run temporary directory, invokes
-  children with `shell=False`, rejects escaping/symlink/nonregular artifacts,
-  uploads sorted artifacts and completion markers, and stops after the first
-  failure. Artifact upload failures still cause one failed marker write; marker
-  write failures remain visible as the original storage exception.
+  children with `shell=False`, traverses artifacts through held `dirfd` values
+  with `O_NOFOLLOW`, stages regular-file snapshots in worker-owned temporary
+  storage, uploads each snapshot, and stops after the first failure. Artifact
+  upload failures write a marker containing partial success and error details,
+  then re-raise the original exception by identity; marker-write failures are
+  retained as exception context without replacing the artifact failure.
+- File uploads use safe file descriptors and bounded streaming into controlled
+  snapshots; neither control-plane nor worker artifact uploads call
+  `Path.read_bytes`.
 - ECR reads bind every call to the expected registry account/region, verify the
   digest response identity, and verify downloaded config bytes against the
   manifest digest.
@@ -48,13 +53,14 @@ the serial fail-fast image worker.
 RED was observed for SDK protocol extraction, control-plane re-export identity,
 shared URI parsing, canonical JSON reads, ECR registry/digest/blob checks,
 strict Batch infrastructure contracts, isolated worker imports, generated
-temporary paths, artifact failure markers, and unsafe artifact rejection.
+temporary paths, partial artifact failure markers, original exception identity,
+large streamed file uploads, and symlink/FIFO/replacement-race rejection.
 
 ## Verification
 
-- Review-fix targeted suite: 106 passed.
+- Review-fix targeted suite: 110 passed.
 - Full training-sdk suite: 120 passed.
-- Full control-plane suite: 370 passed.
+- Full control-plane suite: 374 passed.
 - Ruff: passed.
 - `git diff --check`: passed.
 - IDE lint for changed implementation and tests: no findings.

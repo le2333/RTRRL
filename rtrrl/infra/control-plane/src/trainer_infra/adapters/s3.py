@@ -2,7 +2,10 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 from pathlib import Path
+import stat
+import tempfile
 from typing import Any
 
 from training_sdk.execution import canonical_json
@@ -61,5 +64,28 @@ class S3ObjectStore:
         return value
 
     def put_file(self, uri: str, path: Path) -> str:
-        data = path.read_bytes()
-        return self.put_bytes(uri, data)
+        bucket, key = self._location(uri)
+        source_fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+        try:
+            if not stat.S_ISREG(os.fstat(source_fd).st_mode):
+                raise ValueError(f"upload source is not a regular file: {path}")
+            digest = hashlib.sha256()
+            with (
+                os.fdopen(os.dup(source_fd), "rb") as source,
+                tempfile.TemporaryFile("w+b") as staged,
+            ):
+                while chunk := source.read(1024 * 1024):
+                    digest.update(chunk)
+                    staged.write(chunk)
+                hexdigest = digest.hexdigest()
+                staged.flush()
+                staged.seek(0)
+                self._client.upload_fileobj(
+                    staged,
+                    bucket,
+                    key,
+                    ExtraArgs={"Metadata": {"sha256": hexdigest}},
+                )
+        finally:
+            os.close(source_fd)
+        return hexdigest

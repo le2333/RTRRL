@@ -30,6 +30,7 @@ class FakeStore:
         self.put_json_calls: list[tuple[str, Any]] = []
         self.put_file_calls: list[tuple[str, bytes]] = []
         self.put_file_error: Exception | None = None
+        self.put_file_fail_at = 1
         self.put_json_error: Exception | None = None
 
     def get_bytes(self, uri: str, *, expected_sha256: str | None = None) -> bytes:
@@ -45,7 +46,10 @@ class FakeStore:
         return hashlib.sha256(canonical_json(value).encode()).hexdigest()
 
     def put_file(self, uri: str, path: Path) -> str:
-        if self.put_file_error is not None:
+        if (
+            self.put_file_error is not None
+            and len(self.put_file_calls) + 1 == self.put_file_fail_at
+        ):
             raise self.put_file_error
         data = path.read_bytes()
         self.put_file_calls.append((uri, data))
@@ -206,7 +210,10 @@ def test_artifact_upload_failure_writes_failed_marker_and_stops(tmp_path: Path) 
         (artifact / "eval.rrd").write_bytes(b"artifact")
         return subprocess.CompletedProcess(argv, 0)
 
-    assert worker.execute_bundle(BUNDLE_URI, store, run_command=child) != 0
+    error = store.put_file_error
+    with pytest.raises(RuntimeError) as caught:
+        worker.execute_bundle(BUNDLE_URI, store, run_command=child)
+    assert caught.value is error
     assert calls == 1
     marker = store.put_json_calls[0][1]
     assert marker["exit_code"] == 0
@@ -231,7 +238,8 @@ def test_marker_failure_after_artifact_failure_remains_visible(tmp_path: Path) -
 
     with pytest.raises(RuntimeError) as caught:
         worker.execute_bundle(BUNDLE_URI, store, run_command=child)
-    assert caught.value is marker_error
+    assert caught.value is store.put_file_error
+    assert caught.value.__cause__ is marker_error
 
 
 @pytest.mark.parametrize("kind", ["symlink", "fifo"])
@@ -254,8 +262,77 @@ def test_worker_rejects_symlink_and_nonregular_artifacts(
             os.mkfifo(path)
         return subprocess.CompletedProcess(argv, 0)
 
-    assert worker.execute_bundle(BUNDLE_URI, store, run_command=child) != 0
+    with pytest.raises((OSError, ValueError)):
+        worker.execute_bundle(BUNDLE_URI, store, run_command=child)
     assert "artifact" in store.put_json_calls[0][1]["error"]
+
+
+def test_second_artifact_failure_marker_keeps_first_uploaded_uri(tmp_path: Path) -> None:
+    run = make_worker_run(tmp_path, 1)
+    store, _ = make_store(tmp_path, (run,))
+    error = RuntimeError("second upload failed")
+    store.put_file_error = error
+    store.put_file_fail_at = 2
+
+    def child(
+        argv: list[str], *, env: dict[str, str], shell: bool, check: bool
+    ) -> subprocess.CompletedProcess[str]:
+        context = json.loads(Path(env["TRAINER_RUN_CONTEXT_PATH"]).read_text())
+        artifact = Path(context["artifact_directory"]) / "rerun"
+        artifact.mkdir(parents=True)
+        (artifact / "a.rrd").write_bytes(b"first")
+        (artifact / "b.rrd").write_bytes(b"second")
+        return subprocess.CompletedProcess(argv, 0)
+
+    with pytest.raises(RuntimeError) as caught:
+        worker.execute_bundle(BUNDLE_URI, store, run_command=child)
+    assert caught.value is error
+    assert len(store.put_file_calls) == 1
+    marker = store.put_json_calls[0][1]
+    assert marker["artifacts"] == [store.put_file_calls[0][0]]
+    assert "second upload failed" in marker["error"]
+
+
+def test_artifact_replaced_by_symlink_before_open_is_never_uploaded(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    run = make_worker_run(tmp_path, 1)
+    store, _ = make_store(tmp_path, (run,))
+    outside = tmp_path / "outside"
+    outside.write_bytes(b"secret")
+    original_open = worker.os.open
+    replaced = False
+
+    def racing_open(path: Any, flags: int, *args: Any, **kwargs: Any) -> int:
+        nonlocal replaced
+        if (
+            path == "victim"
+            and flags & worker.os.O_NOFOLLOW
+            and not flags & worker.os.O_DIRECTORY
+            and not replaced
+        ):
+            parent_fd = kwargs["dir_fd"]
+            worker.os.unlink(path, dir_fd=parent_fd)
+            worker.os.symlink(str(outside), path, dir_fd=parent_fd)
+            replaced = True
+        return original_open(path, flags, *args, **kwargs)
+
+    monkeypatch.setattr(worker.os, "open", racing_open)
+
+    def child(
+        argv: list[str], *, env: dict[str, str], shell: bool, check: bool
+    ) -> subprocess.CompletedProcess[str]:
+        context = json.loads(Path(env["TRAINER_RUN_CONTEXT_PATH"]).read_text())
+        artifact = Path(context["artifact_directory"]) / "rerun"
+        artifact.mkdir(parents=True)
+        (artifact / "victim").write_bytes(b"safe")
+        return subprocess.CompletedProcess(argv, 0)
+
+    with pytest.raises(OSError):
+        worker.execute_bundle(BUNDLE_URI, store, run_command=child)
+    assert replaced is True
+    assert store.put_file_calls == []
+    assert "artifact upload failed" in store.put_json_calls[0][1]["error"]
 
 
 def test_worker_imports_with_sdk_only_and_trainer_infra_blocked() -> None:
