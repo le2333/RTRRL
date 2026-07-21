@@ -9,8 +9,8 @@
         "verified": true
       },
       "head": {
-        "actual_sha256": "04138a897ad7cdc0e037a2b3ca212c602f1611ab77ff0ced271e517ddb070317",
-        "expected_sha256": "04138a897ad7cdc0e037a2b3ca212c602f1611ab77ff0ced271e517ddb070317",
+        "actual_sha256": "f015b6010aaeb892d09a9049857cee3017c4728dec32e2125932ec82948ac26c",
+        "expected_sha256": "f015b6010aaeb892d09a9049857cee3017c4728dec32e2125932ec82948ac26c",
         "path": "/tmp/head.tar",
         "verified": true
       },
@@ -22,7 +22,7 @@
       }
     }
   },
-  "batch_job_id": "8c9035b9-ad43-444b-9564-614c5edf96e8",
+  "batch_job_id": "83804547-56dc-4ff5-bd31-e9c11e141230",
   "brax_smoke": {
     "best_reward": 49.92558288574219,
     "config_payload": {
@@ -117,7 +117,7 @@
       "relative_error": 7.30149404e-05
     }
   },
-  "functional_head_sha": "8e9dbace42dc9e75d4fb40505a66a78382a25e30",
+  "functional_head_sha": "ca9f80f76c1b7df7a804eeba656fb02ca1ad11f3",
   "gates": {
     "all_passed": true,
     "archive_verification": {
@@ -129,8 +129,8 @@
           "verified": true
         },
         "head": {
-          "actual_sha256": "04138a897ad7cdc0e037a2b3ca212c602f1611ab77ff0ced271e517ddb070317",
-          "expected_sha256": "04138a897ad7cdc0e037a2b3ca212c602f1611ab77ff0ced271e517ddb070317",
+          "actual_sha256": "f015b6010aaeb892d09a9049857cee3017c4728dec32e2125932ec82948ac26c",
+          "expected_sha256": "f015b6010aaeb892d09a9049857cee3017c4728dec32e2125932ec82948ac26c",
           "path": "/tmp/head.tar",
           "verified": true
         },
@@ -158,14 +158,14 @@
       "base_junit_error": null,
       "base_junit_valid": true,
       "base_only_errors": [],
-      "base_only_failures": [],
+      "base_only_failures": [
+        "tests/online_ac/test_standard_parity.py::test_standard_one_step_matches_legacy_every_exposed_leaf"
+      ],
       "condition": "valid_junit_and_exit_0_or_1_with_recorded_outcomes_and_no_head_only_failure_or_error_nodeids",
       "head_errors": [],
       "head_exit_accepted": true,
-      "head_exit_code": 1,
-      "head_failures": [
-        "tests/online_ac/test_standard_parity.py::test_standard_one_step_matches_legacy_every_exposed_leaf"
-      ],
+      "head_exit_code": 0,
+      "head_failures": [],
       "head_junit_error": null,
       "head_junit_valid": true,
       "head_only_errors": [],
@@ -1120,8 +1120,8 @@
     "interpretation": "structural AST evidence only; controlled objectives separately measure the numerical effect",
     "schema_version": 1
   },
-  "report_parent_sha": "8e9dbace42dc9e75d4fb40505a66a78382a25e30",
-  "review_fix_patch_sha256": "f33468f9e451a8a298716f9e896fb3e0944c70198384d30c78b99702e50acd20",
+  "report_parent_sha": "ca9f80f76c1b7df7a804eeba656fb02ca1ad11f3",
+  "review_fix_patch_sha256": "aeabbe826618b49b6228412a40e5b5b978cebef6ffa91b256689201913245c92",
   "runs": {
     "brax_smoke": {
       "command": "PYTHONPATH=/tmp/head/memo /tmp/venv/bin/python -m tests.rtrrl_parity.task12_brax_smoke > /tmp/task12-results/brax_smoke.stdout.json",
@@ -1140,10 +1140,10 @@
         "valid": false
       },
       "time": {
-        "elapsed": "0:22.25",
-        "peak_rss_kib": 1382480,
-        "system_seconds": 2.31,
-        "user_seconds": 33.08
+        "elapsed": "0:21.55",
+        "peak_rss_kib": 1375656,
+        "system_seconds": 2.49,
+        "user_seconds": 32.62
       },
       "working_directory": "/tmp/head/memo"
     },
@@ -1163,9 +1163,9 @@
       },
       "time": {
         "elapsed": "0:00.12",
-        "peak_rss_kib": 16292,
-        "system_seconds": 0.03,
-        "user_seconds": 0.08
+        "peak_rss_kib": 16268,
+        "system_seconds": 0.0,
+        "user_seconds": 0.11
       },
       "working_directory": "/tmp/head"
     },
@@ -1197,10 +1197,10 @@
         "valid": true
       },
       "time": {
-        "elapsed": "0:04.81",
-        "peak_rss_kib": 466476,
-        "system_seconds": 0.43,
-        "user_seconds": 5.72
+        "elapsed": "0:04.65",
+        "peak_rss_kib": 466696,
+        "system_seconds": 0.29,
+        "user_seconds": 5.83
       },
       "working_directory": "/tmp/head/memo"
     },
@@ -1231,10 +1231,10 @@
         "valid": true
       },
       "time": {
-        "elapsed": "0:22.61",
-        "peak_rss_kib": 1476600,
-        "system_seconds": 2.17,
-        "user_seconds": 23.93
+        "elapsed": "0:21.93",
+        "peak_rss_kib": 1474824,
+        "system_seconds": 2.0,
+        "user_seconds": 23.55
       },
       "working_directory": "/tmp/head/memo"
     },
@@ -1255,10 +1255,10 @@
         "valid": false
       },
       "time": {
-        "elapsed": "0:12.38",
-        "peak_rss_kib": 1079596,
-        "system_seconds": 0.96,
-        "user_seconds": 15.04
+        "elapsed": "0:11.93",
+        "peak_rss_kib": 1071656,
+        "system_seconds": 0.85,
+        "user_seconds": 14.78
       },
       "working_directory": "/tmp/head/memo"
     },
@@ -1293,10 +1293,10 @@
         "valid": true
       },
       "time": {
-        "elapsed": "3:32.72",
-        "peak_rss_kib": 5038128,
-        "system_seconds": 23.5,
-        "user_seconds": 312.39
+        "elapsed": "3:29.70",
+        "peak_rss_kib": 5034444,
+        "system_seconds": 22.89,
+        "user_seconds": 309.97
       },
       "working_directory": "/tmp/base/memo"
     },
@@ -1304,7 +1304,7 @@
       "command": "PYTHONPATH=/tmp/head/memo /tmp/venv/bin/python tests/rtrrl_parity/task12_nodeids.py /tmp/head/memo /tmp/task12-results/online_ac_head.nodes && PYTHONPATH=/tmp/head/memo /tmp/venv/bin/pytest -q tests/online_ac --junitxml=/tmp/task12-results/online_ac_head.xml",
       "counts": {
         "errors": 0,
-        "failures": 1,
+        "failures": 0,
         "skipped": 0,
         "tests": 113
       },
@@ -1312,29 +1312,25 @@
       "environment": {
         "PYTHONPATH": "/tmp/head/memo"
       },
-      "exit_code": 1,
-      "failures": [
-        "tests/online_ac/test_standard_parity.py::test_standard_one_step_matches_legacy_every_exposed_leaf"
-      ],
+      "exit_code": 0,
+      "failures": [],
       "junit": {
         "counts": {
           "errors": 0,
-          "failures": 1,
+          "failures": 0,
           "skipped": 0,
           "tests": 113
         },
         "error": null,
         "error_nodeids": [],
-        "failure_nodeids": [
-          "tests/online_ac/test_standard_parity.py::test_standard_one_step_matches_legacy_every_exposed_leaf"
-        ],
+        "failure_nodeids": [],
         "valid": true
       },
       "time": {
-        "elapsed": "3:36.60",
-        "peak_rss_kib": 5124492,
-        "system_seconds": 23.27,
-        "user_seconds": 325.64
+        "elapsed": "3:32.52",
+        "peak_rss_kib": 5114968,
+        "system_seconds": 23.55,
+        "user_seconds": 322.29
       },
       "working_directory": "/tmp/head/memo"
     },
@@ -1356,10 +1352,10 @@
         "valid": false
       },
       "time": {
-        "elapsed": "0:02.37",
-        "peak_rss_kib": 362496,
-        "system_seconds": 0.25,
-        "user_seconds": 3.65
+        "elapsed": "0:02.25",
+        "peak_rss_kib": 362256,
+        "system_seconds": 0.3,
+        "user_seconds": 3.67
       },
       "working_directory": "/tmp/head"
     },
@@ -1378,10 +1374,10 @@
         "valid": false
       },
       "time": {
-        "elapsed": "0:00.13",
-        "peak_rss_kib": 29656,
-        "system_seconds": 0.02,
-        "user_seconds": 0.72
+        "elapsed": "0:00.08",
+        "peak_rss_kib": 29564,
+        "system_seconds": 0.01,
+        "user_seconds": 0.43
       },
       "working_directory": "/tmp/head"
     },
@@ -1403,10 +1399,10 @@
         "valid": false
       },
       "time": {
-        "elapsed": "0:02.41",
-        "peak_rss_kib": 367180,
-        "system_seconds": 0.26,
-        "user_seconds": 3.77
+        "elapsed": "0:02.28",
+        "peak_rss_kib": 366348,
+        "system_seconds": 0.22,
+        "user_seconds": 3.8
       },
       "working_directory": "/tmp/head"
     },
@@ -1429,10 +1425,10 @@
         "valid": false
       },
       "time": {
-        "elapsed": "0:06.67",
-        "peak_rss_kib": 865096,
-        "system_seconds": 0.61,
-        "user_seconds": 11.24
+        "elapsed": "0:06.66",
+        "peak_rss_kib": 854752,
+        "system_seconds": 0.79,
+        "user_seconds": 11.01
       },
       "working_directory": "/tmp/base/memo"
     },
@@ -1455,10 +1451,10 @@
         "valid": false
       },
       "time": {
-        "elapsed": "0:12.03",
-        "peak_rss_kib": 964784,
-        "system_seconds": 2.21,
-        "user_seconds": 14.88
+        "elapsed": "0:11.89",
+        "peak_rss_kib": 972996,
+        "system_seconds": 2.43,
+        "user_seconds": 14.61
       },
       "working_directory": "/tmp/head/memo"
     },
@@ -1481,10 +1477,10 @@
         "valid": false
       },
       "time": {
-        "elapsed": "0:03.42",
-        "peak_rss_kib": 602336,
-        "system_seconds": 0.41,
-        "user_seconds": 5.69
+        "elapsed": "0:03.43",
+        "peak_rss_kib": 606336,
+        "system_seconds": 0.42,
+        "user_seconds": 5.66
       },
       "working_directory": "/tmp/base/memo"
     },
@@ -1507,10 +1503,10 @@
         "valid": false
       },
       "time": {
-        "elapsed": "0:03.77",
-        "peak_rss_kib": 643724,
-        "system_seconds": 0.49,
-        "user_seconds": 6.12
+        "elapsed": "0:03.69",
+        "peak_rss_kib": 643520,
+        "system_seconds": 0.66,
+        "user_seconds": 5.83
       },
       "working_directory": "/tmp/head/memo"
     },
@@ -1529,10 +1525,10 @@
         "valid": false
       },
       "time": {
-        "elapsed": "0:00.16",
-        "peak_rss_kib": 23896,
-        "system_seconds": 0.04,
-        "user_seconds": 0.0
+        "elapsed": "0:00.13",
+        "peak_rss_kib": 23864,
+        "system_seconds": 0.0,
+        "user_seconds": 0.04
       },
       "working_directory": "/tmp/head/memo"
     },
@@ -1563,10 +1559,10 @@
         "valid": true
       },
       "time": {
-        "elapsed": "1:25.35",
-        "peak_rss_kib": 3200744,
-        "system_seconds": 7.04,
-        "user_seconds": 140.52
+        "elapsed": "1:21.58",
+        "peak_rss_kib": 3180048,
+        "system_seconds": 6.87,
+        "user_seconds": 136.82
       },
       "working_directory": "/tmp/head/memo"
     },
@@ -1586,9 +1582,9 @@
       },
       "time": {
         "elapsed": "0:00.09",
-        "peak_rss_kib": 17256,
-        "system_seconds": 0.0,
-        "user_seconds": 0.09
+        "peak_rss_kib": 17344,
+        "system_seconds": 0.01,
+        "user_seconds": 0.08
       },
       "working_directory": "/tmp/head"
     },
@@ -1621,10 +1617,10 @@
         "valid": true
       },
       "time": {
-        "elapsed": "0:41.72",
-        "peak_rss_kib": 2142944,
-        "system_seconds": 2.98,
-        "user_seconds": 50.73
+        "elapsed": "0:40.66",
+        "peak_rss_kib": 2141628,
+        "system_seconds": 2.76,
+        "user_seconds": 50.14
       },
       "working_directory": "/tmp/head/memo"
     }
@@ -1649,11 +1645,11 @@
     "memo/memorax/algorithms/rtrrl/legacy.py": "b9edc5926402fb782d02fa055a5290681dc08d427a219d49b14c8b53724966e3",
     "memo/tests/online_ac/conftest.py": "ce215955aa00c8d7df764443511f4dbdf669334df0e51e246af33f03ee13290e",
     "memo/tests/online_ac/golden.py": "5beba2bb142f61660fd5be807cc43e18ec448ce2d55f8c42e55714ca4c77248e",
-    "memo/tests/online_ac/test_meta_parity.py": "08ae8d948816eb0ef7593fa861d26f9b68d5d4dc380e1ebcf7d3bf044d952c60",
+    "memo/tests/online_ac/test_meta_parity.py": "d59d0660441926159b4e898892b596e8df98f726da21cd0b88e5a8bfe4fa7359",
     "preserved_original_compare.py": "b32bd1da5707d49fd061da43ba27136a18442f85a3778d7cb925c8c1f4daac98",
     "preserved_original_probe.py": "0b00dddbe2d8ac9c0efeb0332cc363f8f7e8596c014af097fd75cc3e85ce836c",
     "preserved_original_source_audit.py": "6bc9848b8faa89a2d31bdc59e749f1154180d38cd79e750103b09db37b9a561e",
-    "task12_batch_verification.sh": "cfe60c0b8d4b4b76f9686a329a33ab849966fcc8ff10e211cac8d01e0375630b",
+    "task12_batch_verification.sh": "41082ca2e5915ea5afe34e06d88e043ffd7ec583f4a9826793cc6b2468f7b3f6",
     "task12_brax_smoke.py": "cfd0928688874c2fc4ed31c183121276797aa379191e2f4928e2b653b1cb0e0f",
     "task12_collect_evidence.py": "1e8a4316528dcfa282c9ca96421164adfb02bb48a076960e96f62a8c4baf0e6a",
     "task12_nodeids.py": "c29892d9bae3472989afaac0541187bba57db7848331ae67955c7c957d155003",
