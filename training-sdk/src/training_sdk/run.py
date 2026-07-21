@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+from threading import RLock
 from typing import Mapping, Protocol
 
 from .context import RunContext
@@ -70,6 +71,8 @@ class TrainingRun:
         self._last_metric_env_steps: int | None = None
         self._terminal_state = "active"
         self._closed = False
+        self._terminal_lock = RLock()
+        self._finish_commit_in_progress = False
         self._summary_sequence = max(
             (
                 event.aim_step
@@ -110,6 +113,9 @@ class TrainingRun:
 
     def _emit_many(self, events: tuple[MetricEvent, ...]) -> None:
         self.spool.append_many(events)
+        self._send_persisted(events)
+
+    def _send_persisted(self, events: tuple[MetricEvent, ...]) -> None:
         for event in events:
             try:
                 self.aim.send(event)
@@ -172,54 +178,80 @@ class TrainingRun:
         del path
 
     def finish(self, final_metrics: Mapping[str, int | float]) -> None:
-        if self._terminal_state != "active":
-            return
-        self._terminal_state = "finishing"
+        with self._terminal_lock:
+            if (
+                self._terminal_state != "active"
+                or self._finish_commit_in_progress
+            ):
+                return
+
         try:
             objective_metric = self.context.objective.get("metric")
             if not self.context.objective:
-                self._terminal_state = "finished"
-                self._close_resources(suppress_errors=False)
-                return
-            if not isinstance(objective_metric, str) or not objective_metric:
-                raise ValueError("objective.metric must be a non-empty string")
-            if objective_metric not in final_metrics:
-                raise ValueError(
-                    f"final_metrics must contain objective metric {objective_metric!r}"
+                events = ()
+            else:
+                if not isinstance(objective_metric, str) or not objective_metric:
+                    raise ValueError("objective.metric must be a non-empty string")
+                if objective_metric not in final_metrics:
+                    raise ValueError(
+                        "final_metrics must contain objective metric "
+                        f"{objective_metric!r}"
+                    )
+                ordered_metrics = [
+                    (name, value)
+                    for name, value in final_metrics.items()
+                    if name != objective_metric
+                ]
+                ordered_metrics.append(
+                    (objective_metric, final_metrics[objective_metric])
                 )
-            ordered_metrics = [
-                (name, value)
-                for name, value in final_metrics.items()
-                if name != objective_metric
-            ]
-            ordered_metrics.append(
-                (objective_metric, final_metrics[objective_metric])
-            )
-            events = tuple(
-                MetricEvent.final(
-                    env_steps=self._last_env_steps or 0,
-                    metrics={name: value},
-                    objective_metric=objective_metric,
-                    finalized=name == objective_metric,
+                events = tuple(
+                    MetricEvent.final(
+                        env_steps=self._last_env_steps or 0,
+                        metrics={name: value},
+                        objective_metric=objective_metric,
+                        finalized=name == objective_metric,
+                    )
+                    for name, value in ordered_metrics
                 )
-                for name, value in ordered_metrics
-            )
-            self._emit_many(events)
         except (TypeError, ValueError) as exc:
-            self._close_resources(suppress_errors=True)
             raise type(exc)(f"invalid final_metrics: {exc}") from exc
+
+        with self._terminal_lock:
+            if (
+                self._terminal_state != "active"
+                or self._finish_commit_in_progress
+            ):
+                return
+            self._finish_commit_in_progress = True
+            try:
+                if events:
+                    self.spool.append_many(events)
+            except BaseException:
+                self._finish_commit_in_progress = False
+                raise
+            self._terminal_state = "finishing"
+            self._finish_commit_in_progress = False
+
+        try:
+            self._send_persisted(events)
+            self._close_resources(suppress_errors=False)
         except BaseException:
             self._close_resources(suppress_errors=True)
             raise
-        self._terminal_state = "finished"
-        self._close_resources(suppress_errors=False)
+        with self._terminal_lock:
+            self._terminal_state = "finished"
 
     def fail(self, error: BaseException) -> None:
         """Mark the run failed without publishing an objective or finalized marker."""
 
-        if self._terminal_state != "active":
-            return
-        self._terminal_state = "failed"
+        with self._terminal_lock:
+            if (
+                self._terminal_state != "active"
+                or self._finish_commit_in_progress
+            ):
+                return
+            self._terminal_state = "failed"
         metadata = {"type": type(error).__name__}
         try:
             fail = getattr(self.aim, "fail", None)
@@ -233,9 +265,10 @@ class TrainingRun:
         self.fail(error)
 
     def _close_resources(self, *, suppress_errors: bool) -> None:
-        if self._closed:
-            return
-        self._closed = True
+        with self._terminal_lock:
+            if self._closed:
+                return
+            self._closed = True
         errors = []
         for resource in (self.rerun, self.spool, self.aim):
             try:

@@ -55,10 +55,13 @@ state-machine/contract corrections.
   and best-effort closes Aim, Rerun, and spool resources. Bootstrap closes
   partially created resources. Failure is idempotent and cannot replace the
   original training exception.
-- `TrainingRun` now enters `finishing` before final emission. A partial final
-  send, `mark_sent`, or close failure propagates unchanged, and a later
-  launcher `fail()` cannot append contradictory failed metadata. A dedicated
-  successful-Aim-send/failed-spool-mark test covers this boundary.
+- `TrainingRun.finish()` first performs pure objective/final-metric validation
+  and constructs final events while the run remains active. Under a reentrant
+  terminal-state lock, it durably appends the complete final batch and only
+  then enters `finishing`. Validation or initial append failures therefore
+  remain eligible for `fail()`, while Aim send, `mark_sent`, or close failures
+  after the commit point cannot append contradictory failed metadata. An
+  in-progress guard also rejects reentrant finish/fail calls during append.
 - Masked MuJoCo `env_name`, `mode`, and `backend` values are validated while
   loading the concrete config. Hopper validates the same option tuple at load.
 - Facility builders force `patience=0`, reject explicit early stopping, mark
@@ -79,8 +82,8 @@ closed. Each was observed failing before its implementation change.
 
 ## Verification
 
-- Facility launcher/observability targets: `36 passed`.
-- Standalone training SDK suite: `125 passed`.
+- Facility launcher/observability/logger targets: `58 passed`.
+- Standalone training SDK suite: `129 passed`.
 - Full fake-only control-plane suite: `376 passed`.
 - Evaluation trace fixture tests without optional real Brax:
   `16 passed, 2 deselected`.

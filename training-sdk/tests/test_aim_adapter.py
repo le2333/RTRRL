@@ -359,6 +359,52 @@ def test_fail_never_emits_objective_or_finalized_even_after_objective_metric(tmp
     assert aim.closed == rerun.closed == spool.closed == 1
 
 
+def test_finish_validation_failure_remains_active_for_failed_terminal(tmp_path):
+    class LifecycleAim(FakeAim):
+        def __init__(self):
+            super().__init__()
+            self.failure = None
+
+        def fail(self, metadata):
+            self.failure = metadata
+
+    aim = LifecycleAim()
+    spool = MemorySpool()
+    run = make_training_run(tmp_path, aim=aim, spool=spool)
+
+    with pytest.raises(ValueError) as raised:
+        run.finish({"not/the/objective": 4.0})
+    run.fail(raised.value)
+
+    assert aim.failure == {"type": "ValueError"}
+    assert not any(event.kind == "final" for event in spool.events)
+
+
+def test_finish_spool_append_failure_remains_active_for_failed_terminal(tmp_path):
+    class AppendFailure(MemorySpool):
+        def append_many(self, events):
+            raise OSError("append failed")
+
+    class LifecycleAim(FakeAim):
+        def __init__(self):
+            super().__init__()
+            self.failure = None
+
+        def fail(self, metadata):
+            self.failure = metadata
+
+    aim = LifecycleAim()
+    spool = AppendFailure()
+    run = make_training_run(tmp_path, aim=aim, spool=spool)
+
+    with pytest.raises(OSError, match="append failed") as raised:
+        run.finish({"eval/reward": 4.0})
+    run.fail(raised.value)
+
+    assert aim.failure == {"type": "OSError"}
+    assert not any(event.kind == "final" for event in spool.events)
+
+
 def test_finish_mark_sent_failure_cannot_transition_to_failed(tmp_path):
     class MarkSentFailure(MemorySpool):
         def mark_sent(self, event_id):
@@ -386,10 +432,65 @@ def test_finish_mark_sent_failure_cannot_transition_to_failed(tmp_path):
     run.fail(raised.value)
 
     assert aim.failure is None
-    assert any(
+    assert sum(
         event.kind == "final" and event.data["finalized"]
         for event in aim.events
-    )
+    ) == 1
+
+
+def test_finish_aim_send_failure_after_append_cannot_transition_to_failed(tmp_path):
+    class LifecycleAim(FakeAim):
+        def __init__(self):
+            super().__init__([ConnectionError("aim failed")])
+            self.failure = None
+
+        def fail(self, metadata):
+            self.failure = metadata
+
+    aim = LifecycleAim()
+    spool = MemorySpool()
+    run = make_training_run(tmp_path, aim=aim, spool=spool)
+
+    with pytest.raises(ConnectionError, match="aim failed") as raised:
+        run.finish({"eval/reward": 4.0})
+    run.fail(raised.value)
+
+    assert aim.failure is None
+    assert sum(
+        event.kind == "final" and event.data["finalized"]
+        for event in spool.events
+    ) == 1
+
+
+def test_finish_reentrant_fail_during_append_cannot_create_two_terminals(tmp_path):
+    class ReentrantSpool(MemorySpool):
+        run = None
+
+        def append_many(self, events):
+            assert self.run is not None
+            self.run.fail(RuntimeError("reentrant"))
+            super().append_many(events)
+
+    class LifecycleAim(FakeAim):
+        def __init__(self):
+            super().__init__()
+            self.failure = None
+
+        def fail(self, metadata):
+            self.failure = metadata
+
+    aim = LifecycleAim()
+    spool = ReentrantSpool()
+    run = make_training_run(tmp_path, aim=aim, spool=spool)
+    spool.run = run
+
+    run.finish({"eval/reward": 4.0})
+
+    assert aim.failure is None
+    assert sum(
+        event.kind == "final" and event.data["finalized"]
+        for event in spool.events
+    ) == 1
 
 
 def test_finish_without_descriptor_objective_is_a_noop(tmp_path):
