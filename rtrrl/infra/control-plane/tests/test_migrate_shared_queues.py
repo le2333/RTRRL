@@ -534,7 +534,7 @@ def test_existing_environment_allows_read_only_batch_image_status(
     resources["ec2Configuration"] = [
         {
             "imageType": "ECS_AL2023",
-            "batchImageStatus": "CURRENT",
+            "batchImageStatus": "LATEST",
         }
     ]
 
@@ -557,7 +557,7 @@ def test_existing_environment_rejects_nonempty_image_override(
     resources["ec2Configuration"] = [
         {
             "imageType": "ECS_AL2023",
-            "batchImageStatus": "CURRENT",
+            "batchImageStatus": "LATEST",
             "imageIdOverride": "ami-0123456789abcdef0",
         }
     ]
