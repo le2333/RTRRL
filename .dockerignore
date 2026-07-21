@@ -1,9 +1,19 @@
-# Version-control metadata and linked worktree markers.
+# Root-context allowlist for all memo image builds.
+**
+!memo
+!memo/**
+!training-sdk
+!training-sdk/**
+!rtrrl
+!rtrrl/infra
+!rtrrl/infra/worker
+!rtrrl/infra/worker/worker.py
+
+# Never send local environments, VCS/worktree metadata, caches, or run state.
 .git
+.git/**
 **/.git
 **/.git/**
-
-# Local environments, package outputs, and tool caches.
 **/.venv
 **/.venv/**
 **/__pycache__
@@ -19,10 +29,6 @@
 **/.mypy_cache/**
 **/.cache
 **/.cache/**
-
-# Agent/session history and local experiment state.
-.superpowers
-**/.superpowers
 **/history
 **/history/**
 **/Aim
@@ -41,3 +47,11 @@
 **/_runlogs/**
 **/wandb
 **/wandb/**
+
+# Common secret and credential names.
+**/.env
+**/.env.*
+**/*credentials*
+**/*secret*
+**/*.pem
+**/*.key

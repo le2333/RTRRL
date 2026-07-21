@@ -1,8 +1,8 @@
 name: Build and push memo image
 
 # Builds the memorax-rtrl (Stream AC(λ)+RTU-RTRL / RTRRL-in-memorax, JAX 0.10)
-# training image from the memo/ subproject. Independent of rtrrl/: separate build
-# context, separate pyproject/uv.lock, separate ECR tags (memorax-rtrl-cpu /
+# training image from the memo/ subproject. All variants use repository-root
+# context for the shared training-sdk while retaining separate ECR tags (memorax-rtrl-cpu /
 # memorax-rtrl-gpu, matching memo/project.env).
 
 on:
@@ -63,7 +63,7 @@ jobs:
       - name: Build and push (${{ matrix.tag }})
         uses: docker/build-push-action@v6
         with:
-          context: memo
+          context: .
           file: ${{ matrix.dockerfile }}
           platforms: linux/amd64
           push: true
