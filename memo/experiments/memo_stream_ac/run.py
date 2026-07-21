@@ -37,7 +37,12 @@ def main(argv: list[str] | None = None) -> None:
     if training_run is not None:
         config.logging = "aim"
     trainer = _TRAINERS[value.environment["name"]]
-    run_experiment(trainer, config, project_name="memorax-rtrl")
+    try:
+        run_experiment(trainer, config, project_name="memorax-rtrl")
+    except BaseException as error:
+        if training_run is not None:
+            training_run.fail(error)
+        raise
 
 
 if __name__ == "__main__":

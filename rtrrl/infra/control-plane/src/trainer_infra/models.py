@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import json
 import math
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from enum import Enum
 from types import MappingProxyType
 from typing import Any, Literal, Mapping, TypeAlias
@@ -291,6 +291,32 @@ class ScriptDescriptor(ContractModel):
                 raise ValueError(f"duplicate environment '{environment}' is not allowed")
         return self
 
+    @model_validator(mode="after")
+    def require_safe_unique_field_paths(self) -> ScriptDescriptor:
+        paths: list[tuple[str, ...]] = []
+        for name, descriptor in self.fields.items():
+            segments = tuple(descriptor.path.split("."))
+            if (
+                not segments
+                or any(
+                    not segment.isidentifier() or segment.startswith("__")
+                    for segment in segments
+                )
+            ):
+                raise ValueError(f"field '{name}' has unsafe path {descriptor.path!r}")
+            for previous in paths:
+                if (
+                    segments == previous
+                    or segments[: len(previous)] == previous
+                    or previous[: len(segments)] == segments
+                ):
+                    raise ValueError(
+                        f"field '{name}' path {descriptor.path!r} conflicts "
+                        "with another field path"
+                    )
+            paths.append(segments)
+        return self
+
 
 class ScriptCatalog(ContractModel):
     protocol_version: str
@@ -359,6 +385,9 @@ class ResolvedGroup:
     execution: ExecutionSpec
     metadata: Mapping[str, Any]
     parameters: Mapping[str, ResolvedParameter]
+    parameter_paths: Mapping[str, str] = field(
+        default_factory=lambda: MappingProxyType({})
+    )
 
     @property
     def fixed_parameters(self) -> Mapping[str, JsonScalar]:
@@ -407,9 +436,9 @@ class ConcreteRun:
     hpo: HpoSpec
     execution: ExecutionSpec
     metadata: Mapping[str, Any]
-    fixed_parameters: Mapping[str, JsonScalar]
-    sampled_parameters: Mapping[str, JsonScalar]
-    final_parameters: Mapping[str, JsonScalar]
+    fixed_parameters: Mapping[str, Any]
+    sampled_parameters: Mapping[str, Any]
+    final_parameters: Mapping[str, Any]
     context: Mapping[str, Any]
     config_yaml: str
     config_sha256: str

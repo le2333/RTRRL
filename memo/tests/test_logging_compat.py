@@ -44,6 +44,9 @@ class RecordingTrainingRun:
                 f"final_metrics must contain objective metric {objective!r}"
             )
 
+    def fail(self, error):
+        self.calls.append(("fail", error))
+
 
 def test_dummy_and_wandb_episode_methods_are_noops():
     episode = complete_episode()
@@ -209,6 +212,16 @@ def test_facility_aim_logger_delegates_episode_calls_exactly():
         ("log_episode_summary", summary),
         ("log_episode", episode),
     ]
+
+
+def test_facility_aim_logger_failure_never_finishes():
+    training_run = RecordingTrainingRun()
+    logger = AimLogger("ignored", training_run=training_run)
+    error = RuntimeError("training failed")
+
+    logger.fail(error)
+
+    assert training_run.calls == [("fail", error)]
 
 
 def test_multilogger_fans_out_episode_calls_in_order():

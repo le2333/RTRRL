@@ -12,12 +12,6 @@ from typing import Any
 
 import yaml
 
-from rtrrl_hopper.run import RTRRLHopperConfig
-from stream_ac_kmemorychain.run import StreamACKMemoryChainConfig
-from stream_ac_memorychain.run import StreamACMemoryChainConfig
-from stream_ac_mujoco_masked.run import StreamACMujocoMaskedConfig
-
-
 JsonValue = str | int | float | bool | None | tuple["JsonValue", ...] | Mapping[
     str, "JsonValue"
 ]
@@ -59,12 +53,15 @@ def _require_exact(mapping: Mapping[str, Any], expected: set[str], name: str) ->
 
 @dataclass(frozen=True)
 class FacilityInput:
+    protocol_version: str
     environment: Mapping[str, JsonValue]
     logging: Mapping[str, JsonValue]
     parameters: Mapping[str, JsonValue]
     training_budget: Mapping[str, JsonValue]
 
     def __post_init__(self) -> None:
+        if self.protocol_version != "1":
+            raise ValueError("protocol_version must be '1'")
         for name in ("environment", "logging", "parameters", "training_budget"):
             object.__setattr__(self, name, _mapping(getattr(self, name), name))
         _require_exact(self.environment, {"name", "options"}, "environment")
@@ -72,6 +69,20 @@ class FacilityInput:
             raise ValueError("environment.name must be a non-empty string")
         if not isinstance(self.environment["options"], Mapping):
             raise TypeError("environment.options must be a JSON object")
+        if self.environment["name"] == "mujoco_masked":
+            options = self.environment["options"]
+            assert isinstance(options, Mapping)
+            supported = {
+                "env_name": {"ant", "halfcheetah", "hopper", "walker2d"},
+                "mode": {"F", "P", "V"},
+                "backend": {"generalized", "spring", "positional", "mjx"},
+            }
+            for field, choices in supported.items():
+                if options.get(field) not in choices:
+                    raise ValueError(
+                        f"environment.options.{field} must be one of "
+                        f"{sorted(choices)!r}"
+                    )
         _require_exact(
             self.logging,
             {"aim_every_env_steps", "rerun_every_episodes"},
@@ -94,7 +105,13 @@ class FacilityInput:
             raise TypeError("facility config must be a YAML object")
         _require_exact(
             payload,
-            {"environment", "logging", "parameters", "training_budget"},
+            {
+                "protocol_version",
+                "environment",
+                "logging",
+                "parameters",
+                "training_budget",
+            },
             "facility config",
         )
         # JSON round-trip rejects YAML-native tags and non-finite numbers early.
@@ -105,11 +122,6 @@ class FacilityInput:
         return cls(**payload)
 
 
-_STREAM_CONFIGS = {
-    "memory_chain": StreamACMemoryChainConfig,
-    "kmemory_chain": StreamACKMemoryChainConfig,
-    "mujoco_masked": StreamACMujocoMaskedConfig,
-}
 _STREAM_OPTIONS = {
     "memory_chain": {"length": "chain_length", "max_episode_steps": "max_episode_steps"},
     "kmemory_chain": {
@@ -124,6 +136,18 @@ _STREAM_OPTIONS = {
         "max_episode_steps": "max_episode_steps",
     },
 }
+
+
+def _stream_configs():
+    from stream_ac_kmemorychain.run import StreamACKMemoryChainConfig
+    from stream_ac_memorychain.run import StreamACMemoryChainConfig
+    from stream_ac_mujoco_masked.run import StreamACMujocoMaskedConfig
+
+    return {
+        "memory_chain": StreamACMemoryChainConfig,
+        "kmemory_chain": StreamACKMemoryChainConfig,
+        "mujoco_masked": StreamACMujocoMaskedConfig,
+    }
 _RTRRL_OPTIONS = {
     "mode": "mode",
     "backend": "backend",
@@ -152,31 +176,36 @@ def _build(config_type, value: FacilityInput, option_fields: Mapping[str, str]):
     updates.update({option_fields[name]: item for name, item in options.items()})
     updates["total_timesteps"] = value.training_budget["env_steps"]
     config = config_type(**updates)
-    if config.total_timesteps % config.num_envs:
+    epoch_quantum = config.num_envs * config.num_epochs
+    if config.total_timesteps % epoch_quantum:
         raise ValueError(
-            "training_budget.env_steps must be divisible by parameters.num_envs "
-            "to represent exact vector-environment interactions"
+            "training_budget.env_steps must be divisible by "
+            "parameters.num_envs * parameters.num_epochs to represent exact "
+            "fixed-length vector-environment epochs"
         )
     return config
 
 
 def build_stream_ac_config(value: FacilityInput):
     name = value.environment["name"]
-    if name not in _STREAM_CONFIGS:
+    configs = _stream_configs()
+    if name not in configs:
         raise ValueError(
             f"memo_stream_ac does not support environment {name!r}; "
-            f"use {sorted(_STREAM_CONFIGS)!r}"
+            f"use {sorted(configs)!r}"
         )
     if value.parameters.get("agent_type") != "rtu_rtrl":
         raise ValueError("memo_stream_ac requires agent_type='rtu_rtrl'")
-    config = _build(_STREAM_CONFIGS[name], value, _STREAM_OPTIONS[name])
+    config = _build(configs[name], value, _STREAM_OPTIONS[name])
     if name in ("memory_chain", "kmemory_chain"):
         if config.max_episode_steps != config.chain_length:
             raise ValueError("max_episode_steps must equal length for memory-chain tasks")
     return config
 
 
-def build_rtrrl_config(value: FacilityInput) -> RTRRLHopperConfig:
+def build_rtrrl_config(value: FacilityInput):
+    from rtrrl_hopper.run import RTRRLHopperConfig
+
     if value.environment["name"] != "hopper":
         raise ValueError("memo_rtrrl supports only the 'hopper' environment")
     if value.parameters.get("rtrrl_topology") != "shared":

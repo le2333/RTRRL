@@ -62,15 +62,42 @@ def bootstrap_from_environment(
         if rerun_factory is None:
             rerun_factory = _default_rerun_factory
 
-        run = TrainingRun(
-            context,
-            aim_factory(context, environ),
-            rerun_factory(context),
-            EventSpool(
+        aim = None
+        rerun = None
+        spool = None
+        run = None
+        try:
+            aim = aim_factory(context, environ)
+            rerun = rerun_factory(context)
+            spool = EventSpool(
                 context.artifact_directory / "aim-buffer" / "events.jsonl"
-            ),
-            context_path=context_path,
-        )
-        run.start()
-        set_current_run(run)
-        return run
+            )
+            run = TrainingRun(
+                context,
+                aim,
+                rerun,
+                spool,
+                context_path=context_path,
+            )
+            run.start()
+            set_current_run(run)
+            return run
+        except BaseException as error:
+            if run is not None:
+                run.fail(error)
+            else:
+                metadata = {"type": type(error).__name__}
+                try:
+                    fail = getattr(aim, "fail", None)
+                    if callable(fail):
+                        fail(metadata)
+                except BaseException:
+                    pass
+                for resource in (rerun, spool, aim):
+                    try:
+                        close = getattr(resource, "close", None)
+                        if callable(close):
+                            close()
+                    except BaseException:
+                        pass
+            raise

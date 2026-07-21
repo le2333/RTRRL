@@ -315,6 +315,50 @@ def test_finish_emits_descriptor_objective_and_finalized_marker(tmp_path):
     assert all(len(item.metrics) == 1 for item in run.aim.events)
 
 
+def test_fail_never_emits_objective_or_finalized_even_after_objective_metric(tmp_path):
+    class LifecycleAim(FakeAim):
+        def __init__(self):
+            super().__init__()
+            self.failure = None
+            self.closed = 0
+
+        def fail(self, metadata):
+            self.failure = metadata
+
+        def close(self):
+            self.closed += 1
+
+    class LifecycleRerun(NullRerun):
+        def __init__(self):
+            self.closed = 0
+
+        def close(self):
+            self.closed += 1
+
+    class LifecycleSpool(MemorySpool):
+        def __init__(self):
+            super().__init__()
+            self.closed = 0
+
+        def close(self):
+            self.closed += 1
+
+    aim = LifecycleAim()
+    rerun = LifecycleRerun()
+    spool = LifecycleSpool()
+    run = TrainingRun(make_context(tmp_path), aim, rerun, spool)
+    run.start()
+    run.log_metrics(10, {"eval/reward": 9.0})
+
+    run.fail(RuntimeError("secret-token=do-not-copy"))
+    run.fail(RuntimeError("second"))
+
+    assert aim.failure == {"type": "RuntimeError"}
+    assert "secret-token" not in str(aim.failure)
+    assert not any(event.kind == "final" for event in spool.events)
+    assert aim.closed == rerun.closed == spool.closed == 1
+
+
 def test_finish_without_descriptor_objective_is_a_noop(tmp_path):
     context = make_context(tmp_path, objective={})
     run = make_training_run(tmp_path, context=context)
@@ -334,8 +378,13 @@ class FakeAimRun:
         self.tracked = []
         self.points = {}
         self.fail_event_marker_once = False
+        self.fail_hparams_once = False
+        self.closed = 0
 
     def __setitem__(self, key, value):
+        if key == "hparams" and self.fail_hparams_once:
+            self.fail_hparams_once = False
+            raise RuntimeError("hparams failed")
         if key.startswith("sdk/event_ids/") and self.fail_event_marker_once:
             self.fail_event_marker_once = False
             raise ConnectionError("crash after track")
@@ -348,6 +397,48 @@ class FakeAimRun:
         self.tracked.append((name, value, step, context, epoch))
         stream_identity = tuple(sorted(context.items()))
         self.points[(name, stream_identity, step)] = value
+
+    def close(self):
+        self.closed += 1
+
+
+def test_aim_adapter_failure_metadata_is_nonfinal_and_closes(tmp_path):
+    context = make_context(tmp_path)
+    backend = FakeAimRun(
+        experiment=context.experiment_name,
+        run_hash="a" * 24,
+        force_resume=True,
+    )
+    adapter = AimAdapter(run_factory=lambda **_: backend)
+    adapter.start(context)
+
+    adapter.fail({"type": "RuntimeError"})
+    adapter.close()
+
+    assert backend.values["sdk/failed"] is True
+    assert backend.values["sdk/error"] == {"type": "RuntimeError"}
+    assert "sdk/finalized" not in backend.values
+    assert "sdk/objective_metric" not in backend.values
+    assert backend.closed == 1
+
+
+def test_aim_adapter_can_close_run_created_before_start_configuration_fails(
+    tmp_path,
+):
+    context = make_context(tmp_path)
+    backend = FakeAimRun(
+        experiment=context.experiment_name,
+        run_hash="a" * 24,
+        force_resume=True,
+    )
+    backend.fail_hparams_once = True
+    adapter = AimAdapter(run_factory=lambda **_: backend)
+
+    with pytest.raises(RuntimeError, match="hparams failed"):
+        adapter.start(context)
+    adapter.close()
+
+    assert backend.closed == 1
 
 
 def test_real_aim_adapter_resumes_stable_run_identity(tmp_path):

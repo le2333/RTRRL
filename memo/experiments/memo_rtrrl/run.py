@@ -28,7 +28,12 @@ def main(argv: list[str] | None = None) -> None:
     training_run = bootstrap_from_environment()
     if training_run is not None:
         config.logging = "aim"
-    run_experiment(train, config, project_name="memorax-rtrl")
+    try:
+        run_experiment(train, config, project_name="memorax-rtrl")
+    except BaseException as error:
+        if training_run is not None:
+            training_run.fail(error)
+        raise
 
 
 if __name__ == "__main__":

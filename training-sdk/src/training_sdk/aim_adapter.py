@@ -47,6 +47,7 @@ class AimAdapter:
         self._availability_errors = availability_errors
         self._run: Any | None = None
         self._context: RunContext | None = None
+        self._closed = False
 
     def start(self, context: RunContext) -> None:
         self._context = context
@@ -58,11 +59,11 @@ class AimAdapter:
                 force_resume=True,
                 **self._run_options,
             )
+            self._run = run
             run.name = context.run_name
             run["hparams"] = context.hparams
         except self._availability_errors as exc:
             raise AimUnavailable("Aim is temporarily unavailable") from exc
-        self._run = run
 
     def send(self, event: MetricEvent) -> None:
         if self._run is None:
@@ -87,3 +88,22 @@ class AimAdapter:
             self._run[marker] = True
         except self._availability_errors as exc:
             raise AimUnavailable("Aim is temporarily unavailable") from exc
+
+    def fail(self, metadata: dict[str, str]) -> None:
+        if self._run is None:
+            return
+        try:
+            self._run["sdk/failed"] = True
+            self._run["sdk/error"] = dict(metadata)
+        except self._availability_errors as exc:
+            raise AimUnavailable("Aim is temporarily unavailable") from exc
+
+    def close(self) -> None:
+        if self._closed:
+            return
+        self._closed = True
+        if self._run is None:
+            return
+        close = getattr(self._run, "close", None)
+        if callable(close):
+            close()

@@ -70,6 +70,10 @@ class DummyLogger(dict, object):
         """
         pass
 
+    def fail(self, error) -> None:
+        """Ignore failure finalization."""
+        del error
+
     def save_model(self, model: nn.Module, filename="model.ckpt"):
         """Save an equinox model to file.
 
@@ -255,6 +259,11 @@ class AimLogger(DummyLogger):
         block = os.environ.get("AIM_FINALIZE_BLOCK", "0").lower() in {"1", "true", "yes"}
         self.run.report_successful_finish(block=block)
 
+    def fail(self, error) -> None:
+        """Close a facility run as failed without successful finalization."""
+        if self.training_run is not None:
+            self.training_run.fail(error)
+
     @override
     def save_model(self, model, filename="model.ckpt"):
         """Save the model to aim directory using equinox."""
@@ -341,40 +350,52 @@ class MultiLogger(DummyLogger):
         self.loggers = list(loggers)
 
     def __repr__(self) -> str:  # noqa
-        return "MultiLogger(" + ", ".join(repr(l) for l in self.loggers) + ")"
+        return (
+            "MultiLogger("
+            + ", ".join(repr(logger) for logger in self.loggers)
+            + ")"
+        )
 
     @override
     def log(self, metrics, step=None):
         """Forward metrics to every logger."""
-        for l in self.loggers:
-            l.log(metrics, step=step)
+        for logger in self.loggers:
+            logger.log(metrics, step=step)
 
     @override
     def log_params(self, params_dict):
         """Forward hyperparameters to every logger."""
-        for l in self.loggers:
-            l.log_params(params_dict)
+        for logger in self.loggers:
+            logger.log_params(params_dict)
 
     @override
     def finalize(self, *args, **kwargs):
         """Forward finalize to every logger."""
-        for l in self.loggers:
-            l.finalize(*args, **kwargs)
+        for logger in self.loggers:
+            logger.finalize(*args, **kwargs)
+
+    def fail(self, error) -> None:
+        """Best-effort failure close for every backend."""
+        for logger in self.loggers:
+            try:
+                logger.fail(error)
+            except BaseException:
+                pass
 
     @override
     def save_model(self, *args, **kwargs):
         """Save with whichever logger supports it (skip the ones that don't)."""
-        for l in self.loggers:
+        for logger in self.loggers:
             try:
-                l.save_model(*args, **kwargs)
+                logger.save_model(*args, **kwargs)
             except NotImplementedError:
                 pass
 
     @override
     def log_video(self, *args, **kwargs):
         """Forward video logging to every logger."""
-        for l in self.loggers:
-            l.log_video(*args, **kwargs)
+        for logger in self.loggers:
+            logger.log_video(*args, **kwargs)
 
     def log_episode_summary(self, **summary) -> None:
         """Forward an episode summary to every logger."""
@@ -392,8 +413,8 @@ class MultiLogger(DummyLogger):
 
     def __setitem__(self, key, value):
         """Set the summary value on every logger."""
-        for l in self.loggers:
-            l[key] = value
+        for logger in self.loggers:
+            logger[key] = value
 
     def __getitem__(self, key):
         """Read the summary value from the first logger."""

@@ -51,22 +51,36 @@ def write_context(tmp_path: Path, name: str = "run-context.json") -> Path:
 
 class FakeAim:
     def __init__(self, *, fail=False):
-        self.fail = fail
+        self.fail_start = fail
         self.started = []
+        self.failures = []
+        self.closed = 0
 
     def start(self, context):
         self.started.append(context)
-        if self.fail:
+        if self.fail_start:
             raise RuntimeError("start failed")
 
     def send(self, event):
         del event
 
+    def fail(self, metadata):
+        self.failures.append(metadata)
+
+    def close(self):
+        self.closed += 1
+
 
 class FakeRerun:
+    def __init__(self):
+        self.closed = 0
+
     def log_episode(self, episode):
         del episode
         return None
+
+    def close(self):
+        self.closed += 1
 
 
 @pytest.fixture(autouse=True)
@@ -155,6 +169,25 @@ def test_bootstrap_starts_before_installing_current_run(tmp_path):
             rerun_factory=lambda context: FakeRerun(),
         )
 
+    assert maybe_current_run() is None
+    assert aim.closed == 1
+
+
+def test_bootstrap_closes_aim_when_later_factory_fails(tmp_path):
+    path = write_context(tmp_path)
+    aim = FakeAim()
+    error = RuntimeError("rerun construction failed")
+
+    with pytest.raises(RuntimeError) as raised:
+        bootstrap_from_environment(
+            {"TRAINER_RUN_CONTEXT_PATH": str(path)},
+            aim_factory=lambda context, environ: aim,
+            rerun_factory=lambda context: (_ for _ in ()).throw(error),
+        )
+
+    assert raised.value is error
+    assert aim.failures == [{"type": "RuntimeError"}]
+    assert aim.closed == 1
     assert maybe_current_run() is None
 
 

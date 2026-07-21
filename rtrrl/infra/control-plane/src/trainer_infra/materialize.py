@@ -14,6 +14,40 @@ from trainer_infra.models import (
 )
 
 
+def _set_parameter_path(target: dict, path: str, value: JsonScalar) -> None:
+    segments = path.split(".")
+    if any(
+        not segment.isidentifier() or segment.startswith("__")
+        for segment in segments
+    ):
+        raise ValueError(f"unsafe parameter path {path!r}")
+    current = target
+    for segment in segments[:-1]:
+        existing = current.get(segment)
+        if existing is None:
+            nested: dict = {}
+            current[segment] = nested
+            current = nested
+        elif isinstance(existing, dict):
+            current = existing
+        else:
+            raise ValueError(f"parameter path conflict at {path!r}")
+    leaf = segments[-1]
+    if leaf in current:
+        raise ValueError(f"parameter path conflict at {path!r}")
+    current[leaf] = value
+
+
+def _materialized_parameters(
+    values: Mapping[str, JsonScalar],
+    paths: Mapping[str, str],
+) -> dict:
+    result: dict = {}
+    for name, value in values.items():
+        _set_parameter_path(result, paths.get(name, name), value)
+    return result
+
+
 def materialize_run(
     group: ResolvedGroup,
     trial: Trial,
@@ -36,6 +70,11 @@ def materialize_run(
             raise ValueError(f"missing searchable parameter '{name}'")
         sampled_values[name] = sampled[name]
     final = {**fixed, **sampled_values}
+    fixed_config = _materialized_parameters(fixed, group.parameter_paths)
+    sampled_config = _materialized_parameters(
+        sampled_values, group.parameter_paths
+    )
+    final_config = _materialized_parameters(final, group.parameter_paths)
     run_name = f"{group.name}-{run_number:04d}"
     run_id = f"{group.study_key}:{run_number:04d}"
 
@@ -44,9 +83,10 @@ def materialize_run(
         "options": thaw_json(group.environment.options),
     }
     config = {
+        "protocol_version": group.sdk_protocol_version,
         "environment": environment,
         "logging": group.logging.model_dump(mode="json"),
-        "parameters": final,
+        "parameters": final_config,
         "training_budget": group.training_budget.model_dump(mode="json"),
     }
     config_yaml = canonical_yaml(config)
@@ -74,9 +114,9 @@ def materialize_run(
         "metadata": group.metadata,
         "objective": group.objective.model_dump(mode="json"),
         "parameters": {
-            "final": final,
-            "fixed": fixed,
-            "sampled": sampled_values,
+            "final": final_config,
+            "fixed": fixed_config,
+            "sampled": sampled_config,
         },
         "resources": group.resources.model_dump(mode="json"),
         "sdk_protocol_version": group.sdk_protocol_version,
@@ -102,9 +142,9 @@ def materialize_run(
         hpo=group.hpo,
         execution=group.execution,
         metadata=freeze_json(dict(group.metadata)),
-        fixed_parameters=freeze_json(fixed),
-        sampled_parameters=freeze_json(sampled_values),
-        final_parameters=freeze_json(final),
+        fixed_parameters=freeze_json(fixed_config),
+        sampled_parameters=freeze_json(sampled_config),
+        final_parameters=freeze_json(final_config),
         context=freeze_json(context),
         config_yaml=config_yaml,
         config_sha256=config_sha256,

@@ -555,23 +555,45 @@ def _episode_stats(info: dict) -> tuple[float, float]:
 
 
 def emit_training_summaries(
-    training_run, completed_stats: dict, env_steps: int
+    training_run,
+    completed_stats: dict,
+    *,
+    epoch_start_env_steps: int,
+    num_envs: int,
 ) -> None:
     """Emit one mandatory host record for every completed training episode."""
 
-    if type(env_steps) is not int:
-        raise TypeError("env_steps must be a host integer")
+    if type(epoch_start_env_steps) is not int:
+        raise TypeError("epoch_start_env_steps must be a host integer")
+    if type(num_envs) is not int or num_envs <= 0:
+        raise ValueError("num_envs must be a positive integer")
     completed = np.asarray(completed_stats.get("returned_episode", ()), dtype=bool)
     returns = np.asarray(completed_stats.get("returned_episode_returns", ()))
     lengths = np.asarray(completed_stats.get("returned_episode_lengths", ()))
     if completed.shape != returns.shape or completed.shape != lengths.shape:
         raise ValueError("completed episode statistic arrays must have equal shapes")
-    for index in np.flatnonzero(completed.reshape(-1)):
-        training_run.log_episode_summary(
-            env_steps=env_steps,
-            episode_return=float(returns.reshape(-1)[index]),
-            episode_length=int(lengths.reshape(-1)[index]),
+    if completed.ndim < 2 or completed.shape[-1] != num_envs:
+        raise ValueError("completed episode statistics must end with num_envs")
+    for transition_index in range(completed.reshape(-1, num_envs).shape[0]):
+        completion_env_steps = (
+            epoch_start_env_steps + (transition_index + 1) * num_envs
         )
+        for environment_index in np.flatnonzero(
+            completed.reshape(-1, num_envs)[transition_index]
+        ):
+            training_run.log_episode_summary(
+                env_steps=completion_env_steps,
+                episode_return=float(
+                    returns.reshape(-1, num_envs)[
+                        transition_index, environment_index
+                    ]
+                ),
+                episode_length=int(
+                    lengths.reshape(-1, num_envs)[
+                        transition_index, environment_index
+                    ]
+                ),
+            )
 
 
 def _environment_states(trace, environment_index: int, count: int):
@@ -621,7 +643,7 @@ def episode_from_trace(
     return Episode(
         number=episode_number,
         phase="eval",
-        start_env_steps=max(0, env_steps - count),
+        start_env_steps=env_steps,
         end_env_steps=env_steps,
         observations=observations[: count + 1, environment_index],
         actions=actions[:count, environment_index],
@@ -672,9 +694,12 @@ def _epoch_env_steps(total: int, epochs: int, num_envs: int) -> tuple[int, ...]:
     if total % num_envs:
         raise ValueError("total_timesteps must be divisible by num_envs")
     updates = total // num_envs
-    active_epochs = min(epochs, updates)
-    base, extra = divmod(updates, active_epochs)
-    return tuple((base + (index < extra)) * num_envs for index in range(active_epochs))
+    if updates % epochs:
+        raise ValueError(
+            "total_timesteps / num_envs must be divisible by num_epochs "
+            "to keep one fixed JIT scan length"
+        )
+    return (updates // epochs * num_envs,) * epochs
 
 
 def train_loop(agent, cfg: ExperimentConfig, logger=DummyLogger()):
@@ -717,11 +742,11 @@ def train_loop(agent, cfg: ExperimentConfig, logger=DummyLogger()):
     steps_since_best = 0
     pbar = trange(len(epoch_env_steps), mininterval=1)
     evaluation_episode_number = 1
-    primary_error = None
 
     try:
         for i, num_steps in zip(pbar, epoch_env_steps):
             key, train_key, eval_key = jax.random.split(key, 3)
+            epoch_start_env_steps = int(state.step)
             start = time.perf_counter()
             state, logs = train(train_key, state, num_steps)
             jax.block_until_ready(state)
@@ -730,7 +755,12 @@ def train_loop(agent, cfg: ExperimentConfig, logger=DummyLogger()):
             info = logs.pop("info", {})
             avg_r, avg_len = _episode_stats(info)
             global_step = int(state.step)
-            emit_training_summaries(logger, info, global_step)
+            emit_training_summaries(
+                logger,
+                info,
+                epoch_start_env_steps=epoch_start_env_steps,
+                num_envs=cfg.num_envs,
+            )
 
             metrics = {
                 "train/SPS": sps,
@@ -792,16 +822,14 @@ def train_loop(agent, cfg: ExperimentConfig, logger=DummyLogger()):
                 print(f"Early stopping patience {cfg.patience}")
                 break
     except Exception as e:
-        primary_error = e
         print("Exception in training loop!")
-        raise
-    finally:
         try:
-            logger.finalize()
-        except Exception:
-            if primary_error is None:
-                raise
-            print("Exception while finalizing failed training run!")
+            logger.fail(e)
+        except BaseException:
+            pass
+        raise
+    else:
+        logger.finalize()
 
     return logger["best_eval_reward"]
 

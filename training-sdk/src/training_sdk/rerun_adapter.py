@@ -229,3 +229,7 @@ class RerunAdapter:
                     temporary_path.unlink(missing_ok=True)
                 except OSError:
                     pass
+
+    def close(self) -> None:
+        """Recordings are closed after each episode; no shared stream remains."""
+        return None

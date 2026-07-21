@@ -13,10 +13,12 @@ sys.path.insert(0, str(MEMO_ROOT))
 sys.path.insert(0, str(MEMO_ROOT / "experiments"))
 
 from base.experiment import (  # noqa: E402
+    ExperimentConfig,
     _epoch_env_steps,
     emit_evaluation_episodes,
     emit_training_summaries,
     episode_from_trace,
+    train_loop,
 )
 from memorax.online_ac.build import LegacyProgram  # noqa: E402
 from memorax.online_ac.types import EvalSummary, EvalTrace  # noqa: E402
@@ -49,29 +51,44 @@ def _trace(*, count=2, terminal=True, truncated=False):
 def test_each_completed_training_episode_is_emitted_at_real_state_step():
     run = RecordingRun()
     info = {
-        "returned_episode": np.array([[False, True], [True, False]]),
-        "returned_episode_returns": np.array([[0.0, 2.0], [3.0, 0.0]]),
-        "returned_episode_lengths": np.array([[0, 7], [9, 0]]),
+        "returned_episode": np.array(
+            [[False, True], [True, False], [True, True]]
+        ),
+        "returned_episode_returns": np.array(
+            [[0.0, 2.0], [3.0, 0.0], [4.0, 5.0]]
+        ),
+        "returned_episode_lengths": np.array(
+            [[0, 7], [9, 0], [2, 3]]
+        ),
     }
 
-    emit_training_summaries(run, info, env_steps=123)
+    emit_training_summaries(
+        run,
+        info,
+        epoch_start_env_steps=100,
+        num_envs=2,
+    )
 
     assert run.summaries == [
-        {"env_steps": 123, "episode_return": 2.0, "episode_length": 7},
-        {"env_steps": 123, "episode_return": 3.0, "episode_length": 9},
+        {"env_steps": 102, "episode_return": 2.0, "episode_length": 7},
+        {"env_steps": 104, "episode_return": 3.0, "episode_length": 9},
+        {"env_steps": 106, "episode_return": 4.0, "episode_length": 2},
+        {"env_steps": 106, "episode_return": 5.0, "episode_length": 3},
     ]
 
 
 def test_budget_is_partitioned_as_total_environment_interactions():
-    epochs = _epoch_env_steps(total=30, epochs=4, num_envs=3)
-    assert epochs == (9, 9, 6, 6)
-    assert sum(epochs) == 30
+    epochs = _epoch_env_steps(total=24, epochs=4, num_envs=3)
+    assert epochs == (6, 6, 6, 6)
+    assert sum(epochs) == 24
     assert all(item % 3 == 0 for item in epochs)
 
 
 def test_budget_rejects_unrepresentable_vector_interactions():
     with pytest.raises(ValueError, match="divisible"):
         _epoch_env_steps(total=10, epochs=2, num_envs=3)
+    with pytest.raises(ValueError, match="epochs"):
+        _epoch_env_steps(total=30, epochs=4, num_envs=3)
 
 
 @pytest.mark.parametrize(
@@ -88,7 +105,7 @@ def test_trace_conversion_preserves_n_plus_one_and_ending(terminal, truncated):
     assert len(episode.actions) == len(episode.rewards) == 2
     assert episode.terminals[-1] is terminal
     assert episode.truncations[-1] is truncated
-    assert episode.start_env_steps == 98
+    assert episode.start_env_steps == 100
     assert episode.end_env_steps == 100
     assert len(episode.environment_states) == 2
 
@@ -150,3 +167,89 @@ def test_legacy_program_evaluate_exposes_trace(monkeypatch):
 
     assert state == 5
     assert trace is not None
+
+
+def test_train_loop_bridges_fake_state_step_and_completion_offsets(monkeypatch):
+    import base.experiment as experiment_module
+
+    @dataclass
+    class State:
+        step: int
+
+    class Agent:
+        def init(self, key):
+            del key
+            return State(0)
+
+        def train(self, key, state, num_steps):
+            del key
+            assert num_steps == 4
+            info = {
+                "returned_episode": np.array(
+                    [[False, True], [True, False]]
+                ),
+                "returned_episode_returns": np.array(
+                    [[0.0, state.step + 2.0], [state.step + 4.0, 0.0]]
+                ),
+                "returned_episode_lengths": np.array([[0, 2], [4, 0]]),
+            }
+            return State(state.step + num_steps), {"info": info}
+
+        def evaluate(self, key, state, num_steps):
+            raise AssertionError("evaluation is disabled")
+
+    class Logger(dict):
+        def __init__(self):
+            super().__init__()
+            self.summaries = []
+            self.finalized = 0
+            self.failed = []
+
+        def log_params(self, params):
+            del params
+
+        def log_episode_summary(self, **summary):
+            self.summaries.append(summary)
+
+        def log(self, metrics, step):
+            assert metrics["train/env_steps"] == step
+
+        def finalize(self):
+            self.finalized += 1
+
+        def fail(self, error):
+            self.failed.append(error)
+
+    class Progress:
+        def __init__(self, count):
+            self._values = range(count)
+
+        def __iter__(self):
+            return iter(self._values)
+
+        def set_description(self, *args, **kwargs):
+            pass
+
+        def write(self, *args, **kwargs):
+            pass
+
+    monkeypatch.setattr(experiment_module.jax, "jit", lambda fn, **kwargs: fn)
+    monkeypatch.setattr(experiment_module.jax, "block_until_ready", lambda value: value)
+    monkeypatch.setattr(experiment_module.lox, "spool", lambda fn: fn)
+    monkeypatch.setattr(
+        experiment_module, "trange", lambda count, **kwargs: Progress(count)
+    )
+    logger = Logger()
+    config = ExperimentConfig(
+        seed=1,
+        total_timesteps=8,
+        num_epochs=2,
+        num_envs=2,
+        eval_every=0,
+    )
+
+    train_loop(Agent(), config, logger)
+
+    assert [item["env_steps"] for item in logger.summaries] == [2, 4, 6, 8]
+    assert logger.finalized == 1
+    assert logger.failed == []

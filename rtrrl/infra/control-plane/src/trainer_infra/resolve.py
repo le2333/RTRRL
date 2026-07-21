@@ -284,6 +284,12 @@ def resolve_experiment(
                 execution=configuration.execution,
                 metadata=freeze_json(metadata),
                 parameters=parameters,
+                parameter_paths=MappingProxyType(
+                    {
+                        field_name: field_descriptor.path
+                        for field_name, field_descriptor in descriptor.fields.items()
+                    }
+                ),
             )
         )
 

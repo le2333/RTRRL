@@ -13,6 +13,10 @@ class AimSink(Protocol):
 
     def send(self, event: MetricEvent) -> None: ...
 
+    def fail(self, metadata: Mapping[str, str]) -> None: ...
+
+    def close(self) -> None: ...
+
 
 class Spool(Protocol):
     @property
@@ -25,9 +29,13 @@ class Spool(Protocol):
 
     def mark_sent(self, event_id: str) -> None: ...
 
+    def close(self) -> None: ...
+
 
 class RerunSink(Protocol):
     def log_episode(self, episode: Episode) -> Path | None: ...
+
+    def close(self) -> None: ...
 
 
 class NullRerun:
@@ -35,6 +43,9 @@ class NullRerun:
 
     def log_episode(self, episode: Episode) -> Path | None:
         del episode
+        return None
+
+    def close(self) -> None:
         return None
 
 
@@ -57,6 +68,9 @@ class TrainingRun:
         )
         self._last_env_steps: int | None = None
         self._last_metric_env_steps: int | None = None
+        self._finished = False
+        self._failed = False
+        self._closed = False
         self._summary_sequence = max(
             (
                 event.aim_step
@@ -159,8 +173,12 @@ class TrainingRun:
         del path
 
     def finish(self, final_metrics: Mapping[str, int | float]) -> None:
+        if self._failed or self._finished:
+            return
         objective_metric = self.context.objective.get("metric")
         if not self.context.objective:
+            self._finished = True
+            self._close_resources()
             return
         if not isinstance(objective_metric, str) or not objective_metric:
             raise ValueError("objective.metric must be a non-empty string")
@@ -187,3 +205,35 @@ class TrainingRun:
         except (TypeError, ValueError) as exc:
             raise type(exc)(f"invalid final_metrics: {exc}") from exc
         self._emit_many(events)
+        self._finished = True
+        self._close_resources()
+
+    def fail(self, error: BaseException) -> None:
+        """Mark the run failed without publishing an objective or finalized marker."""
+
+        if self._failed or self._finished:
+            return
+        self._failed = True
+        metadata = {"type": type(error).__name__}
+        try:
+            fail = getattr(self.aim, "fail", None)
+            if callable(fail):
+                fail(metadata)
+        except BaseException:
+            pass
+        self._close_resources()
+
+    def abort(self, error: BaseException) -> None:
+        self.fail(error)
+
+    def _close_resources(self) -> None:
+        if self._closed:
+            return
+        self._closed = True
+        for resource in (self.rerun, self.spool, self.aim):
+            try:
+                close = getattr(resource, "close", None)
+                if callable(close):
+                    close()
+            except BaseException:
+                pass

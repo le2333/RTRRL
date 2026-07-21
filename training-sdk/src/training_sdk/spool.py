@@ -346,6 +346,10 @@ class EventSpool:
                 break
             self.mark_sent(event.event_id)
 
+    def close(self) -> None:
+        """All writes are per-call durable; no descriptor remains open."""
+        return None
+
 
 class MemorySpool:
     def __init__(self) -> None:
@@ -391,3 +395,6 @@ class MemorySpool:
             except AimUnavailable:
                 break
             self.mark_sent(event.event_id)
+
+    def close(self) -> None:
+        return None
