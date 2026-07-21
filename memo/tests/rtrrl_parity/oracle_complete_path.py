@@ -58,9 +58,7 @@ class _Environment:
             reward=self.jnp.asarray(reward, dtype=self.jnp.float32),
             done=self.jnp.zeros((self.batch_size,), dtype=self.jnp.bool_),
             phase=self.jnp.array(0, dtype=self.jnp.int32),
-            last_action=self.jnp.zeros(
-                (self.batch_size, 2), dtype=self.jnp.float32
-            ),
+            last_action=self.jnp.zeros((self.batch_size, 2), dtype=self.jnp.float32),
         )
 
     def step(self, state, action):
@@ -69,9 +67,7 @@ class _Environment:
             observation = self.jnp.asarray(
                 [[0.1 + 0.05 * phase]], dtype=self.jnp.float32
             )
-            reward = self.jnp.asarray(
-                [0.625 - 0.125 * phase], dtype=self.jnp.float32
-            )
+            reward = self.jnp.asarray([0.625 - 0.125 * phase], dtype=self.jnp.float32)
             done = self.jnp.asarray([phase == 1])
         else:
             observation = self.jnp.stack(
@@ -123,13 +119,11 @@ def _instrument_source(source_path: Path) -> str:
         ),
         (
             "        _carry = (\n",
-            '        _oracle_capture_phase("final", locals())\n'
-            "        _carry = (\n",
+            '        _oracle_capture_phase("final", locals())\n' "        _carry = (\n",
         ),
         (
             "    carry = (\n",
-            "    _oracle_capture_init(locals())\n"
-            "    carry = (\n",
+            "    _oracle_capture_init(locals())\n" "    carry = (\n",
         ),
     )
     for old, new in replacements:
@@ -193,9 +187,7 @@ def _state_tree(
         "average_reward": average_reward,
         "emphasis": emphasis,
         "observation_statistics": (
-            NONE_SENTINEL
-            if observation_statistics is None
-            else observation_statistics
+            NONE_SENTINEL if observation_statistics is None else observation_statistics
         ),
         "reward_statistics": (
             NONE_SENTINEL if reward_statistics is None else reward_statistics
@@ -432,9 +424,7 @@ def _run_complete_path(
         prefix = f"step_{index}"
         arrays[f"{prefix}/key_in"] = np.asarray(start["_carry"][-1])
         arrays[f"{prefix}/key_out"] = np.asarray(final["seed"])
-        arrays[f"{prefix}/environment_action"] = np.asarray(
-            start["action"]
-        )
+        arrays[f"{prefix}/environment_action"] = np.asarray(start["action"])
         for name, value in (
             ("model_input", final["f_input"]),
             ("sampled_next_action", final_carry[4]),
@@ -505,10 +495,7 @@ def capture_complete_state_machine(
     )
     arrays = {
         **{f"state_machine/{path}": value for path, value in one.items()},
-        **{
-            f"state_machine/two_env/{path}": value
-            for path, value in two.items()
-        },
+        **{f"state_machine/two_env/{path}": value for path, value in two.items()},
     }
     jax, jnp = oracle_module.jax, oracle_module.jnp
     optimizer_config = optimizers.OptimizerConfig(
@@ -525,9 +512,7 @@ def capture_complete_state_machine(
         gradient_clip=0.4,
         multi_step=2,
     )
-    optimizer = optimizers.make_optimizer(
-        config=optimizer_config, direction="max"
-    )
+    optimizer = optimizers.make_optimizer(config=optimizer_config, direction="max")
     parameters = {
         "bias": jnp.asarray([0.5], dtype=jnp.float32),
         "weight": jnp.asarray([1.0, -2.0], dtype=jnp.float32),
@@ -562,9 +547,7 @@ def capture_complete_state_machine(
         (jnp.asarray([0.4]), jnp.asarray([0.1, -0.2])),
         (jnp.asarray([-0.2]), jnp.asarray([1.5, 2.0])),
     )
-    for index, (bias_gradient, weight_gradient) in enumerate(
-        gradients, start=1
-    ):
+    for index, (bias_gradient, weight_gradient) in enumerate(gradients, start=1):
         updates, optimizer_state = optimizer.update(
             {"bias": bias_gradient, "weight": weight_gradient},
             optimizer_state,

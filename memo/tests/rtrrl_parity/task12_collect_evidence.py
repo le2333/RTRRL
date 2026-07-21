@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections import Counter
 import json
 import os
 from pathlib import Path
@@ -16,13 +17,72 @@ def _text(path: Path) -> str:
     return path.read_text() if path.exists() else ""
 
 
-def _pytest_counts(path: Path) -> dict[str, int]:
-    root = ET.parse(path).getroot()
-    suites = [root] if root.tag == "testsuite" else list(root)
+def _testcase_nodeid(case: ET.Element) -> str:
+    classname = case.attrib.get("classname", "")
+    name = case.attrib.get("name", "<unknown>")
+    parts = classname.split(".") if classname else []
+    module_index = next(
+        (index for index, part in enumerate(parts) if part.startswith("test_")),
+        None,
+    )
+    if module_index is None:
+        return f"{classname or '<unknown>'}::{name}"
+    path = "/".join(parts[: module_index + 1]) + ".py"
+    suffix = parts[module_index + 1 :] + [name]
+    return "::".join((path, *suffix))
+
+
+def _junit_artifact(path: Path) -> dict[str, object]:
+    empty = {
+        "counts": None,
+        "failure_nodeids": [],
+        "error_nodeids": [],
+    }
+    if not path.exists():
+        return {"valid": False, **empty, "error": "missing"}
+    try:
+        root = ET.parse(path).getroot()
+    except ET.ParseError as error:
+        return {
+            "valid": False,
+            **empty,
+            "error": f"malformed XML: {error}",
+        }
+    if root.tag not in {"testsuite", "testsuites"}:
+        return {
+            "valid": False,
+            **empty,
+            "error": f"unexpected root element: {root.tag}",
+        }
+    suites = [root] if root.tag == "testsuite" else list(root.findall("testsuite"))
     names = ("tests", "failures", "errors", "skipped")
-    return {
+    counts = {
         name: sum(int(suite.attrib.get(name, 0)) for suite in suites)
         for name in names
+    }
+    failure_nodeids = []
+    error_nodeids = []
+    for case in root.iter("testcase"):
+        nodeid = _testcase_nodeid(case)
+        failure_nodeids.extend(nodeid for _ in case.findall("failure"))
+        error_nodeids.extend(nodeid for _ in case.findall("error"))
+    if (
+        counts["failures"] != len(failure_nodeids)
+        or counts["errors"] != len(error_nodeids)
+    ):
+        return {
+            "valid": False,
+            "counts": counts,
+            "failure_nodeids": sorted(failure_nodeids),
+            "error_nodeids": sorted(error_nodeids),
+            "error": "JUnit counts disagree with testcase outcomes",
+        }
+    return {
+        "valid": True,
+        "counts": counts,
+        "failure_nodeids": sorted(failure_nodeids),
+        "error_nodeids": sorted(error_nodeids),
+        "error": None,
     }
 
 
@@ -101,6 +161,7 @@ def _nodeids(path: Path) -> list[str]:
 def _run(name: str) -> dict[str, object]:
     log = _text(RESULTS / f"{name}.log")
     junit = RESULTS / f"{name}.xml"
+    junit_artifact = _junit_artifact(junit)
     return {
         "command": _text(RESULTS / f"{name}.command").strip(),
         "working_directory": _text(RESULTS / f"{name}.cwd").strip(),
@@ -109,7 +170,8 @@ def _run(name: str) -> dict[str, object]:
         ),
         "exit_code": int(_text(RESULTS / f"{name}.exit") or "-1"),
         "time": _time(RESULTS / f"{name}.time"),
-        "counts": _pytest_counts(junit) if junit.exists() else None,
+        "counts": junit_artifact["counts"],
+        "junit": junit_artifact,
         "failures": _failures(log),
         "diagnostic_summary": _diagnostic_summary(log),
     }
@@ -119,10 +181,9 @@ def _canonical_diagnostic(diagnostic: dict[str, object]) -> str:
     path = str(diagnostic.get("file", "")).replace("\\", "/")
     if "/memo/" in path:
         path = path.split("/memo/", 1)[1]
-    if path in {
-        "memorax/algorithms/rtrrl.py",
-        "memorax/algorithms/rtrrl/__init__.py",
-    }:
+    if path == "memorax/algorithms/rtrrl.py" or path.startswith(
+        "memorax/algorithms/rtrrl/"
+    ):
         path = "memorax/algorithms/rtrrl"
     message = re.sub(r"\s+", " ", str(diagnostic.get("message", ""))).strip()
     return "|".join(
@@ -141,43 +202,99 @@ def _pyright_diagnostics(log: str) -> list[str]:
     if not isinstance(diagnostics, list):
         raise ValueError("pyright JSON lacks generalDiagnostics")
     return sorted(
-        {
-            _canonical_diagnostic(diagnostic)
-            for diagnostic in diagnostics
-            if isinstance(diagnostic, dict)
-        }
+        _canonical_diagnostic(diagnostic)
+        for diagnostic in diagnostics
+        if isinstance(diagnostic, dict)
     )
+
+
+def _pytest_exit_accepted(run: dict[str, object]) -> bool:
+    artifact = run["junit"]
+    if not artifact["valid"]:
+        return False
+    exit_code = run["exit_code"]
+    outcomes = artifact["failure_nodeids"] + artifact["error_nodeids"]
+    if exit_code == 0:
+        return not outcomes
+    if exit_code == 1:
+        return bool(outcomes)
+    return False
 
 
 def evaluate_gates(
     runs: dict[str, dict[str, object]],
     pyright_review_head_log: str,
     pyright_review_base_log: str,
+    archive_verification: dict[str, object] | None = None,
 ) -> dict[str, object]:
-    head_failures = sorted(set(runs["online_ac_head"]["failures"]))
-    base_failures = sorted(set(runs["online_ac_base"]["failures"]))
-    head_only_failures = sorted(set(head_failures) - set(base_failures))
-    base_only_failures = sorted(set(base_failures) - set(head_failures))
+    head_run = runs["online_ac_head"]
+    base_run = runs["online_ac_base"]
+    head_artifact = head_run["junit"]
+    base_artifact = base_run["junit"]
+    head_failures = Counter(head_artifact["failure_nodeids"])
+    base_failures = Counter(base_artifact["failure_nodeids"])
+    head_errors = Counter(head_artifact["error_nodeids"])
+    base_errors = Counter(base_artifact["error_nodeids"])
+    head_only_failures = sorted((head_failures - base_failures).elements())
+    base_only_failures = sorted((base_failures - head_failures).elements())
+    head_only_errors = sorted((head_errors - base_errors).elements())
+    base_only_errors = sorted((base_errors - head_errors).elements())
     head_diagnostics = _pyright_diagnostics(pyright_review_head_log)
     base_diagnostics = _pyright_diagnostics(pyright_review_base_log)
+    head_diagnostic_counts = Counter(head_diagnostics)
+    base_diagnostic_counts = Counter(base_diagnostics)
     head_only_diagnostics = sorted(
-        set(head_diagnostics) - set(base_diagnostics)
+        (head_diagnostic_counts - base_diagnostic_counts).elements()
     )
     base_only_diagnostics = sorted(
-        set(base_diagnostics) - set(head_diagnostics)
+        (base_diagnostic_counts - head_diagnostic_counts).elements()
     )
+    selected = runs["selected_online_ac"]
+    archive_verification = archive_verification or {
+        "all_verified": True,
+        "archives": {},
+    }
     gates: dict[str, object] = {
         "selected_online_ac": {
-            "passed": runs["selected_online_ac"]["exit_code"] == 0,
-            "exit_code": runs["selected_online_ac"]["exit_code"],
+            "passed": _pytest_exit_accepted(selected)
+            and selected["exit_code"] == 0,
+            "exit_code": selected["exit_code"],
+            "junit_valid": selected["junit"]["valid"],
         },
         "online_ac_regression": {
-            "passed": not head_only_failures,
-            "condition": "no_head_only_failure_nodeids",
-            "head_failures": head_failures,
-            "base_failures": base_failures,
+            "passed": (
+                bool(head_artifact["valid"])
+                and bool(base_artifact["valid"])
+                and _pytest_exit_accepted(head_run)
+                and _pytest_exit_accepted(base_run)
+                and not head_only_failures
+                and not head_only_errors
+            ),
+            "condition": (
+                "valid_junit_and_exit_0_or_1_with_recorded_outcomes_and_"
+                "no_head_only_failure_or_error_nodeids"
+            ),
+            "accepted_exit_behavior": {
+                "0": "accepted only with zero JUnit failures/errors",
+                "1": "accepted only with recorded JUnit failures/errors",
+                "2+": "always rejected",
+            },
+            "head_exit_code": head_run["exit_code"],
+            "base_exit_code": base_run["exit_code"],
+            "head_exit_accepted": _pytest_exit_accepted(head_run),
+            "base_exit_accepted": _pytest_exit_accepted(base_run),
+            "head_junit_valid": head_artifact["valid"],
+            "base_junit_valid": base_artifact["valid"],
+            "head_junit_error": head_artifact["error"],
+            "base_junit_error": base_artifact["error"],
+            "head_failures": sorted(head_failures.elements()),
+            "base_failures": sorted(base_failures.elements()),
             "head_only_failures": head_only_failures,
             "base_only_failures": base_only_failures,
+            "head_errors": sorted(head_errors.elements()),
+            "base_errors": sorted(base_errors.elements()),
+            "head_only_errors": head_only_errors,
+            "base_only_errors": base_only_errors,
         },
         "pyright_review_regression": {
             "passed": not head_only_diagnostics,
@@ -186,6 +303,10 @@ def evaluate_gates(
             "base_diagnostics": base_diagnostics,
             "head_only_diagnostics": head_only_diagnostics,
             "base_only_diagnostics": base_only_diagnostics,
+        },
+        "archive_verification": {
+            "passed": bool(archive_verification["all_verified"]),
+            "archives": archive_verification["archives"],
         },
     }
     gates["all_passed"] = all(
@@ -231,8 +352,11 @@ def collect_evidence() -> dict[str, object]:
         )
     }
     runs = {name: _run(name) for name in names}
+    archive_verification = json.loads(
+        _text(RESULTS / "archive_hashes.json")
+    )
     payload = {
-        "schema_version": 2,
+        "schema_version": 3,
         "batch_job_id": os.environ.get("AWS_BATCH_JOB_ID", ""),
         "functional_head_sha": os.environ["TASK12_FUNCTIONAL_HEAD_SHA"],
         "feature_base_sha": os.environ["TASK12_FEATURE_BASE_SHA"],
@@ -243,10 +367,12 @@ def collect_evidence() -> dict[str, object]:
         ],
         "runtime": json.loads(_text(RESULTS / "runtime.json")),
         "runs": runs,
+        "archive_verification": archive_verification,
         "gates": evaluate_gates(
             runs,
             _text(RESULTS / "pyright_review_head.log"),
             _text(RESULTS / "pyright_review_base.log"),
+            archive_verification,
         ),
         "finite_difference_metrics": finite_metrics,
         "online_ac_collection": {

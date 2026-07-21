@@ -3,16 +3,21 @@ set -uo pipefail
 
 export DEBIAN_FRONTEND=noninteractive
 export TASK12_RESULTS_DIR=/tmp/task12-results
-export TASK12_FUNCTIONAL_HEAD_SHA=b50100dc66305e4005bed93f3d1750df8b474862
+export TASK12_FUNCTIONAL_HEAD_SHA=517e07377b94df2018b0addfb2d99582a139aaf4
 export TASK12_FEATURE_BASE_SHA=5f7ff4e40e66da0b7df4f3edc9a928185ad73ae6
 export TASK12_TASK10_BASE_SHA=5a89953b5d09909b35c5016118dc11a1adb0dec2
-export TASK12_REPORT_PARENT_SHA=b50100dc66305e4005bed93f3d1750df8b474862
-export TASK12_REVIEW_PATCH_SHA256=3ece46030ffd747a13d884273bac5b62b0e39c0c6b61f42c6697fc776625fdda
+export TASK12_REPORT_PARENT_SHA=517e07377b94df2018b0addfb2d99582a139aaf4
+export TASK12_REVIEW_PATCH_SHA256=cacf405d88a42563c2d0ff6bb3ae269017867ccef4fc002e44b5ad138d1197f2
 export NODE_OPTIONS=--max-old-space-size=4096
 
-HEAD_URI=s3://rtrrl-artifacts-007122174918/oracle/task12-preserved/head-b50100d-final-gates-overlay.tar
+: "${TASK12_EXPECTED_HEAD_ARCHIVE_SHA256:?submitted head archive SHA is required}"
+: "${TASK12_EXPECTED_BASE_ARCHIVE_SHA256:?submitted base archive SHA is required}"
+: "${TASK12_EXPECTED_ORACLE_ARCHIVE_SHA256:?submitted oracle archive SHA is required}"
+
+HEAD_URI=s3://rtrrl-artifacts-007122174918/oracle/task12-preserved/head-517e073-hardened-gates-overlay.tar
 BASE_URI=s3://rtrrl-artifacts-007122174918/oracle/task12-review/base-5f7ff4e.tar
 ORACLE_URI=s3://rtrrl-artifacts-007122174918/oracle/task12-preserved/aaai25-4301943.tar
+ARCHIVE_VERIFIER_URI=s3://rtrrl-artifacts-007122174918/oracle/task12-preserved/task12_verify_archives.py
 RESULT_URI=s3://rtrrl-artifacts-007122174918/oracle/task12-preserved/results
 
 rm -rf /tmp/head /tmp/base /tmp/oracle /tmp/venv /tmp/preserved-venv \
@@ -20,9 +25,22 @@ rm -rf /tmp/head /tmp/base /tmp/oracle /tmp/venv /tmp/preserved-venv \
 mkdir -p /tmp/head /tmp/base /tmp/oracle "$TASK12_RESULTS_DIR"
 apt-get update -qq
 apt-get install -y -qq git python3-venv build-essential time >/dev/null
+aws s3 cp "$ARCHIVE_VERIFIER_URI" /tmp/task12_verify_archives.py >/dev/null
 aws s3 cp "$HEAD_URI" /tmp/head.tar >/dev/null
 aws s3 cp "$BASE_URI" /tmp/base.tar >/dev/null
 aws s3 cp "$ORACLE_URI" /tmp/oracle.tar >/dev/null
+archive_status=0
+python3 /tmp/task12_verify_archives.py \
+  --archive head /tmp/head.tar "$TASK12_EXPECTED_HEAD_ARCHIVE_SHA256" \
+  --archive base /tmp/base.tar "$TASK12_EXPECTED_BASE_ARCHIVE_SHA256" \
+  --archive oracle /tmp/oracle.tar "$TASK12_EXPECTED_ORACLE_ARCHIVE_SHA256" \
+  --output "$TASK12_RESULTS_DIR/archive_hashes.json" || archive_status=$?
+if [[ "$archive_status" != "0" ]]; then
+  aws s3 cp --recursive "$TASK12_RESULTS_DIR/" \
+    "$RESULT_URI/$AWS_BATCH_JOB_ID/" >/dev/null
+  echo "TASK12_ARCHIVE_VERIFICATION_FAILED $archive_status"
+  exit "$archive_status"
+fi
 tar -xf /tmp/head.tar -C /tmp/head
 tar -xf /tmp/base.tar -C /tmp/base
 tar -xf /tmp/oracle.tar -C /tmp/oracle
@@ -152,11 +170,11 @@ run_cmd pyright_base /tmp/base/memo \
 
 run_cmd pyright_review_head /tmp/head/memo \
   '{}' \
-  "/tmp/venv/bin/pyright --outputjson experiments/base/experiment.py memorax/__init__.py memorax/algorithms/__init__.py memorax/algorithms/rtrrl/__init__.py tests/test_independent_rtrrl.py"
+  "/tmp/venv/bin/pyright --outputjson experiments/base/experiment.py experiments/rtrrl_hopper/run.py memorax/__init__.py memorax/algorithms/__init__.py memorax/algorithms/independent_rtrrl.py memorax/algorithms/rtrrl memorax/online_ac tests/online_ac tests/test_independent_rtrrl.py"
 
 run_cmd pyright_review_base /tmp/base/memo \
   '{}' \
-  "/tmp/venv/bin/pyright --outputjson experiments/base/experiment.py memorax/__init__.py memorax/algorithms/__init__.py memorax/algorithms/rtrrl.py tests/test_independent_rtrrl.py"
+  "/tmp/venv/bin/pyright --outputjson experiments/base/experiment.py experiments/rtrrl_hopper/run.py memorax/__init__.py memorax/algorithms/__init__.py memorax/algorithms/independent_rtrrl.py memorax/algorithms/rtrrl.py memorax/online_ac tests/online_ac tests/test_independent_rtrrl.py"
 
 run_cmd compileall /tmp/head \
   '{}' \
@@ -174,6 +192,7 @@ paths = {
         "task12_numerical_evidence.py",
         "task12_brax_smoke.py",
         "task12_collect_evidence.py",
+        "task12_verify_archives.py",
         "task12_nodeids.py",
         "preserved_original_probe.py",
         "preserved_original_compare.py",
@@ -200,6 +219,9 @@ paths.update({
     ),
     "memo/tests/online_ac/golden.py": Path(
         "/tmp/head/memo/tests/online_ac/golden.py"
+    ),
+    "memo/tests/online_ac/conftest.py": Path(
+        "/tmp/head/memo/tests/online_ac/conftest.py"
     ),
     "memo/tests/online_ac/test_meta_parity.py": Path(
         "/tmp/head/memo/tests/online_ac/test_meta_parity.py"

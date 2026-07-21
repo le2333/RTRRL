@@ -1,5 +1,28 @@
 {
-  "batch_job_id": "ee678a9a-f600-403b-b4a8-c801b37abf22",
+  "archive_verification": {
+    "all_verified": true,
+    "archives": {
+      "base": {
+        "actual_sha256": "702ff4fdd485cd537ffeef599046b93fcc1510268adbaa7ec24665bb008a3a5f",
+        "expected_sha256": "702ff4fdd485cd537ffeef599046b93fcc1510268adbaa7ec24665bb008a3a5f",
+        "path": "/tmp/base.tar",
+        "verified": true
+      },
+      "head": {
+        "actual_sha256": "a26da0cfe8a41d56db7114a2b163bb126309147c936460d003c520bf37fbe6a6",
+        "expected_sha256": "a26da0cfe8a41d56db7114a2b163bb126309147c936460d003c520bf37fbe6a6",
+        "path": "/tmp/head.tar",
+        "verified": true
+      },
+      "oracle": {
+        "actual_sha256": "f9a97fd54cb2786324ea83dc10078b4f9dbcc6e83bc2becf51c0d62d497b9740",
+        "expected_sha256": "f9a97fd54cb2786324ea83dc10078b4f9dbcc6e83bc2becf51c0d62d497b9740",
+        "path": "/tmp/oracle.tar",
+        "verified": true
+      }
+    }
+  },
+  "batch_job_id": "f2a0d8ba-bdc2-44fb-85c2-890cfc99989f",
   "brax_smoke": {
     "best_reward": 49.92558288574219,
     "config_payload": {
@@ -94,18 +117,58 @@
       "relative_error": 7.30149404e-05
     }
   },
-  "functional_head_sha": "b50100dc66305e4005bed93f3d1750df8b474862",
+  "functional_head_sha": "517e07377b94df2018b0addfb2d99582a139aaf4",
   "gates": {
     "all_passed": true,
+    "archive_verification": {
+      "archives": {
+        "base": {
+          "actual_sha256": "702ff4fdd485cd537ffeef599046b93fcc1510268adbaa7ec24665bb008a3a5f",
+          "expected_sha256": "702ff4fdd485cd537ffeef599046b93fcc1510268adbaa7ec24665bb008a3a5f",
+          "path": "/tmp/base.tar",
+          "verified": true
+        },
+        "head": {
+          "actual_sha256": "a26da0cfe8a41d56db7114a2b163bb126309147c936460d003c520bf37fbe6a6",
+          "expected_sha256": "a26da0cfe8a41d56db7114a2b163bb126309147c936460d003c520bf37fbe6a6",
+          "path": "/tmp/head.tar",
+          "verified": true
+        },
+        "oracle": {
+          "actual_sha256": "f9a97fd54cb2786324ea83dc10078b4f9dbcc6e83bc2becf51c0d62d497b9740",
+          "expected_sha256": "f9a97fd54cb2786324ea83dc10078b4f9dbcc6e83bc2becf51c0d62d497b9740",
+          "path": "/tmp/oracle.tar",
+          "verified": true
+        }
+      },
+      "passed": true
+    },
     "online_ac_regression": {
+      "accepted_exit_behavior": {
+        "0": "accepted only with zero JUnit failures/errors",
+        "1": "accepted only with recorded JUnit failures/errors",
+        "2+": "always rejected"
+      },
+      "base_errors": [],
+      "base_exit_accepted": true,
+      "base_exit_code": 1,
       "base_failures": [
         "tests/online_ac/test_standard_parity.py::test_standard_one_step_matches_legacy_every_exposed_leaf"
       ],
+      "base_junit_error": null,
+      "base_junit_valid": true,
+      "base_only_errors": [],
       "base_only_failures": [],
-      "condition": "no_head_only_failure_nodeids",
+      "condition": "valid_junit_and_exit_0_or_1_with_recorded_outcomes_and_no_head_only_failure_or_error_nodeids",
+      "head_errors": [],
+      "head_exit_accepted": true,
+      "head_exit_code": 1,
       "head_failures": [
         "tests/online_ac/test_standard_parity.py::test_standard_one_step_matches_legacy_every_exposed_leaf"
       ],
+      "head_junit_error": null,
+      "head_junit_valid": true,
+      "head_only_errors": [],
       "head_only_failures": [],
       "passed": true
     },
@@ -120,41 +183,185 @@
         "experiments/base/experiment.py|error|reportArgumentType|Argument of type \"str | None\" cannot be assigned to parameter \"aim_repo\" of type \"str\" in function \"with_logger\" Type \"str | None\" is not assignable to type \"str\" \"None\" is not assignable to \"str\"",
         "experiments/base/experiment.py|error|reportArgumentType|Argument of type \"str | None\" cannot be assigned to parameter \"logger_name\" of type \"str\" in function \"with_logger\" Type \"str | None\" is not assignable to type \"str\" \"None\" is not assignable to \"str\"",
         "experiments/base/experiment.py|error|reportAttributeAccessIssue|Cannot access attribute \"b1\" for class \"ExperimentConfig\" Attribute \"b1\" is unknown",
+        "experiments/base/experiment.py|error|reportAttributeAccessIssue|Cannot access attribute \"b1\" for class \"ExperimentConfig\" Attribute \"b1\" is unknown",
+        "experiments/base/experiment.py|error|reportAttributeAccessIssue|Cannot access attribute \"b2\" for class \"ExperimentConfig\" Attribute \"b2\" is unknown",
         "experiments/base/experiment.py|error|reportAttributeAccessIssue|Cannot access attribute \"b2\" for class \"ExperimentConfig\" Attribute \"b2\" is unknown",
         "experiments/base/experiment.py|error|reportAttributeAccessIssue|Cannot access attribute \"entropy_rate\" for class \"ExperimentConfig\" Attribute \"entropy_rate\" is unknown",
+        "experiments/base/experiment.py|error|reportAttributeAccessIssue|Cannot access attribute \"entropy_rate\" for class \"ExperimentConfig\" Attribute \"entropy_rate\" is unknown",
+        "experiments/base/experiment.py|error|reportAttributeAccessIssue|Cannot access attribute \"eta_f\" for class \"ExperimentConfig\" Attribute \"eta_f\" is unknown",
         "experiments/base/experiment.py|error|reportAttributeAccessIssue|Cannot access attribute \"eta_f\" for class \"ExperimentConfig\" Attribute \"eta_f\" is unknown",
         "experiments/base/experiment.py|error|reportAttributeAccessIssue|Cannot access attribute \"eta_pi\" for class \"ExperimentConfig\" Attribute \"eta_pi\" is unknown",
+        "experiments/base/experiment.py|error|reportAttributeAccessIssue|Cannot access attribute \"eta_pi\" for class \"ExperimentConfig\" Attribute \"eta_pi\" is unknown",
+        "experiments/base/experiment.py|error|reportAttributeAccessIssue|Cannot access attribute \"lambda_pi\" for class \"ExperimentConfig\" Attribute \"lambda_pi\" is unknown",
         "experiments/base/experiment.py|error|reportAttributeAccessIssue|Cannot access attribute \"lambda_pi\" for class \"ExperimentConfig\" Attribute \"lambda_pi\" is unknown",
         "experiments/base/experiment.py|error|reportAttributeAccessIssue|Cannot access attribute \"lambda_rnn\" for class \"ExperimentConfig\" Attribute \"lambda_rnn\" is unknown",
+        "experiments/base/experiment.py|error|reportAttributeAccessIssue|Cannot access attribute \"lambda_rnn\" for class \"ExperimentConfig\" Attribute \"lambda_rnn\" is unknown",
+        "experiments/base/experiment.py|error|reportAttributeAccessIssue|Cannot access attribute \"lambda_v\" for class \"ExperimentConfig\" Attribute \"lambda_v\" is unknown",
         "experiments/base/experiment.py|error|reportAttributeAccessIssue|Cannot access attribute \"lambda_v\" for class \"ExperimentConfig\" Attribute \"lambda_v\" is unknown",
         "experiments/base/experiment.py|error|reportAttributeAccessIssue|Cannot access attribute \"rnn_grad_clip\" for class \"ExperimentConfig\" Attribute \"rnn_grad_clip\" is unknown",
+        "experiments/base/experiment.py|error|reportAttributeAccessIssue|Cannot access attribute \"rnn_grad_clip\" for class \"ExperimentConfig\" Attribute \"rnn_grad_clip\" is unknown",
+        "experiments/base/experiment.py|error|reportAttributeAccessIssue|Cannot access attribute \"rnn_lr\" for class \"ExperimentConfig\" Attribute \"rnn_lr\" is unknown",
         "experiments/base/experiment.py|error|reportAttributeAccessIssue|Cannot access attribute \"rnn_lr\" for class \"ExperimentConfig\" Attribute \"rnn_lr\" is unknown",
         "experiments/base/experiment.py|error|reportAttributeAccessIssue|Cannot access attribute \"td_lr\" for class \"ExperimentConfig\" Attribute \"td_lr\" is unknown",
+        "experiments/base/experiment.py|error|reportAttributeAccessIssue|Cannot access attribute \"td_lr\" for class \"ExperimentConfig\" Attribute \"td_lr\" is unknown",
+        "experiments/base/experiment.py|error|reportAttributeAccessIssue|Cannot access attribute \"update_period\" for class \"ExperimentConfig\" Attribute \"update_period\" is unknown",
         "experiments/base/experiment.py|error|reportAttributeAccessIssue|Cannot access attribute \"update_period\" for class \"ExperimentConfig\" Attribute \"update_period\" is unknown",
         "experiments/base/experiment.py|error|reportCallIssue|No overloads for \"randint\" match the provided arguments",
+        "memorax/algorithms/independent_rtrrl.py|error|reportArgumentType|Argument of type \"Literal['torso']\" cannot be assigned to parameter \"key\" of type \"tuple[None, ...]\" in function \"__getitem__\" \"Literal['torso']\" is not assignable to \"tuple[None, ...]\"",
+        "memorax/algorithms/independent_rtrrl.py|error|reportArgumentType|Argument of type \"Literal['torso']\" cannot be assigned to parameter \"key\" of type \"tuple[None, ...]\" in function \"__getitem__\" \"Literal['torso']\" is not assignable to \"tuple[None, ...]\"",
+        "memorax/algorithms/independent_rtrrl.py|error|reportArgumentType|Argument of type \"Literal['torso']\" cannot be assigned to parameter \"key\" of type \"tuple[None, ...]\" in function \"__getitem__\" \"Literal['torso']\" is not assignable to \"tuple[None, ...]\"",
+        "memorax/algorithms/independent_rtrrl.py|error|reportArgumentType|Argument of type \"Literal['torso']\" cannot be assigned to parameter \"key\" of type \"tuple[None, ...]\" in function \"__getitem__\" \"Literal['torso']\" is not assignable to \"tuple[None, ...]\"",
+        "memorax/algorithms/independent_rtrrl.py|error|reportArgumentType|Argument of type \"Literal['torso']\" cannot be assigned to parameter \"key\" of type \"tuple[None, ...]\" in function \"__getitem__\" \"Literal['torso']\" is not assignable to \"tuple[None, ...]\"",
+        "memorax/algorithms/independent_rtrrl.py|error|reportArgumentType|Argument of type \"Literal['torso']\" cannot be assigned to parameter \"key\" of type \"tuple[None, ...]\" in function \"__getitem__\" \"Literal['torso']\" is not assignable to \"tuple[None, ...]\"",
+        "memorax/algorithms/independent_rtrrl.py|error|reportArgumentType|Argument of type \"dict[str, Unknown]\" cannot be assigned to parameter \"actor_params\" of type \"FrozenDict[str, Any]\" in function \"__init__\" \"dict[str, Unknown]\" is not assignable to \"FrozenDict[str, Any]\"",
+        "memorax/algorithms/independent_rtrrl.py|error|reportArgumentType|Argument of type \"dict[str, Unknown]\" cannot be assigned to parameter \"critic_params\" of type \"FrozenDict[str, Any]\" in function \"__init__\" \"dict[str, Unknown]\" is not assignable to \"FrozenDict[str, Any]\"",
+        "memorax/algorithms/independent_rtrrl.py|error|reportArgumentType|Argument of type \"tuple[int, None]\" cannot be assigned to parameter \"input_shape\" of type \"tuple[int, ...]\" in function \"initialize_carry\" \"tuple[int, None]\" is not assignable to \"tuple[int, ...]\" Tuple entry 1 is incorrect type Type \"int | None\" is not assignable to type \"int\" \"None\" is not assignable to \"int\"",
+        "memorax/algorithms/independent_rtrrl.py|error|reportArgumentType|Argument of type \"tuple[int, None]\" cannot be assigned to parameter \"input_shape\" of type \"tuple[int, ...]\" in function \"initialize_carry\" \"tuple[int, None]\" is not assignable to \"tuple[int, ...]\" Tuple entry 1 is incorrect type Type \"int | None\" is not assignable to type \"int\" \"None\" is not assignable to \"int\"",
+        "memorax/algorithms/independent_rtrrl.py|error|reportArgumentType|Argument of type \"tuple[int, None]\" cannot be assigned to parameter \"input_shape\" of type \"tuple[int, ...]\" in function \"initialize_carry\" \"tuple[int, None]\" is not assignable to \"tuple[int, ...]\" Tuple entry 1 is incorrect type Type \"int | None\" is not assignable to type \"int\" \"None\" is not assignable to \"int\"",
+        "memorax/algorithms/independent_rtrrl.py|error|reportArgumentType|Argument of type \"tuple[int, None]\" cannot be assigned to parameter \"input_shape\" of type \"tuple[int, ...]\" in function \"initialize_carry\" \"tuple[int, None]\" is not assignable to \"tuple[int, ...]\" Tuple entry 1 is incorrect type Type \"int | None\" is not assignable to type \"int\" \"None\" is not assignable to \"int\"",
+        "memorax/algorithms/independent_rtrrl.py|error|reportArgumentType|Argument of type \"tuple[int, None]\" cannot be assigned to parameter \"input_shape\" of type \"tuple[int, ...]\" in function \"initialize_sensitivity\" \"tuple[int, None]\" is not assignable to \"tuple[int, ...]\" Tuple entry 1 is incorrect type Type \"int | None\" is not assignable to type \"int\" \"None\" is not assignable to \"int\"",
+        "memorax/algorithms/independent_rtrrl.py|error|reportArgumentType|Argument of type \"tuple[int, None]\" cannot be assigned to parameter \"input_shape\" of type \"tuple[int, ...]\" in function \"initialize_sensitivity\" \"tuple[int, None]\" is not assignable to \"tuple[int, ...]\" Tuple entry 1 is incorrect type Type \"int | None\" is not assignable to type \"int\" \"None\" is not assignable to \"int\"",
+        "memorax/algorithms/independent_rtrrl.py|error|reportAssignmentType|Expression with type \"Any | tuple[Any, FrozenVariableDict | dict[str, Any]]\" cannot be assigned to target tuple Type \"tuple[Any, FrozenVariableDict | dict[str, Any]]\" is incompatible with target tuple Tuple size mismatch; expected 3 but received 2",
+        "memorax/algorithms/independent_rtrrl.py|error|reportAssignmentType|Type \"None\" is not assignable to declared type \"GradientTransformation\" \"None\" is not assignable to \"GradientTransformation\"",
+        "memorax/algorithms/independent_rtrrl.py|error|reportAssignmentType|Type \"None\" is not assignable to declared type \"GradientTransformation\" \"None\" is not assignable to \"GradientTransformation\"",
+        "memorax/algorithms/independent_rtrrl.py|error|reportAttributeAccessIssue|Cannot access attribute \"replace\" for class \"IndependentRTRRLState\" Attribute \"replace\" is unknown",
+        "memorax/algorithms/independent_rtrrl.py|error|reportAttributeAccessIssue|Cannot access attribute \"replace\" for class \"IndependentRTRRLState\" Attribute \"replace\" is unknown",
+        "memorax/algorithms/independent_rtrrl.py|error|reportCallIssue|No overloads for \"__getitem__\" match the provided arguments",
+        "memorax/algorithms/independent_rtrrl.py|error|reportCallIssue|No overloads for \"__getitem__\" match the provided arguments",
+        "memorax/algorithms/independent_rtrrl.py|error|reportCallIssue|No overloads for \"__getitem__\" match the provided arguments",
+        "memorax/algorithms/independent_rtrrl.py|error|reportCallIssue|No overloads for \"__getitem__\" match the provided arguments",
+        "memorax/algorithms/independent_rtrrl.py|error|reportCallIssue|No overloads for \"__getitem__\" match the provided arguments",
+        "memorax/algorithms/independent_rtrrl.py|error|reportCallIssue|No overloads for \"__getitem__\" match the provided arguments",
+        "memorax/algorithms/independent_rtrrl.py|error|reportIndexIssue|\"__getitem__\" method not defined on type \"Iterable[ArrayTree]\"",
+        "memorax/algorithms/independent_rtrrl.py|error|reportIndexIssue|\"__getitem__\" method not defined on type \"Iterable[ArrayTree]\"",
+        "memorax/algorithms/independent_rtrrl.py|error|reportIndexIssue|\"__getitem__\" method not defined on type \"Iterable[ArrayTree]\"",
+        "memorax/algorithms/independent_rtrrl.py|error|reportIndexIssue|\"__getitem__\" method not defined on type \"Iterable[ArrayTree]\"",
+        "memorax/algorithms/independent_rtrrl.py|error|reportIndexIssue|\"__getitem__\" method not defined on type \"Iterable[ArrayTree]\"",
+        "memorax/algorithms/independent_rtrrl.py|error|reportIndexIssue|\"__getitem__\" method not defined on type \"Iterable[ArrayTree]\"",
+        "memorax/algorithms/independent_rtrrl.py|error|reportIndexIssue|\"__getitem__\" method not defined on type \"bool\"",
+        "memorax/algorithms/independent_rtrrl.py|error|reportIndexIssue|\"__getitem__\" method not defined on type \"bool\"",
+        "memorax/algorithms/independent_rtrrl.py|error|reportIndexIssue|\"__getitem__\" method not defined on type \"bool\"",
+        "memorax/algorithms/independent_rtrrl.py|error|reportIndexIssue|\"__getitem__\" method not defined on type \"bool\"",
+        "memorax/algorithms/independent_rtrrl.py|error|reportIndexIssue|\"__getitem__\" method not defined on type \"bool\"",
+        "memorax/algorithms/independent_rtrrl.py|error|reportIndexIssue|\"__getitem__\" method not defined on type \"bool\"",
+        "memorax/algorithms/independent_rtrrl.py|error|reportIndexIssue|\"__getitem__\" method not defined on type \"complex\"",
+        "memorax/algorithms/independent_rtrrl.py|error|reportIndexIssue|\"__getitem__\" method not defined on type \"complex\"",
+        "memorax/algorithms/independent_rtrrl.py|error|reportIndexIssue|\"__getitem__\" method not defined on type \"complex\"",
+        "memorax/algorithms/independent_rtrrl.py|error|reportIndexIssue|\"__getitem__\" method not defined on type \"complex\"",
+        "memorax/algorithms/independent_rtrrl.py|error|reportIndexIssue|\"__getitem__\" method not defined on type \"complex\"",
+        "memorax/algorithms/independent_rtrrl.py|error|reportIndexIssue|\"__getitem__\" method not defined on type \"complex\"",
+        "memorax/algorithms/independent_rtrrl.py|error|reportIndexIssue|\"__getitem__\" method not defined on type \"float\"",
+        "memorax/algorithms/independent_rtrrl.py|error|reportIndexIssue|\"__getitem__\" method not defined on type \"float\"",
+        "memorax/algorithms/independent_rtrrl.py|error|reportIndexIssue|\"__getitem__\" method not defined on type \"float\"",
+        "memorax/algorithms/independent_rtrrl.py|error|reportIndexIssue|\"__getitem__\" method not defined on type \"float\"",
+        "memorax/algorithms/independent_rtrrl.py|error|reportIndexIssue|\"__getitem__\" method not defined on type \"float\"",
+        "memorax/algorithms/independent_rtrrl.py|error|reportIndexIssue|\"__getitem__\" method not defined on type \"float\"",
+        "memorax/algorithms/independent_rtrrl.py|error|reportIndexIssue|\"__getitem__\" method not defined on type \"int\"",
+        "memorax/algorithms/independent_rtrrl.py|error|reportIndexIssue|\"__getitem__\" method not defined on type \"int\"",
+        "memorax/algorithms/independent_rtrrl.py|error|reportIndexIssue|\"__getitem__\" method not defined on type \"int\"",
+        "memorax/algorithms/independent_rtrrl.py|error|reportIndexIssue|\"__getitem__\" method not defined on type \"int\"",
+        "memorax/algorithms/independent_rtrrl.py|error|reportIndexIssue|\"__getitem__\" method not defined on type \"int\"",
+        "memorax/algorithms/independent_rtrrl.py|error|reportIndexIssue|\"__getitem__\" method not defined on type \"int\"",
+        "memorax/algorithms/independent_rtrrl.py|error|reportOptionalMemberAccess|\"ndim\" is not a known attribute of \"None\"",
+        "memorax/algorithms/independent_rtrrl.py|error|reportOptionalMemberAccess|\"ndim\" is not a known attribute of \"None\"",
+        "memorax/algorithms/rtrrl|error|reportArgumentType|Argument of type \"Array | None\" cannot be assigned to parameter \"action\" of type \"Array\" in function \"_forward\" Type \"Array | None\" is not assignable to type \"Array\" \"None\" is not assignable to \"Array\"",
+        "memorax/algorithms/rtrrl|error|reportArgumentType|Argument of type \"Array | None\" cannot be assigned to parameter \"action\" of type \"Array\" in function \"_forward\" Type \"Array | None\" is not assignable to type \"Array\" \"None\" is not assignable to \"Array\"",
+        "memorax/algorithms/rtrrl|error|reportArgumentType|Argument of type \"Array | None\" cannot be assigned to parameter \"action\" of type \"Array\" in function \"_forward\" Type \"Array | None\" is not assignable to type \"Array\" \"None\" is not assignable to \"Array\"",
+        "memorax/algorithms/rtrrl|error|reportArgumentType|Argument of type \"Array | None\" cannot be assigned to parameter \"action\" of type \"Array\" in function \"_forward\" Type \"Array | None\" is not assignable to type \"Array\" \"None\" is not assignable to \"Array\"",
+        "memorax/algorithms/rtrrl|error|reportArgumentType|Argument of type \"Array | None\" cannot be assigned to parameter \"action\" of type \"Array\" in function \"_forward\" Type \"Array | None\" is not assignable to type \"Array\" \"None\" is not assignable to \"Array\"",
         "memorax/algorithms/rtrrl|error|reportArgumentType|Argument of type \"Array | None\" cannot be assigned to parameter \"action\" of type \"Array\" in function \"_forward\" Type \"Array | None\" is not assignable to type \"Array\" \"None\" is not assignable to \"Array\"",
         "memorax/algorithms/rtrrl|error|reportArgumentType|Argument of type \"Array | None\" cannot be assigned to parameter \"done\" of type \"Array\" in function \"_forward\" Type \"Array | None\" is not assignable to type \"Array\" \"None\" is not assignable to \"Array\"",
+        "memorax/algorithms/rtrrl|error|reportArgumentType|Argument of type \"Array | None\" cannot be assigned to parameter \"done\" of type \"Array\" in function \"_forward\" Type \"Array | None\" is not assignable to type \"Array\" \"None\" is not assignable to \"Array\"",
+        "memorax/algorithms/rtrrl|error|reportArgumentType|Argument of type \"Array | None\" cannot be assigned to parameter \"done\" of type \"Array\" in function \"_forward\" Type \"Array | None\" is not assignable to type \"Array\" \"None\" is not assignable to \"Array\"",
+        "memorax/algorithms/rtrrl|error|reportArgumentType|Argument of type \"Array | None\" cannot be assigned to parameter \"done\" of type \"Array\" in function \"_forward\" Type \"Array | None\" is not assignable to type \"Array\" \"None\" is not assignable to \"Array\"",
+        "memorax/algorithms/rtrrl|error|reportArgumentType|Argument of type \"Array | None\" cannot be assigned to parameter \"done\" of type \"Array\" in function \"_forward\" Type \"Array | None\" is not assignable to type \"Array\" \"None\" is not assignable to \"Array\"",
+        "memorax/algorithms/rtrrl|error|reportArgumentType|Argument of type \"Array | None\" cannot be assigned to parameter \"done\" of type \"Array\" in function \"_forward\" Type \"Array | None\" is not assignable to type \"Array\" \"None\" is not assignable to \"Array\"",
         "memorax/algorithms/rtrrl|error|reportArgumentType|Argument of type \"Array | None\" cannot be assigned to parameter \"obs\" of type \"Array\" in function \"_forward\" Type \"Array | None\" is not assignable to type \"Array\" \"None\" is not assignable to \"Array\"",
+        "memorax/algorithms/rtrrl|error|reportArgumentType|Argument of type \"Array | None\" cannot be assigned to parameter \"obs\" of type \"Array\" in function \"_forward\" Type \"Array | None\" is not assignable to type \"Array\" \"None\" is not assignable to \"Array\"",
+        "memorax/algorithms/rtrrl|error|reportArgumentType|Argument of type \"Array | None\" cannot be assigned to parameter \"obs\" of type \"Array\" in function \"_forward\" Type \"Array | None\" is not assignable to type \"Array\" \"None\" is not assignable to \"Array\"",
+        "memorax/algorithms/rtrrl|error|reportArgumentType|Argument of type \"Array | None\" cannot be assigned to parameter \"obs\" of type \"Array\" in function \"_forward\" Type \"Array | None\" is not assignable to type \"Array\" \"None\" is not assignable to \"Array\"",
+        "memorax/algorithms/rtrrl|error|reportArgumentType|Argument of type \"Array | None\" cannot be assigned to parameter \"obs\" of type \"Array\" in function \"_forward\" Type \"Array | None\" is not assignable to type \"Array\" \"None\" is not assignable to \"Array\"",
+        "memorax/algorithms/rtrrl|error|reportArgumentType|Argument of type \"Array | None\" cannot be assigned to parameter \"obs\" of type \"Array\" in function \"_forward\" Type \"Array | None\" is not assignable to type \"Array\" \"None\" is not assignable to \"Array\"",
+        "memorax/algorithms/rtrrl|error|reportArgumentType|Argument of type \"Array | None\" cannot be assigned to parameter \"reward\" of type \"Array\" in function \"_forward\" Type \"Array | None\" is not assignable to type \"Array\" \"None\" is not assignable to \"Array\"",
+        "memorax/algorithms/rtrrl|error|reportArgumentType|Argument of type \"Array | None\" cannot be assigned to parameter \"reward\" of type \"Array\" in function \"_forward\" Type \"Array | None\" is not assignable to type \"Array\" \"None\" is not assignable to \"Array\"",
+        "memorax/algorithms/rtrrl|error|reportArgumentType|Argument of type \"Array | None\" cannot be assigned to parameter \"reward\" of type \"Array\" in function \"_forward\" Type \"Array | None\" is not assignable to type \"Array\" \"None\" is not assignable to \"Array\"",
+        "memorax/algorithms/rtrrl|error|reportArgumentType|Argument of type \"Array | None\" cannot be assigned to parameter \"reward\" of type \"Array\" in function \"_forward\" Type \"Array | None\" is not assignable to type \"Array\" \"None\" is not assignable to \"Array\"",
+        "memorax/algorithms/rtrrl|error|reportArgumentType|Argument of type \"Array | None\" cannot be assigned to parameter \"reward\" of type \"Array\" in function \"_forward\" Type \"Array | None\" is not assignable to type \"Array\" \"None\" is not assignable to \"Array\"",
         "memorax/algorithms/rtrrl|error|reportArgumentType|Argument of type \"Array | None\" cannot be assigned to parameter \"reward\" of type \"Array\" in function \"_forward\" Type \"Array | None\" is not assignable to type \"Array\" \"None\" is not assignable to \"Array\"",
         "memorax/algorithms/rtrrl|error|reportArgumentType|Argument of type \"Literal['actor']\" cannot be assigned to parameter \"key\" of type \"tuple[None, ...]\" in function \"__getitem__\" \"Literal['actor']\" is not assignable to \"tuple[None, ...]\"",
         "memorax/algorithms/rtrrl|error|reportArgumentType|Argument of type \"Literal['critic']\" cannot be assigned to parameter \"key\" of type \"tuple[None, ...]\" in function \"__getitem__\" \"Literal['critic']\" is not assignable to \"tuple[None, ...]\"",
         "memorax/algorithms/rtrrl|error|reportArgumentType|Argument of type \"Literal['feature_extractor', 'torso']\" cannot be assigned to parameter \"key\" of type \"tuple[None, ...]\" in function \"__getitem__\" Type \"Literal['feature_extractor', 'torso']\" is not assignable to type \"tuple[None, ...]\" \"Literal['feature_extractor']\" is not assignable to \"tuple[None, ...]\"",
         "memorax/algorithms/rtrrl|error|reportArgumentType|Argument of type \"Literal['torso']\" cannot be assigned to parameter \"key\" of type \"tuple[None, ...]\" in function \"__getitem__\" \"Literal['torso']\" is not assignable to \"tuple[None, ...]\"",
+        "memorax/algorithms/rtrrl|error|reportArgumentType|Argument of type \"Literal['torso']\" cannot be assigned to parameter \"key\" of type \"tuple[None, ...]\" in function \"__getitem__\" \"Literal['torso']\" is not assignable to \"tuple[None, ...]\"",
+        "memorax/algorithms/rtrrl|error|reportArgumentType|Argument of type \"Literal['torso']\" cannot be assigned to parameter \"key\" of type \"tuple[None, ...]\" in function \"__getitem__\" \"Literal['torso']\" is not assignable to \"tuple[None, ...]\"",
+        "memorax/algorithms/rtrrl|error|reportArgumentType|Argument of type \"Literal['torso']\" cannot be assigned to parameter \"key\" of type \"tuple[None, ...]\" in function \"__getitem__\" \"Literal['torso']\" is not assignable to \"tuple[None, ...]\"",
+        "memorax/algorithms/rtrrl|error|reportArgumentType|Argument of type \"Literal['torso']\" cannot be assigned to parameter \"key\" of type \"tuple[None, ...]\" in function \"__getitem__\" \"Literal['torso']\" is not assignable to \"tuple[None, ...]\"",
         "memorax/algorithms/rtrrl|error|reportArgumentType|Argument of type \"dict[str, Unknown]\" cannot be assigned to parameter \"params\" of type \"FrozenDict[str, Any]\" in function \"__init__\" \"dict[str, Unknown]\" is not assignable to \"FrozenDict[str, Any]\"",
         "memorax/algorithms/rtrrl|error|reportArgumentType|Argument of type \"dict[str, Unknown]\" cannot be assigned to parameter \"transforms\" of type \"Mapping[Hashable, GradientTransformation]\" in function \"partition\" \"dict[str, Unknown]\" is not assignable to \"Mapping[Hashable, GradientTransformation]\" Type parameter \"_KT@Mapping\" is invariant, but \"str\" is not the same as \"Hashable\"",
         "memorax/algorithms/rtrrl|error|reportArgumentType|Argument of type \"tuple[int, None]\" cannot be assigned to parameter \"input_shape\" of type \"tuple[int, ...]\" in function \"initialize_carry\" \"tuple[int, None]\" is not assignable to \"tuple[int, ...]\" Tuple entry 1 is incorrect type Type \"int | None\" is not assignable to type \"int\" \"None\" is not assignable to \"int\"",
+        "memorax/algorithms/rtrrl|error|reportArgumentType|Argument of type \"tuple[int, None]\" cannot be assigned to parameter \"input_shape\" of type \"tuple[int, ...]\" in function \"initialize_carry\" \"tuple[int, None]\" is not assignable to \"tuple[int, ...]\" Tuple entry 1 is incorrect type Type \"int | None\" is not assignable to type \"int\" \"None\" is not assignable to \"int\"",
+        "memorax/algorithms/rtrrl|error|reportArgumentType|Argument of type \"tuple[int, None]\" cannot be assigned to parameter \"input_shape\" of type \"tuple[int, ...]\" in function \"initialize_sensitivity\" \"tuple[int, None]\" is not assignable to \"tuple[int, ...]\" Tuple entry 1 is incorrect type Type \"int | None\" is not assignable to type \"int\" \"None\" is not assignable to \"int\"",
         "memorax/algorithms/rtrrl|error|reportArgumentType|Argument of type \"tuple[int, None]\" cannot be assigned to parameter \"input_shape\" of type \"tuple[int, ...]\" in function \"initialize_sensitivity\" \"tuple[int, None]\" is not assignable to \"tuple[int, ...]\" Tuple entry 1 is incorrect type Type \"int | None\" is not assignable to type \"int\" \"None\" is not assignable to \"int\"",
         "memorax/algorithms/rtrrl|error|reportAssignmentType|Expression with type \"Any | tuple[Any, FrozenVariableDict | dict[str, Any]]\" cannot be assigned to target tuple Type \"tuple[Any, FrozenVariableDict | dict[str, Any]]\" is incompatible with target tuple Tuple size mismatch; expected 3 but received 2",
         "memorax/algorithms/rtrrl|error|reportAssignmentType|Type \"None\" is not assignable to declared type \"GradientTransformation\" \"None\" is not assignable to \"GradientTransformation\"",
         "memorax/algorithms/rtrrl|error|reportAssignmentType|Type \"None\" is not assignable to declared type \"Module\" \"None\" is not assignable to \"Module\"",
         "memorax/algorithms/rtrrl|error|reportAttributeAccessIssue|Cannot access attribute \"replace\" for class \"RTRRLState\" Attribute \"replace\" is unknown",
+        "memorax/algorithms/rtrrl|error|reportAttributeAccessIssue|Cannot access attribute \"replace\" for class \"RTRRLState\" Attribute \"replace\" is unknown",
+        "memorax/algorithms/rtrrl|error|reportAttributeAccessIssue|Cannot access attribute \"replace\" for class \"RTRRLState\" Attribute \"replace\" is unknown",
+        "memorax/algorithms/rtrrl|error|reportAttributeAccessIssue|Cannot access attribute \"replace\" for class \"RTRRLState\" Attribute \"replace\" is unknown",
+        "memorax/algorithms/rtrrl|error|reportCallIssue|No overloads for \"__getitem__\" match the provided arguments",
+        "memorax/algorithms/rtrrl|error|reportCallIssue|No overloads for \"__getitem__\" match the provided arguments",
+        "memorax/algorithms/rtrrl|error|reportCallIssue|No overloads for \"__getitem__\" match the provided arguments",
+        "memorax/algorithms/rtrrl|error|reportCallIssue|No overloads for \"__getitem__\" match the provided arguments",
+        "memorax/algorithms/rtrrl|error|reportCallIssue|No overloads for \"__getitem__\" match the provided arguments",
+        "memorax/algorithms/rtrrl|error|reportCallIssue|No overloads for \"__getitem__\" match the provided arguments",
+        "memorax/algorithms/rtrrl|error|reportCallIssue|No overloads for \"__getitem__\" match the provided arguments",
         "memorax/algorithms/rtrrl|error|reportCallIssue|No overloads for \"__getitem__\" match the provided arguments",
         "memorax/algorithms/rtrrl|error|reportIndexIssue|\"__getitem__\" method not defined on type \"Iterable[ArrayTree]\"",
+        "memorax/algorithms/rtrrl|error|reportIndexIssue|\"__getitem__\" method not defined on type \"Iterable[ArrayTree]\"",
+        "memorax/algorithms/rtrrl|error|reportIndexIssue|\"__getitem__\" method not defined on type \"Iterable[ArrayTree]\"",
+        "memorax/algorithms/rtrrl|error|reportIndexIssue|\"__getitem__\" method not defined on type \"Iterable[ArrayTree]\"",
+        "memorax/algorithms/rtrrl|error|reportIndexIssue|\"__getitem__\" method not defined on type \"Iterable[ArrayTree]\"",
+        "memorax/algorithms/rtrrl|error|reportIndexIssue|\"__getitem__\" method not defined on type \"Iterable[ArrayTree]\"",
+        "memorax/algorithms/rtrrl|error|reportIndexIssue|\"__getitem__\" method not defined on type \"Iterable[ArrayTree]\"",
+        "memorax/algorithms/rtrrl|error|reportIndexIssue|\"__getitem__\" method not defined on type \"Iterable[ArrayTree]\"",
+        "memorax/algorithms/rtrrl|error|reportIndexIssue|\"__getitem__\" method not defined on type \"bool\"",
+        "memorax/algorithms/rtrrl|error|reportIndexIssue|\"__getitem__\" method not defined on type \"bool\"",
+        "memorax/algorithms/rtrrl|error|reportIndexIssue|\"__getitem__\" method not defined on type \"bool\"",
+        "memorax/algorithms/rtrrl|error|reportIndexIssue|\"__getitem__\" method not defined on type \"bool\"",
+        "memorax/algorithms/rtrrl|error|reportIndexIssue|\"__getitem__\" method not defined on type \"bool\"",
+        "memorax/algorithms/rtrrl|error|reportIndexIssue|\"__getitem__\" method not defined on type \"bool\"",
+        "memorax/algorithms/rtrrl|error|reportIndexIssue|\"__getitem__\" method not defined on type \"bool\"",
         "memorax/algorithms/rtrrl|error|reportIndexIssue|\"__getitem__\" method not defined on type \"bool\"",
         "memorax/algorithms/rtrrl|error|reportIndexIssue|\"__getitem__\" method not defined on type \"complex\"",
+        "memorax/algorithms/rtrrl|error|reportIndexIssue|\"__getitem__\" method not defined on type \"complex\"",
+        "memorax/algorithms/rtrrl|error|reportIndexIssue|\"__getitem__\" method not defined on type \"complex\"",
+        "memorax/algorithms/rtrrl|error|reportIndexIssue|\"__getitem__\" method not defined on type \"complex\"",
+        "memorax/algorithms/rtrrl|error|reportIndexIssue|\"__getitem__\" method not defined on type \"complex\"",
+        "memorax/algorithms/rtrrl|error|reportIndexIssue|\"__getitem__\" method not defined on type \"complex\"",
+        "memorax/algorithms/rtrrl|error|reportIndexIssue|\"__getitem__\" method not defined on type \"complex\"",
+        "memorax/algorithms/rtrrl|error|reportIndexIssue|\"__getitem__\" method not defined on type \"complex\"",
+        "memorax/algorithms/rtrrl|error|reportIndexIssue|\"__getitem__\" method not defined on type \"float\"",
+        "memorax/algorithms/rtrrl|error|reportIndexIssue|\"__getitem__\" method not defined on type \"float\"",
+        "memorax/algorithms/rtrrl|error|reportIndexIssue|\"__getitem__\" method not defined on type \"float\"",
+        "memorax/algorithms/rtrrl|error|reportIndexIssue|\"__getitem__\" method not defined on type \"float\"",
+        "memorax/algorithms/rtrrl|error|reportIndexIssue|\"__getitem__\" method not defined on type \"float\"",
+        "memorax/algorithms/rtrrl|error|reportIndexIssue|\"__getitem__\" method not defined on type \"float\"",
+        "memorax/algorithms/rtrrl|error|reportIndexIssue|\"__getitem__\" method not defined on type \"float\"",
         "memorax/algorithms/rtrrl|error|reportIndexIssue|\"__getitem__\" method not defined on type \"float\"",
         "memorax/algorithms/rtrrl|error|reportIndexIssue|\"__getitem__\" method not defined on type \"int\"",
+        "memorax/algorithms/rtrrl|error|reportIndexIssue|\"__getitem__\" method not defined on type \"int\"",
+        "memorax/algorithms/rtrrl|error|reportIndexIssue|\"__getitem__\" method not defined on type \"int\"",
+        "memorax/algorithms/rtrrl|error|reportIndexIssue|\"__getitem__\" method not defined on type \"int\"",
+        "memorax/algorithms/rtrrl|error|reportIndexIssue|\"__getitem__\" method not defined on type \"int\"",
+        "memorax/algorithms/rtrrl|error|reportIndexIssue|\"__getitem__\" method not defined on type \"int\"",
+        "memorax/algorithms/rtrrl|error|reportIndexIssue|\"__getitem__\" method not defined on type \"int\"",
+        "memorax/algorithms/rtrrl|error|reportIndexIssue|\"__getitem__\" method not defined on type \"int\"",
         "memorax/algorithms/rtrrl|error|reportOptionalMemberAccess|\"ndim\" is not a known attribute of \"None\"",
+        "memorax/algorithms/rtrrl|error|reportOptionalMemberAccess|\"ndim\" is not a known attribute of \"None\"",
+        "memorax/algorithms/rtrrl|error|reportOptionalMemberAccess|\"ndim\" is not a known attribute of \"None\"",
+        "memorax/algorithms/rtrrl|error|reportOptionalMemberAccess|\"ndim\" is not a known attribute of \"None\"",
+        "memorax/algorithms/rtrrl|error|reportOptionalMemberAccess|\"shape\" is not a known attribute of \"None\"",
         "memorax/algorithms/rtrrl|error|reportOptionalMemberAccess|\"shape\" is not a known attribute of \"None\"",
         "tests/test_independent_rtrrl.py|error|reportMissingImports|Import \"base.experiment\" could not be resolved"
       ],
@@ -168,41 +375,185 @@
         "experiments/base/experiment.py|error|reportArgumentType|Argument of type \"str | None\" cannot be assigned to parameter \"aim_repo\" of type \"str\" in function \"with_logger\" Type \"str | None\" is not assignable to type \"str\" \"None\" is not assignable to \"str\"",
         "experiments/base/experiment.py|error|reportArgumentType|Argument of type \"str | None\" cannot be assigned to parameter \"logger_name\" of type \"str\" in function \"with_logger\" Type \"str | None\" is not assignable to type \"str\" \"None\" is not assignable to \"str\"",
         "experiments/base/experiment.py|error|reportAttributeAccessIssue|Cannot access attribute \"b1\" for class \"ExperimentConfig\" Attribute \"b1\" is unknown",
+        "experiments/base/experiment.py|error|reportAttributeAccessIssue|Cannot access attribute \"b1\" for class \"ExperimentConfig\" Attribute \"b1\" is unknown",
+        "experiments/base/experiment.py|error|reportAttributeAccessIssue|Cannot access attribute \"b2\" for class \"ExperimentConfig\" Attribute \"b2\" is unknown",
         "experiments/base/experiment.py|error|reportAttributeAccessIssue|Cannot access attribute \"b2\" for class \"ExperimentConfig\" Attribute \"b2\" is unknown",
         "experiments/base/experiment.py|error|reportAttributeAccessIssue|Cannot access attribute \"entropy_rate\" for class \"ExperimentConfig\" Attribute \"entropy_rate\" is unknown",
+        "experiments/base/experiment.py|error|reportAttributeAccessIssue|Cannot access attribute \"entropy_rate\" for class \"ExperimentConfig\" Attribute \"entropy_rate\" is unknown",
+        "experiments/base/experiment.py|error|reportAttributeAccessIssue|Cannot access attribute \"eta_f\" for class \"ExperimentConfig\" Attribute \"eta_f\" is unknown",
         "experiments/base/experiment.py|error|reportAttributeAccessIssue|Cannot access attribute \"eta_f\" for class \"ExperimentConfig\" Attribute \"eta_f\" is unknown",
         "experiments/base/experiment.py|error|reportAttributeAccessIssue|Cannot access attribute \"eta_pi\" for class \"ExperimentConfig\" Attribute \"eta_pi\" is unknown",
+        "experiments/base/experiment.py|error|reportAttributeAccessIssue|Cannot access attribute \"eta_pi\" for class \"ExperimentConfig\" Attribute \"eta_pi\" is unknown",
+        "experiments/base/experiment.py|error|reportAttributeAccessIssue|Cannot access attribute \"lambda_pi\" for class \"ExperimentConfig\" Attribute \"lambda_pi\" is unknown",
         "experiments/base/experiment.py|error|reportAttributeAccessIssue|Cannot access attribute \"lambda_pi\" for class \"ExperimentConfig\" Attribute \"lambda_pi\" is unknown",
         "experiments/base/experiment.py|error|reportAttributeAccessIssue|Cannot access attribute \"lambda_rnn\" for class \"ExperimentConfig\" Attribute \"lambda_rnn\" is unknown",
+        "experiments/base/experiment.py|error|reportAttributeAccessIssue|Cannot access attribute \"lambda_rnn\" for class \"ExperimentConfig\" Attribute \"lambda_rnn\" is unknown",
+        "experiments/base/experiment.py|error|reportAttributeAccessIssue|Cannot access attribute \"lambda_v\" for class \"ExperimentConfig\" Attribute \"lambda_v\" is unknown",
         "experiments/base/experiment.py|error|reportAttributeAccessIssue|Cannot access attribute \"lambda_v\" for class \"ExperimentConfig\" Attribute \"lambda_v\" is unknown",
         "experiments/base/experiment.py|error|reportAttributeAccessIssue|Cannot access attribute \"rnn_grad_clip\" for class \"ExperimentConfig\" Attribute \"rnn_grad_clip\" is unknown",
+        "experiments/base/experiment.py|error|reportAttributeAccessIssue|Cannot access attribute \"rnn_grad_clip\" for class \"ExperimentConfig\" Attribute \"rnn_grad_clip\" is unknown",
+        "experiments/base/experiment.py|error|reportAttributeAccessIssue|Cannot access attribute \"rnn_lr\" for class \"ExperimentConfig\" Attribute \"rnn_lr\" is unknown",
         "experiments/base/experiment.py|error|reportAttributeAccessIssue|Cannot access attribute \"rnn_lr\" for class \"ExperimentConfig\" Attribute \"rnn_lr\" is unknown",
         "experiments/base/experiment.py|error|reportAttributeAccessIssue|Cannot access attribute \"td_lr\" for class \"ExperimentConfig\" Attribute \"td_lr\" is unknown",
+        "experiments/base/experiment.py|error|reportAttributeAccessIssue|Cannot access attribute \"td_lr\" for class \"ExperimentConfig\" Attribute \"td_lr\" is unknown",
+        "experiments/base/experiment.py|error|reportAttributeAccessIssue|Cannot access attribute \"update_period\" for class \"ExperimentConfig\" Attribute \"update_period\" is unknown",
         "experiments/base/experiment.py|error|reportAttributeAccessIssue|Cannot access attribute \"update_period\" for class \"ExperimentConfig\" Attribute \"update_period\" is unknown",
         "experiments/base/experiment.py|error|reportCallIssue|No overloads for \"randint\" match the provided arguments",
+        "memorax/algorithms/independent_rtrrl.py|error|reportArgumentType|Argument of type \"Literal['torso']\" cannot be assigned to parameter \"key\" of type \"tuple[None, ...]\" in function \"__getitem__\" \"Literal['torso']\" is not assignable to \"tuple[None, ...]\"",
+        "memorax/algorithms/independent_rtrrl.py|error|reportArgumentType|Argument of type \"Literal['torso']\" cannot be assigned to parameter \"key\" of type \"tuple[None, ...]\" in function \"__getitem__\" \"Literal['torso']\" is not assignable to \"tuple[None, ...]\"",
+        "memorax/algorithms/independent_rtrrl.py|error|reportArgumentType|Argument of type \"Literal['torso']\" cannot be assigned to parameter \"key\" of type \"tuple[None, ...]\" in function \"__getitem__\" \"Literal['torso']\" is not assignable to \"tuple[None, ...]\"",
+        "memorax/algorithms/independent_rtrrl.py|error|reportArgumentType|Argument of type \"Literal['torso']\" cannot be assigned to parameter \"key\" of type \"tuple[None, ...]\" in function \"__getitem__\" \"Literal['torso']\" is not assignable to \"tuple[None, ...]\"",
+        "memorax/algorithms/independent_rtrrl.py|error|reportArgumentType|Argument of type \"Literal['torso']\" cannot be assigned to parameter \"key\" of type \"tuple[None, ...]\" in function \"__getitem__\" \"Literal['torso']\" is not assignable to \"tuple[None, ...]\"",
+        "memorax/algorithms/independent_rtrrl.py|error|reportArgumentType|Argument of type \"Literal['torso']\" cannot be assigned to parameter \"key\" of type \"tuple[None, ...]\" in function \"__getitem__\" \"Literal['torso']\" is not assignable to \"tuple[None, ...]\"",
+        "memorax/algorithms/independent_rtrrl.py|error|reportArgumentType|Argument of type \"dict[str, Unknown]\" cannot be assigned to parameter \"actor_params\" of type \"FrozenDict[str, Any]\" in function \"__init__\" \"dict[str, Unknown]\" is not assignable to \"FrozenDict[str, Any]\"",
+        "memorax/algorithms/independent_rtrrl.py|error|reportArgumentType|Argument of type \"dict[str, Unknown]\" cannot be assigned to parameter \"critic_params\" of type \"FrozenDict[str, Any]\" in function \"__init__\" \"dict[str, Unknown]\" is not assignable to \"FrozenDict[str, Any]\"",
+        "memorax/algorithms/independent_rtrrl.py|error|reportArgumentType|Argument of type \"tuple[int, None]\" cannot be assigned to parameter \"input_shape\" of type \"tuple[int, ...]\" in function \"initialize_carry\" \"tuple[int, None]\" is not assignable to \"tuple[int, ...]\" Tuple entry 1 is incorrect type Type \"int | None\" is not assignable to type \"int\" \"None\" is not assignable to \"int\"",
+        "memorax/algorithms/independent_rtrrl.py|error|reportArgumentType|Argument of type \"tuple[int, None]\" cannot be assigned to parameter \"input_shape\" of type \"tuple[int, ...]\" in function \"initialize_carry\" \"tuple[int, None]\" is not assignable to \"tuple[int, ...]\" Tuple entry 1 is incorrect type Type \"int | None\" is not assignable to type \"int\" \"None\" is not assignable to \"int\"",
+        "memorax/algorithms/independent_rtrrl.py|error|reportArgumentType|Argument of type \"tuple[int, None]\" cannot be assigned to parameter \"input_shape\" of type \"tuple[int, ...]\" in function \"initialize_carry\" \"tuple[int, None]\" is not assignable to \"tuple[int, ...]\" Tuple entry 1 is incorrect type Type \"int | None\" is not assignable to type \"int\" \"None\" is not assignable to \"int\"",
+        "memorax/algorithms/independent_rtrrl.py|error|reportArgumentType|Argument of type \"tuple[int, None]\" cannot be assigned to parameter \"input_shape\" of type \"tuple[int, ...]\" in function \"initialize_carry\" \"tuple[int, None]\" is not assignable to \"tuple[int, ...]\" Tuple entry 1 is incorrect type Type \"int | None\" is not assignable to type \"int\" \"None\" is not assignable to \"int\"",
+        "memorax/algorithms/independent_rtrrl.py|error|reportArgumentType|Argument of type \"tuple[int, None]\" cannot be assigned to parameter \"input_shape\" of type \"tuple[int, ...]\" in function \"initialize_sensitivity\" \"tuple[int, None]\" is not assignable to \"tuple[int, ...]\" Tuple entry 1 is incorrect type Type \"int | None\" is not assignable to type \"int\" \"None\" is not assignable to \"int\"",
+        "memorax/algorithms/independent_rtrrl.py|error|reportArgumentType|Argument of type \"tuple[int, None]\" cannot be assigned to parameter \"input_shape\" of type \"tuple[int, ...]\" in function \"initialize_sensitivity\" \"tuple[int, None]\" is not assignable to \"tuple[int, ...]\" Tuple entry 1 is incorrect type Type \"int | None\" is not assignable to type \"int\" \"None\" is not assignable to \"int\"",
+        "memorax/algorithms/independent_rtrrl.py|error|reportAssignmentType|Expression with type \"Any | tuple[Any, FrozenVariableDict | dict[str, Any]]\" cannot be assigned to target tuple Type \"tuple[Any, FrozenVariableDict | dict[str, Any]]\" is incompatible with target tuple Tuple size mismatch; expected 3 but received 2",
+        "memorax/algorithms/independent_rtrrl.py|error|reportAssignmentType|Type \"None\" is not assignable to declared type \"GradientTransformation\" \"None\" is not assignable to \"GradientTransformation\"",
+        "memorax/algorithms/independent_rtrrl.py|error|reportAssignmentType|Type \"None\" is not assignable to declared type \"GradientTransformation\" \"None\" is not assignable to \"GradientTransformation\"",
+        "memorax/algorithms/independent_rtrrl.py|error|reportAttributeAccessIssue|Cannot access attribute \"replace\" for class \"IndependentRTRRLState\" Attribute \"replace\" is unknown",
+        "memorax/algorithms/independent_rtrrl.py|error|reportAttributeAccessIssue|Cannot access attribute \"replace\" for class \"IndependentRTRRLState\" Attribute \"replace\" is unknown",
+        "memorax/algorithms/independent_rtrrl.py|error|reportCallIssue|No overloads for \"__getitem__\" match the provided arguments",
+        "memorax/algorithms/independent_rtrrl.py|error|reportCallIssue|No overloads for \"__getitem__\" match the provided arguments",
+        "memorax/algorithms/independent_rtrrl.py|error|reportCallIssue|No overloads for \"__getitem__\" match the provided arguments",
+        "memorax/algorithms/independent_rtrrl.py|error|reportCallIssue|No overloads for \"__getitem__\" match the provided arguments",
+        "memorax/algorithms/independent_rtrrl.py|error|reportCallIssue|No overloads for \"__getitem__\" match the provided arguments",
+        "memorax/algorithms/independent_rtrrl.py|error|reportCallIssue|No overloads for \"__getitem__\" match the provided arguments",
+        "memorax/algorithms/independent_rtrrl.py|error|reportIndexIssue|\"__getitem__\" method not defined on type \"Iterable[ArrayTree]\"",
+        "memorax/algorithms/independent_rtrrl.py|error|reportIndexIssue|\"__getitem__\" method not defined on type \"Iterable[ArrayTree]\"",
+        "memorax/algorithms/independent_rtrrl.py|error|reportIndexIssue|\"__getitem__\" method not defined on type \"Iterable[ArrayTree]\"",
+        "memorax/algorithms/independent_rtrrl.py|error|reportIndexIssue|\"__getitem__\" method not defined on type \"Iterable[ArrayTree]\"",
+        "memorax/algorithms/independent_rtrrl.py|error|reportIndexIssue|\"__getitem__\" method not defined on type \"Iterable[ArrayTree]\"",
+        "memorax/algorithms/independent_rtrrl.py|error|reportIndexIssue|\"__getitem__\" method not defined on type \"Iterable[ArrayTree]\"",
+        "memorax/algorithms/independent_rtrrl.py|error|reportIndexIssue|\"__getitem__\" method not defined on type \"bool\"",
+        "memorax/algorithms/independent_rtrrl.py|error|reportIndexIssue|\"__getitem__\" method not defined on type \"bool\"",
+        "memorax/algorithms/independent_rtrrl.py|error|reportIndexIssue|\"__getitem__\" method not defined on type \"bool\"",
+        "memorax/algorithms/independent_rtrrl.py|error|reportIndexIssue|\"__getitem__\" method not defined on type \"bool\"",
+        "memorax/algorithms/independent_rtrrl.py|error|reportIndexIssue|\"__getitem__\" method not defined on type \"bool\"",
+        "memorax/algorithms/independent_rtrrl.py|error|reportIndexIssue|\"__getitem__\" method not defined on type \"bool\"",
+        "memorax/algorithms/independent_rtrrl.py|error|reportIndexIssue|\"__getitem__\" method not defined on type \"complex\"",
+        "memorax/algorithms/independent_rtrrl.py|error|reportIndexIssue|\"__getitem__\" method not defined on type \"complex\"",
+        "memorax/algorithms/independent_rtrrl.py|error|reportIndexIssue|\"__getitem__\" method not defined on type \"complex\"",
+        "memorax/algorithms/independent_rtrrl.py|error|reportIndexIssue|\"__getitem__\" method not defined on type \"complex\"",
+        "memorax/algorithms/independent_rtrrl.py|error|reportIndexIssue|\"__getitem__\" method not defined on type \"complex\"",
+        "memorax/algorithms/independent_rtrrl.py|error|reportIndexIssue|\"__getitem__\" method not defined on type \"complex\"",
+        "memorax/algorithms/independent_rtrrl.py|error|reportIndexIssue|\"__getitem__\" method not defined on type \"float\"",
+        "memorax/algorithms/independent_rtrrl.py|error|reportIndexIssue|\"__getitem__\" method not defined on type \"float\"",
+        "memorax/algorithms/independent_rtrrl.py|error|reportIndexIssue|\"__getitem__\" method not defined on type \"float\"",
+        "memorax/algorithms/independent_rtrrl.py|error|reportIndexIssue|\"__getitem__\" method not defined on type \"float\"",
+        "memorax/algorithms/independent_rtrrl.py|error|reportIndexIssue|\"__getitem__\" method not defined on type \"float\"",
+        "memorax/algorithms/independent_rtrrl.py|error|reportIndexIssue|\"__getitem__\" method not defined on type \"float\"",
+        "memorax/algorithms/independent_rtrrl.py|error|reportIndexIssue|\"__getitem__\" method not defined on type \"int\"",
+        "memorax/algorithms/independent_rtrrl.py|error|reportIndexIssue|\"__getitem__\" method not defined on type \"int\"",
+        "memorax/algorithms/independent_rtrrl.py|error|reportIndexIssue|\"__getitem__\" method not defined on type \"int\"",
+        "memorax/algorithms/independent_rtrrl.py|error|reportIndexIssue|\"__getitem__\" method not defined on type \"int\"",
+        "memorax/algorithms/independent_rtrrl.py|error|reportIndexIssue|\"__getitem__\" method not defined on type \"int\"",
+        "memorax/algorithms/independent_rtrrl.py|error|reportIndexIssue|\"__getitem__\" method not defined on type \"int\"",
+        "memorax/algorithms/independent_rtrrl.py|error|reportOptionalMemberAccess|\"ndim\" is not a known attribute of \"None\"",
+        "memorax/algorithms/independent_rtrrl.py|error|reportOptionalMemberAccess|\"ndim\" is not a known attribute of \"None\"",
+        "memorax/algorithms/rtrrl|error|reportArgumentType|Argument of type \"Array | None\" cannot be assigned to parameter \"action\" of type \"Array\" in function \"_forward\" Type \"Array | None\" is not assignable to type \"Array\" \"None\" is not assignable to \"Array\"",
+        "memorax/algorithms/rtrrl|error|reportArgumentType|Argument of type \"Array | None\" cannot be assigned to parameter \"action\" of type \"Array\" in function \"_forward\" Type \"Array | None\" is not assignable to type \"Array\" \"None\" is not assignable to \"Array\"",
+        "memorax/algorithms/rtrrl|error|reportArgumentType|Argument of type \"Array | None\" cannot be assigned to parameter \"action\" of type \"Array\" in function \"_forward\" Type \"Array | None\" is not assignable to type \"Array\" \"None\" is not assignable to \"Array\"",
+        "memorax/algorithms/rtrrl|error|reportArgumentType|Argument of type \"Array | None\" cannot be assigned to parameter \"action\" of type \"Array\" in function \"_forward\" Type \"Array | None\" is not assignable to type \"Array\" \"None\" is not assignable to \"Array\"",
+        "memorax/algorithms/rtrrl|error|reportArgumentType|Argument of type \"Array | None\" cannot be assigned to parameter \"action\" of type \"Array\" in function \"_forward\" Type \"Array | None\" is not assignable to type \"Array\" \"None\" is not assignable to \"Array\"",
         "memorax/algorithms/rtrrl|error|reportArgumentType|Argument of type \"Array | None\" cannot be assigned to parameter \"action\" of type \"Array\" in function \"_forward\" Type \"Array | None\" is not assignable to type \"Array\" \"None\" is not assignable to \"Array\"",
         "memorax/algorithms/rtrrl|error|reportArgumentType|Argument of type \"Array | None\" cannot be assigned to parameter \"done\" of type \"Array\" in function \"_forward\" Type \"Array | None\" is not assignable to type \"Array\" \"None\" is not assignable to \"Array\"",
+        "memorax/algorithms/rtrrl|error|reportArgumentType|Argument of type \"Array | None\" cannot be assigned to parameter \"done\" of type \"Array\" in function \"_forward\" Type \"Array | None\" is not assignable to type \"Array\" \"None\" is not assignable to \"Array\"",
+        "memorax/algorithms/rtrrl|error|reportArgumentType|Argument of type \"Array | None\" cannot be assigned to parameter \"done\" of type \"Array\" in function \"_forward\" Type \"Array | None\" is not assignable to type \"Array\" \"None\" is not assignable to \"Array\"",
+        "memorax/algorithms/rtrrl|error|reportArgumentType|Argument of type \"Array | None\" cannot be assigned to parameter \"done\" of type \"Array\" in function \"_forward\" Type \"Array | None\" is not assignable to type \"Array\" \"None\" is not assignable to \"Array\"",
+        "memorax/algorithms/rtrrl|error|reportArgumentType|Argument of type \"Array | None\" cannot be assigned to parameter \"done\" of type \"Array\" in function \"_forward\" Type \"Array | None\" is not assignable to type \"Array\" \"None\" is not assignable to \"Array\"",
+        "memorax/algorithms/rtrrl|error|reportArgumentType|Argument of type \"Array | None\" cannot be assigned to parameter \"done\" of type \"Array\" in function \"_forward\" Type \"Array | None\" is not assignable to type \"Array\" \"None\" is not assignable to \"Array\"",
         "memorax/algorithms/rtrrl|error|reportArgumentType|Argument of type \"Array | None\" cannot be assigned to parameter \"obs\" of type \"Array\" in function \"_forward\" Type \"Array | None\" is not assignable to type \"Array\" \"None\" is not assignable to \"Array\"",
+        "memorax/algorithms/rtrrl|error|reportArgumentType|Argument of type \"Array | None\" cannot be assigned to parameter \"obs\" of type \"Array\" in function \"_forward\" Type \"Array | None\" is not assignable to type \"Array\" \"None\" is not assignable to \"Array\"",
+        "memorax/algorithms/rtrrl|error|reportArgumentType|Argument of type \"Array | None\" cannot be assigned to parameter \"obs\" of type \"Array\" in function \"_forward\" Type \"Array | None\" is not assignable to type \"Array\" \"None\" is not assignable to \"Array\"",
+        "memorax/algorithms/rtrrl|error|reportArgumentType|Argument of type \"Array | None\" cannot be assigned to parameter \"obs\" of type \"Array\" in function \"_forward\" Type \"Array | None\" is not assignable to type \"Array\" \"None\" is not assignable to \"Array\"",
+        "memorax/algorithms/rtrrl|error|reportArgumentType|Argument of type \"Array | None\" cannot be assigned to parameter \"obs\" of type \"Array\" in function \"_forward\" Type \"Array | None\" is not assignable to type \"Array\" \"None\" is not assignable to \"Array\"",
+        "memorax/algorithms/rtrrl|error|reportArgumentType|Argument of type \"Array | None\" cannot be assigned to parameter \"obs\" of type \"Array\" in function \"_forward\" Type \"Array | None\" is not assignable to type \"Array\" \"None\" is not assignable to \"Array\"",
+        "memorax/algorithms/rtrrl|error|reportArgumentType|Argument of type \"Array | None\" cannot be assigned to parameter \"reward\" of type \"Array\" in function \"_forward\" Type \"Array | None\" is not assignable to type \"Array\" \"None\" is not assignable to \"Array\"",
+        "memorax/algorithms/rtrrl|error|reportArgumentType|Argument of type \"Array | None\" cannot be assigned to parameter \"reward\" of type \"Array\" in function \"_forward\" Type \"Array | None\" is not assignable to type \"Array\" \"None\" is not assignable to \"Array\"",
+        "memorax/algorithms/rtrrl|error|reportArgumentType|Argument of type \"Array | None\" cannot be assigned to parameter \"reward\" of type \"Array\" in function \"_forward\" Type \"Array | None\" is not assignable to type \"Array\" \"None\" is not assignable to \"Array\"",
+        "memorax/algorithms/rtrrl|error|reportArgumentType|Argument of type \"Array | None\" cannot be assigned to parameter \"reward\" of type \"Array\" in function \"_forward\" Type \"Array | None\" is not assignable to type \"Array\" \"None\" is not assignable to \"Array\"",
+        "memorax/algorithms/rtrrl|error|reportArgumentType|Argument of type \"Array | None\" cannot be assigned to parameter \"reward\" of type \"Array\" in function \"_forward\" Type \"Array | None\" is not assignable to type \"Array\" \"None\" is not assignable to \"Array\"",
         "memorax/algorithms/rtrrl|error|reportArgumentType|Argument of type \"Array | None\" cannot be assigned to parameter \"reward\" of type \"Array\" in function \"_forward\" Type \"Array | None\" is not assignable to type \"Array\" \"None\" is not assignable to \"Array\"",
         "memorax/algorithms/rtrrl|error|reportArgumentType|Argument of type \"Literal['actor']\" cannot be assigned to parameter \"key\" of type \"tuple[None, ...]\" in function \"__getitem__\" \"Literal['actor']\" is not assignable to \"tuple[None, ...]\"",
         "memorax/algorithms/rtrrl|error|reportArgumentType|Argument of type \"Literal['critic']\" cannot be assigned to parameter \"key\" of type \"tuple[None, ...]\" in function \"__getitem__\" \"Literal['critic']\" is not assignable to \"tuple[None, ...]\"",
         "memorax/algorithms/rtrrl|error|reportArgumentType|Argument of type \"Literal['feature_extractor', 'torso']\" cannot be assigned to parameter \"key\" of type \"tuple[None, ...]\" in function \"__getitem__\" Type \"Literal['feature_extractor', 'torso']\" is not assignable to type \"tuple[None, ...]\" \"Literal['feature_extractor']\" is not assignable to \"tuple[None, ...]\"",
         "memorax/algorithms/rtrrl|error|reportArgumentType|Argument of type \"Literal['torso']\" cannot be assigned to parameter \"key\" of type \"tuple[None, ...]\" in function \"__getitem__\" \"Literal['torso']\" is not assignable to \"tuple[None, ...]\"",
+        "memorax/algorithms/rtrrl|error|reportArgumentType|Argument of type \"Literal['torso']\" cannot be assigned to parameter \"key\" of type \"tuple[None, ...]\" in function \"__getitem__\" \"Literal['torso']\" is not assignable to \"tuple[None, ...]\"",
+        "memorax/algorithms/rtrrl|error|reportArgumentType|Argument of type \"Literal['torso']\" cannot be assigned to parameter \"key\" of type \"tuple[None, ...]\" in function \"__getitem__\" \"Literal['torso']\" is not assignable to \"tuple[None, ...]\"",
+        "memorax/algorithms/rtrrl|error|reportArgumentType|Argument of type \"Literal['torso']\" cannot be assigned to parameter \"key\" of type \"tuple[None, ...]\" in function \"__getitem__\" \"Literal['torso']\" is not assignable to \"tuple[None, ...]\"",
+        "memorax/algorithms/rtrrl|error|reportArgumentType|Argument of type \"Literal['torso']\" cannot be assigned to parameter \"key\" of type \"tuple[None, ...]\" in function \"__getitem__\" \"Literal['torso']\" is not assignable to \"tuple[None, ...]\"",
         "memorax/algorithms/rtrrl|error|reportArgumentType|Argument of type \"dict[str, Unknown]\" cannot be assigned to parameter \"params\" of type \"FrozenDict[str, Any]\" in function \"__init__\" \"dict[str, Unknown]\" is not assignable to \"FrozenDict[str, Any]\"",
         "memorax/algorithms/rtrrl|error|reportArgumentType|Argument of type \"dict[str, Unknown]\" cannot be assigned to parameter \"transforms\" of type \"Mapping[Hashable, GradientTransformation]\" in function \"partition\" \"dict[str, Unknown]\" is not assignable to \"Mapping[Hashable, GradientTransformation]\" Type parameter \"_KT@Mapping\" is invariant, but \"str\" is not the same as \"Hashable\"",
         "memorax/algorithms/rtrrl|error|reportArgumentType|Argument of type \"tuple[int, None]\" cannot be assigned to parameter \"input_shape\" of type \"tuple[int, ...]\" in function \"initialize_carry\" \"tuple[int, None]\" is not assignable to \"tuple[int, ...]\" Tuple entry 1 is incorrect type Type \"int | None\" is not assignable to type \"int\" \"None\" is not assignable to \"int\"",
+        "memorax/algorithms/rtrrl|error|reportArgumentType|Argument of type \"tuple[int, None]\" cannot be assigned to parameter \"input_shape\" of type \"tuple[int, ...]\" in function \"initialize_carry\" \"tuple[int, None]\" is not assignable to \"tuple[int, ...]\" Tuple entry 1 is incorrect type Type \"int | None\" is not assignable to type \"int\" \"None\" is not assignable to \"int\"",
+        "memorax/algorithms/rtrrl|error|reportArgumentType|Argument of type \"tuple[int, None]\" cannot be assigned to parameter \"input_shape\" of type \"tuple[int, ...]\" in function \"initialize_sensitivity\" \"tuple[int, None]\" is not assignable to \"tuple[int, ...]\" Tuple entry 1 is incorrect type Type \"int | None\" is not assignable to type \"int\" \"None\" is not assignable to \"int\"",
         "memorax/algorithms/rtrrl|error|reportArgumentType|Argument of type \"tuple[int, None]\" cannot be assigned to parameter \"input_shape\" of type \"tuple[int, ...]\" in function \"initialize_sensitivity\" \"tuple[int, None]\" is not assignable to \"tuple[int, ...]\" Tuple entry 1 is incorrect type Type \"int | None\" is not assignable to type \"int\" \"None\" is not assignable to \"int\"",
         "memorax/algorithms/rtrrl|error|reportAssignmentType|Expression with type \"Any | tuple[Any, FrozenVariableDict | dict[str, Any]]\" cannot be assigned to target tuple Type \"tuple[Any, FrozenVariableDict | dict[str, Any]]\" is incompatible with target tuple Tuple size mismatch; expected 3 but received 2",
         "memorax/algorithms/rtrrl|error|reportAssignmentType|Type \"None\" is not assignable to declared type \"GradientTransformation\" \"None\" is not assignable to \"GradientTransformation\"",
         "memorax/algorithms/rtrrl|error|reportAssignmentType|Type \"None\" is not assignable to declared type \"Module\" \"None\" is not assignable to \"Module\"",
         "memorax/algorithms/rtrrl|error|reportAttributeAccessIssue|Cannot access attribute \"replace\" for class \"RTRRLState\" Attribute \"replace\" is unknown",
+        "memorax/algorithms/rtrrl|error|reportAttributeAccessIssue|Cannot access attribute \"replace\" for class \"RTRRLState\" Attribute \"replace\" is unknown",
+        "memorax/algorithms/rtrrl|error|reportAttributeAccessIssue|Cannot access attribute \"replace\" for class \"RTRRLState\" Attribute \"replace\" is unknown",
+        "memorax/algorithms/rtrrl|error|reportAttributeAccessIssue|Cannot access attribute \"replace\" for class \"RTRRLState\" Attribute \"replace\" is unknown",
+        "memorax/algorithms/rtrrl|error|reportCallIssue|No overloads for \"__getitem__\" match the provided arguments",
+        "memorax/algorithms/rtrrl|error|reportCallIssue|No overloads for \"__getitem__\" match the provided arguments",
+        "memorax/algorithms/rtrrl|error|reportCallIssue|No overloads for \"__getitem__\" match the provided arguments",
+        "memorax/algorithms/rtrrl|error|reportCallIssue|No overloads for \"__getitem__\" match the provided arguments",
+        "memorax/algorithms/rtrrl|error|reportCallIssue|No overloads for \"__getitem__\" match the provided arguments",
+        "memorax/algorithms/rtrrl|error|reportCallIssue|No overloads for \"__getitem__\" match the provided arguments",
+        "memorax/algorithms/rtrrl|error|reportCallIssue|No overloads for \"__getitem__\" match the provided arguments",
         "memorax/algorithms/rtrrl|error|reportCallIssue|No overloads for \"__getitem__\" match the provided arguments",
         "memorax/algorithms/rtrrl|error|reportIndexIssue|\"__getitem__\" method not defined on type \"Iterable[ArrayTree]\"",
+        "memorax/algorithms/rtrrl|error|reportIndexIssue|\"__getitem__\" method not defined on type \"Iterable[ArrayTree]\"",
+        "memorax/algorithms/rtrrl|error|reportIndexIssue|\"__getitem__\" method not defined on type \"Iterable[ArrayTree]\"",
+        "memorax/algorithms/rtrrl|error|reportIndexIssue|\"__getitem__\" method not defined on type \"Iterable[ArrayTree]\"",
+        "memorax/algorithms/rtrrl|error|reportIndexIssue|\"__getitem__\" method not defined on type \"Iterable[ArrayTree]\"",
+        "memorax/algorithms/rtrrl|error|reportIndexIssue|\"__getitem__\" method not defined on type \"Iterable[ArrayTree]\"",
+        "memorax/algorithms/rtrrl|error|reportIndexIssue|\"__getitem__\" method not defined on type \"Iterable[ArrayTree]\"",
+        "memorax/algorithms/rtrrl|error|reportIndexIssue|\"__getitem__\" method not defined on type \"Iterable[ArrayTree]\"",
+        "memorax/algorithms/rtrrl|error|reportIndexIssue|\"__getitem__\" method not defined on type \"bool\"",
+        "memorax/algorithms/rtrrl|error|reportIndexIssue|\"__getitem__\" method not defined on type \"bool\"",
+        "memorax/algorithms/rtrrl|error|reportIndexIssue|\"__getitem__\" method not defined on type \"bool\"",
+        "memorax/algorithms/rtrrl|error|reportIndexIssue|\"__getitem__\" method not defined on type \"bool\"",
+        "memorax/algorithms/rtrrl|error|reportIndexIssue|\"__getitem__\" method not defined on type \"bool\"",
+        "memorax/algorithms/rtrrl|error|reportIndexIssue|\"__getitem__\" method not defined on type \"bool\"",
+        "memorax/algorithms/rtrrl|error|reportIndexIssue|\"__getitem__\" method not defined on type \"bool\"",
         "memorax/algorithms/rtrrl|error|reportIndexIssue|\"__getitem__\" method not defined on type \"bool\"",
         "memorax/algorithms/rtrrl|error|reportIndexIssue|\"__getitem__\" method not defined on type \"complex\"",
+        "memorax/algorithms/rtrrl|error|reportIndexIssue|\"__getitem__\" method not defined on type \"complex\"",
+        "memorax/algorithms/rtrrl|error|reportIndexIssue|\"__getitem__\" method not defined on type \"complex\"",
+        "memorax/algorithms/rtrrl|error|reportIndexIssue|\"__getitem__\" method not defined on type \"complex\"",
+        "memorax/algorithms/rtrrl|error|reportIndexIssue|\"__getitem__\" method not defined on type \"complex\"",
+        "memorax/algorithms/rtrrl|error|reportIndexIssue|\"__getitem__\" method not defined on type \"complex\"",
+        "memorax/algorithms/rtrrl|error|reportIndexIssue|\"__getitem__\" method not defined on type \"complex\"",
+        "memorax/algorithms/rtrrl|error|reportIndexIssue|\"__getitem__\" method not defined on type \"complex\"",
+        "memorax/algorithms/rtrrl|error|reportIndexIssue|\"__getitem__\" method not defined on type \"float\"",
+        "memorax/algorithms/rtrrl|error|reportIndexIssue|\"__getitem__\" method not defined on type \"float\"",
+        "memorax/algorithms/rtrrl|error|reportIndexIssue|\"__getitem__\" method not defined on type \"float\"",
+        "memorax/algorithms/rtrrl|error|reportIndexIssue|\"__getitem__\" method not defined on type \"float\"",
+        "memorax/algorithms/rtrrl|error|reportIndexIssue|\"__getitem__\" method not defined on type \"float\"",
+        "memorax/algorithms/rtrrl|error|reportIndexIssue|\"__getitem__\" method not defined on type \"float\"",
+        "memorax/algorithms/rtrrl|error|reportIndexIssue|\"__getitem__\" method not defined on type \"float\"",
         "memorax/algorithms/rtrrl|error|reportIndexIssue|\"__getitem__\" method not defined on type \"float\"",
         "memorax/algorithms/rtrrl|error|reportIndexIssue|\"__getitem__\" method not defined on type \"int\"",
+        "memorax/algorithms/rtrrl|error|reportIndexIssue|\"__getitem__\" method not defined on type \"int\"",
+        "memorax/algorithms/rtrrl|error|reportIndexIssue|\"__getitem__\" method not defined on type \"int\"",
+        "memorax/algorithms/rtrrl|error|reportIndexIssue|\"__getitem__\" method not defined on type \"int\"",
+        "memorax/algorithms/rtrrl|error|reportIndexIssue|\"__getitem__\" method not defined on type \"int\"",
+        "memorax/algorithms/rtrrl|error|reportIndexIssue|\"__getitem__\" method not defined on type \"int\"",
+        "memorax/algorithms/rtrrl|error|reportIndexIssue|\"__getitem__\" method not defined on type \"int\"",
+        "memorax/algorithms/rtrrl|error|reportIndexIssue|\"__getitem__\" method not defined on type \"int\"",
         "memorax/algorithms/rtrrl|error|reportOptionalMemberAccess|\"ndim\" is not a known attribute of \"None\"",
+        "memorax/algorithms/rtrrl|error|reportOptionalMemberAccess|\"ndim\" is not a known attribute of \"None\"",
+        "memorax/algorithms/rtrrl|error|reportOptionalMemberAccess|\"ndim\" is not a known attribute of \"None\"",
+        "memorax/algorithms/rtrrl|error|reportOptionalMemberAccess|\"ndim\" is not a known attribute of \"None\"",
+        "memorax/algorithms/rtrrl|error|reportOptionalMemberAccess|\"shape\" is not a known attribute of \"None\"",
         "memorax/algorithms/rtrrl|error|reportOptionalMemberAccess|\"shape\" is not a known attribute of \"None\""
       ],
       "condition": "no_head_only_canonical_diagnostics",
@@ -214,6 +565,7 @@
     },
     "selected_online_ac": {
       "exit_code": 0,
+      "junit_valid": true,
       "passed": true
     }
   },
@@ -768,8 +1120,8 @@
     "interpretation": "structural AST evidence only; controlled objectives separately measure the numerical effect",
     "schema_version": 1
   },
-  "report_parent_sha": "b50100dc66305e4005bed93f3d1750df8b474862",
-  "review_fix_patch_sha256": "3ece46030ffd747a13d884273bac5b62b0e39c0c6b61f42c6697fc776625fdda",
+  "report_parent_sha": "517e07377b94df2018b0addfb2d99582a139aaf4",
+  "review_fix_patch_sha256": "cacf405d88a42563c2d0ff6bb3ae269017867ccef4fc002e44b5ad138d1197f2",
   "runs": {
     "brax_smoke": {
       "command": "PYTHONPATH=/tmp/head/memo /tmp/venv/bin/python -m tests.rtrrl_parity.task12_brax_smoke > /tmp/task12-results/brax_smoke.stdout.json",
@@ -780,11 +1132,18 @@
       },
       "exit_code": 0,
       "failures": [],
+      "junit": {
+        "counts": null,
+        "error": "missing",
+        "error_nodeids": [],
+        "failure_nodeids": [],
+        "valid": false
+      },
       "time": {
-        "elapsed": "0:22.34",
-        "peak_rss_kib": 1376552,
-        "system_seconds": 2.42,
-        "user_seconds": 33.17
+        "elapsed": "0:22.07",
+        "peak_rss_kib": 1379832,
+        "system_seconds": 2.22,
+        "user_seconds": 33.27
       },
       "working_directory": "/tmp/head/memo"
     },
@@ -795,11 +1154,18 @@
       "environment": {},
       "exit_code": 0,
       "failures": [],
+      "junit": {
+        "counts": null,
+        "error": "missing",
+        "error_nodeids": [],
+        "failure_nodeids": [],
+        "valid": false
+      },
       "time": {
         "elapsed": "0:00.12",
-        "peak_rss_kib": 16352,
-        "system_seconds": 0.01,
-        "user_seconds": 0.1
+        "peak_rss_kib": 16296,
+        "system_seconds": 0.0,
+        "user_seconds": 0.11
       },
       "working_directory": "/tmp/head"
     },
@@ -818,11 +1184,23 @@
       },
       "exit_code": 0,
       "failures": [],
+      "junit": {
+        "counts": {
+          "errors": 0,
+          "failures": 0,
+          "skipped": 0,
+          "tests": 5
+        },
+        "error": null,
+        "error_nodeids": [],
+        "failure_nodeids": [],
+        "valid": true
+      },
       "time": {
-        "elapsed": "0:04.80",
-        "peak_rss_kib": 466508,
-        "system_seconds": 0.49,
-        "user_seconds": 5.6
+        "elapsed": "0:04.82",
+        "peak_rss_kib": 466348,
+        "system_seconds": 0.42,
+        "user_seconds": 5.74
       },
       "working_directory": "/tmp/head/memo"
     },
@@ -840,11 +1218,23 @@
       },
       "exit_code": 0,
       "failures": [],
+      "junit": {
+        "counts": {
+          "errors": 0,
+          "failures": 0,
+          "skipped": 0,
+          "tests": 11
+        },
+        "error": null,
+        "error_nodeids": [],
+        "failure_nodeids": [],
+        "valid": true
+      },
       "time": {
         "elapsed": "0:22.64",
-        "peak_rss_kib": 1480832,
-        "system_seconds": 2.39,
-        "user_seconds": 23.73
+        "peak_rss_kib": 1473480,
+        "system_seconds": 2.07,
+        "user_seconds": 24.04
       },
       "working_directory": "/tmp/head/memo"
     },
@@ -857,11 +1247,18 @@
       },
       "exit_code": 0,
       "failures": [],
+      "junit": {
+        "counts": null,
+        "error": "missing",
+        "error_nodeids": [],
+        "failure_nodeids": [],
+        "valid": false
+      },
       "time": {
-        "elapsed": "0:12.41",
-        "peak_rss_kib": 1080152,
-        "system_seconds": 0.71,
-        "user_seconds": 15.32
+        "elapsed": "0:12.28",
+        "peak_rss_kib": 1074156,
+        "system_seconds": 0.95,
+        "user_seconds": 14.94
       },
       "working_directory": "/tmp/head/memo"
     },
@@ -881,11 +1278,25 @@
       "failures": [
         "tests/online_ac/test_standard_parity.py::test_standard_one_step_matches_legacy_every_exposed_leaf"
       ],
+      "junit": {
+        "counts": {
+          "errors": 0,
+          "failures": 1,
+          "skipped": 0,
+          "tests": 106
+        },
+        "error": null,
+        "error_nodeids": [],
+        "failure_nodeids": [
+          "tests/online_ac/test_standard_parity.py::test_standard_one_step_matches_legacy_every_exposed_leaf"
+        ],
+        "valid": true
+      },
       "time": {
-        "elapsed": "3:35.59",
-        "peak_rss_kib": 5041708,
-        "system_seconds": 23.97,
-        "user_seconds": 315.33
+        "elapsed": "3:34.74",
+        "peak_rss_kib": 5038164,
+        "system_seconds": 23.02,
+        "user_seconds": 314.61
       },
       "working_directory": "/tmp/base/memo"
     },
@@ -905,11 +1316,25 @@
       "failures": [
         "tests/online_ac/test_standard_parity.py::test_standard_one_step_matches_legacy_every_exposed_leaf"
       ],
+      "junit": {
+        "counts": {
+          "errors": 0,
+          "failures": 1,
+          "skipped": 0,
+          "tests": 113
+        },
+        "error": null,
+        "error_nodeids": [],
+        "failure_nodeids": [
+          "tests/online_ac/test_standard_parity.py::test_standard_one_step_matches_legacy_every_exposed_leaf"
+        ],
+        "valid": true
+      },
       "time": {
-        "elapsed": "3:37.24",
-        "peak_rss_kib": 5126092,
-        "system_seconds": 23.42,
-        "user_seconds": 325.53
+        "elapsed": "3:36.66",
+        "peak_rss_kib": 5128076,
+        "system_seconds": 23.37,
+        "user_seconds": 325.63
       },
       "working_directory": "/tmp/head/memo"
     },
@@ -923,11 +1348,18 @@
       },
       "exit_code": 0,
       "failures": [],
+      "junit": {
+        "counts": null,
+        "error": "missing",
+        "error_nodeids": [],
+        "failure_nodeids": [],
+        "valid": false
+      },
       "time": {
-        "elapsed": "0:02.38",
-        "peak_rss_kib": 362608,
-        "system_seconds": 0.36,
-        "user_seconds": 3.57
+        "elapsed": "0:02.27",
+        "peak_rss_kib": 363200,
+        "system_seconds": 0.2,
+        "user_seconds": 3.76
       },
       "working_directory": "/tmp/head"
     },
@@ -938,11 +1370,18 @@
       "environment": {},
       "exit_code": 0,
       "failures": [],
+      "junit": {
+        "counts": null,
+        "error": "missing",
+        "error_nodeids": [],
+        "failure_nodeids": [],
+        "valid": false
+      },
       "time": {
         "elapsed": "0:00.08",
-        "peak_rss_kib": 29600,
-        "system_seconds": 0.02,
-        "user_seconds": 0.35
+        "peak_rss_kib": 29580,
+        "system_seconds": 0.01,
+        "user_seconds": 0.42
       },
       "working_directory": "/tmp/head"
     },
@@ -956,11 +1395,18 @@
       },
       "exit_code": 0,
       "failures": [],
+      "junit": {
+        "counts": null,
+        "error": "missing",
+        "error_nodeids": [],
+        "failure_nodeids": [],
+        "valid": false
+      },
       "time": {
-        "elapsed": "0:02.38",
-        "peak_rss_kib": 367352,
-        "system_seconds": 0.23,
-        "user_seconds": 3.71
+        "elapsed": "0:02.32",
+        "peak_rss_kib": 367512,
+        "system_seconds": 0.29,
+        "user_seconds": 3.75
       },
       "working_directory": "/tmp/head"
     },
@@ -975,11 +1421,18 @@
       "environment": {},
       "exit_code": 1,
       "failures": [],
+      "junit": {
+        "counts": null,
+        "error": "missing",
+        "error_nodeids": [],
+        "failure_nodeids": [],
+        "valid": false
+      },
       "time": {
-        "elapsed": "0:06.68",
-        "peak_rss_kib": 860700,
-        "system_seconds": 0.7,
-        "user_seconds": 11.15
+        "elapsed": "0:06.91",
+        "peak_rss_kib": 877788,
+        "system_seconds": 0.59,
+        "user_seconds": 11.61
       },
       "working_directory": "/tmp/base/memo"
     },
@@ -987,42 +1440,56 @@
       "command": "/tmp/venv/bin/pyright --outputjson",
       "counts": null,
       "diagnostic_summary": {
-        "errors": 480,
+        "errors": 512,
         "informations": 0,
         "warnings": 2
       },
       "environment": {},
       "exit_code": 1,
       "failures": [],
+      "junit": {
+        "counts": null,
+        "error": "missing",
+        "error_nodeids": [],
+        "failure_nodeids": [],
+        "valid": false
+      },
       "time": {
-        "elapsed": "0:11.72",
-        "peak_rss_kib": 967632,
-        "system_seconds": 2.3,
-        "user_seconds": 14.98
+        "elapsed": "0:12.35",
+        "peak_rss_kib": 969184,
+        "system_seconds": 2.08,
+        "user_seconds": 15.36
       },
       "working_directory": "/tmp/head/memo"
     },
     "pyright_review_base": {
-      "command": "/tmp/venv/bin/pyright --outputjson experiments/base/experiment.py memorax/__init__.py memorax/algorithms/__init__.py memorax/algorithms/rtrrl.py tests/test_independent_rtrrl.py",
+      "command": "/tmp/venv/bin/pyright --outputjson experiments/base/experiment.py experiments/rtrrl_hopper/run.py memorax/__init__.py memorax/algorithms/__init__.py memorax/algorithms/independent_rtrrl.py memorax/algorithms/rtrrl.py memorax/online_ac tests/online_ac tests/test_independent_rtrrl.py",
       "counts": null,
       "diagnostic_summary": {
-        "errors": 133,
+        "errors": 190,
         "informations": 0,
         "warnings": 0
       },
       "environment": {},
       "exit_code": 1,
       "failures": [],
+      "junit": {
+        "counts": null,
+        "error": "missing",
+        "error_nodeids": [],
+        "failure_nodeids": [],
+        "valid": false
+      },
       "time": {
-        "elapsed": "0:02.16",
-        "peak_rss_kib": 470504,
-        "system_seconds": 0.39,
-        "user_seconds": 3.51
+        "elapsed": "0:03.43",
+        "peak_rss_kib": 601768,
+        "system_seconds": 0.35,
+        "user_seconds": 5.74
       },
       "working_directory": "/tmp/base/memo"
     },
     "pyright_review_head": {
-      "command": "/tmp/venv/bin/pyright --outputjson experiments/base/experiment.py memorax/__init__.py memorax/algorithms/__init__.py memorax/algorithms/rtrrl/__init__.py tests/test_independent_rtrrl.py",
+      "command": "/tmp/venv/bin/pyright --outputjson experiments/base/experiment.py experiments/rtrrl_hopper/run.py memorax/__init__.py memorax/algorithms/__init__.py memorax/algorithms/independent_rtrrl.py memorax/algorithms/rtrrl memorax/online_ac tests/online_ac tests/test_independent_rtrrl.py",
       "counts": null,
       "diagnostic_summary": {
         "errors": 1,
@@ -1032,11 +1499,18 @@
       "environment": {},
       "exit_code": 1,
       "failures": [],
+      "junit": {
+        "counts": null,
+        "error": "missing",
+        "error_nodeids": [],
+        "failure_nodeids": [],
+        "valid": false
+      },
       "time": {
-        "elapsed": "0:02.00",
-        "peak_rss_kib": 459420,
-        "system_seconds": 0.32,
-        "user_seconds": 3.23
+        "elapsed": "0:03.76",
+        "peak_rss_kib": 647520,
+        "system_seconds": 0.52,
+        "user_seconds": 6.06
       },
       "working_directory": "/tmp/head/memo"
     },
@@ -1047,11 +1521,18 @@
       "environment": {},
       "exit_code": 0,
       "failures": [],
+      "junit": {
+        "counts": null,
+        "error": "missing",
+        "error_nodeids": [],
+        "failure_nodeids": [],
+        "valid": false
+      },
       "time": {
-        "elapsed": "0:00.14",
-        "peak_rss_kib": 24068,
-        "system_seconds": 0.02,
-        "user_seconds": 0.01
+        "elapsed": "0:00.13",
+        "peak_rss_kib": 24040,
+        "system_seconds": 0.03,
+        "user_seconds": 0.0
       },
       "working_directory": "/tmp/head/memo"
     },
@@ -1069,11 +1550,23 @@
       },
       "exit_code": 0,
       "failures": [],
+      "junit": {
+        "counts": {
+          "errors": 0,
+          "failures": 0,
+          "skipped": 0,
+          "tests": 36
+        },
+        "error": null,
+        "error_nodeids": [],
+        "failure_nodeids": [],
+        "valid": true
+      },
       "time": {
-        "elapsed": "1:25.22",
-        "peak_rss_kib": 3201080,
-        "system_seconds": 7.0,
-        "user_seconds": 140.08
+        "elapsed": "1:24.63",
+        "peak_rss_kib": 3194652,
+        "system_seconds": 6.45,
+        "user_seconds": 140.82
       },
       "working_directory": "/tmp/head/memo"
     },
@@ -1084,9 +1577,16 @@
       "environment": {},
       "exit_code": 0,
       "failures": [],
+      "junit": {
+        "counts": null,
+        "error": "missing",
+        "error_nodeids": [],
+        "failure_nodeids": [],
+        "valid": false
+      },
       "time": {
         "elapsed": "0:00.09",
-        "peak_rss_kib": 17240,
+        "peak_rss_kib": 17260,
         "system_seconds": 0.0,
         "user_seconds": 0.09
       },
@@ -1098,7 +1598,7 @@
         "errors": 0,
         "failures": 0,
         "skipped": 0,
-        "tests": 214
+        "tests": 225
       },
       "diagnostic_summary": null,
       "environment": {
@@ -1108,11 +1608,23 @@
       },
       "exit_code": 0,
       "failures": [],
+      "junit": {
+        "counts": {
+          "errors": 0,
+          "failures": 0,
+          "skipped": 0,
+          "tests": 225
+        },
+        "error": null,
+        "error_nodeids": [],
+        "failure_nodeids": [],
+        "valid": true
+      },
       "time": {
-        "elapsed": "0:41.92",
-        "peak_rss_kib": 2148048,
-        "system_seconds": 2.8,
-        "user_seconds": 51.09
+        "elapsed": "0:41.74",
+        "peak_rss_kib": 2146508,
+        "system_seconds": 2.7,
+        "user_seconds": 51.01
       },
       "working_directory": "/tmp/head/memo"
     }
@@ -1128,24 +1640,26 @@
     "jaxlib": "0.10.0",
     "python": "3.12.13"
   },
-  "schema_version": 2,
+  "schema_version": 3,
   "source_hashes": {
     "memo/experiments/base/experiment.py": "6e4d1260c0d66df02c1cfb04e0bb0869619bfb655723aa8982c7ee79a0e6d303",
     "memo/memorax/__init__.py": "c9776663a9fabe0311708d47987acbd8a49949dfad5b1f70edf7aff724f6a1a0",
     "memo/memorax/algorithms/__init__.py": "640a999fb45c51869dfadc0c545ffdcb3c40949edc35d8beeaec18394a00bacc",
     "memo/memorax/algorithms/rtrrl/__init__.py": "a8a1f8bcb5815278a2b555b6e4742d4de842a3166cf96d27806950c4bd45f5ab",
     "memo/memorax/algorithms/rtrrl/legacy.py": "b9edc5926402fb782d02fa055a5290681dc08d427a219d49b14c8b53724966e3",
+    "memo/tests/online_ac/conftest.py": "ce215955aa00c8d7df764443511f4dbdf669334df0e51e246af33f03ee13290e",
     "memo/tests/online_ac/golden.py": "5beba2bb142f61660fd5be807cc43e18ec448ce2d55f8c42e55714ca4c77248e",
     "memo/tests/online_ac/test_meta_parity.py": "08ae8d948816eb0ef7593fa861d26f9b68d5d4dc380e1ebcf7d3bf044d952c60",
     "preserved_original_compare.py": "b32bd1da5707d49fd061da43ba27136a18442f85a3778d7cb925c8c1f4daac98",
     "preserved_original_probe.py": "0b00dddbe2d8ac9c0efeb0332cc363f8f7e8596c014af097fd75cc3e85ce836c",
     "preserved_original_source_audit.py": "6bc9848b8faa89a2d31bdc59e749f1154180d38cd79e750103b09db37b9a561e",
-    "task12_batch_verification.sh": "5c392283d83789323ce626b4d94cbdfc2dde37fdfbca1e1fb59fd8067db5b709",
+    "task12_batch_verification.sh": "ce93c2cfbc991c9cdb7298bc4a0646662c6f6b0e7f5058b927656143764cf90e",
     "task12_brax_smoke.py": "cfd0928688874c2fc4ed31c183121276797aa379191e2f4928e2b653b1cb0e0f",
-    "task12_collect_evidence.py": "b438bc891121ed8a8b80cde6a1d587965c5dcddad23dd6ae9f477b1144a1f541",
+    "task12_collect_evidence.py": "1e8a4316528dcfa282c9ca96421164adfb02bb48a076960e96f62a8c4baf0e6a",
     "task12_nodeids.py": "c29892d9bae3472989afaac0541187bba57db7848331ae67955c7c957d155003",
     "task12_numerical_evidence.py": "a6ee7ccb2e7ef2010868d912b87bc5bac4b67e23c78757fefc44fbbcf094099c",
-    "test_task12_evidence_gates.py": "b22b6f93312d62cdb721afe2d402b71a66b82274a1e6ed6fbc000c6445d2b766"
+    "task12_verify_archives.py": "5c3fe3c09e309a60e400a5b5c28bc027c27f267c3a8fe9fde413e907de73e62c",
+    "test_task12_evidence_gates.py": "9d4b4cdb64f5c0875df6fd19e7472361424bf2685110b8b8281d74534d815fcc"
   },
   "task10_comparison_base_sha": "5a89953b5d09909b35c5016118dc11a1adb0dec2"
 }

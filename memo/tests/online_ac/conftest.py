@@ -144,7 +144,7 @@ def build_rtrrl_agent(*, fresh_trace):
         env,  # pyright: ignore[reportArgumentType]
         env.default_params,  # pyright: ignore[reportArgumentType]
         feature_extractor,
-        torso,
+        torso,  # pyright: ignore[reportArgumentType]
         heads.Gaussian(action_dim=2),
         heads.VNetwork(),
     )
