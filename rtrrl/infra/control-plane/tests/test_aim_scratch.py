@@ -92,6 +92,28 @@ def test_launch_writes_pid_and_reproducible_runtime_metadata(tmp_path: Path) -> 
     assert calls[0]["start_new_session"] is True
 
 
+def test_launch_resumes_valid_recorded_process_without_duplicate(
+    tmp_path: Path,
+) -> None:
+    control = _control(tmp_path)
+    control.metadata_file.write_text('{"pid":321}')
+    control.pid_file.write_text("321\n")
+    popen_calls: list[object] = []
+
+    result = launch_aim_scratch(
+        control,
+        aim_executable="/venv/bin/aim",
+        popen=lambda *_args, **_kwargs: popen_calls.append(object()),
+        runtime_validator=lambda _control: {
+            "pid": 321,
+            "status": "ready",
+        },
+    )
+
+    assert result == {"pid": 321, "status": "resumed"}
+    assert popen_calls == []
+
+
 def test_preflight_validates_metadata_pid_cmdline_cwd_port_and_repo(
     tmp_path: Path,
 ) -> None:

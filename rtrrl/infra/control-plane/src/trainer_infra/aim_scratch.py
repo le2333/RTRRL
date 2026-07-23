@@ -135,12 +135,23 @@ def launch_aim_scratch(
     popen: Callable[..., Any] = subprocess.Popen,
     health_probe: Callable[[str, int], bool] = probe_health,
     discover_process: Callable[[AimScratchControl], ProcessSnapshot] = discover_aim_process,
+    runtime_validator: Callable[[AimScratchControl], dict[str, Any]] = validate_aim_scratch,
     now: Callable[[], datetime] = lambda: datetime.now(timezone.utc),
     sleep: Callable[[float], None] = time.sleep,
 ) -> dict[str, Any]:
     repo = control.repo.resolve()
     if not (repo / ".aim").is_dir():
         raise ValueError(f"Aim repository metadata is missing under {repo}")
+    if control.metadata_file.is_file() and control.pid_file.is_file():
+        try:
+            current = runtime_validator(control)
+        except FileNotFoundError:
+            if health_probe(control.host, control.port):
+                raise ValueError(
+                    "Aim endpoint is occupied but recorded process is missing"
+                ) from None
+        else:
+            return {**current, "status": "resumed"}
     command = [
         aim_executable,
         "server",
