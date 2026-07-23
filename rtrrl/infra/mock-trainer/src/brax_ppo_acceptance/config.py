@@ -92,8 +92,10 @@ class AcceptanceConfig:
         cls,
         path: str | Path,
         *,
-        environ: Mapping[str, str] | None = None,
+        environ: Mapping[str, str] = os.environ,
     ) -> AcceptanceConfig:
+        if not isinstance(environ, Mapping):
+            raise TypeError("environ must be a mapping")
         try:
             loaded = yaml.safe_load(Path(path).read_text(encoding="utf-8"))
         except (OSError, yaml.YAMLError) as error:
@@ -152,9 +154,8 @@ class AcceptanceConfig:
         _exact_keys(training_budget, {"env_steps"}, "training_budget")
         _integer(training_budget["env_steps"], "training_budget.env_steps", positive=True)
 
-        live_environ = os.environ if environ is None else environ
-        test_mode = _enabled(live_environ, "BRAX_ACCEPTANCE_TEST_MODE")
-        fast_mode = _enabled(live_environ, "BRAX_ACCEPTANCE_E2E_FAST")
+        test_mode = _enabled(environ, "BRAX_ACCEPTANCE_TEST_MODE")
+        fast_mode = _enabled(environ, "BRAX_ACCEPTANCE_E2E_FAST")
         if failure_mode != "none" and not test_mode:
             raise ValueError("non-none failure_mode requires BRAX_ACCEPTANCE_TEST_MODE=1")
         if fast_mode and not test_mode:

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import copy
 import dataclasses
+import inspect
 import os
 import subprocess
 import sys
@@ -265,6 +266,18 @@ def test_default_environment_is_read_live(monkeypatch: pytest.MonkeyPatch, tmp_p
     monkeypatch.delenv("BRAX_ACCEPTANCE_TEST_MODE")
     with pytest.raises(ValueError, match="BRAX_ACCEPTANCE_TEST_MODE=1"):
         AcceptanceConfig.load(path)
+
+
+def test_load_signature_defaults_to_live_os_environ_object() -> None:
+    parameter = inspect.signature(AcceptanceConfig.load).parameters["environ"]
+
+    assert parameter.annotation == "Mapping[str, str]"
+    assert parameter.default is os.environ
+
+
+def test_explicit_none_environment_is_rejected(tmp_path: Path) -> None:
+    with pytest.raises(TypeError, match="environ"):
+        AcceptanceConfig.load(_write(tmp_path, VALID), environ=None)  # type: ignore[arg-type]
 
 
 @pytest.mark.parametrize(
