@@ -110,6 +110,25 @@ class _FiniteSpace:
     domains: tuple[Iterable[JsonScalar], ...] = ()
 
 
+@dataclass
+class _GroupLoop:
+    group: ResolvedGroup
+    study: Any
+    tracker: FiniteSpaceTracker
+    finite_candidates: Iterator[dict[str, JsonScalar]] | None
+    finite_space_too_large: bool
+    seen: set[str]
+    terminal_trials: set[int]
+    allocated: int = 0
+
+    @property
+    def complete(self) -> bool:
+        return (
+            self.allocated >= self.group.hpo.total_trials
+            or self.tracker.exhausted
+        )
+
+
 def _estimated_jobs(group: ResolvedGroup) -> int:
     remaining = group.hpo.total_trials
     result = 0
@@ -528,6 +547,7 @@ class ExperimentController:
         completed_runs = 0
 
         try:
+            loops: list[_GroupLoop] = []
             for original_group in resolved.groups:
                 group = replace(
                     original_group,
@@ -540,46 +560,65 @@ class ExperimentController:
                 )
                 tracker = FiniteSpaceTracker(group)
                 finite_space = self._finite_space(group)
-                finite_candidates = (
-                    self._iter_finite_candidates(finite_space)
-                    if finite_space is not None and not finite_space.too_large
-                    else None
-                )
-                seen: set[str] = set()
-                terminal_trials: set[int] = set()
-                allocated = 0
-                round_number = 0
-                while allocated < group.hpo.total_trials and not tracker.exhausted:
-                    wanted = min(
-                        group.hpo.configs_per_batch,
-                        group.hpo.total_trials - allocated,
+                loops.append(
+                    _GroupLoop(
+                        group=group,
+                        study=study,
+                        tracker=tracker,
+                        finite_candidates=(
+                            self._iter_finite_candidates(finite_space)
+                            if finite_space is not None and not finite_space.too_large
+                            else None
+                        ),
+                        finite_space_too_large=(
+                            finite_space is not None and finite_space.too_large
+                        ),
+                        seen=set(),
+                        terminal_trials=set(),
                     )
-                    round_trials: list[Any] = []
-                    trials_and_runs: list[tuple[Any, RunBundle]] = []
-                    try:
-                        while len(trials_and_runs) < wanted and not tracker.exhausted:
+                )
+
+            round_number = 0
+            while any(not loop.complete for loop in loops):
+                pending: list[tuple[_GroupLoop, list[Any]]] = []
+                ready_by_group: list[
+                    tuple[_GroupLoop, list[tuple[Any, RunBundle]]]
+                ] = []
+                try:
+                    for loop in loops:
+                        if loop.complete:
+                            continue
+                        group = loop.group
+                        round_trials: list[Any] = []
+                        trials_and_runs: list[tuple[Any, RunBundle]] = []
+                        pending.append((loop, round_trials))
+                        wanted = min(
+                            group.hpo.configs_per_batch,
+                            group.hpo.total_trials - loop.allocated,
+                        )
+                        while (
+                            len(trials_and_runs) < wanted
+                            and not loop.tracker.exhausted
+                        ):
                             allocation = self._ask_unique(
-                                study,
+                                loop.study,
                                 group,
-                                tracker,
-                                seen,
-                                terminal_trials,
-                                finite_candidates,
-                                finite_space_too_large=(
-                                    finite_space is not None
-                                    and finite_space.too_large
-                                ),
+                                loop.tracker,
+                                loop.seen,
+                                loop.terminal_trials,
+                                loop.finite_candidates,
+                                finite_space_too_large=loop.finite_space_too_large,
                             )
                             if allocation is None:
                                 break
                             trial, sampled = allocation
                             round_trials.append(trial)
-                            allocated += 1
+                            loop.allocated += 1
                             concrete = materialize_run(
                                 group,
                                 trial,
                                 sampled,
-                                run_number=allocated,
+                                run_number=loop.allocated,
                             )
                             trials_and_runs.append(
                                 (
@@ -592,26 +631,60 @@ class ExperimentController:
                                     ),
                                 )
                             )
-                        if not trials_and_runs:
-                            break
+                        if trials_and_runs:
+                            ready_by_group.append((loop, trials_and_runs))
 
-                        round_number += 1
-                        round_jobs: list[
-                            tuple[Any, list[tuple[Any, RunBundle]]]
-                        ] = []
-                        runs_per_job = group.execution.runs_per_job
-                        for offset in range(0, len(trials_and_runs), runs_per_job):
-                            children = trials_and_runs[offset : offset + runs_per_job]
-                            for _, child in children:
+                    if not ready_by_group:
+                        break
+
+                    round_number += 1
+                    ordered: list[tuple[_GroupLoop, Any, RunBundle]] = []
+                    max_group_runs = max(
+                        len(items) for _, items in ready_by_group
+                    )
+                    for index in range(max_group_runs):
+                        for loop, items in ready_by_group:
+                            if index < len(items):
+                                trial, run = items[index]
+                                ordered.append((loop, trial, run))
+
+                    partitions: dict[
+                        tuple[str, str, int],
+                        list[tuple[_GroupLoop, Any, RunBundle]],
+                    ] = {}
+                    for item in ordered:
+                        loop, _, run = item
+                        key = (
+                            run.image_digest,
+                            run.resource_profile,
+                            loop.group.execution.runs_per_job,
+                        )
+                        partitions.setdefault(key, []).append(item)
+
+                    round_jobs: list[
+                        tuple[
+                            Any,
+                            list[tuple[_GroupLoop, Any, RunBundle]],
+                        ]
+                    ] = []
+                    job_number = 0
+                    for (
+                        image_digest,
+                        resource_profile,
+                        runs_per_job,
+                    ), partition in partitions.items():
+                        for offset in range(0, len(partition), runs_per_job):
+                            children = partition[offset : offset + runs_per_job]
+                            for _, _, child in children:
                                 self._upload_run(store, child)
+                            job_number += 1
                             job = JobBundle(
                                 job_id=(
-                                    f"{experiment_id}-{group.name}-r{round_number}-"
-                                    f"j{offset // runs_per_job + 1}"
+                                    f"{experiment_id}-r{round_number}-j{job_number}"
                                 ),
-                                image_digest=group.image,
-                                resource_profile=group.resources.profile,
-                                runs=tuple(child for _, child in children),
+                                image_digest=image_digest,
+                                resource_profile=resource_profile,
+                                runs=tuple(child for _, _, child in children),
                             )
                             store.put_json(
                                 f"{experiment_prefix}jobs/{job.job_id}/bundle.json",
@@ -619,42 +692,47 @@ class ExperimentController:
                             )
                             submitted = batch.submit(
                                 job,
-                                profile(group.resources.profile),
-                                definitions[group.resources.profile],
+                                profile(resource_profile),
+                                definitions[resource_profile],
                             )
                             submitted_ids.append(submitted.job_id)
                             round_jobs.append((submitted, children))
-                        self._wait_jobs(
-                            batch,
-                            [submitted.job_id for submitted, _ in round_jobs],
-                        )
-                        for _, children in round_jobs:
-                            for trial, run in children:
-                                self._collect_marker(store, run)
-                                value = self._aim_reader.wait_for_result(
-                                    run.run_id,
-                                    group.objective.metric,
-                                    group.execution.aim_result_timeout_seconds,
-                                )
-                                self._tell_once(
-                                    study,
-                                    trial,
-                                    terminal_trials,
-                                    value=value,
-                                )
-                                completed_runs += 1
-                    except BaseException as error:
-                        lifecycle_errors = self._fail_pending(
-                            study,
-                            round_trials,
-                            terminal_trials,
-                        )
-                        for lifecycle_error in lifecycle_errors:
-                            error.add_note(
-                                "failed to terminate pending Optuna trial: "
-                                f"{type(lifecycle_error).__name__}: {lifecycle_error}"
+
+                    self._wait_jobs(
+                        batch,
+                        [submitted.job_id for submitted, _ in round_jobs],
+                    )
+                    for _, children in round_jobs:
+                        for loop, trial, run in children:
+                            self._collect_marker(store, run)
+                            value = self._aim_reader.wait_for_result(
+                                run.run_id,
+                                loop.group.objective.metric,
+                                loop.group.execution.aim_result_timeout_seconds,
                             )
-                        raise
+                            self._tell_once(
+                                loop.study,
+                                trial,
+                                loop.terminal_trials,
+                                value=value,
+                            )
+                            completed_runs += 1
+                except BaseException as error:
+                    lifecycle_errors: list[BaseException] = []
+                    for loop, round_trials in pending:
+                        lifecycle_errors.extend(
+                            self._fail_pending(
+                                loop.study,
+                                round_trials,
+                                loop.terminal_trials,
+                            )
+                        )
+                    for lifecycle_error in lifecycle_errors:
+                        error.add_note(
+                            "failed to terminate pending Optuna trial: "
+                            f"{type(lifecycle_error).__name__}: {lifecycle_error}"
+                        )
+                    raise
             report = ExperimentReport(
                 status="succeeded",
                 experiment_id=experiment_id,

@@ -30,7 +30,7 @@ def _default_rerun_factory(context: RunContext) -> RerunSink:
     return RerunAdapter(
         context,
         every_episodes=int(context.logging["rerun_every_episodes"]),
-        root=context.artifact_directory,
+        root=context.artifact_directory / "rerun",
     )
 
 

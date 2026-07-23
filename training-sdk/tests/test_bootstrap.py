@@ -256,7 +256,7 @@ def test_default_factories_use_context_and_facility_environment(tmp_path, monkey
         run.context,
         {
             "every_episodes": 7,
-            "root": run.context.artifact_directory,
+                "root": run.context.artifact_directory / "rerun",
         },
     )
     assert aim.started == [run.context]

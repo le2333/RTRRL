@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+import shutil
 from threading import RLock
 from typing import Mapping, Protocol
 
@@ -175,7 +176,18 @@ class TrainingRun:
         return self.rerun.log_episode(episode)
 
     def register_checkpoint(self, path: Path) -> None:
-        del path
+        source = Path(path)
+        if source.is_symlink() or not source.is_file():
+            raise ValueError("checkpoint source must be a regular file")
+        target_directory = self.context.artifact_directory / "checkpoints"
+        target_directory.mkdir(parents=True, exist_ok=True)
+        target = target_directory / source.name
+        try:
+            with source.open("rb") as input_file, target.open("xb") as output_file:
+                shutil.copyfileobj(input_file, output_file, length=1024 * 1024)
+        except BaseException:
+            target.unlink(missing_ok=True)
+            raise
 
     def finish(self, final_metrics: Mapping[str, int | float]) -> None:
         with self._terminal_lock:

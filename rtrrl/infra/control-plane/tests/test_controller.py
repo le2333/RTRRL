@@ -391,7 +391,11 @@ def test_two_groups_run_automatic_two_two_one_with_controller_only_tell(
 
     assert report.status == "succeeded"
     assert report.experiment_id == "fresh-1"
-    assert batches[0].round_sizes == {"first": [2, 2, 1], "second": [2, 2, 1]}
+    assert len(batches[0].submitted) == 5
+    assert all(
+        {run.run_context["group"] for run in bundle.runs} == {"first", "second"}
+        for bundle in batches[0].submitted
+    )
     assert {
         run.run_context["experiment_name"]
         for bundle in batches[0].submitted
@@ -403,7 +407,7 @@ def test_two_groups_run_automatic_two_two_one_with_controller_only_tell(
     assert {
         state for study in studies for _, _, state, _ in study.told
     } == {None}
-    assert len(report.submitted_job_ids) == 6
+    assert len(report.submitted_job_ids) == 5
     assert stores[0].puts[-2:] == [
         "s3://bucket/experiments/fresh-1/state/final.json",
         "s3://bucket/experiments/fresh-1/report.json",
@@ -442,15 +446,16 @@ def test_failure_boundaries_stop_future_batches_and_keep_submitted_ids(
         controller.run(experiment)
 
     assert raised.value.report.status == "failed"
-    assert raised.value.report.submitted_job_ids == ("aws-1",)
-    assert len(batches[0].submitted) == 1
+    assert raised.value.report.submitted_job_ids == ("aws-1", "aws-2")
+    assert len(batches[0].submitted) == 2
     assert [
         (value, state)
-        for trial in studies[0].told
+        for study in studies
+        for trial in study.told
         for _, value, state, _ in (trial,)
-    ] == [(None, TrialState.FAIL), (None, TrialState.FAIL)]
-    assert len({number for number, _, _, _ in studies[0].told}) == 2
-    assert {thread for _, _, _, thread in studies[0].told} == {
+    ] == [(None, TrialState.FAIL)] * 4
+    assert all(len({number for number, _, _, _ in study.told}) == 2 for study in studies)
+    assert {thread for study in studies for _, _, _, thread in study.told} == {
         threading.get_ident()
     }
     assert stores[0].puts[-2:] == [
@@ -471,8 +476,13 @@ def test_failed_concurrent_round_retains_every_submitted_id(tmp_path: Path) -> N
     with pytest.raises(ExperimentRunError) as raised:
         controller.run(experiment)
 
-    assert raised.value.report.submitted_job_ids == ("aws-1", "aws-2")
-    assert len(batches[0].submitted) == 2
+    assert raised.value.report.submitted_job_ids == (
+        "aws-1",
+        "aws-2",
+        "aws-3",
+        "aws-4",
+    )
+    assert len(batches[0].submitted) == 4
 
 
 @pytest.mark.parametrize(
@@ -522,7 +532,7 @@ def test_runtime_and_both_persistence_failures_are_all_preserved(tmp_path: Path)
         OSError,
         PermissionError,
     )
-    assert raised.value.report.submitted_job_ids == ("aws-1",)
+    assert raised.value.report.submitted_job_ids == ("aws-1", "aws-2")
     assert stores[0].puts[-2:] == [
         "s3://bucket/experiments/fresh-1/state/final.json",
         "s3://bucket/experiments/fresh-1/report.json",
@@ -566,7 +576,11 @@ def test_real_optuna_completes_two_two_one_without_running_trials(tmp_path: Path
     report = controller.run(experiment)
 
     assert report.completed_runs == 10
-    assert batches[0].round_sizes == {"first": [2, 2, 1], "second": [2, 2, 1]}
+    assert len(batches[0].submitted) == 5
+    assert all(
+        {run.run_context["group"] for run in bundle.runs} == {"first", "second"}
+        for bundle in batches[0].submitted
+    )
     for study in studies:
         assert sum(trial.state == TrialState.COMPLETE for trial in study.trials) == 5
         assert not any(trial.state == TrialState.RUNNING for trial in study.trials)
