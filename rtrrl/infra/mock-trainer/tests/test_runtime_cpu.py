@@ -2,16 +2,38 @@ from __future__ import annotations
 
 import json
 import math
-import os
-import subprocess
-import sys
-import time
 from pathlib import Path
 from typing import Any
 
 import jax
+import numpy as np
+import pytest
 import training_sdk
 import yaml
+
+import brax_ppo_acceptance.__main__ as launcher
+import brax_ppo_acceptance.train as train_module
+from brax_ppo_acceptance.train import restore_checkpoint
+
+
+class RecordingAim:
+    def __init__(self) -> None:
+        self.started = 0
+        self.events: list[training_sdk.MetricEvent] = []
+        self.failures: list[dict[str, str]] = []
+
+    def start(self, context: training_sdk.RunContext) -> None:
+        del context
+        self.started += 1
+
+    def send(self, event: training_sdk.MetricEvent) -> None:
+        self.events.append(event)
+
+    def fail(self, metadata: dict[str, str]) -> None:
+        self.failures.append(metadata)
+
+    def close(self) -> None:
+        return None
 
 
 def _write_inputs(tmp_path: Path) -> tuple[Path, Path, Path]:
@@ -72,33 +94,40 @@ def _write_inputs(tmp_path: Path) -> tuple[Path, Path, Path]:
     return config_path, context_path, artifact_directory
 
 
-def test_real_cpu_ppo_runtime_writes_finite_objective_and_artifacts(tmp_path: Path) -> None:
+def test_real_cpu_ppo_params_round_trip_and_runtime_artifacts(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
     assert jax.default_backend() == "cpu"
     assert {device.platform for device in jax.devices()} == {"cpu"}
     config_path, context_path, artifact_directory = _write_inputs(tmp_path)
-    environment = os.environ.copy()
-    environment["JAX_PLATFORM_NAME"] = "cpu"
-    environment["TRAINER_RUN_CONTEXT_PATH"] = str(context_path)
-    environment["AIM_REPO"] = str(tmp_path / "aim")
-    environment.pop("BRAX_ACCEPTANCE_TEST_MODE", None)
-    environment.pop("BRAX_ACCEPTANCE_E2E_FAST", None)
+    aim = RecordingAim()
+    captured: dict[str, Any] = {}
+    real_ppo_train = train_module.ppo_train.train
 
-    started = time.monotonic()
-    completed = subprocess.run(
-        [sys.executable, "-m", "brax_ppo_acceptance", "--config", str(config_path)],
-        cwd=tmp_path,
-        env=environment,
-        check=False,
-        capture_output=True,
-        text=True,
-        timeout=600,
-    )
-    elapsed = time.monotonic() - started
+    def capturing_ppo_train(**kwargs: Any) -> tuple[Any, Any, dict[str, Any]]:
+        result = real_ppo_train(**kwargs)
+        captured["params"] = result[1]
+        return result
 
-    assert completed.returncode == 0, (
-        f"real CPU PPO failed after {elapsed:.1f}s\n"
-        f"stdout:\n{completed.stdout}\nstderr:\n{completed.stderr}"
-    )
+    def bootstrap() -> training_sdk.TrainingRun | None:
+        return training_sdk.bootstrap_from_environment(
+            {"TRAINER_RUN_CONTEXT_PATH": str(context_path)},
+            aim_factory=lambda context, environ: aim,
+        )
+
+    monkeypatch.delenv("BRAX_ACCEPTANCE_TEST_MODE", raising=False)
+    monkeypatch.delenv("BRAX_ACCEPTANCE_E2E_FAST", raising=False)
+    monkeypatch.setattr(train_module.ppo_train, "train", capturing_ppo_train)
+    monkeypatch.setattr(launcher, "bootstrap_from_environment", bootstrap)
+    training_sdk.set_current_run(None)
+    try:
+        assert launcher.main(["--config", str(config_path)]) == 0
+    finally:
+        training_sdk.set_current_run(None)
+
+    assert aim.started == 1
+    assert aim.failures == []
     spool = training_sdk.EventSpool(
         artifact_directory / "aim-buffer" / "events.jsonl"
     )
@@ -111,4 +140,23 @@ def test_real_cpu_ppo_runtime_writes_finite_objective_and_artifacts(tmp_path: Pa
     assert finalized[0].data["objective_metric"] == "eval/episode_return"
     assert math.isfinite(float(finalized[0].metric_value))
     assert len(list((artifact_directory / "rerun").rglob("*.rrd"))) == 1
-    assert (artifact_directory / "checkpoints" / "ppo-params.npz").is_file()
+    checkpoint = artifact_directory / "checkpoints" / "ppo-params.npz"
+    assert checkpoint.is_file()
+
+    original = captured["params"]
+    restored = restore_checkpoint(checkpoint)
+    assert jax.tree_util.tree_structure(restored) == jax.tree_util.tree_structure(
+        original
+    )
+    original_leaves = jax.tree_util.tree_leaves(original)
+    restored_leaves = jax.tree_util.tree_leaves(restored)
+    assert len(restored_leaves) == len(original_leaves)
+    for expected, actual in zip(original_leaves, restored_leaves, strict=True):
+        expected_array = np.asarray(jax.device_get(expected))
+        actual_array = np.asarray(jax.device_get(actual))
+        assert actual_array.dtype == expected_array.dtype
+        assert actual_array.shape == expected_array.shape
+        np.testing.assert_array_equal(actual_array, expected_array)
+
+    with np.load(checkpoint, allow_pickle=False) as archive:
+        assert all(archive[name].dtype != np.dtype("O") for name in archive.files)

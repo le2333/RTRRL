@@ -228,6 +228,7 @@ dependencies = [
     { name = "jax" },
     { name = "jaxlib" },
     { name = "numpy" },
+    { name = "orbax-checkpoint" },
     { name = "pyyaml" },
     { name = "training-sdk" },
 ]
@@ -251,6 +252,7 @@ requires-dist = [
     { name = "jax", extras = ["cuda12"], marker = "extra == 'cuda12'", specifier = "==0.10.0" },
     { name = "jaxlib", specifier = "==0.10.0" },
     { name = "numpy", specifier = ">=2" },
+    { name = "orbax-checkpoint", specifier = "==0.12.1" },
     { name = "pyyaml", specifier = ">=6,<7" },
     { name = "training-sdk", directory = "../../../training-sdk" },
 ]

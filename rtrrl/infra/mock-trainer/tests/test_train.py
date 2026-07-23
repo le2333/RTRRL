@@ -1,21 +1,24 @@
 from __future__ import annotations
 
 import copy
+import json
 import math
 from pathlib import Path
 from typing import Any
 
 import jax
 import jax.numpy as jnp
+import numpy as np
 import pytest
 import training_sdk
 import yaml
 from brax import envs
+from brax.envs.base import State
 
 import brax_ppo_acceptance.__main__ as launcher
 import brax_ppo_acceptance.train as train_module
 from brax_ppo_acceptance.config import AcceptanceConfig
-from brax_ppo_acceptance.train import rollout_episode, train
+from brax_ppo_acceptance.train import restore_checkpoint, rollout_episode, train
 
 VALID: dict[str, Any] = {
     "protocol_version": "1",
@@ -138,6 +141,43 @@ def make_run(
     return run, recording_aim, rerun, spool
 
 
+def write_run_context(tmp_path: Path) -> Path:
+    path = tmp_path / "run-context.json"
+    path.write_text(
+        json.dumps(
+            {
+                "experiment_name": "brax-acceptance",
+                "experiment_id": "experiment-1",
+                "group": "cpu",
+                "script": "brax_ppo_acceptance",
+                "run_id": "bootstrap-run-1",
+                "run_number": 1,
+                "trial_number": 1,
+                "seed": 7,
+                "metadata": {},
+                "environment": {
+                    "name": "inverted_pendulum",
+                    "options": {"backend": "generalized"},
+                },
+                "training_budget": {"env_steps": 128},
+                "fixed_parameters": {},
+                "sampled_parameters": {},
+                "final_parameters": {},
+                "image_digest": "sha256:test",
+                "resource_profile": "cpu",
+                "artifact_directory": str(tmp_path / "bootstrap-artifacts"),
+                "logging": {
+                    "aim_every_env_steps": 1,
+                    "rerun_every_episodes": 1,
+                },
+                "objective": {"metric": "eval/episode_return"},
+            }
+        ),
+        encoding="utf-8",
+    )
+    return path
+
+
 def zero_policy(observation: jax.Array, key: jax.Array) -> tuple[jax.Array, dict[str, Any]]:
     del key
     return jnp.zeros(observation.shape[:-1] + (1,)), {}
@@ -166,10 +206,55 @@ def test_rollout_uses_real_jitted_environment_and_builds_complete_episode() -> N
     assert math.isfinite(episode_return)
 
 
+def test_rollout_splits_reset_and_action_random_streams() -> None:
+    class KeyEnvironment:
+        action_size = 2
+
+        def reset(self, key: jax.Array) -> State:
+            return State(
+                pipeline_state=None,
+                obs=key,
+                reward=jnp.array(0.0),
+                done=jnp.array(0.0),
+                metrics={},
+                info={},
+            )
+
+        def step(self, state: State, action: jax.Array) -> State:
+            return state.replace(
+                obs=state.obs + 1,
+                reward=jnp.sum(action.astype(jnp.float32)),
+            )
+
+    def key_policy(
+        observation: jax.Array,
+        key: jax.Array,
+    ) -> tuple[jax.Array, dict[str, Any]]:
+        del observation
+        return key, {}
+
+    seed = 23
+    root_key = jax.random.PRNGKey(seed)
+    expected_reset_key, rollout_key = jax.random.split(root_key)
+    _, expected_action_key = jax.random.split(rollout_key)
+
+    first, _ = rollout_episode(KeyEnvironment(), key_policy, seed, 1, "eval")
+    repeated, _ = rollout_episode(KeyEnvironment(), key_policy, seed, 1, "eval")
+    different, _ = rollout_episode(KeyEnvironment(), key_policy, seed + 1, 1, "eval")
+
+    np.testing.assert_array_equal(first.observations[0], expected_reset_key)
+    np.testing.assert_array_equal(first.actions[0], expected_action_key)
+    assert not np.array_equal(first.observations[0], first.actions[0])
+    np.testing.assert_array_equal(first.observations[0], repeated.observations[0])
+    np.testing.assert_array_equal(first.actions[0], repeated.actions[0])
+    assert not np.array_equal(first.actions[0], different.actions[0])
+
+
 def test_fast_train_retains_rollout_sdk_and_checkpoint_lifecycle(tmp_path: Path) -> None:
     config_path, environ = write_config(tmp_path)
     config = AcceptanceConfig.load(config_path, environ=environ)
     run, _, rerun, spool = make_run(tmp_path)
+    run.start()
 
     result = train(config, run)
     run.finish(
@@ -198,6 +283,42 @@ def test_fast_train_retains_rollout_sdk_and_checkpoint_lifecycle(tmp_path: Path)
     assert episode.end_env_steps == config.num_timesteps
     assert len(episode.observations) == len(episode.actions) + 1
     assert episode.terminals[-1] or episode.truncations[-1]
+    restored = restore_checkpoint(result.checkpoint)
+    assert jax.tree_util.tree_structure(restored) == jax.tree_util.tree_structure(
+        (jnp.zeros((1,)),)
+    )
+    np.testing.assert_array_equal(restored[0], jnp.zeros((1,)))
+    with np.load(result.checkpoint, allow_pickle=False) as archive:
+        assert archive.files
+        assert all(archive[name].dtype != np.dtype("O") for name in archive.files)
+
+
+def test_restore_checkpoint_rejects_archive_path_traversal(tmp_path: Path) -> None:
+    archive = tmp_path / "malicious.npz"
+    np.savez(
+        archive,
+        format_version=np.asarray(1, dtype=np.int64),
+        relative_paths=np.asarray(["../escape"], dtype=np.str_),
+        tree=np.asarray('{"kind":"tuple","children":[]}', dtype=np.str_),
+        payload_000000=np.frombuffer(b"malicious", dtype=np.uint8),
+    )
+
+    with pytest.raises(ValueError, match="unsafe checkpoint archive path"):
+        restore_checkpoint(archive)
+    assert not (tmp_path / "escape").exists()
+
+
+def test_restore_checkpoint_normalizes_missing_metadata_error(tmp_path: Path) -> None:
+    archive = tmp_path / "missing-paths.npz"
+    np.savez(
+        archive,
+        format_version=np.asarray(1, dtype=np.int64),
+        tree=np.asarray('{"kind":"tuple","children":[]}', dtype=np.str_),
+        unexpected=np.asarray(1, dtype=np.int64),
+    )
+
+    with pytest.raises(ValueError, match="missing required metadata"):
+        restore_checkpoint(archive)
 
 
 def test_normal_path_calls_real_brax_entry_point_with_fixed_micro_parameters(
@@ -207,6 +328,7 @@ def test_normal_path_calls_real_brax_entry_point_with_fixed_micro_parameters(
     config_path, _ = write_config(tmp_path, fast=False)
     config = AcceptanceConfig.load(config_path, environ={})
     run, _, rerun, _ = make_run(tmp_path)
+    run.start()
     observed: dict[str, Any] = {}
 
     def recording_ppo_train(**kwargs: Any) -> tuple[Any, Any, dict[str, Any]]:
@@ -260,6 +382,7 @@ def test_launcher_fails_once_and_preserves_pre_failure_artifacts(
     monkeypatch.setenv("BRAX_ACCEPTANCE_TEST_MODE", environ["BRAX_ACCEPTANCE_TEST_MODE"])
     monkeypatch.setenv("BRAX_ACCEPTANCE_E2E_FAST", environ["BRAX_ACCEPTANCE_E2E_FAST"])
     run, aim, rerun, spool = make_run(tmp_path)
+    run.start()
     monkeypatch.setattr(launcher, "bootstrap_from_environment", lambda: run)
 
     with pytest.raises(RuntimeError, match=f"injected failure: {failure_mode}") as raised:
@@ -284,6 +407,7 @@ def test_finalization_failure_is_rethrown_without_double_terminal(
     monkeypatch.setenv("BRAX_ACCEPTANCE_E2E_FAST", environ["BRAX_ACCEPTANCE_E2E_FAST"])
     close_error = KeyboardInterrupt("close interrupted")
     run, aim, _, spool = make_run(tmp_path, aim=RecordingAim(close_error=close_error))
+    run.start()
     monkeypatch.setattr(launcher, "bootstrap_from_environment", lambda: run)
 
     with pytest.raises(KeyboardInterrupt, match="close interrupted") as raised:
@@ -300,14 +424,16 @@ def test_finalization_failure_is_rethrown_without_double_terminal(
     assert len(finalized) == 1
 
 
-def test_successful_launcher_finishes_exactly_once(
+def test_successful_launcher_uses_real_bootstrap_and_starts_exactly_once(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
     config_path, environ = write_config(tmp_path)
     monkeypatch.setenv("BRAX_ACCEPTANCE_TEST_MODE", environ["BRAX_ACCEPTANCE_TEST_MODE"])
     monkeypatch.setenv("BRAX_ACCEPTANCE_E2E_FAST", environ["BRAX_ACCEPTANCE_E2E_FAST"])
-    run, aim, _, spool = make_run(tmp_path)
+    context_path = write_run_context(tmp_path)
+    aim = RecordingAim()
+    rerun = RecordingRerun()
     checkpoint = tmp_path / "ppo-params.npz"
     checkpoint.write_bytes(b"test")
     result = train_module.TrainingResult(
@@ -316,14 +442,26 @@ def test_successful_launcher_finishes_exactly_once(
         platform="cpu",
         device_kind="cpu",
     )
-    monkeypatch.setattr(launcher, "bootstrap_from_environment", lambda: run)
+    def bootstrap() -> training_sdk.TrainingRun | None:
+        return training_sdk.bootstrap_from_environment(
+            {"TRAINER_RUN_CONTEXT_PATH": str(context_path)},
+            aim_factory=lambda context, environ: aim,
+            rerun_factory=lambda context: rerun,
+        )
+
+    training_sdk.set_current_run(None)
+    monkeypatch.setattr(launcher, "bootstrap_from_environment", bootstrap)
     monkeypatch.setattr(launcher, "train", lambda config, sdk_run: result)
 
-    assert launcher.main(["--config", str(config_path)]) == 0
+    try:
+        assert launcher.main(["--config", str(config_path)]) == 0
+        run = training_sdk.current_run()
+    finally:
+        training_sdk.set_current_run(None)
 
-    assert run.finish_calls == 1
-    assert run.fail_calls == []
+    assert aim.started == 1
     assert aim.failures == []
+    spool = run.spool
     finalized = [
         event
         for event in spool.events

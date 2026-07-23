@@ -21,7 +21,6 @@ def main(argv: Sequence[str] | None = None) -> int:
     if run is None:
         raise RuntimeError("TRAINER_RUN_CONTEXT_PATH is required")
     try:
-        run.start()
         result = train(config, run)
         run.finish(
             {

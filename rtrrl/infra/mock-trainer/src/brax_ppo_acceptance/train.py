@@ -1,18 +1,24 @@
 from __future__ import annotations
 
 import dataclasses
+import json
 import math
-from collections.abc import Callable, Iterator
+import os
+import tempfile
+from collections.abc import Callable, Iterator, Mapping
 from contextlib import contextmanager
 from dataclasses import dataclass
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import Any, Literal
 
 import jax
 import jax.numpy as jnp
 import numpy as np
+import orbax.checkpoint as ocp
 import training_sdk
 from brax import envs
+from brax.training import types as brax_types
+from brax.training.acme import running_statistics
 from brax.training.agents.ppo import train as ppo_train
 
 from brax_ppo_acceptance.config import AcceptanceConfig
@@ -44,8 +50,8 @@ def rollout_episode(
     step = jax.jit(environment.step)
     infer = jax.jit(policy)
 
-    key = jax.random.PRNGKey(seed)
-    state = reset(key)
+    reset_key, rollout_key = jax.random.split(jax.random.PRNGKey(seed))
+    state = reset(reset_key)
     jax.block_until_ready(state)
 
     observations = [_host_array(state.obs)]
@@ -55,7 +61,7 @@ def rollout_episode(
     truncations: list[bool] = []
 
     for transition_index in range(episode_length):
-        key, action_key = jax.random.split(key)
+        rollout_key, action_key = jax.random.split(rollout_key)
         action, _ = infer(state.obs, action_key)
         next_state = step(state, action)
         jax.block_until_ready(next_state)
@@ -111,13 +117,216 @@ def _exercise_selected_device(environment: envs.Env, seed: int) -> None:
     jax.block_until_ready(next_state)
 
 
+def _tree_descriptor(value: Any) -> dict[str, Any]:
+    if isinstance(value, running_statistics.RunningStatisticsState):
+        return {
+            "kind": "running_statistics",
+            "mode": int(value.mode),
+            "fields": {
+                "mean": _tree_descriptor(value.mean),
+                "std": _tree_descriptor(value.std),
+                "count": _tree_descriptor(value.count),
+                "summed_variance": _tree_descriptor(value.summed_variance),
+                "std_eps": _tree_descriptor(value.std_eps),
+            },
+        }
+    if isinstance(value, brax_types.UInt64):
+        return {
+            "kind": "uint64",
+            "fields": {
+                "hi": _tree_descriptor(value.hi),
+                "lo": _tree_descriptor(value.lo),
+            },
+        }
+    if isinstance(value, tuple):
+        return {
+            "kind": "tuple",
+            "children": [_tree_descriptor(child) for child in value],
+        }
+    if isinstance(value, list):
+        return {
+            "kind": "list",
+            "children": [_tree_descriptor(child) for child in value],
+        }
+    if isinstance(value, Mapping):
+        if not all(isinstance(key, str) for key in value):
+            raise TypeError("checkpoint mappings must use string keys")
+        return {
+            "kind": "dict",
+            "keys": list(value),
+            "children": [_tree_descriptor(value[key]) for key in value],
+        }
+    return {"kind": "leaf"}
+
+
+def _restore_tree(descriptor: Mapping[str, Any], value: Any) -> Any:
+    kind = descriptor.get("kind")
+    if kind == "leaf":
+        return value
+    if kind in {"tuple", "list"}:
+        children = descriptor.get("children")
+        if not isinstance(children, list) or not isinstance(value, (list, tuple)):
+            raise ValueError("invalid checkpoint tree sequence")
+        if len(children) != len(value):
+            raise ValueError("checkpoint tree sequence length mismatch")
+        restored = [
+            _restore_tree(child, item)
+            for child, item in zip(children, value, strict=True)
+        ]
+        return tuple(restored) if kind == "tuple" else restored
+    if kind == "dict":
+        keys = descriptor.get("keys")
+        children = descriptor.get("children")
+        if (
+            not isinstance(keys, list)
+            or not all(isinstance(key, str) for key in keys)
+            or len(set(keys)) != len(keys)
+            or not isinstance(children, list)
+            or len(keys) != len(children)
+            or not isinstance(value, Mapping)
+            or set(value) != set(keys)
+        ):
+            raise ValueError("invalid checkpoint tree mapping")
+        return {
+            key: _restore_tree(child, value[key])
+            for key, child in zip(keys, children, strict=True)
+        }
+    if kind in {"running_statistics", "uint64"}:
+        fields = descriptor.get("fields")
+        if not isinstance(fields, Mapping) or not isinstance(value, Mapping):
+            raise ValueError("invalid checkpoint custom node")
+        expected = (
+            {"mean", "std", "count", "summed_variance", "std_eps"}
+            if kind == "running_statistics"
+            else {"hi", "lo"}
+        )
+        if set(fields) != expected or set(value) != expected:
+            raise ValueError("invalid checkpoint custom node fields")
+        restored_fields = {
+            name: _restore_tree(fields[name], value[name]) for name in expected
+        }
+        if kind == "uint64":
+            return brax_types.UInt64(**restored_fields)
+        mode = descriptor.get("mode")
+        if type(mode) is not int:
+            raise ValueError("invalid checkpoint normalization mode")
+        return running_statistics.RunningStatisticsState(
+            **restored_fields,
+            mode=running_statistics.NormalizationMode(mode),
+        )
+    raise ValueError(f"unsupported checkpoint tree node: {kind!r}")
+
+
+def _validated_archive_path(value: str) -> PurePosixPath:
+    relative = PurePosixPath(value)
+    if (
+        not value
+        or "\\" in value
+        or relative.is_absolute()
+        or any(part in {"", ".", ".."} for part in relative.parts)
+    ):
+        raise ValueError(f"unsafe checkpoint archive path: {value!r}")
+    return relative
+
+
 def _write_checkpoint(path: Path, params: Any) -> None:
-    leaves, _ = jax.tree_util.tree_flatten(params)
-    arrays = {f"leaf_{index:04d}": _host_array(leaf) for index, leaf in enumerate(leaves)}
-    if not arrays:
-        raise ValueError("PPO parameters produced an empty checkpoint")
     path.parent.mkdir(parents=True, exist_ok=True)
-    np.savez(path, **arrays)
+    descriptor = json.dumps(
+        _tree_descriptor(params),
+        allow_nan=False,
+        separators=(",", ":"),
+    )
+    with tempfile.TemporaryDirectory(prefix=".orbax-", dir=path.parent) as temporary:
+        checkpoint_directory = Path(temporary) / "checkpoint"
+        checkpointer = ocp.StandardCheckpointer()
+        try:
+            checkpointer.save(checkpoint_directory, params)
+            checkpointer.wait_until_finished()
+        finally:
+            checkpointer.close()
+
+        files = sorted(item for item in checkpoint_directory.rglob("*") if item.is_file())
+        if not files or any(item.is_symlink() for item in files):
+            raise ValueError("Orbax checkpoint must contain regular files")
+        relative_paths = [
+            item.relative_to(checkpoint_directory).as_posix() for item in files
+        ]
+        arrays: dict[str, np.ndarray] = {
+            "format_version": np.asarray(1, dtype=np.int64),
+            "relative_paths": np.asarray(relative_paths, dtype=np.str_),
+            "tree": np.asarray(descriptor, dtype=np.str_),
+        }
+        arrays.update(
+            {
+                f"payload_{index:06d}": np.frombuffer(item.read_bytes(), dtype=np.uint8)
+                for index, item in enumerate(files)
+            }
+        )
+        temporary_archive = Path(temporary) / path.name
+        with temporary_archive.open("wb") as output:
+            np.savez(output, **arrays)
+            output.flush()
+            os.fsync(output.fileno())
+        os.replace(temporary_archive, path)
+
+
+def restore_checkpoint(path: str | Path) -> Any:
+    """Restore a Brax PPO PyTree from a controlled single-file Orbax archive."""
+    source = Path(path)
+    with np.load(source, allow_pickle=False) as archive:
+        required = {"format_version", "relative_paths", "tree"}
+        if not required.issubset(archive.files):
+            raise ValueError("checkpoint archive is missing required metadata")
+        version = archive["format_version"]
+        if version.shape != () or version.dtype.kind not in "iu" or int(version) != 1:
+            raise ValueError("unsupported checkpoint archive version")
+        paths_array = archive["relative_paths"]
+        if paths_array.ndim != 1 or paths_array.dtype.kind != "U":
+            raise ValueError("invalid checkpoint archive paths")
+        relative_paths = [
+            _validated_archive_path(str(value)) for value in paths_array.tolist()
+        ]
+        if len(set(relative_paths)) != len(relative_paths):
+            raise ValueError("duplicate checkpoint archive path")
+        expected_keys = {
+            "format_version",
+            "relative_paths",
+            "tree",
+            *(f"payload_{index:06d}" for index in range(len(relative_paths))),
+        }
+        if set(archive.files) != expected_keys:
+            raise ValueError("checkpoint archive payload set mismatch")
+        tree_array = archive["tree"]
+        if tree_array.shape != () or tree_array.dtype.kind != "U":
+            raise ValueError("invalid checkpoint tree metadata")
+        try:
+            descriptor = json.loads(str(tree_array))
+        except json.JSONDecodeError as error:
+            raise ValueError("invalid checkpoint tree metadata") from error
+        if not isinstance(descriptor, Mapping):
+            raise ValueError("invalid checkpoint tree metadata")  # noqa: TRY004
+        payloads = []
+        for index in range(len(relative_paths)):
+            payload = archive[f"payload_{index:06d}"]
+            if payload.ndim != 1 or payload.dtype != np.dtype(np.uint8):
+                raise ValueError("invalid checkpoint archive payload")
+            payloads.append(payload.tobytes())
+
+    with tempfile.TemporaryDirectory(prefix=".orbax-restore-") as temporary:
+        checkpoint_directory = Path(temporary) / "checkpoint"
+        checkpoint_directory.mkdir()
+        for relative, payload in zip(relative_paths, payloads, strict=True):
+            destination = checkpoint_directory.joinpath(*relative.parts)
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            destination.write_bytes(payload)
+        checkpointer = ocp.StandardCheckpointer()
+        try:
+            generic = checkpointer.restore(checkpoint_directory)
+        finally:
+            checkpointer.close()
+        restored = _restore_tree(descriptor, generic)
+        jax.block_until_ready(restored)
+        return restored
 
 
 def _inject_failure(config: AcceptanceConfig, point: str) -> None:
