@@ -2,38 +2,17 @@ from __future__ import annotations
 
 import json
 import math
+import os
+import subprocess
+import sys
 from pathlib import Path
 from typing import Any
 
 import jax
-import numpy as np
-import pytest
 import training_sdk
 import yaml
 
-import brax_ppo_acceptance.__main__ as launcher
-import brax_ppo_acceptance.train as train_module
 from brax_ppo_acceptance.train import restore_checkpoint
-
-
-class RecordingAim:
-    def __init__(self) -> None:
-        self.started = 0
-        self.events: list[training_sdk.MetricEvent] = []
-        self.failures: list[dict[str, str]] = []
-
-    def start(self, context: training_sdk.RunContext) -> None:
-        del context
-        self.started += 1
-
-    def send(self, event: training_sdk.MetricEvent) -> None:
-        self.events.append(event)
-
-    def fail(self, metadata: dict[str, str]) -> None:
-        self.failures.append(metadata)
-
-    def close(self) -> None:
-        return None
 
 
 def _write_inputs(tmp_path: Path) -> tuple[Path, Path, Path]:
@@ -94,40 +73,33 @@ def _write_inputs(tmp_path: Path) -> tuple[Path, Path, Path]:
     return config_path, context_path, artifact_directory
 
 
-def test_real_cpu_ppo_params_round_trip_and_runtime_artifacts(
-    monkeypatch: pytest.MonkeyPatch,
-    tmp_path: Path,
-) -> None:
+def test_installed_module_runs_real_cpu_ppo_in_subprocess(tmp_path: Path) -> None:
     assert jax.default_backend() == "cpu"
     assert {device.platform for device in jax.devices()} == {"cpu"}
     config_path, context_path, artifact_directory = _write_inputs(tmp_path)
-    aim = RecordingAim()
-    captured: dict[str, Any] = {}
-    real_ppo_train = train_module.ppo_train.train
+    environment = os.environ.copy()
+    environment.pop("PYTHONPATH", None)
+    environment.pop("BRAX_ACCEPTANCE_TEST_MODE", None)
+    environment.pop("BRAX_ACCEPTANCE_E2E_FAST", None)
+    environment["JAX_PLATFORM_NAME"] = "cpu"
+    environment["TRAINER_RUN_CONTEXT_PATH"] = str(context_path)
+    environment["AIM_REPO"] = str(tmp_path / "aim")
 
-    def capturing_ppo_train(**kwargs: Any) -> tuple[Any, Any, dict[str, Any]]:
-        result = real_ppo_train(**kwargs)
-        captured["params"] = result[1]
-        return result
+    completed = subprocess.run(
+        [sys.executable, "-m", "brax_ppo_acceptance", "--config", str(config_path)],
+        cwd=tmp_path,
+        env=environment,
+        check=False,
+        capture_output=True,
+        text=True,
+        timeout=600,
+    )
 
-    def bootstrap() -> training_sdk.TrainingRun | None:
-        return training_sdk.bootstrap_from_environment(
-            {"TRAINER_RUN_CONTEXT_PATH": str(context_path)},
-            aim_factory=lambda context, environ: aim,
-        )
-
-    monkeypatch.delenv("BRAX_ACCEPTANCE_TEST_MODE", raising=False)
-    monkeypatch.delenv("BRAX_ACCEPTANCE_E2E_FAST", raising=False)
-    monkeypatch.setattr(train_module.ppo_train, "train", capturing_ppo_train)
-    monkeypatch.setattr(launcher, "bootstrap_from_environment", bootstrap)
-    training_sdk.set_current_run(None)
-    try:
-        assert launcher.main(["--config", str(config_path)]) == 0
-    finally:
-        training_sdk.set_current_run(None)
-
-    assert aim.started == 1
-    assert aim.failures == []
+    assert completed.returncode == 0, (
+        f"stdout:\n{completed.stdout}\nstderr:\n{completed.stderr}"
+    )
+    assert '"platform": "cpu"' in completed.stdout
+    assert '"device_platforms": ["cpu"]' in completed.stdout
     spool = training_sdk.EventSpool(
         artifact_directory / "aim-buffer" / "events.jsonl"
     )
@@ -142,21 +114,5 @@ def test_real_cpu_ppo_params_round_trip_and_runtime_artifacts(
     assert len(list((artifact_directory / "rerun").rglob("*.rrd"))) == 1
     checkpoint = artifact_directory / "checkpoints" / "ppo-params.npz"
     assert checkpoint.is_file()
-
-    original = captured["params"]
     restored = restore_checkpoint(checkpoint)
-    assert jax.tree_util.tree_structure(restored) == jax.tree_util.tree_structure(
-        original
-    )
-    original_leaves = jax.tree_util.tree_leaves(original)
-    restored_leaves = jax.tree_util.tree_leaves(restored)
-    assert len(restored_leaves) == len(original_leaves)
-    for expected, actual in zip(original_leaves, restored_leaves, strict=True):
-        expected_array = np.asarray(jax.device_get(expected))
-        actual_array = np.asarray(jax.device_get(actual))
-        assert actual_array.dtype == expected_array.dtype
-        assert actual_array.shape == expected_array.shape
-        np.testing.assert_array_equal(actual_array, expected_array)
-
-    with np.load(checkpoint, allow_pickle=False) as archive:
-        assert all(archive[name].dtype != np.dtype("O") for name in archive.files)
+    assert len(jax.tree_util.tree_leaves(restored)) > 1

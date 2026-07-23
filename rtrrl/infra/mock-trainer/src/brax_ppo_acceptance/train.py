@@ -329,6 +329,27 @@ def restore_checkpoint(path: str | Path) -> Any:
         return restored
 
 
+def _verify_checkpoint_round_trip(expected: Any, checkpoint: Path) -> None:
+    restored = restore_checkpoint(checkpoint)
+    if jax.tree_util.tree_structure(restored) != jax.tree_util.tree_structure(expected):
+        raise ValueError("checkpoint round-trip tree structure mismatch")
+    expected_leaves = jax.tree_util.tree_leaves(expected)
+    restored_leaves = jax.tree_util.tree_leaves(restored)
+    if len(expected_leaves) != len(restored_leaves):
+        raise ValueError("checkpoint round-trip leaf count mismatch")
+    for index, (expected_leaf, restored_leaf) in enumerate(
+        zip(expected_leaves, restored_leaves, strict=True)
+    ):
+        expected_array = _host_array(expected_leaf)
+        restored_array = _host_array(restored_leaf)
+        if expected_array.dtype != restored_array.dtype:
+            raise ValueError(f"checkpoint round-trip leaf {index} dtype mismatch")
+        if expected_array.shape != restored_array.shape:
+            raise ValueError(f"checkpoint round-trip leaf {index} shape mismatch")
+        if not np.array_equal(expected_array, restored_array):
+            raise ValueError(f"checkpoint round-trip leaf {index} value mismatch")
+
+
 def _inject_failure(config: AcceptanceConfig, point: str) -> None:
     if config.failure_mode == point:
         raise RuntimeError(f"injected failure: {point}")
@@ -421,6 +442,7 @@ def train(config: AcceptanceConfig, run: training_sdk.TrainingRun) -> TrainingRe
 
     checkpoint = run.context.artifact_directory / "ppo-params.npz"
     _write_checkpoint(checkpoint, params)
+    _verify_checkpoint_round_trip(params, checkpoint)
     run.register_checkpoint(checkpoint)
     _inject_failure(config, "after_checkpoint")
 

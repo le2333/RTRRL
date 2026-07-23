@@ -321,6 +321,27 @@ def test_restore_checkpoint_normalizes_missing_metadata_error(tmp_path: Path) ->
         restore_checkpoint(archive)
 
 
+def test_train_rejects_checkpoint_mismatch_before_registration(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    config_path, environ = write_config(tmp_path)
+    config = AcceptanceConfig.load(config_path, environ=environ)
+    run, _, _, spool = make_run(tmp_path)
+    run.start()
+    monkeypatch.setattr(
+        train_module,
+        "restore_checkpoint",
+        lambda path: (jnp.ones((2,), dtype=jnp.float32),),
+    )
+
+    with pytest.raises(ValueError, match="checkpoint round-trip"):
+        train(config, run)
+
+    assert not (run.context.artifact_directory / "checkpoints" / "ppo-params.npz").exists()
+    assert not any(event.kind == "final" for event in spool.events)
+
+
 def test_normal_path_calls_real_brax_entry_point_with_fixed_micro_parameters(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
@@ -425,6 +446,7 @@ def test_finalization_failure_is_rethrown_without_double_terminal(
 
 
 def test_successful_launcher_uses_real_bootstrap_and_starts_exactly_once(
+    capsys: pytest.CaptureFixture[str],
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
@@ -459,6 +481,9 @@ def test_successful_launcher_uses_real_bootstrap_and_starts_exactly_once(
     finally:
         training_sdk.set_current_run(None)
 
+    output = capsys.readouterr().out
+    assert '"platform": "cpu"' in output
+    assert '"device_platforms": ["cpu"]' in output
     assert aim.started == 1
     assert aim.failures == []
     spool = run.spool

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import json
 from collections.abc import Sequence
 from pathlib import Path
 
@@ -27,6 +28,16 @@ def main(argv: Sequence[str] | None = None) -> int:
                 "eval/episode_return": result.objective,
                 "runtime/device_count": len(jax.devices()),
             }
+        )
+        print(
+            json.dumps(
+                {
+                    "device_kind": result.device_kind,
+                    "device_platforms": sorted({device.platform for device in jax.devices()}),
+                    "platform": result.platform,
+                },
+                sort_keys=True,
+            )
         )
     except BaseException as error:
         run.fail(error)
