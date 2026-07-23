@@ -315,6 +315,7 @@ def make_controller(
     calls: list[str],
     *,
     mode: str = "ok",
+    aim_mode: str | None = None,
     ids: list[str] | None = None,
     custom_study_factory: Any | None = None,
 ) -> tuple[ExperimentController, Store, Batch, list[Any]]:
@@ -337,6 +338,10 @@ def make_controller(
         batches.append(batch)
         return batch
 
+    def aim_reader_factory(store: Store) -> Aim:
+        assert store in stores
+        return Aim(aim_mode or mode)
+
     def study_factory(**kwargs: object) -> Study:
         calls.append("study")
         if custom_study_factory is not None:
@@ -352,7 +357,7 @@ def make_controller(
         preflight=Preflight(calls),
         store_factory=store_factory,
         batch_factory=batch_factory,
-        aim_reader=Aim(mode),
+        aim_reader_factory=aim_reader_factory,
         study_factory=study_factory,
         experiment_id_factory=lambda: next(identifiers),
         bucket="bucket",
@@ -520,8 +525,11 @@ def test_runtime_and_both_persistence_failures_are_all_preserved(tmp_path: Path)
     experiment = tmp_path / "experiment.yaml"
     write_experiment(experiment)
     calls: list[str] = []
-    controller, stores, _, _ = make_controller(calls, mode="persist-both-failed")
-    controller._aim_reader.mode = "aim-failed"  # type: ignore[attr-defined]
+    controller, stores, _, _ = make_controller(
+        calls,
+        mode="persist-both-failed",
+        aim_mode="aim-failed",
+    )
 
     with pytest.raises(ExperimentRunError) as raised:
         controller.run(experiment)

@@ -427,7 +427,6 @@ class FakeBatch:
     ) -> SubmittedJob:
         del profile, job_definition
         self.submit_attempts += 1
-        self.submitted.append(bundle)
         if self.mode == "partial-submit" and self.submit_attempts == 2:
             raise RuntimeError("second Batch submit failed")
         job_id = f"batch-{self.submit_attempts}"
@@ -475,6 +474,7 @@ class FakeBatch:
             status=status,
             status_reason=failed_reason,
         )
+        self.submitted.append(bundle)
         return SubmittedJob(job_id=job_id, bundle_id=bundle.job_id)
 
     def query(self, job_ids: list[str]) -> tuple[JobQuery, ...]:
@@ -867,6 +867,7 @@ def test_submission_failures_preserve_accepted_ids_and_fail_all_pending_trials(
     assert cause_match in str(raised.value.__cause__)
     assert raised.value.report.submitted_job_ids == submitted_ids
     assert batch.submit_attempts == submit_attempts
+    assert len(batch.submitted) == len(submitted_ids)
     assert batch.resubmit_calls == batch.cancel_calls == batch.retry_calls == 0
     assert all(
         sum(trial.state == TrialState.FAIL for trial in study.trials) == 2

@@ -40,8 +40,8 @@ only ECR, S3, Batch, and Aim service boundaries.
   checkpoint, and Rerun artifact under that run's artifact prefix. Artifact
   URIs are one-to-one across runs, exist in fake S3, and match stored SHA-256.
 - Added an explicit 1,428-entry
-  `tests/data/historical-fd195c4.json` manifest with path, baseline git blob
-  SHA, and category for every selected historical entry.
+  `tests/data/historical-fd195c4.json` manifest with path, baseline Git mode,
+  git blob SHA, and category for every selected historical entry.
 
 ## Implementation Defects Exposed and Fixed
 
@@ -84,7 +84,9 @@ baseline-derived union contains 1,428 unique paths:
 
 The test independently recomputes the selection from
 `git ls-tree --full-tree fd195c4`, requires exact manifest equality, and recomputes each
-current file's git blob SHA from its bytes. Every entry exists and is unchanged.
+current file's git blob SHA from its bytes. It also verifies that each current
+file's executable bits agree with baseline mode `100644` or `100755`. Every
+entry exists and is unchanged.
 Workflows, descriptors, and HPO specs parse as YAML. Every selected shell
 command is syntax-checked with `bash -n`; safe Python CLI help surfaces and the
 historical HPO dry run are exercised. A fake `aws` executable proves those
@@ -126,6 +128,14 @@ verification.
   constructor argument. The controller now formally supports exactly one
   fixed reader or store-bound reader factory, so Task 6 tests no longer modify
   controller private attributes.
+- Final Minor cleanup moved `test_controller.py` entirely onto the formal
+  store-bound `aim_reader_factory`; combined persistence/Aim failure is injected
+  through independent constructor modes instead of mutating `_aim_reader`.
+- The partial-submit fake records attempts separately and appends to
+  `submitted` only after `submit()` successfully returns an accepted job.
+- The historical manifest now locks Git mode as well as blob identity, and the
+  test compares baseline executable mode with current filesystem executable
+  bits.
 
 ## Verification
 
@@ -155,6 +165,10 @@ verification.
 - `git diff --check` — passed.
 - IDE diagnostics for every changed Python implementation and test file — no
   findings.
+- Final Minor coverage:
+  `cd rtrrl/infra/control-plane && uv run pytest tests/test_controller.py tests/test_end_to_end.py tests/test_historical_entries.py -q`
+  — 42 passed in 71.21 seconds, one upstream Aim/SQLAlchemy warning. Control
+  plane Ruff, `git diff --check`, and IDE diagnostics all passed.
 
 ## Review Remediation Concerns
 

@@ -100,6 +100,7 @@ def _expected_manifest_entries() -> list[dict[str, Any]]:
             entries.append(
                 {
                     "path": path,
+                    "mode": mode,
                     "blob": blob,
                     "categories": categories,
                 }
@@ -147,6 +148,10 @@ def test_every_manifest_entry_exists_with_unchanged_git_blob_identity() -> None:
     for entry in entries:
         path = REPOSITORY_ROOT / entry["path"]
         assert path.is_file(), entry["path"]
+        assert entry["mode"] in {"100644", "100755"}
+        assert bool(path.stat().st_mode & 0o111) == (entry["mode"] == "100755"), entry[
+            "path"
+        ]
         assert _git_blob_sha(path.read_bytes()) == entry["blob"], entry["path"]
 
 
