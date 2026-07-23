@@ -92,6 +92,12 @@ def test_iam_simulation_unavailable_is_unknown_and_preflight_passes() -> None:
         (item["vcpus"], item["memory_mib"], item["gpus"])
         for item in report["profiles"]
     ] == [(1, 1600, 0), (2, 3200, 0), (4, 7168, 0), (4, 12000, 1)]
+    assert [item["dev_queue"] for item in report["profiles"]] == [
+        {"name": "dev-cpu-c7am-queue", "priority": 10},
+        {"name": "dev-cpu-c7al-queue", "priority": 10},
+        {"name": "dev-cpu-c7ax-queue", "priority": 10},
+        {"name": "dev-gpu-queue", "priority": 10},
+    ]
     assert all(item["run_queue"]["priority"] == 100 for item in report["profiles"])
 
 
@@ -115,3 +121,20 @@ def test_authoritative_profile_drift_blocks_preflight() -> None:
     assert report["status"] == "blocked"
     assert report["profiles"]["status"] == "failed"
     assert "minvCpus" in report["profiles"]["error"]
+
+
+def test_preflight_writes_only_canonical_report_atomically(tmp_path: Path) -> None:
+    preflight = _load()
+    destination = tmp_path / "complete-facility-task7-phase-a-preflight.json"
+
+    written = preflight.write_canonical_report(
+        {"schema_version": 1, "status": "pass"},
+        path=destination,
+    )
+
+    assert preflight.CANONICAL_REPORT == Path(
+        "/tmp/complete-facility-task7-phase-a-preflight.json"
+    )
+    assert written == destination
+    assert destination.read_text() == '{"schema_version":1,"status":"pass"}\n'
+    assert list(tmp_path.glob("*.tmp")) == []

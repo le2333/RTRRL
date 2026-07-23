@@ -10,6 +10,7 @@ from trainer_infra.models import ResourceProfileName
 @dataclass(frozen=True)
 class AwsProfile:
     name: ResourceProfileName
+    dev_queue: str
     run_queue: str
     compute_environment: str
     vcpus: int
@@ -21,6 +22,7 @@ PROFILES: Mapping[ResourceProfileName, AwsProfile] = MappingProxyType(
     {
         "c7am": AwsProfile(
             name="c7am",
+            dev_queue="dev-cpu-c7am-queue",
             run_queue="run-cpu-c7am-queue",
             compute_environment="rtrrl-cpu-c7am-ce",
             vcpus=1,
@@ -29,6 +31,7 @@ PROFILES: Mapping[ResourceProfileName, AwsProfile] = MappingProxyType(
         ),
         "c7al": AwsProfile(
             name="c7al",
+            dev_queue="dev-cpu-c7al-queue",
             run_queue="run-cpu-c7al-queue",
             compute_environment="rtrrl-cpu-c7al-ce",
             vcpus=2,
@@ -37,6 +40,7 @@ PROFILES: Mapping[ResourceProfileName, AwsProfile] = MappingProxyType(
         ),
         "c7ax": AwsProfile(
             name="c7ax",
+            dev_queue="dev-cpu-c7ax-queue",
             run_queue="run-cpu-c7ax-queue",
             compute_environment="rtrrl-cpu-c7ax-ce",
             vcpus=4,
@@ -45,6 +49,7 @@ PROFILES: Mapping[ResourceProfileName, AwsProfile] = MappingProxyType(
         ),
         "g6x": AwsProfile(
             name="g6x",
+            dev_queue="dev-gpu-queue",
             run_queue="run-gpu-queue",
             compute_environment="rtrrl-gpu-g6x-ce",
             vcpus=4,

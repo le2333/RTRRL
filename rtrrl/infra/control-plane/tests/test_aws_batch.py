@@ -209,14 +209,19 @@ class FakePreflightBatch:
     def describe_job_queues(self, **kwargs: Any) -> dict[str, Any]:
         self.calls.append(("describe_job_queues", kwargs))
         name = kwargs["jobQueues"][0]
-        profile = next(item for item in PROFILES.values() if item.run_queue == name)
+        profile = next(
+            item
+            for item in PROFILES.values()
+            if name in {item.dev_queue, item.run_queue}
+        )
+        priority = 10 if name == profile.dev_queue else 100
         return {
             "jobQueues": [
                 {
                     "jobQueueName": name,
                     "state": "ENABLED",
                     "status": "VALID",
-                    "priority": 100,
+                    "priority": priority,
                     "computeEnvironmentOrder": [
                         {"order": 1, "computeEnvironment": f"arn:ce:{profile.compute_environment}"}
                     ],
@@ -309,6 +314,27 @@ def test_authoritative_infrastructure_preflight_can_validate_without_definitions
         (item.profile.vcpus, item.profile.memory_mib, item.profile.gpus)
         for item in validated
     ] == [(1, 1600, 0), (2, 3200, 0), (4, 7168, 0), (4, 12000, 1)]
+    assert [item.profile.dev_queue for item in validated] == [
+        "dev-cpu-c7am-queue",
+        "dev-cpu-c7al-queue",
+        "dev-cpu-c7ax-queue",
+        "dev-gpu-queue",
+    ]
+    queue_calls = [
+        arguments["jobQueues"][0]
+        for name, arguments in client.calls
+        if name == "describe_job_queues"
+    ]
+    assert queue_calls == [
+        "dev-cpu-c7am-queue",
+        "run-cpu-c7am-queue",
+        "dev-cpu-c7al-queue",
+        "run-cpu-c7al-queue",
+        "dev-cpu-c7ax-queue",
+        "run-cpu-c7ax-queue",
+        "dev-gpu-queue",
+        "run-gpu-queue",
+    ]
     assert {name for name, _ in client.calls} == {
         "describe_compute_environments",
         "describe_job_queues",

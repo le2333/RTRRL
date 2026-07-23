@@ -222,20 +222,26 @@ class AwsBatchPreflight:
                     "ec2Configuration does not match expected contract"
                 )
 
-            queue_response = self._client.describe_job_queues(jobQueues=[profile.run_queue])
-            queue = _one(
-                queue_response.get("jobQueues", []),
-                context=f"job queue {profile.run_queue!r}",
-            )
-            if (
-                queue.get("jobQueueName") != profile.run_queue
-                or queue.get("state") != "ENABLED"
-                or queue.get("status") != "VALID"
-                or queue.get("priority") != 100
-                or queue.get("computeEnvironmentOrder")
-                != [{"order": 1, "computeEnvironment": environment_arn}]
+            for queue_name, priority in (
+                (profile.dev_queue, 10),
+                (profile.run_queue, 100),
             ):
-                raise ValueError(f"job queue {profile.run_queue!r} is invalid")
+                queue_response = self._client.describe_job_queues(
+                    jobQueues=[queue_name]
+                )
+                queue = _one(
+                    queue_response.get("jobQueues", []),
+                    context=f"job queue {queue_name!r}",
+                )
+                if (
+                    queue.get("jobQueueName") != queue_name
+                    or queue.get("state") != "ENABLED"
+                    or queue.get("status") != "VALID"
+                    or queue.get("priority") != priority
+                    or queue.get("computeEnvironmentOrder")
+                    != [{"order": 1, "computeEnvironment": environment_arn}]
+                ):
+                    raise ValueError(f"job queue {queue_name!r} is invalid")
             result.append(
                 ValidatedAwsProfile(
                     profile=profile,

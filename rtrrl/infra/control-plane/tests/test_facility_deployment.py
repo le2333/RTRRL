@@ -95,14 +95,19 @@ class FakeBatch:
     def describe_job_queues(self, **kwargs: Any) -> dict[str, Any]:
         self.calls.append(("describe_job_queues", deepcopy(kwargs)))
         name = kwargs["jobQueues"][0]
-        profile = next(profile for profile in PROFILES.values() if profile.run_queue == name)
+        profile = next(
+            profile
+            for profile in PROFILES.values()
+            if name in {profile.dev_queue, profile.run_queue}
+        )
+        priority = 10 if name == profile.dev_queue else 100
         return {
             "jobQueues": [
                 {
                     "jobQueueName": name,
                     "state": "ENABLED",
                     "status": "VALID",
-                    "priority": 100,
+                    "priority": priority,
                     "computeEnvironmentOrder": [
                         {
                             "order": 1,
@@ -257,6 +262,12 @@ def test_read_only_preflight_reports_stable_complete_json(
         100,
         100,
         100,
+    ]
+    assert [item["dev_queue"]["priority"] for item in report["profiles"]] == [
+        10,
+        10,
+        10,
+        10,
     ]
     assert report["s3"]["prefix"] == "experiments/"
     assert report["ecr"]["images"]["memorax-rtrl-facility-cpu"]["status"] == "visible"

@@ -108,6 +108,45 @@ def test_local_build_is_independent_and_push_does_not_require_build(
     assert built == ["build"]
 
 
+def test_push_reverifies_both_local_tags_before_login_or_push(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    deploy = _load()
+    control = load_facility_control(CONTROL)
+    session = Session()
+    verified: list[tuple[str, str]] = []
+    push_calls: list[object] = []
+
+    def reject_gpu(kind: str, image: str) -> None:
+        verified.append((kind, image))
+        if kind == "gpu":
+            raise ValueError("gpu image verification failed")
+
+    monkeypatch.setattr(deploy, "_verify_image", reject_gpu)
+    monkeypatch.setattr(
+        deploy,
+        "_push_images",
+        lambda *_args, **_kwargs: push_calls.append(object()),
+    )
+
+    with pytest.raises(ValueError, match="gpu image verification failed"):
+        deploy.deploy(
+            deploy.DeployRequest(
+                push=True,
+                confirm_account="007122174918",
+            ),
+            control=control,
+            session=session,
+        )
+
+    assert verified == [
+        ("cpu", deploy._tagged_image(control, "cpu")),
+        ("gpu", deploy._tagged_image(control, "gpu")),
+    ]
+    assert session.requested == ["sts"]
+    assert push_calls == []
+
+
 def test_registration_uses_only_fixed_control_roles_and_profile_resources() -> None:
     deploy = _load()
     control = load_facility_control(CONTROL)

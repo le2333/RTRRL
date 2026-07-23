@@ -323,6 +323,8 @@ def deploy(
         built = _build_images(control)
     if config.push:
         assert active_session is not None
+        for kind in ("cpu", "gpu"):
+            _verify_image(kind, _tagged_image(control, kind))
         digests.update(_push_images(active_session, control))
     definitions: list[str] = []
     if config.register:

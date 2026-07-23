@@ -2,8 +2,10 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 from pathlib import Path
 import sys
+import tempfile
 from typing import Any, Callable, Mapping
 
 import boto3
@@ -36,10 +38,38 @@ REQUIRED_ACTIONS = (
     "s3:ListBucket",
     "s3:PutObject",
 )
+CANONICAL_REPORT = Path("/tmp/complete-facility-task7-phase-a-preflight.json")
 
 
 def stable_json(value: object) -> str:
     return json.dumps(value, separators=(",", ":"), sort_keys=True)
+
+
+def write_canonical_report(
+    report: object,
+    *,
+    path: Path = CANONICAL_REPORT,
+) -> Path:
+    rendered = stable_json(report) + "\n"
+    temporary_path: Path | None = None
+    try:
+        with tempfile.NamedTemporaryFile(
+            mode="w",
+            encoding="utf-8",
+            dir=path.parent,
+            prefix=f".{path.name}.",
+            suffix=".tmp",
+            delete=False,
+        ) as stream:
+            temporary_path = Path(stream.name)
+            stream.write(rendered)
+            stream.flush()
+            os.fsync(stream.fileno())
+        temporary_path.replace(path)
+    finally:
+        if temporary_path is not None:
+            temporary_path.unlink(missing_ok=True)
+    return path
 
 
 def _permission_denied(error: BaseException) -> bool:
@@ -147,6 +177,10 @@ def _check_profiles(batch: Any, control: FacilityControl) -> list[dict[str, Any]
         {
             "compute_environment": item.profile.compute_environment,
             "compute_environment_arn": item.compute_environment_arn,
+            "dev_queue": {
+                "name": item.profile.dev_queue,
+                "priority": 10,
+            },
             "gpus": item.profile.gpus,
             "memory_mib": item.profile.memory_mib,
             "profile": item.profile.name,
@@ -344,7 +378,6 @@ def run_preflight(
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Read-only Task 7 AWS/Aim preflight.")
     parser.add_argument("--control", required=True, type=Path)
-    parser.add_argument("--output", type=Path)
     return parser
 
 
@@ -354,8 +387,7 @@ def main(argv: list[str] | None = None) -> int:
     report = run_preflight(boto3.Session(region_name=config.region), config)
     rendered = stable_json(report)
     print(rendered)
-    if arguments.output is not None:
-        arguments.output.write_text(rendered + "\n", encoding="utf-8")
+    write_canonical_report(report)
     return 0 if report["status"] == "pass" else 1
 
 
