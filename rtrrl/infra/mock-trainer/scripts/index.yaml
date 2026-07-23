@@ -1,0 +1,3 @@
+protocol_version: "1"
+scripts:
+  - brax_ppo_acceptance.yaml

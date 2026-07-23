@@ -1,13 +1,12 @@
-# Root-context allowlist for all memo image builds.
 **
-!memo
-!memo/**
 !training-sdk
 !training-sdk/**
 !rtrrl
 !rtrrl/infra
 !rtrrl/infra/worker
 !rtrrl/infra/worker/worker.py
+!rtrrl/infra/mock-trainer
+!rtrrl/infra/mock-trainer/**
 
 # Never send local environments, VCS/worktree metadata, caches, or run state.
 .git
