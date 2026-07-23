@@ -2,9 +2,11 @@
 
 ## Reproduction Identity
 
-- Generated at (UTC): `2026-07-23T18:25:30Z`
+- Generated at (UTC): `2026-07-23T18:30:09Z`
 - Baseline: `c763673`
-- Reviewed implementation commit: `64668aecc5aa80e54493c98fc48fb80b2b778b04`
+- Review hardening commits:
+  `64668aecc5aa80e54493c98fc48fb80b2b778b04`,
+  `30427f2a1ddea4c1833660734e70036e4b211009`
 - Result: `PASS`
 - AWS writes performed: none
 - Image builds performed: none
@@ -126,8 +128,8 @@ This is an estimate only. No job was submitted in Phase A.
 
 ## Verification
 
-- Targeted review suite: `63 passed`
-- Full control-plane suite: `494 passed`
+- Targeted review suite: `64 passed`
+- Full control-plane suite: `495 passed`
 - Ruff over `src`, `tests`, and `scripts`: passed
 - IDE lint on changed implementation files: no findings
 - `git diff --check`: passed
