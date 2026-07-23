@@ -21,11 +21,10 @@ ENV UV_PYTHON_DOWNLOADS=never \
 WORKDIR /app
 
 # Only the dependency manifests first, so this layer caches across code changes.
-COPY training-sdk /training-sdk
-COPY memo/pyproject.toml memo/uv.lock ./
-# Source is copied only in the runtime stage, so install locked dependencies only.
+COPY pyproject.toml uv.lock ./
+# pyproject has [tool.uv] package = false, so this installs deps only (no project).
 # --extra brax: Brax envs (Hopper etc.) are imported at runtime by experiments.
-RUN uv sync --frozen --no-dev --no-editable --extra brax --no-install-project
+RUN uv sync --frozen --no-dev --extra brax
 
 # ---- runtime -----------------------------------------------------------------
 FROM python:3.12-slim AS runtime
@@ -52,10 +51,10 @@ WORKDIR /app
 
 # Application code (build context is the repo root; see .dockerignore).
 # config/, docs/, figures/, logs/ are excluded — configs are injected at runtime.
-COPY memo /app
+COPY . /app
 
 # Entrypoint decodes the submit-time CONFIG_B64 into /tmp/run-config.yml, then exec's.
-COPY memo/infra/docker/entrypoint.sh /usr/local/bin/entrypoint.sh
+COPY infra/docker/entrypoint.sh /usr/local/bin/entrypoint.sh
 RUN chmod +x /usr/local/bin/entrypoint.sh
 
 ENTRYPOINT ["/usr/local/bin/entrypoint.sh"]

@@ -13,6 +13,8 @@ Action: Discrete(2**K) — a K-bit prediction (integer 0..2**K-1).
 Reward: at the final step, fraction of recalled bits that match the cue
   (0..1); 0 on all non-final steps.
 """
+from typing import Any
+
 import jax
 import jax.numpy as jnp
 from flax import struct
@@ -54,17 +56,6 @@ class KMemoryChain:
     def step(
         self, key: Key, state: KMemoryChainState, action: Array, params: KMemoryChainParams
     ) -> tuple[Array, KMemoryChainState, Array, Array, dict]:
-        obs, new_state, reward, terminated, _, info = self.trace_step(
-            key, state, action, params
-        )
-        return obs, new_state, reward, terminated, info
-
-    def trace_step(
-        self, key: Key, state: KMemoryChainState, action: Array, params: KMemoryChainParams
-    ) -> tuple[Array, KMemoryChainState, Array, Array, Array, dict]:
-        """Step without auto-reset and expose natural termination explicitly."""
-
-        del key
         L = state.L
         K = params.K
         t = state.t
@@ -80,7 +71,7 @@ class KMemoryChain:
             jnp.array([0.0], dtype=jnp.float32),
         ])
         new_state = KMemoryChainState(bits=state.bits, t=new_t, L=L)
-        return obs, new_state, reward, done, jnp.asarray(False), {}
+        return obs, new_state, reward, done, {}
 
     def observation_space(self, params: KMemoryChainParams) -> spaces.Box:
         return spaces.Box(low=-1.0, high=1.0, shape=(params.K + 1,))

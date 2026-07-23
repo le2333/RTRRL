@@ -1,8 +1,8 @@
 name: Build and push memo image
 
 # Builds the memorax-rtrl (Stream AC(λ)+RTU-RTRL / RTRRL-in-memorax, JAX 0.10)
-# training image from the memo/ subproject. All variants use repository-root
-# context for the shared training-sdk while retaining separate ECR tags (memorax-rtrl-cpu /
+# training image from the memo/ subproject. Independent of rtrrl/: separate build
+# context, separate pyproject/uv.lock, separate ECR tags (memorax-rtrl-cpu /
 # memorax-rtrl-gpu, matching memo/project.env).
 
 on:
@@ -10,10 +10,6 @@ on:
     branches: [main]
     paths:
       - "memo/**"
-      - "training-sdk/**"
-      - "rtrrl/infra/worker/**"
-      - "rtrrl/infra/control-plane/**"
-      - ".dockerignore"
       - ".github/workflows/build-memo-image.yml"
   workflow_dispatch: {}
 
@@ -63,69 +59,10 @@ jobs:
       - name: Build and push (${{ matrix.tag }})
         uses: docker/build-push-action@v6
         with:
-          context: .
+          context: memo
           file: ${{ matrix.dockerfile }}
           platforms: linux/amd64
           push: true
-          tags: |
-            ${{ steps.ecr.outputs.registry }}/${{ env.ECR_REPO }}:${{ matrix.tag }}
-            ${{ steps.ecr.outputs.registry }}/${{ env.ECR_REPO }}:${{ github.sha }}-${{ matrix.tag }}
-          cache-from: type=gha,scope=${{ matrix.tag }}
-          cache-to: type=gha,mode=max,scope=${{ matrix.tag }}
-
-  build-facility:
-    runs-on: ubuntu-latest
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - tag: memorax-rtrl-facility-cpu
-            dockerfile: memo/infra/docker/Dockerfile.facility
-          - tag: memorax-rtrl-facility-gpu
-            dockerfile: memo/infra/docker/Dockerfile.facility.gpu
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Set up uv
-        uses: astral-sh/setup-uv@v6
-
-      - name: Encode facility script catalog
-        id: catalog
-        run: |
-          value="$(
-            uv run --project rtrrl/infra/control-plane \
-              trainer-image-catalog memo/infra/scripts/index.yaml
-          )"
-          test -n "$value"
-          echo "value=$value" >> "$GITHUB_OUTPUT"
-
-      - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
-
-      - name: Configure AWS credentials (OIDC)
-        uses: aws-actions/configure-aws-credentials@v4
-        with:
-          role-to-assume: ${{ env.AWS_ROLE_ARN }}
-          aws-region: ${{ env.AWS_REGION }}
-
-      - name: Ensure ECR repository exists
-        run: |
-          aws ecr describe-repositories --repository-names "$ECR_REPO" --region "$AWS_REGION" >/dev/null 2>&1 \
-            || aws ecr create-repository --repository-name "$ECR_REPO" --region "$AWS_REGION" >/dev/null
-
-      - name: Login to Amazon ECR
-        id: ecr
-        uses: aws-actions/amazon-ecr-login@v2
-
-      - name: Build and push formal image (${{ matrix.tag }})
-        uses: docker/build-push-action@v6
-        with:
-          context: .
-          file: ${{ matrix.dockerfile }}
-          platforms: linux/amd64
-          push: true
-          build-args: |
-            TRAINER_SCRIPT_CATALOG=${{ steps.catalog.outputs.value }}
           tags: |
             ${{ steps.ecr.outputs.registry }}/${{ env.ECR_REPO }}:${{ matrix.tag }}
             ${{ steps.ecr.outputs.registry }}/${{ env.ECR_REPO }}:${{ github.sha }}-${{ matrix.tag }}

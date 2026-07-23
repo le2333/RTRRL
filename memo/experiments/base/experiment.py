@@ -11,9 +11,9 @@ binding (see its run.py); only the backbone variant (agent_type) and
 hyperparameters are configurable. Algorithm and environment are never mixed
 across experiments.
 """
-import time
 from dataclasses import asdict, dataclass
 from pprint import pprint
+import time
 
 import flax.linen as nn
 import jax
@@ -21,42 +21,32 @@ import jax.numpy as jnp
 import lox
 import numpy as np
 import optax
-from logging_util import DummyLogger, with_logger
-from training_sdk import Episode
+from tqdm import trange
+
 from memorax.algorithms import (
     QRC,
-    RTRRL,
-    IndependentRTRRL,
-    IndependentRTRRLConfig,
     QRCConfig,
     QRCRtrl,
+    RTRRL,
     RTRRLConfig,
     StreamAC,
     StreamACConfig,
     StreamACRtrl,
 )
 from memorax.networks import (
-    RNN,
     FeatureExtractor,
     LRUCell,
     LRUConfig,
     Memoroid,
     Network,
+    RNN,
     RTUCell,
     RTUConfig,
     heads,
 )
-from memorax.online_ac import (
-    LegacyProgram,
-    MetaProgramConfig,
-    StandardProgramConfig,
-    build_meta_program,
-    build_standard_program,
-    legacy_env_adapter,
-    legacy_normalization_config,
-)
 from memorax.utils.typing import Discrete
-from tqdm import trange
+
+from logging_util import DummyLogger, with_logger
 
 # Persistent JAX compilation cache (matches streaming-rtrrl/rtrrl_lru.py).
 jax.config.update("jax_compilation_cache_dir", "/tmp/jax_cache")
@@ -80,8 +70,6 @@ class ExperimentConfig:
     total_timesteps: int = 500_000
     num_epochs: int = 50
     num_envs: int = 16
-    max_episode_steps: int = 1000
-    require_full_budget: bool = False
 
     # Validation
     eval_every: int = 10
@@ -136,21 +124,6 @@ def _identity(x):
     return x
 
 
-def _reject_legacy_new_conflict(cfg):
-    """Prevent silently mixing legacy scalar fields with a new program recipe."""
-
-    for field in (
-        "online_ac_config",
-        "program_config",
-        "meta_program_config",
-        "standard_program_config",
-    ):
-        if getattr(cfg, field, None) is not None:
-            raise ValueError(
-                f"legacy/new config conflict: legacy builder received '{field}'"
-            )
-
-
 def build_networks(cfg: ExperimentConfig, action_space) -> tuple[Network, Network]:
     """Build actor/critic networks from cfg.agent_type and the action space.
 
@@ -159,8 +132,12 @@ def build_networks(cfg: ExperimentConfig, action_space) -> tuple[Network, Networ
     """
     feat = cfg.encoder_dim
     observation_extractor = nn.Sequential((nn.Dense(feat), nn.relu))
-    action_extractor = nn.Sequential((nn.Dense(feat), nn.relu)) if cfg.meta_rl else None
-    reward_extractor = nn.Sequential((nn.Dense(feat), nn.relu)) if cfg.meta_rl else None
+    action_extractor = (
+        nn.Sequential((nn.Dense(feat), nn.relu)) if cfg.meta_rl else None
+    )
+    reward_extractor = (
+        nn.Sequential((nn.Dense(feat), nn.relu)) if cfg.meta_rl else None
+    )
     feature_extractor = FeatureExtractor(
         observation_extractor=observation_extractor,
         action_extractor=action_extractor,
@@ -200,8 +177,7 @@ def build_networks(cfg: ExperimentConfig, action_space) -> tuple[Network, Networ
 
 
 def build_stream_ac_agent(cfg: ExperimentConfig, env, env_params):
-    """Build StreamAC-RTRL through the composable program lifecycle."""
-    _reject_legacy_new_conflict(cfg)
+    """Build a StreamAC or StreamACRtrl agent from cfg.agent_type."""
     action_space = env.action_space(env_params)
     actor_network, critic_network = build_networks(cfg, action_space)
 
@@ -219,23 +195,9 @@ def build_stream_ac_agent(cfg: ExperimentConfig, env, env_params):
         eps=cfg.eps,
     )
 
-    if cfg.agent_type == "rtu_tbptt":
-        return StreamAC(ac_cfg, env, env_params, actor_network, critic_network)
-    if cfg.agent_type not in ("rtu_rtrl", "lru_rtrl"):
-        raise ValueError(
-            "build_stream_ac_agent requires exact-RTRL agent_type "
-            "'rtu_rtrl' or 'lru_rtrl'."
-        )
-    parts = StreamACRtrl(ac_cfg, env, env_params, actor_network, critic_network)
-    adapter = legacy_env_adapter(env, env_params)
-    program_config = StandardProgramConfig.from_legacy_parts(
-        parts,
-        normalization=legacy_normalization_config(env, cfg),
-    )
-    return LegacyProgram(
-        build_standard_program(program_config, adapter),
-        program_config,
-    )
+    if cfg.agent_type in ("rtu_rtrl", "lru_rtrl"):
+        return StreamACRtrl(ac_cfg, env, env_params, actor_network, critic_network)
+    return StreamAC(ac_cfg, env, env_params, actor_network, critic_network)
 
 
 def build_rtrrl_agent(cfg: ExperimentConfig, env, env_params):
@@ -250,12 +212,9 @@ def build_rtrrl_agent(cfg: ExperimentConfig, env, env_params):
     via lru_output_dim (through C, + D skip, then silu in RTRRL._forward) — the
     faithful streaming-rtrrl OnlineLRULayer(d_output, d_hidden) topology.
     """
-    _reject_legacy_new_conflict(cfg)
     action_space = env.action_space(env_params)
     if isinstance(action_space, Discrete):
-        raise ValueError(
-            "RTRRL currently targets continuous-action envs (Gaussian actor)."
-        )
+        raise ValueError("RTRRL currently targets continuous-action envs (Gaussian actor).")
 
     use_encoder = getattr(cfg, "use_encoder", True)
     if use_encoder:
@@ -294,9 +253,7 @@ def build_rtrrl_agent(cfg: ExperimentConfig, env, env_params):
     # probe. Both expose the same local_jacobian RTRL interface.
     backbone = getattr(cfg, "backbone", "lru")
     if backbone == "rtu":
-        torso = RNN(
-            cell=RTUCell(config=RTUConfig(features=in_dim, hidden_dim=cfg.hidden_dim))
-        )
+        torso = RNN(cell=RTUCell(config=RTUConfig(features=in_dim, hidden_dim=cfg.hidden_dim)))
     elif backbone == "lru":
         torso = Memoroid(
             cell=LRUCell(
@@ -352,7 +309,7 @@ def build_rtrrl_agent(cfg: ExperimentConfig, env, env_params):
             else 1.0
         ),
     )
-    parts = RTRRL(
+    return RTRRL(
         rtrrl_cfg,
         env,
         env_params,
@@ -362,129 +319,18 @@ def build_rtrrl_agent(cfg: ExperimentConfig, env, env_params):
         critic_head,
         pred_head=pred_head,
     )
-    adapter = legacy_env_adapter(env, env_params)
-    program_config = MetaProgramConfig.from_legacy_parts(
-        parts,
-        normalization=legacy_normalization_config(env, cfg),
-    )
-    return LegacyProgram(
-        build_meta_program(program_config, adapter),
-        program_config,
-    )
 
 
-def build_independent_rtrrl_agent(cfg: ExperimentConfig, env, env_params):
-    """Build strict two-path legacy RTRRL with no actor/critic state sharing."""
-    if getattr(cfg, "pred_obs", False):
-        raise ValueError("Independent RTRRL does not support pred_obs.")
-    action_space = env.action_space(env_params)
-    if isinstance(action_space, Discrete):
-        raise ValueError("Independent RTRRL currently targets continuous-action envs.")
-
-    use_encoder = getattr(cfg, "use_encoder", True)
-    if use_encoder:
-        feat = cfg.encoder_dim
-
-        def make_feature_extractor():
-            return FeatureExtractor(
-                observation_extractor=nn.Sequential((nn.Dense(feat), nn.relu)),
-                action_extractor=(
-                    nn.Sequential((nn.Dense(feat), nn.relu)) if cfg.meta_rl else None
-                ),
-                reward_extractor=(
-                    nn.Sequential((nn.Dense(feat), nn.relu)) if cfg.meta_rl else None
-                ),
-            )
-
-        in_dim = feat * (3 if cfg.meta_rl else 1)
-        lru_output_dim = None
-    else:
-        # Construct two distinct module objects even though these front-ends have
-        # no trainable leaves.
-        def make_feature_extractor():
-            return FeatureExtractor(
-                observation_extractor=_identity,
-                action_extractor=_identity if cfg.meta_rl else None,
-                reward_extractor=_identity if cfg.meta_rl else None,
-            )
-
-        obs_dim = env.observation_space(env_params).shape[0]
-        act_dim = action_space.shape[0]
-        in_dim = obs_dim + (act_dim + 1 if cfg.meta_rl else 0)
-        lru_output_dim = getattr(cfg, "lru_output_dim", None) or cfg.hidden_dim
-
-    backbone = getattr(cfg, "backbone", "lru")
-
-    def make_torso():
-        if backbone == "rtu":
-            return RNN(
-                cell=RTUCell(
-                    config=RTUConfig(features=in_dim, hidden_dim=cfg.hidden_dim)
-                )
-            )
-        if backbone == "lru":
-            return Memoroid(
-                cell=LRUCell(
-                    config=LRUConfig(
-                        features=in_dim,
-                        hidden_dim=cfg.hidden_dim,
-                        output_dim=lru_output_dim,
-                    )
-                )
-            )
-        raise ValueError(f"backbone '{backbone}' not supported; use 'lru' or 'rtu'.")
-
-    independent_cfg = IndependentRTRRLConfig(
-        num_envs=cfg.num_envs,
-        gamma=cfg.gamma,
-        lambda_pi=cfg.lambda_pi,
-        lambda_v=cfg.lambda_v,
-        lambda_rnn=cfg.lambda_rnn,
-        td_lr=cfg.td_lr,
-        rnn_lr=cfg.rnn_lr,
-        eta_pi=cfg.eta_pi,
-        eta_f=cfg.eta_f,
-        entropy_rate=cfg.entropy_rate,
-        update_period=cfg.update_period,
-        b1=cfg.b1,
-        b2=cfg.b2,
-        eps=cfg.eps,
-        rnn_grad_clip=cfg.rnn_grad_clip,
-        act_clip=getattr(cfg, "act_clip", 0.0),
-        freeze_gamma=getattr(cfg, "freeze_gamma", False),
-        pred_obs=False,
-        pred_coeff=getattr(cfg, "pred_coeff", 1.0),
-        update_trace_before_td=getattr(cfg, "update_trace_before_td", True),
-        logprob_scale=(
-            1.0 / action_space.shape[0]
-            if getattr(cfg, "logprob_reduction", "sum") == "mean"
-            else 1.0
-        ),
-    )
-    return IndependentRTRRL(
-        independent_cfg,
-        env,
-        env_params,
-        make_feature_extractor(),
-        make_torso(),
-        heads.Gaussian(
-            action_dim=action_space.shape[0],
-            bound=getattr(cfg, "bound_actor", False),
-        ),
-        make_feature_extractor(),
-        make_torso(),
-        heads.VNetwork(),
-    )
-
-
-def build_qrc_networks(
-    cfg: ExperimentConfig, num_actions: int
-) -> tuple[Network, Network]:
+def build_qrc_networks(cfg: ExperimentConfig, num_actions: int) -> tuple[Network, Network]:
     """Build Q/H networks for QRC: FeatureExtractor -> RNN(RTUCell) -> DiscreteQNetwork."""
     feat = cfg.encoder_dim
     observation_extractor = nn.Sequential((nn.Dense(feat), nn.relu))
-    action_extractor = nn.Sequential((nn.Dense(feat), nn.relu)) if cfg.meta_rl else None
-    reward_extractor = nn.Sequential((nn.Dense(feat), nn.relu)) if cfg.meta_rl else None
+    action_extractor = (
+        nn.Sequential((nn.Dense(feat), nn.relu)) if cfg.meta_rl else None
+    )
+    reward_extractor = (
+        nn.Sequential((nn.Dense(feat), nn.relu)) if cfg.meta_rl else None
+    )
     feature_extractor = FeatureExtractor(
         observation_extractor=observation_extractor,
         action_extractor=action_extractor,
@@ -497,8 +343,12 @@ def build_qrc_networks(
     torso = RNN(cell=cell)
 
     head = heads.DiscreteQNetwork(action_dim=num_actions)
-    q_network = Network(feature_extractor=feature_extractor, torso=torso, head=head)
-    h_network = Network(feature_extractor=feature_extractor, torso=torso, head=head)
+    q_network = Network(
+        feature_extractor=feature_extractor, torso=torso, head=head
+    )
+    h_network = Network(
+        feature_extractor=feature_extractor, torso=torso, head=head
+    )
     return q_network, h_network
 
 
@@ -524,24 +374,12 @@ def build_qrc_agent(cfg: ExperimentConfig, env, env_params):
 
     if cfg.agent_type == "rtu_rtrl":
         return QRCRtrl(
-            qrc_cfg,
-            env,
-            env_params,
-            q_network,
-            h_network,
-            q_optimizer,
-            h_optimizer,
-            epsilon_schedule,
+            qrc_cfg, env, env_params, q_network, h_network,
+            q_optimizer, h_optimizer, epsilon_schedule,
         )
     return QRC(
-        qrc_cfg,
-        env,
-        env_params,
-        q_network,
-        h_network,
-        q_optimizer,
-        h_optimizer,
-        epsilon_schedule,
+        qrc_cfg, env, env_params, q_network, h_network,
+        q_optimizer, h_optimizer, epsilon_schedule,
     )
 
 
@@ -550,157 +388,13 @@ def _episode_stats(info: dict) -> tuple[float, float]:
     mask = info.get("returned_episode")
     if mask is None or not jnp.any(mask):
         return float("nan"), float("nan")
-    returns = float(jnp.mean(info["returned_episode_returns"], where=mask))
-    lengths = float(jnp.mean(info["returned_episode_lengths"], where=mask))
+    returns = float(
+        jnp.mean(info["returned_episode_returns"], where=mask)
+    )
+    lengths = float(
+        jnp.mean(info["returned_episode_lengths"], where=mask)
+    )
     return returns, lengths
-
-
-def emit_training_summaries(
-    training_run,
-    completed_stats: dict,
-    *,
-    epoch_start_env_steps: int,
-    num_envs: int,
-) -> None:
-    """Emit one mandatory host record for every completed training episode."""
-
-    if type(epoch_start_env_steps) is not int:
-        raise TypeError("epoch_start_env_steps must be a host integer")
-    if type(num_envs) is not int or num_envs <= 0:
-        raise ValueError("num_envs must be a positive integer")
-    completed = np.asarray(completed_stats.get("returned_episode", ()), dtype=bool)
-    returns = np.asarray(completed_stats.get("returned_episode_returns", ()))
-    lengths = np.asarray(completed_stats.get("returned_episode_lengths", ()))
-    if completed.shape != returns.shape or completed.shape != lengths.shape:
-        raise ValueError("completed episode statistic arrays must have equal shapes")
-    if completed.ndim < 2 or completed.shape[-1] != num_envs:
-        raise ValueError("completed episode statistics must end with num_envs")
-    for transition_index in range(completed.reshape(-1, num_envs).shape[0]):
-        completion_env_steps = (
-            epoch_start_env_steps + (transition_index + 1) * num_envs
-        )
-        for environment_index in np.flatnonzero(
-            completed.reshape(-1, num_envs)[transition_index]
-        ):
-            training_run.log_episode_summary(
-                env_steps=completion_env_steps,
-                episode_return=float(
-                    returns.reshape(-1, num_envs)[
-                        transition_index, environment_index
-                    ]
-                ),
-                episode_length=int(
-                    lengths.reshape(-1, num_envs)[
-                        transition_index, environment_index
-                    ]
-                ),
-            )
-
-
-def _environment_states(trace, environment_index: int, count: int):
-    if trace.environment_states is None:
-        return None
-    return tuple(
-        jax.tree.map(
-            lambda leaf: np.asarray(leaf)[step, environment_index],
-            trace.environment_states,
-        )
-        for step in range(count)
-    )
-
-
-def episode_from_trace(
-    trace,
-    environment_index: int,
-    *,
-    episode_number: int = 1,
-    env_steps: int = 0,
-) -> Episode:
-    """Convert one complete fixed-shape JAX trace on the host."""
-
-    counts = np.asarray(trace.valid_transitions)
-    if counts.ndim != 1 or not 0 <= environment_index < counts.shape[0]:
-        raise ValueError("environment_index is outside valid_transitions")
-    count = int(counts[environment_index])
-    if count <= 0:
-        raise ValueError("valid_transitions must be positive for a complete episode")
-    observations = np.asarray(trace.observations)
-    actions = np.asarray(trace.actions)
-    rewards = np.asarray(trace.rewards)
-    terminals = np.asarray(trace.terminals, dtype=bool)
-    truncations = np.asarray(trace.truncations, dtype=bool)
-    if (
-        observations.shape[0] < count + 1
-        or actions.shape[0] < count
-        or rewards.shape[0] < count
-        or terminals.shape[0] < count
-        or truncations.shape[0] < count
-    ):
-        raise ValueError("evaluation trace is shorter than valid_transitions")
-    final_terminal = bool(terminals[count - 1, environment_index])
-    final_truncation = bool(truncations[count - 1, environment_index])
-    if not (final_terminal or final_truncation):
-        raise ValueError("evaluation trace is not complete")
-    return Episode(
-        number=episode_number,
-        phase="eval",
-        start_env_steps=env_steps,
-        end_env_steps=env_steps,
-        observations=observations[: count + 1, environment_index],
-        actions=actions[:count, environment_index],
-        rewards=rewards[:count, environment_index],
-        terminals=[
-            bool(value) for value in terminals[:count, environment_index]
-        ],
-        truncations=[
-            bool(value) for value in truncations[:count, environment_index]
-        ],
-        environment_states=_environment_states(trace, environment_index, count),
-    )
-
-
-def emit_evaluation_episodes(
-    training_run,
-    trace,
-    *,
-    first_episode_number: int,
-    env_steps: int,
-) -> int:
-    """Submit every complete environment trace; incomplete windows are skipped."""
-
-    next_number = first_episode_number
-    for environment_index, count in enumerate(
-        np.asarray(trace.valid_transitions).reshape(-1)
-    ):
-        if int(count) <= 0:
-            continue
-        episode = episode_from_trace(
-            trace,
-            environment_index,
-            episode_number=next_number,
-            env_steps=env_steps,
-        )
-        training_run.log_episode(episode)
-        next_number += 1
-    return next_number
-
-
-def _epoch_env_steps(total: int, epochs: int, num_envs: int) -> tuple[int, ...]:
-    if type(total) is not int or total <= 0:
-        raise ValueError("total_timesteps must be a positive integer")
-    if type(epochs) is not int or epochs <= 0:
-        raise ValueError("num_epochs must be a positive integer")
-    if type(num_envs) is not int or num_envs <= 0:
-        raise ValueError("num_envs must be a positive integer")
-    if total % num_envs:
-        raise ValueError("total_timesteps must be divisible by num_envs")
-    updates = total // num_envs
-    if updates % epochs:
-        raise ValueError(
-            "total_timesteps / num_envs must be divisible by num_epochs "
-            "to keep one fixed JIT scan length"
-        )
-    return (updates // epochs * num_envs,) * epochs
 
 
 def train_loop(agent, cfg: ExperimentConfig, logger=DummyLogger()):
@@ -735,21 +429,15 @@ def train_loop(agent, cfg: ExperimentConfig, logger=DummyLogger()):
     key, init_key = jax.random.split(key)
     state = init(init_key)
 
-    epoch_env_steps = _epoch_env_steps(
-        cfg.total_timesteps, cfg.num_epochs, cfg.num_envs
-    )
-    if cfg.require_full_budget and cfg.patience:
-        raise ValueError("full-budget facility runs cannot enable early stopping")
+    num_steps = cfg.total_timesteps // cfg.num_epochs
 
     logger["best_eval_reward"] = -jnp.inf
     steps_since_best = 0
-    pbar = trange(len(epoch_env_steps), mininterval=1)
-    evaluation_episode_number = 1
+    pbar = trange(cfg.num_epochs, mininterval=1)
 
     try:
-        for i, num_steps in zip(pbar, epoch_env_steps):
+        for i in pbar:
             key, train_key, eval_key = jax.random.split(key, 3)
-            epoch_start_env_steps = int(state.step)
             start = time.perf_counter()
             state, logs = train(train_key, state, num_steps)
             jax.block_until_ready(state)
@@ -757,19 +445,11 @@ def train_loop(agent, cfg: ExperimentConfig, logger=DummyLogger()):
 
             info = logs.pop("info", {})
             avg_r, avg_len = _episode_stats(info)
-            global_step = int(state.step)
-            emit_training_summaries(
-                logger,
-                info,
-                epoch_start_env_steps=epoch_start_env_steps,
-                num_envs=cfg.num_envs,
-            )
 
             metrics = {
                 "train/SPS": sps,
                 "train/episode_returns": avg_r,
                 "train/episode_lengths": avg_len,
-                "train/env_steps": global_step,
             }
             # Forward remaining logs (critic/td_error, actor/entropy, diag/*, ...).
             # lox stacks per-step scalars over the scan -> shape (num_steps,); we
@@ -785,29 +465,24 @@ def train_loop(agent, cfg: ExperimentConfig, logger=DummyLogger()):
                     metrics[f"train/{k}"] = float(jnp.mean(v))
                     metrics[f"train/{k}_max"] = float(jnp.max(jnp.abs(v)))
 
-            metrics["debug/state_step"] = float(global_step)
+            # Aim step: use the loop-derived env-step count, NOT state.step.
+            # state.step has been observed to read back as int64 garbage
+            # (~±2^63) once training diverges, which scrambles metric ordering
+            # in Aim. The loop counter is always a clean multiple of num_steps.
+            global_step = (i + 1) * num_steps
+            # Keep the raw counter as a metric so we can still see WHEN it goes
+            # bad (a canary for state corruption during divergence).
+            metrics["debug/state_step"] = float(state.step)
 
             pbar.set_description(f"ep{i} R={avg_r:.2f}", refresh=False)
 
             # EVAL ------------------------------------------------------------
             if cfg.eval_every and (
-                i % cfg.eval_every == 0 or i == len(epoch_env_steps) - 1
+                i % cfg.eval_every == 0 or i == cfg.num_epochs - 1
             ):
-                eval_result, eval_logs = eval_fn(eval_key, state, cfg.eval_steps)
-                eval_trace = (
-                    eval_result[1]
-                    if isinstance(eval_result, tuple) and len(eval_result) == 2
-                    else None
-                )
+                _, eval_logs = eval_fn(eval_key, state, cfg.eval_steps)
                 eval_info = eval_logs.get("info", {})
                 eval_avg, _ = _episode_stats(eval_info)
-                if eval_trace is not None:
-                    evaluation_episode_number = emit_evaluation_episodes(
-                        logger,
-                        eval_trace,
-                        first_episode_number=evaluation_episode_number,
-                        env_steps=global_step,
-                    )
                 if eval_avg == eval_avg:  # not NaN
                     metrics["eval/rewards"] = eval_avg
                     pbar.write(f"Eval reward: {eval_avg:.2f}")
@@ -824,18 +499,10 @@ def train_loop(agent, cfg: ExperimentConfig, logger=DummyLogger()):
             if cfg.patience and steps_since_best >= cfg.patience:
                 print(f"Early stopping patience {cfg.patience}")
                 break
-        if cfg.require_full_budget and int(state.step) != cfg.total_timesteps:
-            raise RuntimeError(
-                "training ended before exhausting training_budget.env_steps"
-            )
     except Exception as e:
         print("Exception in training loop!")
-        try:
-            logger.fail(e)
-        except BaseException:
-            pass
-        raise
-    else:
+        raise e
+    finally:
         logger.finalize()
 
     return logger["best_eval_reward"]
@@ -849,7 +516,6 @@ def run_experiment(train_fn, cfg: ExperimentConfig, project_name: str = "memorax
     whose `logger` defaults to DummyLogger — matching that contract without
     forcing every experiment's train() to carry a default itself.
     """
-
     def wrapped(hparams, logger=DummyLogger()):
         return train_fn(hparams, logger)
 

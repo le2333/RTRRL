@@ -1,5 +1,12 @@
 # Complete Training Facility Implementation Plan
 
+> **Superseded on 2026-07-23:** Memo registration, memo launchers, and memo
+> facility images in this document are replaced by
+> `docs/superpowers/specs/2026-07-23-infra-only-training-acceptance-design.md`.
+> The generic control-plane, worker, and SDK contracts remain historical design
+> context. Reports produced from this document are historical evidence and are
+> intentionally unchanged.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development. Execute one task at a time, write tests first, commit each task, and require an independent review before the next task.
 
 **Goal:** Complete the foreground `trainerctl run` path from experiment YAML to memo CPU/GPU Batch execution, Aim/Rerun collection, Optuna completion, and a verified user manual.

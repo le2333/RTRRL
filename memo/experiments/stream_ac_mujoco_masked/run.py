@@ -62,10 +62,7 @@ class StreamACMujocoMaskedConfig(ExperimentConfig):
 
 def make_env(cfg: StreamACMujocoMaskedConfig):
     env, env_params = environment.make(
-        f"brax::{cfg.env_name}",
-        mode=cfg.mode,
-        backend=cfg.backend,
-        max_episode_steps=cfg.max_episode_steps,
+        f"brax::{cfg.env_name}", mode=cfg.mode, backend=cfg.backend
     )
     env = RecordEpisodeStatistics(env)
     env = NormalizeObservationWrapper(env)

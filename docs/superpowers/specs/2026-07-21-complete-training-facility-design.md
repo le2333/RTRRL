@@ -1,5 +1,12 @@
 # Complete Training Facility Design
 
+> **Superseded on 2026-07-23:** Memo registration, memo launchers, and memo
+> facility images in this document are replaced by
+> `docs/superpowers/specs/2026-07-23-infra-only-training-acceptance-design.md`.
+> The generic control-plane, worker, and SDK contracts remain historical design
+> context. Reports produced from this document are historical evidence and are
+> intentionally unchanged.
+
 ## Status and Scope
 
 This specification defines the remaining work required to turn the completed
