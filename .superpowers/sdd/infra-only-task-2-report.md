@@ -28,6 +28,18 @@ GREEN:
   `.github/workflows/memo-ci.yml`, covering path, type, mode, and blob changes.
 - Re-ran the targeted test: `2 passed in 0.03s`.
 
+Minor follow-up:
+
+- Added a real temporary-git-repository negative test, parameterized over
+  protected-tree addition, deletion, content/blob modification, and executable
+  mode modification.
+- Each case copies and invokes the real gate with an explicit baseline commit,
+  commits its mutation, verifies the temporary repository is clean, and proves
+  a nonzero exit plus `protected tree differs`.
+- The test never modifies the repository's real `memo/` tree and does not
+  depend on the repository's uncommitted state.
+- Re-ran the targeted test: `6 passed`.
+
 ## Restored from the live merge base
 
 The workflow `.github/workflows/build-memo-image.yml` was restored to blob
@@ -95,7 +107,7 @@ only Task 2 addition there.
 
 ## Verification
 
-- Targeted pytest: `2 passed in 0.03s`.
+- Targeted pytest after the Minor follow-up: `6 passed`.
 - Gate: `protected tree matches
   1551fda2ecb92dc6351113fb3ee77e55bfe56cd0 by path, blob, and mode`.
 - Direct `git diff --raw` assertion against the live merge base: empty.
@@ -106,9 +118,10 @@ only Task 2 addition there.
 
 ## Commit
 
-This report is included in the non-amended commit
-`fix(infra): restore algorithm merge boundary`; its hash is recorded in the
-final Task 2 status after commit creation.
+- Task 2 implementation: `b9859d6f9e5138ee5bdab84dbdd2aa330f430e5e`
+  (`fix(infra): restore algorithm merge boundary`).
+- The Minor follow-up is a separate, non-amended commit; its hash is recorded
+  in the final follow-up status after commit creation.
 
 ## Attention points
 
