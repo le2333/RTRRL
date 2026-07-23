@@ -16,7 +16,6 @@ on:
 
 permissions:
   contents: read
-  id-token: write
 
 jobs:
   build:
@@ -67,28 +66,36 @@ jobs:
           build-args: |
             TRAINER_SCRIPT_CATALOG=${{ steps.catalog.outputs.value }}
 
-      - name: Verify catalog, paths, and runtime
+      - name: Verify actual label, paths, and runtime
         id: verify
         shell: bash
         env:
+          EXPECTED_LABEL: ${{ steps.catalog.outputs.value }}
           IMAGE: ${{ matrix.local_tag }}
           VARIANT: ${{ matrix.variant }}
         run: |
           set -euo pipefail
-          LABEL="$(docker image inspect --format '{{ index .Config.Labels "org.rtrrl.trainer.scripts.v1" }}' "$IMAGE")"
-          LABEL="$LABEL" uv run --project rtrrl/infra/control-plane python - <<'PY'
+          ACTUAL_LABEL="$(docker image inspect --format '{{ index .Config.Labels "org.rtrrl.trainer.scripts.v1" }}' "$IMAGE")"
+          ACTUAL_LABEL="$ACTUAL_LABEL" uv run --project rtrrl/infra/control-plane python - <<'PY'
           import os
-          from trainer_infra.image_catalog import decode_catalog
+          from pathlib import Path
 
-          catalog = decode_catalog(os.environ["LABEL"])
-          assert catalog.protocol_version == "1"
-          assert set(catalog.scripts) == {"brax_ppo_acceptance"}
+          from trainer_infra.image_catalog import decode_catalog, load_catalog_index
+
+          actual_bytes = os.environ["ACTUAL_LABEL"].encode("ascii")
+          expected_bytes = os.environ["EXPECTED_LABEL"].encode("ascii")
+          assert actual_bytes == expected_bytes
+          actual_catalog = decode_catalog(os.environ["ACTUAL_LABEL"])
+          source_catalog = load_catalog_index(
+              Path("rtrrl/infra/mock-trainer/scripts/index.yaml")
+          )
+          assert actual_catalog == source_catalog
           PY
 
-          docker run --rm "$IMAGE" sh -c '
-            test -f /opt/trainer/worker.py
-            test -f /opt/trainer/scripts/index.yaml
-            test -f /opt/trainer/scripts/brax_ppo_acceptance.yaml
+          docker run --rm "$IMAGE" sh -eu -c '
+            test -f /opt/trainer/worker.py &&
+            test -f /opt/trainer/scripts/index.yaml &&
+            test -f /opt/trainer/scripts/brax_ppo_acceptance.yaml &&
             test -d /opt/acceptance
           '
           docker run --rm "$IMAGE" python /opt/trainer/worker.py --help >/dev/null
@@ -115,82 +122,21 @@ jobs:
           '
           fi
 
-      - name: Confirm exact push account
-        id: confirm
-        if: ${{ inputs.push }}
-        shell: bash
-        env:
-          AWS_ROLE_ARN: ${{ vars.INFRA_ACCEPTANCE_AWS_ROLE_ARN }}
-          CONFIRM_ACCOUNT: ${{ inputs.confirm_account }}
-        run: |
-          set -euo pipefail
-          test "$CONFIRM_ACCOUNT" = "007122174918"
-          test -n "$AWS_ROLE_ARN"
-
-      - name: Configure push-only AWS credentials
-        id: credentials
-        if: ${{ inputs.push }}
-        uses: aws-actions/configure-aws-credentials@61815dcd50bd041e203e49132bacad1fd04d2708
-        with:
-          role-to-assume: ${{ vars.INFRA_ACCEPTANCE_AWS_ROLE_ARN }}
-          aws-region: eu-north-1
-
-      - name: Verify authenticated AWS account
-        id: account
-        if: ${{ inputs.push }}
-        shell: bash
-        run: |
-          set -euo pipefail
-          ACTUAL_ACCOUNT="$(aws sts get-caller-identity --query Account --output text)"
-          test "$ACTUAL_ACCOUNT" = "007122174918"
-
-      - name: Verify existing ECR repository
-        id: repository
-        if: ${{ inputs.push }}
-        shell: bash
-        run: |
-          set -euo pipefail
-          aws ecr describe-repositories --repository-names rtrrl --region eu-north-1 >/dev/null
-
-      - name: Log in to existing ECR
-        id: ecr
-        if: ${{ inputs.push }}
-        uses: aws-actions/amazon-ecr-login@d539f0932e70871a027e9d5a9d8fc38589180a64
-
-      - name: Push fixed acceptance test tag
-        id: push
-        if: ${{ inputs.push }}
-        shell: bash
-        env:
-          LOCAL_IMAGE: ${{ matrix.local_tag }}
-          REGISTRY: ${{ steps.ecr.outputs.registry }}
-          ECR_TAG: ${{ matrix.ecr_tag }}
-        run: |
-          set -euo pipefail
-          REMOTE_IMAGE="$REGISTRY/rtrrl:$ECR_TAG"
-          docker tag "$LOCAL_IMAGE" "$REMOTE_IMAGE"
-          PUSH_OUTPUT="$(docker push "$REMOTE_IMAGE" 2>&1)"
-          printf '%s\n' "$PUSH_OUTPUT"
-          DIGEST="$(printf '%s\n' "$PUSH_OUTPUT" | awk '/digest: sha256:/ {print $3}' | tail -n 1)"
-          [[ "$DIGEST" =~ ^sha256:[0-9a-f]{64}$ ]]
-          echo "digest=$DIGEST" >> "$GITHUB_OUTPUT"
-          echo "immutable_image=$REGISTRY/rtrrl@$DIGEST" >> "$GITHUB_OUTPUT"
-
-      - name: Write JSON evidence
+      - name: Write build JSON evidence
         id: evidence
         shell: bash
         env:
-          CATALOG: ${{ steps.catalog.outputs.value }}
           DOCKERFILE: ${{ matrix.dockerfile }}
           IMAGE: ${{ matrix.local_tag }}
-          IMMUTABLE_DIGEST: ${{ steps.push.outputs.digest }}
+          IMMUTABLE_DIGEST: ""
           SOURCE_COMMIT: ${{ github.sha }}
           VARIANT: ${{ matrix.variant }}
         run: |
           set -euo pipefail
+          ACTUAL_LABEL="$(docker image inspect --format '{{ index .Config.Labels "org.rtrrl.trainer.scripts.v1" }}' "$IMAGE")"
           IMAGE_ID="$(docker image inspect --format '{{ .Id }}' "$IMAGE")"
           IMAGE_SIZE="$(docker image inspect --format '{{ .Size }}' "$IMAGE")"
-          export IMAGE_ID IMAGE_SIZE
+          export ACTUAL_LABEL IMAGE_ID IMAGE_SIZE
           python - <<'PY'
           import hashlib
           import json
@@ -212,7 +158,7 @@ jobs:
                   {reference.rsplit("@", 1)[1] for reference in references}
               ),
               "catalog_sha256": hashlib.sha256(
-                  os.environ["CATALOG"].encode("ascii")
+                  os.environ["ACTUAL_LABEL"].encode("ascii")
               ).hexdigest(),
               "immutable_digest": os.environ["IMMUTABLE_DIGEST"] or None,
           }
@@ -223,11 +169,237 @@ jobs:
           )
           PY
 
-      - name: Upload JSON evidence
+      - name: Upload build JSON evidence
         id: upload
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
-          name: infra-acceptance-${{ matrix.variant }}-evidence
+          name: infra-acceptance-build-${{ matrix.variant }}-evidence
+          path: infra-acceptance-${{ matrix.variant }}-evidence.json
+          if-no-files-found: error
+          retention-days: 14
+
+  push:
+    name: Rebuild, verify, and push ${{ matrix.variant }}
+    if: ${{ inputs.push }}
+    needs: build
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      id-token: write
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - variant: cpu
+            dockerfile: rtrrl/infra/mock-trainer/docker/Dockerfile.cpu
+            local_tag: infra-acceptance:cpu
+            ecr_tag: infra-acceptance-brax-ppo-cpu-20260723
+          - variant: gpu
+            dockerfile: rtrrl/infra/mock-trainer/docker/Dockerfile.gpu
+            local_tag: infra-acceptance:gpu
+            ecr_tag: infra-acceptance-brax-ppo-gpu-20260723
+    steps:
+      - name: Check out source
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@d0cc045d04ccac9d8b7881df0226f9e82c39688e
+        with:
+          version: "0.11.25"
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f
+
+      - name: Encode production catalog
+        id: catalog
+        shell: bash
+        run: |
+          set -euo pipefail
+          CATALOG="$(uv run --project rtrrl/infra/control-plane trainer-image-catalog rtrrl/infra/mock-trainer/scripts/index.yaml)"
+          echo "value=$CATALOG" >> "$GITHUB_OUTPUT"
+
+      - name: Rebuild local image
+        id: build
+        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8
+        with:
+          context: .
+          file: ${{ matrix.dockerfile }}
+          platforms: linux/amd64
+          load: true
+          push: false
+          tags: ${{ matrix.local_tag }}
+          build-args: |
+            TRAINER_SCRIPT_CATALOG=${{ steps.catalog.outputs.value }}
+
+      - name: Verify actual label, paths, and runtime
+        id: verify
+        shell: bash
+        env:
+          EXPECTED_LABEL: ${{ steps.catalog.outputs.value }}
+          IMAGE: ${{ matrix.local_tag }}
+          VARIANT: ${{ matrix.variant }}
+        run: |
+          set -euo pipefail
+          ACTUAL_LABEL="$(docker image inspect --format '{{ index .Config.Labels "org.rtrrl.trainer.scripts.v1" }}' "$IMAGE")"
+          ACTUAL_LABEL="$ACTUAL_LABEL" uv run --project rtrrl/infra/control-plane python - <<'PY'
+          import os
+          from pathlib import Path
+
+          from trainer_infra.image_catalog import decode_catalog, load_catalog_index
+
+          actual_bytes = os.environ["ACTUAL_LABEL"].encode("ascii")
+          expected_bytes = os.environ["EXPECTED_LABEL"].encode("ascii")
+          assert actual_bytes == expected_bytes
+          actual_catalog = decode_catalog(os.environ["ACTUAL_LABEL"])
+          source_catalog = load_catalog_index(
+              Path("rtrrl/infra/mock-trainer/scripts/index.yaml")
+          )
+          assert actual_catalog == source_catalog
+          PY
+
+          docker run --rm "$IMAGE" sh -eu -c '
+            test -f /opt/trainer/worker.py &&
+            test -f /opt/trainer/scripts/index.yaml &&
+            test -f /opt/trainer/scripts/brax_ppo_acceptance.yaml &&
+            test -d /opt/acceptance
+          '
+          docker run --rm "$IMAGE" python /opt/trainer/worker.py --help >/dev/null
+          docker run --rm "$IMAGE" python -c '
+          import brax_ppo_acceptance, boto3, jax, training_sdk
+          import importlib.util
+          assert importlib.util.find_spec("memo") is None
+          assert importlib.util.find_spec("trainer_infra") is None
+          '
+
+          if [[ "$VARIANT" == "cpu" ]]; then
+            docker run --rm "$IMAGE" python -c '
+          import jax
+          import jax.numpy
+          assert jax.default_backend() == "cpu"
+          assert jax.numpy.add(2, 3).item() == 5
+          '
+          else
+            docker run --rm --entrypoint /opt/venv/bin/python "$IMAGE" -c '
+          import importlib.util
+          import jax
+          assert importlib.util.find_spec("jax_cuda12_plugin") is not None
+          print(jax.__version__)
+          '
+          fi
+
+      - name: Confirm account and role boundary
+        id: confirm
+        shell: bash
+        env:
+          AWS_ROLE_ARN: ${{ vars.INFRA_ACCEPTANCE_AWS_ROLE_ARN }}
+          CONFIRM_ACCOUNT: ${{ inputs.confirm_account }}
+        run: |
+          set -euo pipefail
+          test "$CONFIRM_ACCOUNT" = "007122174918"
+          case "$AWS_ROLE_ARN" in
+            arn:aws:iam::007122174918:role/*) ;;
+            *)
+              echo "INFRA_ACCEPTANCE_AWS_ROLE_ARN is outside the approved account/role boundary" >&2
+              exit 1
+              ;;
+          esac
+
+      - name: Configure push-only AWS credentials
+        id: credentials
+        uses: aws-actions/configure-aws-credentials@61815dcd50bd041e203e49132bacad1fd04d2708
+        with:
+          role-to-assume: ${{ vars.INFRA_ACCEPTANCE_AWS_ROLE_ARN }}
+          aws-region: eu-north-1
+
+      - name: Verify authenticated AWS account
+        id: account
+        shell: bash
+        run: |
+          set -euo pipefail
+          ACTUAL_ACCOUNT="$(aws sts get-caller-identity --query Account --output text)"
+          test "$ACTUAL_ACCOUNT" = "007122174918"
+
+      - name: Verify existing ECR repository
+        id: repository
+        shell: bash
+        run: |
+          set -euo pipefail
+          aws ecr describe-repositories --repository-names rtrrl --region eu-north-1 >/dev/null
+
+      - name: Log in to existing ECR
+        id: ecr
+        uses: aws-actions/amazon-ecr-login@d539f0932e70871a027e9d5a9d8fc38589180a64
+
+      - name: Push fixed acceptance test tag
+        id: push
+        shell: bash
+        env:
+          LOCAL_IMAGE: ${{ matrix.local_tag }}
+          REGISTRY: ${{ steps.ecr.outputs.registry }}
+          ECR_TAG: ${{ matrix.ecr_tag }}
+        run: |
+          set -euo pipefail
+          REMOTE_IMAGE="$REGISTRY/rtrrl:$ECR_TAG"
+          docker tag "$LOCAL_IMAGE" "$REMOTE_IMAGE"
+          PUSH_OUTPUT="$(docker push "$REMOTE_IMAGE" 2>&1)"
+          printf '%s\n' "$PUSH_OUTPUT"
+          DIGEST="$(printf '%s\n' "$PUSH_OUTPUT" | awk '/digest: sha256:/ {print $3}' | tail -n 1)"
+          [[ "$DIGEST" =~ ^sha256:[0-9a-f]{64}$ ]]
+          echo "digest=$DIGEST" >> "$GITHUB_OUTPUT"
+          echo "immutable_image=$REGISTRY/rtrrl@$DIGEST" >> "$GITHUB_OUTPUT"
+
+      - name: Write push JSON evidence
+        id: evidence
+        shell: bash
+        env:
+          DOCKERFILE: ${{ matrix.dockerfile }}
+          IMAGE: ${{ matrix.local_tag }}
+          IMMUTABLE_DIGEST: ${{ steps.push.outputs.digest }}
+          SOURCE_COMMIT: ${{ github.sha }}
+          VARIANT: ${{ matrix.variant }}
+        run: |
+          set -euo pipefail
+          ACTUAL_LABEL="$(docker image inspect --format '{{ index .Config.Labels "org.rtrrl.trainer.scripts.v1" }}' "$IMAGE")"
+          IMAGE_ID="$(docker image inspect --format '{{ .Id }}' "$IMAGE")"
+          IMAGE_SIZE="$(docker image inspect --format '{{ .Size }}' "$IMAGE")"
+          export ACTUAL_LABEL IMAGE_ID IMAGE_SIZE
+          python - <<'PY'
+          import hashlib
+          import json
+          import os
+          import re
+          from pathlib import Path
+
+          dockerfile = Path(os.environ["DOCKERFILE"]).read_text(encoding="utf-8")
+          references = re.findall(
+              r"(?:FROM |--from=)(\S+@sha256:[0-9a-f]{64})",
+              dockerfile,
+          )
+          evidence = {
+              "variant": os.environ["VARIANT"],
+              "source_commit": os.environ["SOURCE_COMMIT"],
+              "image_id": os.environ["IMAGE_ID"],
+              "image_size_bytes": int(os.environ["IMAGE_SIZE"]),
+              "base_digests": sorted(
+                  {reference.rsplit("@", 1)[1] for reference in references}
+              ),
+              "catalog_sha256": hashlib.sha256(
+                  os.environ["ACTUAL_LABEL"].encode("ascii")
+              ).hexdigest(),
+              "immutable_digest": os.environ["IMMUTABLE_DIGEST"] or None,
+          }
+          output = Path(f"infra-acceptance-{os.environ['VARIANT']}-evidence.json")
+          output.write_text(
+              json.dumps(evidence, indent=2, sort_keys=True) + "\n",
+              encoding="utf-8",
+          )
+          PY
+
+      - name: Upload push JSON evidence
+        id: upload
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: infra-acceptance-push-${{ matrix.variant }}-evidence
           path: infra-acceptance-${{ matrix.variant }}-evidence.json
           if-no-files-found: error
           retention-days: 14

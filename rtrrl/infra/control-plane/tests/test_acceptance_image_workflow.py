@@ -1,6 +1,7 @@
 import re
 from pathlib import Path
 
+import pytest
 import yaml
 
 
@@ -16,6 +17,20 @@ EXPECTED_ACTIONS = {
     "aws-actions/amazon-ecr-login": "d539f0932e70871a027e9d5a9d8fc38589180a64",
     "actions/upload-artifact": "ea165f8d65b6e75b540449e92b4886f43607fa02",
 }
+MATRIX = [
+    {
+        "variant": "cpu",
+        "dockerfile": "rtrrl/infra/mock-trainer/docker/Dockerfile.cpu",
+        "local_tag": "infra-acceptance:cpu",
+        "ecr_tag": "infra-acceptance-brax-ppo-cpu-20260723",
+    },
+    {
+        "variant": "gpu",
+        "dockerfile": "rtrrl/infra/mock-trainer/docker/Dockerfile.gpu",
+        "local_tag": "infra-acceptance:gpu",
+        "ecr_tag": "infra-acceptance-brax-ppo-gpu-20260723",
+    },
+]
 
 
 def _workflow() -> dict:
@@ -24,9 +39,9 @@ def _workflow() -> dict:
     return loaded
 
 
-def _job(workflow: dict) -> dict:
-    assert set(workflow["jobs"]) == {"build"}
-    return workflow["jobs"]["build"]
+def _job(workflow: dict, name: str) -> dict:
+    assert set(workflow["jobs"]) == {"build", "push"}
+    return workflow["jobs"][name]
 
 
 def _step(job: dict, identifier: str) -> dict:
@@ -52,28 +67,27 @@ def test_workflow_is_manual_build_only_by_default_with_isolated_matrix_runners()
         "default": "",
     }
 
-    job = _job(workflow)
-    assert job["runs-on"] == "ubuntu-24.04"
-    assert job["strategy"]["fail-fast"] is False
-    assert job["strategy"]["matrix"]["include"] == [
-        {
-            "variant": "cpu",
-            "dockerfile": "rtrrl/infra/mock-trainer/docker/Dockerfile.cpu",
-            "local_tag": "infra-acceptance:cpu",
-            "ecr_tag": "infra-acceptance-brax-ppo-cpu-20260723",
-        },
-        {
-            "variant": "gpu",
-            "dockerfile": "rtrrl/infra/mock-trainer/docker/Dockerfile.gpu",
-            "local_tag": "infra-acceptance:gpu",
-            "ecr_tag": "infra-acceptance-brax-ppo-gpu-20260723",
-        },
-    ]
+    assert workflow["permissions"] == {"contents": "read"}
+    build = _job(workflow, "build")
+    push = _job(workflow, "push")
+    for job in (build, push):
+        assert job["runs-on"] == "ubuntu-24.04"
+        assert job["strategy"]["fail-fast"] is False
+        assert job["strategy"]["matrix"]["include"] == MATRIX
+    assert "permissions" not in build
+    assert push["if"] == PUSH_CONDITION
+    assert push["needs"] == "build"
+    assert push["permissions"] == {"contents": "read", "id-token": "write"}
 
 
 def test_every_third_party_action_is_locked_to_the_resolved_official_tag_sha() -> None:
-    job = _job(_workflow())
-    action_uses = {step["uses"] for step in job["steps"] if "uses" in step}
+    workflow = _workflow()
+    action_uses = {
+        step["uses"]
+        for job_name in ("build", "push")
+        for step in _job(workflow, job_name)["steps"]
+        if "uses" in step
+    }
 
     assert action_uses == {
         f"{repository}@{sha}" for repository, sha in EXPECTED_ACTIONS.items()
@@ -84,40 +98,50 @@ def test_every_third_party_action_is_locked_to_the_resolved_official_tag_sha() -
     )
 
 
-def test_default_path_loads_one_local_image_and_has_no_aws_login_or_push() -> None:
-    job = _job(_workflow())
-    build = _step(job, "build")
+def test_build_job_has_no_oidc_aws_ecr_login_or_push_path() -> None:
+    job = _job(_workflow(), "build")
+    image_build = _step(job, "build")
 
-    assert build["with"]["context"] == "."
-    assert build["with"]["file"] == "${{ matrix.dockerfile }}"
-    assert build["with"]["platforms"] == "linux/amd64"
-    assert build["with"]["load"] is True
-    assert build["with"]["push"] is False
-    assert build["with"]["tags"] == "${{ matrix.local_tag }}"
-    assert "if" not in build
+    assert image_build["with"]["context"] == "."
+    assert image_build["with"]["file"] == "${{ matrix.dockerfile }}"
+    assert image_build["with"]["platforms"] == "linux/amd64"
+    assert image_build["with"]["load"] is True
+    assert image_build["with"]["push"] is False
+    assert image_build["with"]["tags"] == "${{ matrix.local_tag }}"
 
     for step in job["steps"]:
         uses = step.get("uses", "")
         run = step.get("run", "")
-        if step.get("if") != PUSH_CONDITION:
-            assert not uses.startswith("aws-actions/")
-            assert "aws sts " not in run
-            assert "aws ecr " not in run
-            assert "docker push " not in run
+        assert not uses.startswith("aws-actions/")
+        assert "aws sts " not in run
+        assert "aws ecr " not in run
+        assert "docker push " not in run
 
 
-def test_remote_runtime_contracts_are_real_but_never_run_ppo() -> None:
-    job = _job(_workflow())
+@pytest.mark.parametrize("job_name", ["build", "push"])
+def test_each_job_rebuilds_and_runs_actual_label_bound_runtime_contracts(
+    job_name: str,
+) -> None:
+    job = _job(_workflow(), job_name)
     catalog = _step(job, "catalog")["run"]
+    image_build = _step(job, "build")
     verify = _step(job, "verify")["run"]
 
     assert (
         "trainer-image-catalog rtrrl/infra/mock-trainer/scripts/index.yaml"
         in catalog
     )
+    assert image_build["with"]["load"] is True
+    assert image_build["with"]["push"] is False
     assert "docker image inspect" in verify
-    assert "trainer_infra.image_catalog import decode_catalog" in verify
+    assert "EXPECTED_LABEL" in verify
+    assert 'actual_bytes == expected_bytes' in verify
+    assert "decode_catalog" in verify
+    assert "load_catalog_index" in verify
+    assert "actual_catalog == source_catalog" in verify
     assert "org.rtrrl.trainer.scripts.v1" in verify
+    assert 'sh -eu -c' in verify
+    assert "&&" in verify
     assert "/opt/trainer/worker.py" in verify
     assert "/opt/trainer/scripts/index.yaml" in verify
     assert "/opt/trainer/scripts/brax_ppo_acceptance.yaml" in verify
@@ -132,11 +156,10 @@ def test_remote_runtime_contracts_are_real_but_never_run_ppo() -> None:
 
 
 def test_push_path_confirms_account_before_oidc_and_only_pushes_fixed_test_tag() -> None:
-    job = _job(_workflow())
+    job = _job(_workflow(), "push")
     steps = job["steps"]
-    push_steps = [step for step in steps if step.get("if") == PUSH_CONDITION]
-
-    assert [step["id"] for step in push_steps] == [
+    ordered_ids = [step["id"] for step in steps if "id" in step]
+    guarded_ids = [
         "confirm",
         "credentials",
         "account",
@@ -144,12 +167,19 @@ def test_push_path_confirms_account_before_oidc_and_only_pushes_fixed_test_tag()
         "ecr",
         "push",
     ]
+    assert [ordered_ids.index(identifier) for identifier in guarded_ids] == sorted(
+        ordered_ids.index(identifier) for identifier in guarded_ids
+    )
+    assert ordered_ids.index("verify") < ordered_ids.index("confirm")
+
     confirm = _step(job, "confirm")
     assert 'test "$CONFIRM_ACCOUNT" = "007122174918"' in confirm["run"]
     assert confirm["env"]["AWS_ROLE_ARN"] == (
         "${{ vars.INFRA_ACCEPTANCE_AWS_ROLE_ARN }}"
     )
-    assert 'test -n "$AWS_ROLE_ARN"' in confirm["run"]
+    assert 'case "$AWS_ROLE_ARN" in' in confirm["run"]
+    assert "arn:aws:iam::007122174918:role/*" in confirm["run"]
+    assert "exit 1" in confirm["run"]
 
     credentials = _step(job, "credentials")
     assert credentials["uses"] == (
@@ -178,8 +208,11 @@ def test_push_path_confirms_account_before_oidc_and_only_pushes_fixed_test_tag()
     assert "immutable_image=" in push
 
 
-def test_json_evidence_records_provenance_and_optional_immutable_digest() -> None:
-    job = _job(_workflow())
+@pytest.mark.parametrize("job_name", ["build", "push"])
+def test_json_evidence_hashes_actual_image_label(
+    job_name: str,
+) -> None:
+    job = _job(_workflow(), job_name)
     evidence = _step(job, "evidence")["run"]
     upload = _step(job, "upload")
 
@@ -193,7 +226,12 @@ def test_json_evidence_records_provenance_and_optional_immutable_digest() -> Non
         "immutable_digest",
     ):
         assert f'"{key}"' in evidence
+    assert "docker image inspect" in evidence
+    assert 'os.environ["ACTUAL_LABEL"].encode("ascii")' in evidence
+    assert 'os.environ["CATALOG"]' not in evidence
     assert "json.dump" in evidence
-    assert upload["with"]["name"] == "infra-acceptance-${{ matrix.variant }}-evidence"
+    assert upload["with"]["name"] == (
+        f"infra-acceptance-{job_name}-${{{{ matrix.variant }}}}-evidence"
+    )
     assert upload["with"]["path"] == "infra-acceptance-${{ matrix.variant }}-evidence.json"
     assert upload["with"]["if-no-files-found"] == "error"
