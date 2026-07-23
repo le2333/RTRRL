@@ -13,6 +13,8 @@
 .git/**
 **/.git
 **/.git/**
+**/worktrees
+**/worktrees/**
 **/.venv
 **/.venv/**
 **/__pycache__
@@ -50,6 +52,9 @@
 # Common secret and credential names.
 **/.env
 **/.env.*
+**/.netrc
+**/.pypirc
+**/.npmrc
 **/*credentials*
 **/*secret*
 **/*.pem
