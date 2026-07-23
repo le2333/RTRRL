@@ -239,6 +239,8 @@ class FakeStore:
         return digest
 
     def put_bytes(self, uri: str, data: bytes) -> str:
+        if self.mode == "input-upload" and "/input/" in uri:
+            raise OSError("run input upload failed")
         return self._put(uri, data)
 
     def get_bytes(self, uri: str, *, expected_sha256: str | None = None) -> bytes:
@@ -260,6 +262,8 @@ class FakeStore:
             "report.json"
         ):
             raise PermissionError("report persistence failed")
+        if self.mode == "job-upload" and "/jobs/" in uri:
+            raise OSError("job bundle upload failed")
         if "/status/" in uri:
             self.marker_writes.append(uri)
         return self._put(uri, canonical_json(value).encode())
@@ -410,6 +414,7 @@ class FakeBatch:
         self.submitted: list[Any] = []
         self.statuses: dict[str, JobQuery] = {}
         self.query_calls: list[tuple[str, ...]] = []
+        self.submit_attempts = 0
         self.resubmit_calls = 0
         self.cancel_calls = 0
         self.retry_calls = 0
@@ -421,8 +426,11 @@ class FakeBatch:
         job_definition: object,
     ) -> SubmittedJob:
         del profile, job_definition
+        self.submit_attempts += 1
         self.submitted.append(bundle)
-        job_id = f"batch-{len(self.submitted)}"
+        if self.mode == "partial-submit" and self.submit_attempts == 2:
+            raise RuntimeError("second Batch submit failed")
+        job_id = f"batch-{self.submit_attempts}"
         uri = f"{self.prefix}jobs/{bundle.job_id}/bundle.json"
         previous = os.environ.get("TASK6_CHILD_NONZERO")
         previous_pythonpath = os.environ.get("PYTHONPATH")
@@ -460,6 +468,8 @@ class FakeBatch:
             # Surface the real completion marker to the controller as an
             # algorithm failure rather than collapsing it into Batch status.
             status = "SUCCEEDED"
+        if self.mode == "batch-timeout":
+            status = "RUNNING"
         self.statuses[job_id] = JobQuery(
             job_id=job_id,
             status=status,
@@ -487,6 +497,7 @@ class FakeBatch:
 @dataclass
 class Harness:
     controller: ExperimentController
+    experiment: Path
     stores: list[FakeStore]
     batches: list[FakeBatch]
     aims: list[FakeAim]
@@ -574,6 +585,8 @@ def _make_harness(tmp_path: Path, mode: str = "ok") -> Harness:
 
     store_mode = mode if mode in {
         "artifact-upload",
+        "input-upload",
+        "job-upload",
         "marker-missing",
         "marker-tamper",
         "persist-state",
@@ -591,7 +604,12 @@ def _make_harness(tmp_path: Path, mode: str = "ok") -> Harness:
             prefix,
             store,
             fixture,
-            mode if mode in {"batch-failed", "child-nonzero"} else "ok",
+            mode if mode in {
+                "batch-failed",
+                "batch-timeout",
+                "child-nonzero",
+                "partial-submit",
+            } else "ok",
         )
         batches.append(batch)
         return batch
@@ -604,26 +622,37 @@ def _make_harness(tmp_path: Path, mode: str = "ok") -> Harness:
         studies.append(study)
         return study
 
-    # Aim is created after the store by run(); this proxy binds lazily.
-    aim_proxy: list[FakeAim] = []
+    aims: list[FakeAim] = []
+    batch_clock = 0.0
 
-    class AimProxy:
-        def wait_for_result(
-            self, run_id: str, objective: str, timeout: float
-        ) -> float:
-            return aim_proxy[0].wait_for_result(run_id, objective, timeout)
+    def clock() -> float:
+        nonlocal batch_clock
+        value = batch_clock
+        batch_clock += 1.0
+        return value
+
+    def aim_reader_factory(store: FakeStore) -> FakeAim:
+        aim_mode = mode if mode in {
+            "aim-failed",
+            "aim-timeout",
+            "aim-nonfinite",
+        } else "ok"
+        aim = FakeAim(store, tmp_path, aim_mode)
+        aims.append(aim)
+        return aim
 
     controller = ExperimentController(
         catalog_reader=catalog_reader,
         preflight=FakePreflight(),
         store_factory=store_factory,
         batch_factory=batch_factory,
-        aim_reader=AimProxy(),
+        aim_reader_factory=aim_reader_factory,
         study_factory=study_factory,
         experiment_id_factory=lambda: "task6-exp-001",
         bucket="bucket",
         poll_interval=0.01,
         batch_timeout=1,
+        clock=clock,
         sleep=lambda _: None,
     )
 
@@ -633,27 +662,11 @@ def _make_harness(tmp_path: Path, mode: str = "ok") -> Harness:
     validation = controller.validate(experiment)
     assert validation.experiment_name == "task6-complete-facility"
     assert stores == batches == studies == []
-
-    # The actual run will append one store before its first Aim read.
-    original_store_factory = controller._store_factory
-
-    def binding_store_factory(prefix: str) -> FakeStore:
-        store = original_store_factory(prefix)
-        aim_mode = mode if mode in {
-            "aim-failed",
-            "aim-timeout",
-            "aim-nonfinite",
-        } else "ok"
-        aim_proxy.append(FakeAim(store, tmp_path, aim_mode))
-        return store
-
-    controller._store_factory = binding_store_factory
-    controller._task6_experiment = experiment
-    return Harness(controller, stores, batches, aim_proxy, ecr, studies)
+    return Harness(controller, experiment, stores, batches, aims, ecr, studies)
 
 
 def _run(harness: Harness) -> Any:
-    return harness.controller.run(harness.controller._task6_experiment)
+    return harness.controller.run(harness.experiment)
 
 
 def test_real_facility_lifecycle_mixes_groups_and_preserves_artifact_identity(
@@ -707,12 +720,6 @@ def test_real_facility_lifecycle_mixes_groups_and_preserves_artifact_identity(
             assert config["protocol_version"] == "1"
             assert config["parameters"]["runtime"]["seed"] == 11
 
-    markers = [
-        value
-        for uri in store.objects
-        if "/status/attempt-0.json" in uri
-        for value in [store.get_json(uri)]
-    ]
     expected_marker_order = [
         "s3://bucket/"
         + run.artifact_prefix.removesuffix("input/")
@@ -721,19 +728,33 @@ def test_real_facility_lifecycle_mixes_groups_and_preserves_artifact_identity(
         for run in bundle.runs
     ]
     assert store.marker_writes == expected_marker_order
-    assert len(markers) == 10
-    assert all(marker["attempt"] == 0 and marker["exit_code"] == 0 for marker in markers)
-    artifact_uris = {
-        uri for marker in markers for uri in marker["artifacts"]
-    }
-    assert any("/aim-buffer/events.jsonl" in uri for uri in artifact_uris)
-    assert any("/checkpoints/" in uri for uri in artifact_uris)
-    assert any("/rerun/" in uri and uri.endswith(".rrd") for uri in artifact_uris)
-    assert all(uri in store.objects for uri in artifact_uris)
-    assert all(
-        store.digests[uri] == hashlib.sha256(store.objects[uri]).hexdigest()
-        for uri in artifact_uris
-    )
+    artifact_owners: dict[str, str] = {}
+    for bundle in bundles:
+        for run in bundle.runs:
+            run_root = "s3://bucket/" + run.artifact_prefix.removesuffix("input/")
+            marker = store.get_json(f"{run_root}status/attempt-0.json")
+            assert marker["run_id"] == run.run_id
+            assert marker["attempt"] == 0
+            assert marker["exit_code"] == 0
+            artifacts = tuple(marker["artifacts"])
+            assert len(artifacts) == 3
+            assert all(uri.startswith(run_root) for uri in artifacts)
+            assert sum(uri == f"{run_root}aim-buffer/events.jsonl" for uri in artifacts) == 1
+            assert sum(
+                uri == f"{run_root}checkpoints/fixture-checkpoint.bin"
+                for uri in artifacts
+            ) == 1
+            assert sum(
+                uri.startswith(f"{run_root}rerun/")
+                and uri.endswith("/episode-000001.rrd")
+                for uri in artifacts
+            ) == 1
+            for uri in artifacts:
+                assert uri not in artifact_owners
+                artifact_owners[uri] = run.run_id
+                assert uri in store.objects
+                assert store.digests[uri] == hashlib.sha256(store.objects[uri]).hexdigest()
+    assert len(artifact_owners) == 30
     assert set(aim.replayed) == {
         run.run_id for bundle in bundles for run in bundle.runs
     }
@@ -808,6 +829,57 @@ def test_every_runtime_failure_stops_future_rounds_without_retry(
 
 
 @pytest.mark.parametrize(
+    ("mode", "submitted_ids", "submit_attempts", "cause_type", "cause_match"),
+    [
+        (
+            "batch-timeout",
+            ("batch-1", "batch-2"),
+            2,
+            TimeoutError,
+            "timed out waiting for Batch jobs",
+        ),
+        ("input-upload", (), 0, OSError, "run input upload failed"),
+        ("job-upload", (), 0, OSError, "job bundle upload failed"),
+        (
+            "partial-submit",
+            ("batch-1",),
+            2,
+            RuntimeError,
+            "second Batch submit failed",
+        ),
+    ],
+)
+def test_submission_failures_preserve_accepted_ids_and_fail_all_pending_trials(
+    tmp_path: Path,
+    mode: str,
+    submitted_ids: tuple[str, ...],
+    submit_attempts: int,
+    cause_type: type[BaseException],
+    cause_match: str,
+) -> None:
+    harness = _make_harness(tmp_path, mode)
+
+    with pytest.raises(ExperimentRunError) as raised:
+        _run(harness)
+
+    batch = harness.batches[0]
+    assert isinstance(raised.value.__cause__, cause_type)
+    assert cause_match in str(raised.value.__cause__)
+    assert raised.value.report.submitted_job_ids == submitted_ids
+    assert batch.submit_attempts == submit_attempts
+    assert batch.resubmit_calls == batch.cancel_calls == batch.retry_calls == 0
+    assert all(
+        sum(trial.state == TrialState.FAIL for trial in study.trials) == 2
+        for study in harness.studies
+    )
+    assert not any(
+        trial.state in {TrialState.RUNNING, TrialState.COMPLETE}
+        for study in harness.studies
+        for trial in study.trials
+    )
+
+
+@pytest.mark.parametrize(
     ("mode", "error_types"),
     [
         ("persist-state", (OSError,)),
@@ -840,7 +912,7 @@ def test_finite_spaces_exit_before_nominal_budget_without_extra_submission(
     tmp_path: Path,
 ) -> None:
     harness = _make_harness(tmp_path)
-    experiment = harness.controller._task6_experiment
+    experiment = harness.experiment
     payload = yaml.safe_load(experiment.read_text())
     payload["defaults"]["hpo"]["total_trials"] = 8
     payload["groups"]["stream"]["parameters"]["hidden_dim"]["values"] = [64, 96, 128]

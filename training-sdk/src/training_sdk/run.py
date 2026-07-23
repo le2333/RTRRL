@@ -1,7 +1,10 @@
 from __future__ import annotations
 
+import os
 from pathlib import Path
 import shutil
+import stat
+import tempfile
 from threading import RLock
 from typing import Mapping, Protocol
 
@@ -49,6 +52,14 @@ class NullRerun:
 
     def close(self) -> None:
         return None
+
+
+def _fsync_directory(path: Path) -> None:
+    descriptor = os.open(path, os.O_RDONLY | getattr(os, "O_DIRECTORY", 0))
+    try:
+        os.fsync(descriptor)
+    finally:
+        os.close(descriptor)
 
 
 class TrainingRun:
@@ -177,17 +188,42 @@ class TrainingRun:
 
     def register_checkpoint(self, path: Path) -> None:
         source = Path(path)
-        if source.is_symlink() or not source.is_file():
-            raise ValueError("checkpoint source must be a regular file")
         target_directory = self.context.artifact_directory / "checkpoints"
         target_directory.mkdir(parents=True, exist_ok=True)
         target = target_directory / source.name
+        if target.exists():
+            raise FileExistsError(f"checkpoint artifact already exists: {target}")
+
+        source_fd = os.open(
+            source,
+            os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK,
+        )
+        temporary: Path | None = None
         try:
-            with source.open("rb") as input_file, target.open("xb") as output_file:
+            if not stat.S_ISREG(os.fstat(source_fd).st_mode):
+                raise ValueError("checkpoint source must be a regular file")
+            temporary_fd, temporary_name = tempfile.mkstemp(
+                prefix=f".{target.name}.",
+                suffix=".tmp",
+                dir=target_directory,
+            )
+            temporary = Path(temporary_name)
+            with (
+                os.fdopen(os.dup(source_fd), "rb") as input_file,
+                os.fdopen(temporary_fd, "wb") as output_file,
+            ):
                 shutil.copyfileobj(input_file, output_file, length=1024 * 1024)
+                output_file.flush()
+                os.fsync(output_file.fileno())
+            os.link(temporary, target)
+            _fsync_directory(target_directory)
         except BaseException:
-            target.unlink(missing_ok=True)
             raise
+        finally:
+            os.close(source_fd)
+            if temporary is not None:
+                temporary.unlink(missing_ok=True)
+                _fsync_directory(target_directory)
 
     def finish(self, final_metrics: Mapping[str, int | float]) -> None:
         with self._terminal_lock:

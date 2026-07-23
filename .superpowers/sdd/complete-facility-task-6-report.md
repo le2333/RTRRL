@@ -30,15 +30,18 @@ only ECR, S3, Batch, and Aim service boundaries.
 - Proved objective values reach real Optuna `tell`, every accepted trial is
   terminal, finite spaces stop before the nominal budget, and no later round is
   submitted after a failure.
-- Proved Batch `FAILED`, real child nonzero, artifact upload failure,
-  missing/tampered completion marker, Aim failed/timeout/nonfinite result, and
-  one-or-both final persistence failures. Accepted Batch IDs are retained;
-  pending trials become `FAIL`; no resubmit, cancel, retry, or future-round
-  submit occurs.
-- Proved uploaded Aim spool, checkpoint, and Rerun artifacts have marker keys,
-  stored bytes, and matching SHA-256 identities in the fake S3 boundary.
-- Added `test_historical_entries.py`, deriving its compatibility set directly
-  from `git ls-tree -r --name-only fd195c4` instead of inventing a list.
+- Proved Batch `FAILED` and poll timeout, real child nonzero, run-input and
+  `JobBundle` upload failures, partial submit exception, artifact upload
+  failure, missing/tampered completion marker, Aim failed/timeout/nonfinite
+  result, and one-or-both final persistence failures. Accepted Batch IDs are
+  retained; every asked pending trial becomes `FAIL`; no resubmit, cancel,
+  retry, or future submit occurs.
+- Proved each run's completion marker independently owns exactly one Aim spool,
+  checkpoint, and Rerun artifact under that run's artifact prefix. Artifact
+  URIs are one-to-one across runs, exist in fake S3, and match stored SHA-256.
+- Added an explicit 1,428-entry
+  `tests/data/historical-fd195c4.json` manifest with path, baseline git blob
+  SHA, and category for every selected historical entry.
 
 ## Implementation Defects Exposed and Fixed
 
@@ -55,7 +58,10 @@ only ECR, S3, Batch, and Aim service boundaries.
    uploads the reserved `checkpoints/` tree, so the SDK no-op made checkpoint
    registration unverifiable and silently lost the artifact. It now validates
    a regular non-symlink source and copies a bounded stream into the run-owned
-   `checkpoints/` directory with no replacement and partial-file cleanup.
+   `checkpoints/` directory through a same-directory temporary file, file
+   `fsync`, atomic no-overwrite hard-link publication, and directory `fsync`.
+   Duplicate and same-path registration reject without deleting the existing
+   artifact; failures remove only this call's temporary file.
 3. **Default Rerun output bypassed the worker exchange namespace.** Bootstrap
    rooted Rerun directly at `artifact_directory`, while the worker intentionally
    uploads only `aim-buffer/`, `checkpoints/`, and `rerun/`. The default root is
@@ -64,29 +70,25 @@ only ECR, S3, Batch, and Aim service boundaries.
 
 ## Historical Compatibility Inventory
 
-The baseline-derived union contains 1,398 entries:
+The reviewable manifest is
+`rtrrl/infra/control-plane/tests/data/historical-fd195c4.json`. Its
+baseline-derived union contains 1,428 unique paths:
 
-- 14 shell commands: `infra/backup-aim.sh`,
-  `infra/batch/create-batch.sh`,
-  `infra/batch/heavy-tests/build-image.sh`, `infra/benchmark.sh`,
-  `infra/build-and-push.sh`, `infra/env.sh`, `infra/hpo.sh`,
-  `infra/iam/setup-github-oidc.sh`, `infra/iam/setup-iam.sh`,
-  `infra/submit.sh`, `infra/submit_many.sh`, `infra/sweep.sh`,
-  `memo/infra/docker/entrypoint.sh`, and
-  `rtrrl/infra/docker/entrypoint.sh`.
-- 3 workflows: `.github/workflows/build-memo-image.yml`,
-  `.github/workflows/build-rtrrl-image.yml`, and
-  `.github/workflows/memo-ci.yml`.
-- 7 catalog files: the memo index and two descriptors, plus the RTRRL index
-  and three descriptors.
-- 1,374 HPO source/data entries under `infra/hpo/` and `rtrrl/hpo/`, including
-  specs, plans, generated configurations, reports, and controller source.
+- 44 commands selected by baseline mode `100755`, shebang, Python
+  `__main__` guard, or a `pyproject.toml` `project.scripts` registration and
+  target. This includes non-shell entries and `infra/submit.sh`.
+- 3 workflows under `.github/workflows/`.
+- 7 memo/RTRRL catalog index and descriptor YAML files.
+- 1,375 complete HPO source/data entries under `infra/hpo/` and `rtrrl/hpo/`,
+  without suffix filtering and explicitly including `infra/hpo/uv.lock`.
 
-Every entry exists in the working tree. Workflows, descriptors, and HPO specs
-parse as YAML. `infra/run_many.py --help` and the historical HPO submit command
-were exercised; HPO submit was run without `--yes` and printed `Dry run only`.
-A fake `aws` executable proves those checks never crossed the AWS boundary.
-`infra/submit.sh` was syntax-checked with `bash -n` and was not modified.
+The test independently recomputes the selection from
+`git ls-tree --full-tree fd195c4`, requires exact manifest equality, and recomputes each
+current file's git blob SHA from its bytes. Every entry exists and is unchanged.
+Workflows, descriptors, and HPO specs parse as YAML. Every selected shell
+command is syntax-checked with `bash -n`; safe Python CLI help surfaces and the
+historical HPO dry run are exercised. A fake `aws` executable proves those
+checks never crossed the AWS boundary. No historical file was modified.
 
 ### Historical concern
 
@@ -113,18 +115,32 @@ verification.
   historical behavior was outside Task 6, the implementation change was
   removed and the test was corrected to use non-mutating syntax/help/dry-run
   surfaces.
+- Review RED tests reproduced existing checkpoint deletion on duplicate and
+  same-path registration. Both failed because the old broad exception handler
+  unlinked the final target rather than a call-owned temporary file.
+- The new submission-boundary parameterization first completed all four modes
+  because the harness lacked those injected boundaries; after injection it
+  proves Batch timeout, input upload, job bundle upload, and partial submit
+  semantics independently.
+- The first DI-seam test failed with an unsupported `aim_reader_factory`
+  constructor argument. The controller now formally supports exactly one
+  fixed reader or store-bound reader factory, so Task 6 tests no longer modify
+  controller private attributes.
 
 ## Verification
 
 - Task 6 targeted:
   `cd rtrrl/infra/control-plane && uv run pytest tests/test_end_to_end.py tests/test_historical_entries.py -q`
-  — 16 passed, one upstream Aim/SQLAlchemy deprecation warning.
+  — 21 passed in 68.86 seconds, one upstream Aim/SQLAlchemy warning.
 - Full control plane:
   `cd rtrrl/infra/control-plane && uv run pytest -q`
-  — 462 passed in 63.47 seconds.
+  — 467 passed in 100.62 seconds.
 - Full training SDK:
   `cd training-sdk && uv run pytest -q`
-  — 129 passed in 5.36 seconds.
+  — 132 passed in 8.43 seconds.
+- Checkpoint review target:
+  `cd training-sdk && uv run pytest tests/test_aim_adapter.py -k checkpoint -q`
+  — 3 passed, 37 deselected.
 - Memo lightweight facility targets:
   `cd memo && uv run pytest tests/test_facility_catalog.py tests/test_facility_launchers.py tests/test_experiment_observability.py tests/test_logging_compat.py -q`
   — 60 tests passed (exit 0), with one upstream JAX deprecation warning; no
@@ -139,6 +155,15 @@ verification.
 - `git diff --check` — passed.
 - IDE diagnostics for every changed Python implementation and test file — no
   findings.
+
+## Review Remediation Concerns
+
+- The manifest deliberately defines "command" by auditable baseline evidence:
+  executable mode, shebang, Python main guard, or `project.scripts`
+  registration/target. The checked-in per-path blob list is the source of truth
+  and the test detects both omissions and additions relative to that rule.
+- Upstream Aim/SQLAlchemy and JAX deprecation warnings remain; neither is caused
+  by Task 6.
 
 ## Not Run
 

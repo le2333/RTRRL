@@ -149,7 +149,8 @@ class ExperimentController:
         preflight: Any,
         store_factory: Callable[..., Any],
         batch_factory: Callable[..., Any],
-        aim_reader: Any,
+        aim_reader: Any | None = None,
+        aim_reader_factory: Callable[[Any], Any] | None = None,
         study_factory: Callable[..., Any] = create_study,
         experiment_id_factory: Callable[[], str] = lambda: str(uuid4()),
         bucket: str,
@@ -163,11 +164,16 @@ class ExperimentController:
             raise ValueError("control prefix must be exactly 'experiments'")
         if poll_interval <= 0 or batch_timeout <= 0:
             raise ValueError("poll and timeout values must be positive")
+        if (aim_reader is None) == (aim_reader_factory is None):
+            raise ValueError(
+                "provide exactly one of aim_reader or aim_reader_factory"
+            )
         self._catalog_reader = catalog_reader
         self._preflight = preflight
         self._store_factory = store_factory
         self._batch_factory = batch_factory
         self._aim_reader = aim_reader
+        self._aim_reader_factory = aim_reader_factory
         self._study_factory = study_factory
         self._experiment_id_factory = experiment_id_factory
         self._bucket = bucket
@@ -543,6 +549,11 @@ class ExperimentController:
         )
         store = self._store_factory(experiment_prefix)
         batch = self._batch_factory(experiment_prefix, store)
+        aim_reader = (
+            self._aim_reader_factory(store)
+            if self._aim_reader_factory is not None
+            else self._aim_reader
+        )
         submitted_ids: list[str] = []
         completed_runs = 0
 
@@ -705,7 +716,7 @@ class ExperimentController:
                     for _, children in round_jobs:
                         for loop, trial, run in children:
                             self._collect_marker(store, run)
-                            value = self._aim_reader.wait_for_result(
+                            value = aim_reader.wait_for_result(
                                 run.run_id,
                                 loop.group.objective.metric,
                                 loop.group.execution.aim_result_timeout_seconds,

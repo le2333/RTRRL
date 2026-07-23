@@ -1,94 +1,170 @@
 from __future__ import annotations
 
+import hashlib
+import json
 import os
 from pathlib import Path
 import subprocess
 import sys
+import tomllib
+from typing import Any
 
 import yaml
 
 
 REPOSITORY_ROOT = Path(__file__).parents[4]
-BASELINE = "fd195c4"
+BASELINE = "fd195c494ff4ac3b34dff066a6ccb1efb024b16b"
+MANIFEST_PATH = Path(__file__).parent / "data" / "historical-fd195c4.json"
 
 
-def _baseline_paths() -> set[str]:
-    result = subprocess.run(
-        ["git", "ls-tree", "-r", "--name-only", BASELINE],
+def _git(*args: str) -> bytes:
+    return subprocess.check_output(
+        ["git", *args],
         cwd=REPOSITORY_ROOT,
-        check=True,
-        capture_output=True,
-        text=True,
     )
-    return set(result.stdout.splitlines())
 
 
-def _compatibility_entries(paths: set[str]) -> set[str]:
-    entries = set()
-    for path in paths:
-        suffix = Path(path).suffix
-        if path.startswith(".github/workflows/") and suffix in {".yml", ".yaml"}:
-            entries.add(path)
+def _baseline_tree() -> dict[str, tuple[str, str]]:
+    fields = _git("ls-tree", "-r", "--full-tree", "-z", BASELINE).split(b"\0")
+    result: dict[str, tuple[str, str]] = {}
+    for field in fields:
+        if not field:
+            continue
+        metadata, raw_path = field.split(b"\t", 1)
+        mode, object_type, blob = metadata.decode().split()
+        assert object_type == "blob"
+        result[raw_path.decode()] = (mode, blob)
+    return result
+
+
+def _blob(blob: str) -> bytes:
+    return _git("cat-file", "blob", blob)
+
+
+def _cli_registration_paths(
+    tree: dict[str, tuple[str, str]],
+) -> set[str]:
+    registrations: set[str] = set()
+    for path, (_, blob) in tree.items():
+        if Path(path).name != "pyproject.toml":
+            continue
+        parsed = tomllib.loads(_blob(blob).decode())
+        scripts = parsed.get("project", {}).get("scripts", {})
+        if not scripts:
+            continue
+        registrations.add(path)
+        root = Path(path).parent
+        for target in scripts.values():
+            module = str(target).split(":", 1)[0]
+            relative = Path(*module.split("."))
+            candidates = (
+                root / "src" / relative.with_suffix(".py"),
+                root / relative.with_suffix(".py"),
+                root / "src" / relative / "__init__.py",
+                root / relative / "__init__.py",
+            )
+            matches = [candidate.as_posix() for candidate in candidates if candidate.as_posix() in tree]
+            assert len(matches) == 1, (path, target, matches)
+            registrations.add(matches[0])
+    return registrations
+
+
+def _expected_manifest_entries() -> list[dict[str, Any]]:
+    tree = _baseline_tree()
+    cli_registrations = _cli_registration_paths(tree)
+    entries: list[dict[str, Any]] = []
+    for path, (mode, blob) in sorted(tree.items()):
+        content = _blob(blob)
+        categories: list[str] = []
+        is_cli_source = (
+            b'if __name__ == "__main__"' in content
+            or b"if __name__ == '__main__'" in content
+        )
         if (
-            path.startswith(("infra/", "memo/infra/", "rtrrl/infra/"))
-            and suffix == ".sh"
+            mode == "100755"
+            or content.startswith(b"#!")
+            or path in cli_registrations
+            or is_cli_source
         ):
-            entries.add(path)
-        if "/infra/scripts/" in path and suffix in {".yml", ".yaml"}:
-            entries.add(path)
-        if path.startswith(("infra/hpo/", "rtrrl/hpo/")) and suffix in {
-            ".csv",
-            ".json",
-            ".md",
-            ".py",
-            ".toml",
+            categories.append("command")
+        if path.startswith(".github/workflows/") and Path(path).suffix in {
             ".yaml",
             ".yml",
         }:
-            entries.add(path)
+            categories.append("workflow")
+        if "/infra/scripts/" in path and Path(path).suffix in {".yaml", ".yml"}:
+            categories.append("descriptor")
+        if path.startswith(("infra/hpo/", "rtrrl/hpo/")):
+            categories.append("hpo")
+        if categories:
+            entries.append(
+                {
+                    "path": path,
+                    "blob": blob,
+                    "categories": categories,
+                }
+            )
     return entries
 
 
-def test_every_baseline_command_descriptor_workflow_and_hpo_entry_exists() -> None:
-    baseline_paths = _baseline_paths()
-    entries = _compatibility_entries(baseline_paths)
+def _manifest() -> dict[str, Any]:
+    return json.loads(MANIFEST_PATH.read_text(encoding="utf-8"))
 
-    assert "infra/submit.sh" in entries
-    assert "rtrrl/infra/submit.sh" not in baseline_paths
-    assert ".github/workflows/build-rtrrl-image.yml" in entries
-    assert ".github/workflows/build-memo-image.yml" in entries
-    assert "memo/infra/scripts/index.yaml" in entries
-    assert "rtrrl/infra/scripts/index.yaml" in entries
-    assert any(path.startswith("rtrrl/hpo/specs/") for path in entries)
-    assert any("/plan.json" in path for path in entries)
-    assert len(entries) > 1_300
 
-    missing = sorted(
-        path
-        for path in entries
-        if not (REPOSITORY_ROOT / path).is_file()
+def _git_blob_sha(data: bytes) -> str:
+    header = f"blob {len(data)}\0".encode()
+    return hashlib.sha1(header + data).hexdigest()
+
+
+def test_manifest_exactly_matches_task6_baseline_selection() -> None:
+    manifest = _manifest()
+
+    assert manifest["baseline"] == BASELINE
+    assert manifest["selection"] == {
+        "command": [
+            "git mode 100755",
+            "shebang",
+            "Python __main__ guard",
+            "pyproject project.scripts registration and target",
+        ],
+        "descriptor": "**/infra/scripts/*.{yaml,yml}",
+        "workflow": ".github/workflows/*.{yaml,yml}",
+        "hpo": ["infra/hpo/**", "rtrrl/hpo/**"],
+    }
+    assert manifest["entries"] == _expected_manifest_entries()
+    assert any(
+        entry["path"] == "infra/hpo/uv.lock"
+        and "hpo" in entry["categories"]
+        for entry in manifest["entries"]
     )
-    assert missing == []
 
 
-def test_baseline_workflows_and_descriptors_still_parse() -> None:
-    entries = _compatibility_entries(_baseline_paths())
-    structured = sorted(
-        path
-        for path in entries
+def test_every_manifest_entry_exists_with_unchanged_git_blob_identity() -> None:
+    entries = _manifest()["entries"]
+    paths = [entry["path"] for entry in entries]
+    assert paths == sorted(set(paths))
+
+    for entry in entries:
+        path = REPOSITORY_ROOT / entry["path"]
+        assert path.is_file(), entry["path"]
+        assert _git_blob_sha(path.read_bytes()) == entry["blob"], entry["path"]
+
+
+def test_manifest_workflows_descriptors_and_hpo_specs_still_parse() -> None:
+    for entry in _manifest()["entries"]:
+        categories = set(entry["categories"])
+        path = Path(entry["path"])
         if (
-            path.startswith(".github/workflows/")
-            or "/infra/scripts/" in path
-            or path.startswith("rtrrl/hpo/specs/")
-        )
-    )
-
-    for relative in structured:
-        value = yaml.safe_load((REPOSITORY_ROOT / relative).read_text())
-        assert isinstance(value, dict), relative
+            categories & {"workflow", "descriptor"}
+            or "hpo" in categories
+            and "/specs/" in path.as_posix()
+            and path.suffix in {".yaml", ".yml"}
+        ):
+            value = yaml.safe_load((REPOSITORY_ROOT / path).read_text())
+            assert isinstance(value, dict), path
 
 
-def test_safe_historical_help_and_hpo_dry_run_do_not_call_aws(
+def test_safe_historical_help_syntax_and_hpo_dry_run_do_not_call_aws(
     tmp_path: Path,
 ) -> None:
     fake_bin = tmp_path / "bin"
@@ -103,26 +179,41 @@ def test_safe_historical_help_and_hpo_dry_run_do_not_call_aws(
     environment = dict(os.environ)
     environment["PATH"] = f"{fake_bin}:{environment['PATH']}"
 
-    run_many = subprocess.run(
-        [sys.executable, str(REPOSITORY_ROOT / "infra" / "run_many.py"), "--help"],
-        cwd=REPOSITORY_ROOT,
-        env=environment,
-        check=True,
-        capture_output=True,
-        text=True,
-    )
-    assert "--fail-fast" in run_many.stdout
+    for entry in _manifest()["entries"]:
+        path = REPOSITORY_ROOT / entry["path"]
+        if "command" in entry["categories"] and path.suffix == ".sh":
+            subprocess.run(
+                ["bash", "-n", str(path)],
+                cwd=REPOSITORY_ROOT,
+                env=environment,
+                check=True,
+                capture_output=True,
+                text=True,
+            )
 
-    legacy_submit = subprocess.run(
-        ["bash", "-n", str(REPOSITORY_ROOT / "infra" / "submit.sh")],
-        cwd=REPOSITORY_ROOT,
-        env=environment,
-        check=True,
-        capture_output=True,
-        text=True,
+    help_commands = (
+        [sys.executable, str(REPOSITORY_ROOT / "infra" / "run_many.py"), "--help"],
+        [
+            sys.executable,
+            "-m",
+            "trainer_infra",
+            "--help",
+        ],
+        [
+            sys.executable,
+            str(REPOSITORY_ROOT / "rtrrl" / "infra" / "worker" / "worker.py"),
+            "--help",
+        ],
     )
-    assert legacy_submit.stdout == legacy_submit.stderr == ""
-    assert not aws_marker.exists()
+    for command in help_commands:
+        subprocess.run(
+            command,
+            cwd=REPOSITORY_ROOT,
+            env=environment,
+            check=True,
+            capture_output=True,
+            text=True,
+        )
 
     plans = sorted((REPOSITORY_ROOT / "rtrrl" / "hpo" / "runs").glob("**/plan.json"))
     assert plans

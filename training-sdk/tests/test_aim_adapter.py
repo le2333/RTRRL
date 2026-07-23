@@ -2,6 +2,7 @@ from pathlib import Path
 
 import pytest
 import training_sdk
+import training_sdk.run as run_module
 
 from training_sdk import (
     EventSpool,
@@ -77,6 +78,56 @@ def make_training_run(tmp_path, *, context=None, aim=None, spool=None):
     )
     run.start()
     return run
+
+
+def test_checkpoint_duplicate_registration_preserves_existing_artifact(tmp_path):
+    run = make_training_run(tmp_path)
+    source = tmp_path / "model.ckpt"
+    source.write_bytes(b"first")
+    run.register_checkpoint(source)
+    target = run.context.artifact_directory / "checkpoints" / source.name
+    source.write_bytes(b"second")
+
+    with pytest.raises(FileExistsError):
+        run.register_checkpoint(source)
+
+    assert target.read_bytes() == b"first"
+
+
+def test_checkpoint_source_equal_to_target_is_rejected_without_deletion(tmp_path):
+    run = make_training_run(tmp_path)
+    target = run.context.artifact_directory / "checkpoints" / "model.ckpt"
+    target.parent.mkdir(parents=True)
+    target.write_bytes(b"existing")
+
+    with pytest.raises(FileExistsError):
+        run.register_checkpoint(target)
+
+    assert target.read_bytes() == b"existing"
+
+
+def test_checkpoint_copy_failure_preserves_source_and_removes_only_temporary_file(
+    tmp_path,
+    monkeypatch,
+):
+    run = make_training_run(tmp_path)
+    source = tmp_path / "model.ckpt"
+    source.write_bytes(b"source")
+    target_directory = run.context.artifact_directory / "checkpoints"
+
+    def fail_after_partial_copy(input_file, output_file, *, length):
+        del input_file, length
+        output_file.write(b"partial")
+        raise OSError("copy failed")
+
+    monkeypatch.setattr(run_module.shutil, "copyfileobj", fail_after_partial_copy)
+
+    with pytest.raises(OSError, match="copy failed"):
+        run.register_checkpoint(source)
+
+    assert source.read_bytes() == b"source"
+    assert not (target_directory / source.name).exists()
+    assert list(target_directory.iterdir()) == []
 
 
 def test_start_uses_exact_experiment_run_name_and_nested_hparams(tmp_path):
