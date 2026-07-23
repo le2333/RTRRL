@@ -16,7 +16,6 @@ type FrozenValue = (
 )
 
 _FAILURE_MODES = frozenset({"none", "before_training", "after_training", "after_checkpoint"})
-_DEFAULT_ENVIRON: Mapping[str, str] = MappingProxyType(dict(os.environ))
 
 
 def _mapping(value: object, location: str) -> Mapping[str, Any]:
@@ -50,7 +49,10 @@ def _integer(value: object, location: str, *, positive: bool) -> int:
 def _finite_number(value: object, location: str) -> float:
     if type(value) not in (int, float):
         raise ValueError(f"{location} must be a finite number")
-    result = float(cast(int | float, value))
+    try:
+        result = float(cast(int | float, value))
+    except OverflowError as error:
+        raise ValueError(f"{location} must be a finite number") from error
     if not math.isfinite(result):
         raise ValueError(f"{location} must be a finite number")
     return result
@@ -73,7 +75,7 @@ def _freeze(value: Any) -> FrozenValue:
     return cast(str | int | float | bool | None, value)
 
 
-@dataclass(frozen=True, slots=True)
+@dataclass(frozen=True, slots=True, init=False)
 class AcceptanceConfig:
     protocol_version: Literal["1"]
     environment: Mapping[str, FrozenValue]
@@ -82,12 +84,15 @@ class AcceptanceConfig:
     training_budget: Mapping[str, FrozenValue]
     fast_mode: bool = False
 
+    def __init__(self, *args: object, **kwargs: object) -> None:
+        raise TypeError("AcceptanceConfig instances must be created with AcceptanceConfig.load()")
+
     @classmethod
     def load(
         cls,
         path: str | Path,
         *,
-        environ: Mapping[str, str] = _DEFAULT_ENVIRON,
+        environ: Mapping[str, str] | None = None,
     ) -> AcceptanceConfig:
         try:
             loaded = yaml.safe_load(Path(path).read_text(encoding="utf-8"))
@@ -137,39 +142,58 @@ class AcceptanceConfig:
         )
         if learning_rate <= 0:
             raise ValueError("parameters.algorithm.learning_rate must be positive")
-        num_envs = _integer(
-            algorithm["num_envs"], "parameters.algorithm.num_envs", positive=True
-        )
-        episode_length = _integer(
-            algorithm["episode_length"], "parameters.algorithm.episode_length", positive=True
-        )
+        _integer(algorithm["num_envs"], "parameters.algorithm.num_envs", positive=True)
+        _integer(algorithm["episode_length"], "parameters.algorithm.episode_length", positive=True)
         failure_mode = algorithm["failure_mode"]
         if type(failure_mode) is not str or failure_mode not in _FAILURE_MODES:
             raise ValueError(f"parameters.algorithm.failure_mode must be one of {sorted(_FAILURE_MODES)}")
 
         training_budget = _mapping(root["training_budget"], "training_budget")
         _exact_keys(training_budget, {"env_steps"}, "training_budget")
-        env_steps = _integer(
-            training_budget["env_steps"], "training_budget.env_steps", positive=True
-        )
-        if env_steps != num_envs * episode_length:
-            raise ValueError("training_budget.env_steps must equal num_envs * episode_length")
+        _integer(training_budget["env_steps"], "training_budget.env_steps", positive=True)
 
-        test_mode = _enabled(environ, "BRAX_ACCEPTANCE_TEST_MODE")
-        fast_mode = _enabled(environ, "BRAX_ACCEPTANCE_E2E_FAST")
+        live_environ = os.environ if environ is None else environ
+        test_mode = _enabled(live_environ, "BRAX_ACCEPTANCE_TEST_MODE")
+        fast_mode = _enabled(live_environ, "BRAX_ACCEPTANCE_E2E_FAST")
         if failure_mode != "none" and not test_mode:
             raise ValueError("non-none failure_mode requires BRAX_ACCEPTANCE_TEST_MODE=1")
         if fast_mode and not test_mode:
             raise ValueError("BRAX_ACCEPTANCE_E2E_FAST=1 requires BRAX_ACCEPTANCE_TEST_MODE=1")
 
-        return cls(
-            protocol_version="1",
-            environment=cast(Mapping[str, FrozenValue], _freeze(environment)),
-            logging=cast(Mapping[str, FrozenValue], _freeze(logging)),
-            parameters=cast(Mapping[str, FrozenValue], _freeze(parameters)),
-            training_budget=cast(Mapping[str, FrozenValue], _freeze(training_budget)),
+        return cls._create(
+            environment=environment,
+            logging=logging,
+            parameters=parameters,
+            training_budget=training_budget,
             fast_mode=fast_mode,
         )
+
+    @classmethod
+    def _create(
+        cls,
+        *,
+        environment: Mapping[str, Any],
+        logging: Mapping[str, Any],
+        parameters: Mapping[str, Any],
+        training_budget: Mapping[str, Any],
+        fast_mode: bool,
+    ) -> AcceptanceConfig:
+        instance = object.__new__(cls)
+        object.__setattr__(instance, "protocol_version", "1")
+        object.__setattr__(
+            instance, "environment", cast(Mapping[str, FrozenValue], _freeze(environment))
+        )
+        object.__setattr__(instance, "logging", cast(Mapping[str, FrozenValue], _freeze(logging)))
+        object.__setattr__(
+            instance, "parameters", cast(Mapping[str, FrozenValue], _freeze(parameters))
+        )
+        object.__setattr__(
+            instance,
+            "training_budget",
+            cast(Mapping[str, FrozenValue], _freeze(training_budget)),
+        )
+        object.__setattr__(instance, "fast_mode", fast_mode)
+        return instance
 
     @property
     def environment_name(self) -> str:
