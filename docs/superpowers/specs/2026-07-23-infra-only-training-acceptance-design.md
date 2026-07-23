@@ -92,14 +92,22 @@ launcher. It proves:
 
 ### Container tests
 
-CPU and GPU images are built from the infrastructure acceptance package.
-Before push, each image is inspected and executed to prove:
+CPU and GPU images are built on isolated GitHub Actions runners from the
+infrastructure acceptance package. The development host does not build or run
+Docker images. Before push, each remote image job inspects and executes its
+image to prove:
 
 - fixed worker and catalog paths;
 - importability of `training_sdk` and the launcher;
 - catalog-label decoding;
 - expected CPU or CUDA JAX runtime;
 - absence of the control-plane package and memo.
+
+The CPU and GPU matrix jobs use separate ephemeral disks. A build-only workflow
+requires no AWS credentials and cannot push. ECR login and push are enabled
+only by a separately authorized workflow input after the exact commit and tags
+are reviewed. Actual NVIDIA L4 device execution remains a `g6.xlarge` Batch
+acceptance check because standard GitHub-hosted runners do not provide L4 GPUs.
 
 ### Real AWS acceptance
 

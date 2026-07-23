@@ -27,7 +27,12 @@
 - The existing shared account is `007122174918`, region is `eu-north-1`, ECR repository is `rtrrl`, S3 bucket is `rtrrl-artifacts-007122174918`, and experiment root is `experiments/`.
 - Test labels are exactly `infra-acceptance-brax-ppo-cpu-20260723` and `infra-acceptance-brax-ppo-gpu-20260723`; they do not replace memo or historical image tags.
 - No AWS mutation, image push, job-definition registration, paid Batch run, or deletion is executed until the user explicitly authorizes that exact phase after reviewing its dry-run/read-only evidence.
-- The current host can access Docker only through `sudo -n docker`; Docker operations use an explicit `DockerRunner` prefix and an isolated Docker config that is removed with the same privilege. Python/AWS commands never run under sudo.
+- The development host must not build or run Docker images. Image builds and
+  container runtime checks execute only in
+  `.github/workflows/build-infra-acceptance-image.yml` on isolated GitHub
+  Actions runners. Local Docker cache may be inspected or explicitly
+  user-authorized for cleanup, but local verification gates never invoke
+  `docker build` or `docker run`.
 - The optional memo reference image is additional evidence only. Its build, push, or execution cannot block local gates, container gates, the infrastructure merge, or generic AWS acceptance.
 - Never commit credentials, registry tokens, local Aim state, `/tmp` reports, Docker credentials, generated artifacts, or acceptance output.
 - Every task below ends in one independent commit on the named branch, except a task that is stopped awaiting authorization; do not combine task commits.
@@ -43,10 +48,14 @@
 - `rtrrl/infra/mock-trainer/src/brax_ppo_acceptance/__main__.py`: `python -m brax_ppo_acceptance --config PATH` entry point.
 - `rtrrl/infra/mock-trainer/scripts/index.yaml`, `brax_ppo_acceptance.yaml`: single-script protocol-version-1 catalog.
 - `rtrrl/infra/mock-trainer/docker/Dockerfile.cpu`, `Dockerfile.gpu`: repository-root builds containing only acceptance runtime, SDK, worker, and catalog.
+- `.github/workflows/build-infra-acceptance-image.yml`: build-only by default,
+  CPU/GPU matrix on separate ephemeral runners; push is a separately confirmed
+  input.
 - `rtrrl/infra/mock-trainer/tests/`: package, real-runtime, SDK artifact, catalog, and image contract tests.
 - `rtrrl/infra/control-plane/tests/test_end_to_end.py`: real worker plus real acceptance launcher fake-service lifecycle.
 - `rtrrl/infra/control-plane/examples/experiment-smoke.yaml`: exact two-group/six-job acceptance experiment.
-- `rtrrl/infra/control-plane/scripts/deploy_facility.py`: acceptance image build/verify/push and digest-bound registration.
+- `rtrrl/infra/control-plane/scripts/deploy_facility.py`: digest-bound
+  job-definition registration only; it never invokes Docker or pushes images.
 - `rtrrl/infra/control-plane/scripts/facility_preflight.py`: acceptance tags and read-only readiness.
 - `rtrrl/infra/control-plane/scripts/cleanup_acceptance.py`: exact-prefix, explicitly confirmed S3/Aim scratch cleanup only.
 - `rtrrl/infra/control-plane/config/facility.yaml`: test-labelled CPU/GPU tags.
@@ -552,7 +561,7 @@ git commit -m "feat(infra): run observable Brax PPO acceptance"
 
 ---
 
-### Task 5: Package the Shared Catalog and CPU/GPU Images
+### Task 5: Package the Shared Catalog and Remote CPU/GPU Build
 
 **Files:**
 - Create: `rtrrl/infra/mock-trainer/scripts/index.yaml`
@@ -561,12 +570,17 @@ git commit -m "feat(infra): run observable Brax PPO acceptance"
 - Create: `rtrrl/infra/mock-trainer/docker/Dockerfile.gpu`
 - Create: `rtrrl/infra/mock-trainer/tests/test_catalog.py`
 - Create: `rtrrl/infra/mock-trainer/tests/test_image_contract.py`
+- Create: `.github/workflows/build-infra-acceptance-image.yml`
+- Create: `rtrrl/infra/control-plane/tests/test_acceptance_image_workflow.py`
 - Modify: `.dockerignore`
 
 **Interfaces:**
 - Catalog label: `org.rtrrl.trainer.scripts.v1`.
 - Image paths: `/opt/trainer/worker.py`, `/opt/trainer/scripts/index.yaml`, `/opt/trainer/scripts/brax_ppo_acceptance.yaml`, `/opt/acceptance`.
 - Launcher argv: `python -m brax_ppo_acceptance --config {config_path}`.
+- Workflow dispatch input `push` defaults to `false`; build-only runs never
+  configure AWS credentials or contact ECR. `push: true` additionally requires
+  exact input `confirm_account: "007122174918"`.
 
 - [ ] **Step 1: Write RED catalog and Docker contract tests**
 
@@ -691,45 +705,40 @@ Extend `.dockerignore` allowlisting only:
 
 Keep secret, VCS, cache, Aim, and artifact exclusions. Remove the memo-specific allowlist because the mergeable acceptance images do not consume memo.
 
-- [ ] **Step 5: Build both images and run the host-supported container contracts**
+- [ ] **Step 5: Add the isolated GitHub Actions build matrix**
 
-Run:
+Create `.github/workflows/build-infra-acceptance-image.yml` with two independent
+`ubuntu-24.04` matrix jobs (`cpu`, `gpu`). Pin every third-party action by full
+commit SHA. Both jobs encode the production catalog, build only their own
+image, inspect/decode the actual label, verify worker/catalog paths and
+installed imports, prove `memo` and `trainer_infra` are absent, and emit image
+ID, size, base digests, catalog SHA-256, and source commit as a JSON artifact.
 
-```bash
-CATALOG="$(uv run --project rtrrl/infra/control-plane trainer-image-catalog encode rtrrl/infra/mock-trainer/scripts/index.yaml)"
-sudo -n docker build --platform linux/amd64 \
-  --build-arg "TRAINER_SCRIPT_CATALOG=$CATALOG" \
-  -f rtrrl/infra/mock-trainer/docker/Dockerfile.cpu \
-  -t brax-ppo-acceptance:cpu .
-sudo -n docker build --platform linux/amd64 \
-  --build-arg "TRAINER_SCRIPT_CATALOG=$CATALOG" \
-  -f rtrrl/infra/mock-trainer/docker/Dockerfile.gpu \
-  -t brax-ppo-acceptance:gpu .
-sudo -n docker run --rm brax-ppo-acceptance:cpu \
-  python -c 'import brax_ppo_acceptance,training_sdk,jax; assert jax.default_backend()=="cpu"'
-sudo -n docker run --rm --entrypoint /opt/venv/bin/python brax-ppo-acceptance:gpu \
-  -c 'import importlib.util,jax; assert importlib.util.find_spec("jax_cuda12_plugin") is not None; print(jax.__version__)'
-sudo -n docker run --rm brax-ppo-acceptance:cpu \
-  python -c 'import importlib.util; assert importlib.util.find_spec("memo") is None; assert importlib.util.find_spec("trainer_infra") is None'
-sudo -n docker run --rm --entrypoint /opt/venv/bin/python brax-ppo-acceptance:gpu \
-  python -c 'import importlib.util; assert importlib.util.find_spec("memo") is None; assert importlib.util.find_spec("trainer_infra") is None'
-```
+CPU executes a real CPU JAX operation. GPU imports `jax_cuda12_plugin` without
+requesting a GPU. The `push: false` path contains no AWS configuration, login,
+or push step. The `push: true` path first checks `confirm_account`, then uses
+the approved OIDC role variable, verifies STS account `007122174918`, logs into
+the existing `rtrrl` ECR repository, pushes only its test label, and records
+the immutable digest. Actual L4 execution remains Task 12.
 
-Expected: both builds succeed; CPU executes a CPU JAX operation; the GPU image
-contains the CUDA 12 JAX plugin and imports without requiring a host GPU;
-neither runtime imports memo or control-plane. This host has no authorized
-direct Docker access and no GPU, so L4 selection and the real CUDA JIT
-operation are deferred explicitly to the authorized `g6x` Batch acceptance.
+The development host must not run Docker. Pushing the branch and dispatching
+this workflow are external actions and require the Task 10 authorization gate.
 
-- [ ] **Step 6: Run tests and commit**
+- [ ] **Step 6: Test the workflow contract without invoking Docker or GitHub**
 
 ```bash
 uv run --project rtrrl/infra/control-plane pytest \
   rtrrl/infra/mock-trainer/tests/test_catalog.py \
-  rtrrl/infra/mock-trainer/tests/test_image_contract.py -q
-git add .dockerignore rtrrl/infra/mock-trainer
+  rtrrl/infra/mock-trainer/tests/test_image_contract.py \
+  rtrrl/infra/control-plane/tests/test_acceptance_image_workflow.py -q
+git add .dockerignore .github/workflows/build-infra-acceptance-image.yml \
+  rtrrl/infra/mock-trainer \
+  rtrrl/infra/control-plane/tests/test_acceptance_image_workflow.py
 git commit -m "feat(infra): package acceptance trainer images"
 ```
+
+Expected: all static/codec/context/workflow tests pass; no local Docker or
+GitHub command runs.
 
 ---
 
@@ -864,19 +873,23 @@ git commit -m "test(infra): accept facility without memo"
 - Create: `rtrrl/infra/control-plane/tests/test_cleanup_acceptance.py`
 
 **Interfaces:**
-- `DOCKERFILES = {"cpu": ROOT / "rtrrl/infra/mock-trainer/docker/Dockerfile.cpu", "gpu": ...}`
-- `DockerRunner(prefix: tuple[str, ...], config_directory: Path | None)` prefixes every Docker invocation; `--docker-via-sudo` selects `("sudo", "-n", "docker")`.
-- `_verify_image(kind: Literal["cpu", "gpu"], image: str) -> None`; CPU proves backend `cpu`, while GPU proves the CUDA plugin/import contract before push and defers device execution to `g6x`.
+- `deploy_facility.py` accepts only dry-run and digest-bound `--register`; it
+  exposes no `--build`, `--push`, Docker subprocess, or ECR mutation.
+- `.github/workflows/build-infra-acceptance-image.yml` is the sole image
+  build/runtime/push implementation.
 - `CleanupRequest(experiment_id: str, confirm_prefix: str | None, execute: bool)`.
 - `cleanup(request, *, control, s3, aim_repo) -> CleanupReport`.
 
 - [ ] **Step 1: Write RED deployment/preflight tests**
 
-Assert dry-run planned tags are exactly the two test labels, image verification imports `brax_ppo_acceptance` and `training_sdk`, catalog key is exactly `brax_ppo_acceptance`, and source contains no memo path or memo script identity.
+Assert dry-run planned tags are exactly the two test labels, catalog key is
+exactly `brax_ppo_acceptance`, and source contains no memo path or memo script
+identity. Assert `deploy_facility.py` has no Docker command, build flag, push
+flag, ECR authorization-token call, or `PutImage` path.
 
-Assert the pre-push GPU runtime verification imports JAX and requires
-`jax_cuda12_plugin` without creating a device. Assert the separate Batch
-acceptance command executes:
+Assert the workflow's pre-push GPU runtime verification imports JAX and
+requires `jax_cuda12_plugin` without creating a device. Assert the separate
+Batch acceptance command executes:
 
 ```python
 devices = jax.devices()
@@ -885,10 +898,10 @@ assert any("NVIDIA L4" in device.device_kind for device in devices)
 jax.jit(lambda x: x @ x)(jnp.eye(64)).block_until_ready()
 ```
 
-CPU verification requires backend `cpu`. Both require no import spec for
-`memo` and `trainer_infra`. Tests also prove `--docker-via-sudo` prefixes every
-build/inspect/run/login/push command, uses `docker --config TEMP` rather than
-the default config, and removes TEMP with the same runner in `finally`.
+CPU workflow verification requires backend `cpu`. Both image jobs require no
+import spec for `memo` and `trainer_infra`. Workflow tests prove `push:false`
+cannot execute AWS credential/login/push steps and `push:true` requires the
+exact account confirmation before those steps.
 
 - [ ] **Step 2: Write RED exact-cleanup tests**
 
@@ -929,14 +942,11 @@ Expected: failures mention memo paths/catalog and missing cleanup script.
 
 - [ ] **Step 4: Implement generic deployment and read-only preflight**
 
-Change only acceptance Dockerfiles, tags, label checks, and runtime checks.
-`_verify_image("gpu", image)` must prove the CUDA plugin and imports without
-requesting a host GPU. The real `g6x` child command must require an NVIDIA L4
-and complete the JIT matrix operation before training. Preserve account/region
-confirmation, isolated Docker credentials, digest-only ECR verification, four
-profile registrations, retry attempts one, and absence of Batch
-submit/cleanup from `deploy_facility.py`. Python and boto3 remain unprivileged;
-only Docker subprocesses use the selected runner.
+Remove local image build/push/runtime code from `deploy_facility.py`; keep
+account/region confirmation, digest-only ECR read-back, four profile
+registrations, retry attempts one, and absence of Batch submit/cleanup. The
+workflow proves CPU runtime and GPU plugin contracts. The real `g6x` child
+requires an NVIDIA L4 and completes the JIT matrix operation before training.
 
 Set:
 
@@ -1092,20 +1102,39 @@ git commit -m "docs(infra): record generic acceptance preflight"
 **Interfaces:**
 - Produces immutable `CPU_DIGEST` and `GPU_DIGEST` in `007122174918.dkr.ecr.eu-north-1.amazonaws.com/rtrrl`.
 
-- [ ] **Step 1: Produce a no-write deployment preview**
+- [ ] **Step 1: Verify the branch and build-only workflow without external writes**
 
 Run:
 
 ```bash
-cd rtrrl/infra/control-plane
-uv run python scripts/deploy_facility.py --control config/facility.yaml
+scripts/verify-infra-only-acceptance.sh
+gh workflow view build-infra-acceptance-image.yml --yaml
+git status --short --branch
 ```
 
-Expected: mode `dry-run`, exact two test labels, profiles `c7am,c7al,c7ax,g6x`, `submission_supported:false`, and no AWS write.
+Expected: local gates pass without Docker; workflow default is `push:false`;
+the branch and workflow source commit are explicit.
 
-- [ ] **Step 2: Stop and request explicit authorization for exactly two ECR test-label pushes**
+- [ ] **Step 2: Stop and request authorization to push the feature branch and dispatch build-only**
 
-Do not run `--push` until the user authorizes pushing:
+The request identifies the exact branch/ref and commit. After authorization,
+push without force and dispatch:
+
+```bash
+git push -u origin feature/trainer-infra
+gh workflow run build-infra-acceptance-image.yml \
+  --ref feature/trainer-infra \
+  -f push=false \
+  -f confirm_account=
+```
+
+Watch the exact run with `gh run watch RUN_ID --exit-status`. Expected: separate
+CPU/GPU jobs build and pass runtime contracts; no AWS credentials or ECR calls
+occur. Download and hash both JSON evidence artifacts.
+
+- [ ] **Step 3: Stop and request separate authorization for exactly two ECR test-label pushes**
+
+Do not dispatch `push:true` until the user authorizes pushing:
 
 ```text
 infra-acceptance-brax-ppo-cpu-20260723
@@ -1114,16 +1143,16 @@ infra-acceptance-brax-ppo-gpu-20260723
 
 No memo tag is included in this authorization.
 
-- [ ] **Step 3: After authorization, build, runtime-test, and push**
+- [ ] **Step 4: After push authorization, dispatch the exact immutable build**
 
 Run:
 
 ```bash
-cd rtrrl/infra/control-plane
-uv run python scripts/deploy_facility.py \
-  --control config/facility.yaml \
-  --build --push --docker-via-sudo --confirm-account 007122174918 \
-  | tee /tmp/infra-only-training-acceptance-images.json
+gh workflow run build-infra-acceptance-image.yml \
+  --ref feature/trainer-infra \
+  -f push=true \
+  -f confirm_account=007122174918
+gh run watch RUN_ID --exit-status
 ```
 
 Expected: CPU and GPU images build; catalog decodes to one shared
@@ -1133,11 +1162,13 @@ contains memo/control-plane; push returns one immutable digest per label.
 NVIDIA L4 selection and the real CUDA JIT operation are not claimed until the
 authorized `g6x` job in Task 12.
 
-- [ ] **Step 4: Verify ECR digests read-only**
+- [ ] **Step 5: Verify ECR digests read-only**
 
-Use `aws ecr batch-get-image` for each exact tag and compare returned digests with deployment output. Record digests, image IDs, label decode result, local runtime checks, and zero Batch submissions.
+Use `aws ecr batch-get-image` for each exact tag and compare returned digests
+with workflow artifacts. Record digests, image IDs, label decode result, remote
+runtime checks, source commit, workflow run URLs, and zero Batch submissions.
 
-- [ ] **Step 5: Commit evidence**
+- [ ] **Step 6: Commit evidence**
 
 ```bash
 git add docs/acceptance/2026-07-23-infra-only-training-acceptance-images.md
