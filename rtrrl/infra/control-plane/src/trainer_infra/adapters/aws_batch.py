@@ -50,11 +50,20 @@ class JobDefinitionExpectation(ContractModel):
     log_configuration: dict[str, Any]
 
 
-class AwsBatchPreflightContract(ContractModel):
+class AwsInfrastructurePreflightContract(ContractModel):
     subnets: tuple[str, ...]
     security_group_ids: tuple[str, ...]
     instance_role: str
+
+
+class AwsBatchPreflightContract(AwsInfrastructurePreflightContract):
     job_definitions: dict[ResourceProfileName, JobDefinitionExpectation]
+
+
+@dataclass(frozen=True)
+class ValidatedAwsProfile:
+    profile: AwsProfile
+    compute_environment_arn: str
 
 
 _COMPUTE_EXPECTATIONS = {
@@ -158,13 +167,11 @@ class AwsBatchPreflight:
             resource_profile=profile.name,
         )
 
-    def validate(
+    def validate_profiles(
         self,
-        contract: AwsBatchPreflightContract,
-    ) -> tuple[ValidatedJobDefinition, ...]:
-        if set(contract.job_definitions) != set(PROFILES):
-            raise ValueError("preflight requires job definitions for all four profiles")
-        result = []
+        contract: AwsInfrastructurePreflightContract,
+    ) -> tuple[ValidatedAwsProfile, ...]:
+        result: list[ValidatedAwsProfile] = []
         for name, profile in PROFILES.items():
             environment_response = self._client.describe_compute_environments(
                 computeEnvironments=[profile.compute_environment]
@@ -229,8 +236,25 @@ class AwsBatchPreflight:
                 != [{"order": 1, "computeEnvironment": environment_arn}]
             ):
                 raise ValueError(f"job queue {profile.run_queue!r} is invalid")
-            result.append(self._definition(contract.job_definitions[name], profile))
+            result.append(
+                ValidatedAwsProfile(
+                    profile=profile,
+                    compute_environment_arn=environment_arn,
+                )
+            )
         return tuple(result)
+
+    def validate(
+        self,
+        contract: AwsBatchPreflightContract,
+    ) -> tuple[ValidatedJobDefinition, ...]:
+        if set(contract.job_definitions) != set(PROFILES):
+            raise ValueError("preflight requires job definitions for all four profiles")
+        profiles = self.validate_profiles(contract)
+        return tuple(
+            self._definition(contract.job_definitions[item.profile.name], item.profile)
+            for item in profiles
+        )
 
 
 class AwsBatchAdapter:

@@ -6,6 +6,7 @@ import pytest
 
 from trainer_infra.adapters.aws_batch import (
     AwsBatchAdapter,
+    AwsInfrastructurePreflightContract,
     AwsBatchPreflight,
     AwsBatchPreflightContract,
     JobDefinitionExpectation,
@@ -291,6 +292,27 @@ def test_read_only_preflight_validates_all_four_profiles_and_definitions() -> No
     for forbidden in ("register", "update", "delete", "cancel", "retry", "cleanup"):
         assert not hasattr(AwsBatchAdapter, forbidden)
         assert not hasattr(AwsBatchPreflight, forbidden)
+
+
+def test_authoritative_infrastructure_preflight_can_validate_without_definitions() -> None:
+    client = FakePreflightBatch()
+    contract = AwsInfrastructurePreflightContract(
+        subnets=("subnet-a", "subnet-b"),
+        security_group_ids=("sg-a",),
+        instance_role="arn:aws:iam::123456789012:instance-profile/ecs",
+    )
+
+    validated = AwsBatchPreflight(client).validate_profiles(contract)
+
+    assert [item.profile.name for item in validated] == list(PROFILES)
+    assert [
+        (item.profile.vcpus, item.profile.memory_mib, item.profile.gpus)
+        for item in validated
+    ] == [(1, 1600, 0), (2, 3200, 0), (4, 7168, 0), (4, 12000, 1)]
+    assert {name for name, _ in client.calls} == {
+        "describe_compute_environments",
+        "describe_job_queues",
+    }
 
 
 def make_preflight_contract() -> AwsBatchPreflightContract:

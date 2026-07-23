@@ -9,8 +9,12 @@ from typing import Any
 
 import pytest
 
+from trainer_infra.aws_profiles import PROFILES
+from trainer_infra.facility_control import load_facility_control
+
 
 SCRIPTS = Path(__file__).parents[1] / "scripts"
+CONTROL = Path(__file__).parents[1] / "config" / "facility.yaml"
 
 
 def _load(name: str):
@@ -50,18 +54,39 @@ class FakeBatch:
     def describe_compute_environments(self, **kwargs: Any) -> dict[str, Any]:
         self.calls.append(("describe_compute_environments", deepcopy(kwargs)))
         name = kwargs["computeEnvironments"][0]
-        expected = next(
-            item for item in self.preflight.COMPUTE_ENVIRONMENTS if item["name"] == name
+        profile_name = next(
+            key for key, profile in PROFILES.items() if profile.compute_environment == name
         )
+        instance_type, max_vcpus, image_type = {
+            "c7am": ("c7a.medium", 16, "ECS_AL2023"),
+            "c7al": ("c7a.large", 32, "ECS_AL2023"),
+            "c7ax": ("c7a.xlarge", 16, "ECS_AL2023"),
+            "g6x": ("g6.xlarge", 32, "ECS_AL2023_NVIDIA"),
+        }[profile_name]
         return {
             "computeEnvironments": [
                 {
                     "computeEnvironmentName": name,
                     "computeEnvironmentArn": f"arn:aws:batch:eu-north-1:007122174918:ce/{name}",
+                    "type": "MANAGED",
                     "state": "ENABLED",
                     "status": "VALID",
                     "computeResources": {
-                        "instanceTypes": [expected["instance_type"]],
+                        "type": "EC2",
+                        "instanceTypes": [instance_type],
+                        "minvCpus": 0,
+                        "maxvCpus": max_vcpus,
+                        "subnets": [
+                            "subnet-08127d1c5d4de6ac2",
+                            "subnet-0b8c68ea0a9784758",
+                            "subnet-01a2aa195678f8411",
+                        ],
+                        "securityGroupIds": ["sg-0c0ed6b927c5113dc"],
+                        "instanceRole": (
+                            "arn:aws:iam::007122174918:"
+                            "instance-profile/rtrrl-ecs-instance-role"
+                        ),
+                        "ec2Configuration": [{"imageType": image_type}],
                     },
                 }
             ]
@@ -70,20 +95,20 @@ class FakeBatch:
     def describe_job_queues(self, **kwargs: Any) -> dict[str, Any]:
         self.calls.append(("describe_job_queues", deepcopy(kwargs)))
         name = kwargs["jobQueues"][0]
-        expected = next(item for item in self.preflight.QUEUES if item["name"] == name)
+        profile = next(profile for profile in PROFILES.values() if profile.run_queue == name)
         return {
             "jobQueues": [
                 {
                     "jobQueueName": name,
                     "state": "ENABLED",
                     "status": "VALID",
-                    "priority": expected["priority"],
+                    "priority": 100,
                     "computeEnvironmentOrder": [
                         {
                             "order": 1,
                             "computeEnvironment": (
                                 "arn:aws:batch:eu-north-1:007122174918:ce/"
-                                + expected["environment"]
+                                + profile.compute_environment
                             ),
                         }
                     ],
@@ -182,15 +207,25 @@ class FakeSession:
 
 
 def _config(preflight: Any, tmp_path: Path) -> Any:
+    del preflight
     scratch = tmp_path / "task7-scratch"
     scratch.mkdir()
     (scratch / ".aim").mkdir()
     main = tmp_path / "main"
     main.mkdir()
-    return preflight.PreflightConfig(
-        aim_repo=scratch,
-        main_repo=main,
-        aim_endpoint="aim://127.0.0.1:53801",
+    control = load_facility_control(CONTROL)
+    return control.model_copy(
+        update={
+            "aim": control.aim.model_copy(
+                update={
+                    "repo": scratch,
+                    "main_repo": main,
+                    "metadata_file": scratch / "aim-server-53801.json",
+                    "pid_file": scratch / "aim-server-53801.pid",
+                    "log_file": scratch / "aim-server-53801.log",
+                }
+            )
+        }
     )
 
 
@@ -202,10 +237,14 @@ def test_read_only_preflight_reports_stable_complete_json(
     report = preflight.run_preflight(
         session,
         _config(preflight, tmp_path),
-        aim_probe=lambda _endpoint: {"pid": 123, "healthy": True},
+        aim_validator=lambda _control: {
+            "isolated": True,
+            "pid": 123,
+            "status": "ready",
+        },
     )
 
-    assert report["status"] == "ready"
+    assert report["status"] == "pass"
     assert report["account"]["actual"] == "007122174918"
     assert [item["profile"] for item in report["profiles"]] == [
         "c7am",
@@ -218,12 +257,6 @@ def test_read_only_preflight_reports_stable_complete_json(
         100,
         100,
         100,
-    ]
-    assert [item["dev_queue"]["priority"] for item in report["profiles"]] == [
-        10,
-        10,
-        10,
-        10,
     ]
     assert report["s3"]["prefix"] == "experiments/"
     assert report["ecr"]["images"]["memorax-rtrl-facility-cpu"]["status"] == "visible"
@@ -250,7 +283,7 @@ def test_read_only_preflight_reports_stable_complete_json(
     }
 
 
-def test_preflight_reports_iam_read_permission_block_without_mutation(
+def test_preflight_reports_iam_simulation_as_unknown_without_mutation(
     preflight: Any, tmp_path: Path
 ) -> None:
     session = FakeSession(preflight)
@@ -263,11 +296,12 @@ def test_preflight_reports_iam_read_permission_block_without_mutation(
     report = preflight.run_preflight(
         session,
         _config(preflight, tmp_path),
-        aim_probe=lambda _endpoint: {"pid": 123, "healthy": True},
+        aim_validator=lambda _control: {"pid": 123, "status": "ready"},
     )
 
-    assert report["status"] == "blocked"
-    assert report["iam"]["status"] == "blocked"
+    assert report["status"] == "pass"
+    assert report["iam"]["status"] == "unknown"
+    assert report["iam"]["blocking"] is False
     assert "SimulatePrincipalPolicy" in report["iam"]["error"]
 
 
@@ -280,22 +314,28 @@ def test_preflight_rejects_wrong_account_and_nonisolated_aim(
         "Arn": "arn:aws:iam::123456789012:user/wrong",
     }
     config = _config(preflight, tmp_path)
-    config = preflight.PreflightConfig(
-        aim_repo=config.main_repo,
-        main_repo=config.main_repo,
-        aim_endpoint=config.aim_endpoint,
+    config = config.model_copy(
+        update={
+            "aim": config.aim.model_copy(
+                update={"repo": config.aim.main_repo}
+            )
+        }
     )
+
+    def reject_nonisolated(control: Any) -> dict[str, Any]:
+        if control.repo == control.main_repo:
+            raise ValueError("Aim scratch repository is not isolated")
+        return {"status": "ready"}
 
     report = preflight.run_preflight(
         session,
         config,
-        aim_probe=lambda _endpoint: {"pid": 123, "healthy": True},
+        aim_validator=reject_nonisolated,
     )
 
-    assert report["status"] == "failed"
+    assert report["status"] == "blocked"
     assert report["account"]["status"] == "mismatch"
     assert report["aim"]["status"] == "failed"
-    assert report["aim"]["isolated"] is False
 
 
 def test_deploy_default_is_dry_run_and_has_no_submit_or_cleanup(
@@ -314,7 +354,11 @@ def test_deploy_default_is_dry_run_and_has_no_submit_or_cleanup(
             session_calls.append(name)
             raise AssertionError("dry-run must not construct AWS clients")
 
-    plan = deploy.deploy(deploy.DeployConfig(), session=NoAws())
+    plan = deploy.deploy(
+        deploy.DeployRequest(),
+        control=load_facility_control(CONTROL),
+        session=NoAws(),
+    )
 
     assert plan["mode"] == "dry-run"
     assert plan["requested"] == {"build": False, "push": False, "register": False}
@@ -343,20 +387,25 @@ class RegisterBatch:
 
 def test_register_is_explicit_digest_bound_and_single_attempt(deploy: Any) -> None:
     batch = RegisterBatch()
-    session = SimpleNamespace(client=lambda name: batch if name == "batch" else None)
+    sts = FakeSts()
+    session = SimpleNamespace(
+        region_name="eu-north-1",
+        client=lambda name: sts if name == "sts" else batch,
+    )
     cpu = "007122174918.dkr.ecr.eu-north-1.amazonaws.com/rtrrl@sha256:" + "a" * 64
     gpu = "007122174918.dkr.ecr.eu-north-1.amazonaws.com/rtrrl@sha256:" + "b" * 64
-    config = deploy.DeployConfig(
+    config = deploy.DeployRequest(
         register=True,
+        confirm_account="007122174918",
         cpu_digest=cpu,
         gpu_digest=gpu,
-        job_role_arn="arn:aws:iam::007122174918:role/rtrrl-batch-job-role",
-        execution_role_arn=(
-            "arn:aws:iam::007122174918:role/rtrrl-batch-execution-role"
-        ),
     )
 
-    report = deploy.deploy(config, session=session)
+    report = deploy.deploy(
+        config,
+        control=load_facility_control(CONTROL),
+        session=session,
+    )
 
     assert report["mode"] == "execute"
     assert len(batch.calls) == 4
@@ -380,7 +429,22 @@ def test_register_is_explicit_digest_bound_and_single_attempt(deploy: Any) -> No
 
 
 def test_push_and_register_require_their_own_explicit_inputs(deploy: Any) -> None:
-    with pytest.raises(ValueError, match="--push requires --build"):
-        deploy.deploy(deploy.DeployConfig(push=True), session=SimpleNamespace())
+    control = load_facility_control(CONTROL)
+    with pytest.raises(ValueError, match="confirm-account"):
+        deploy.deploy(
+            deploy.DeployRequest(push=True),
+            control=control,
+            session=SimpleNamespace(),
+        )
     with pytest.raises(ValueError, match="digest"):
-        deploy.deploy(deploy.DeployConfig(register=True), session=SimpleNamespace())
+        deploy.deploy(
+            deploy.DeployRequest(
+                register=True,
+                confirm_account="007122174918",
+            ),
+            control=control,
+            session=SimpleNamespace(
+                region_name="eu-north-1",
+                client=lambda _name: FakeSts(),
+            ),
+        )
