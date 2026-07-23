@@ -2,11 +2,12 @@
 
 ## Reproduction Identity
 
-- Generated at (UTC): `2026-07-23T18:30:09Z`
+- Generated at (UTC): `2026-07-23T18:39:37Z`
 - Baseline: `c763673`
 - Review hardening commits:
   `64668aecc5aa80e54493c98fc48fb80b2b778b04`,
-  `30427f2a1ddea4c1833660734e70036e4b211009`
+  `30427f2a1ddea4c1833660734e70036e4b211009`,
+  `39277334456777ba66dda2c598ca4a0b7873614a`
 - Result: `PASS`
 - AWS writes performed: none
 - Image builds performed: none
@@ -22,15 +23,18 @@ Run from `rtrrl/infra/control-plane`:
 ```bash
 uv run python scripts/start_facility_aim.py --control config/facility.yaml
 uv run python scripts/facility_preflight.py \
-  --control config/facility.yaml \
-  --output /tmp/complete-facility-task7-phase-a-review-preflight.json
+  --control config/facility.yaml
+sha256sum /tmp/complete-facility-task7-phase-a-preflight.json
+printf '%s  %s\n' \
+  '217222f683caa89b4fd1964df438e0148bb5bb54f4d206d03a62731808572132' \
+  '/tmp/complete-facility-task7-phase-a-preflight.json' | sha256sum --check -
 uv run pytest \
-  tests/test_facility_control.py \
-  tests/test_aim_scratch.py \
+  tests/test_aws_batch.py \
   tests/test_facility_preflight_review.py \
   tests/test_facility_deploy_review.py \
   tests/test_facility_deployment.py \
-  tests/test_aws_batch.py -q
+  tests/test_execution.py \
+  tests/test_heavy_tests.py -q
 uv run pytest -q
 uv run ruff check src tests scripts
 git diff --check
@@ -59,28 +63,33 @@ surface their own authorization errors after their separate approvals.
 The preflight uses Task 2 `AwsBatchPreflight.validate_profiles()` rather than a
 second profile table. It validates managed/enabled/valid compute environments,
 EC2 type, minimum and maximum vCPUs, exact instance type, AL2023 image variant,
-empty AMI override, subnets, security group, instance profile, run queue
-priority 100, and exact queue-to-CE binding.
+empty AMI override, subnets, security group, instance profile, all four dev
+queues at priority 10, all four run queues at priority 100, and every exact
+queue-to-CE binding.
 
-| Profile | Run queue | Compute environment | Instance | Job resources |
-| --- | --- | --- | --- | --- |
-| `c7am` | `run-cpu-c7am-queue` | `rtrrl-cpu-c7am-ce` | `c7a.medium` | 1 vCPU, 1600 MiB |
-| `c7al` | `run-cpu-c7al-queue` | `rtrrl-cpu-c7al-ce` | `c7a.large` | 2 vCPU, 3200 MiB |
-| `c7ax` | `run-cpu-c7ax-queue` | `rtrrl-cpu-c7ax-ce` | `c7a.xlarge` | 4 vCPU, 7168 MiB |
-| `g6x` | `run-gpu-queue` | `rtrrl-gpu-g6x-ce` | `g6.xlarge` | 4 vCPU, 12000 MiB, 1 GPU |
+| Profile | Dev queue (priority 10) | Run queue (priority 100) | Compute environment | Instance | Job resources |
+| --- | --- | --- | --- | --- | --- |
+| `c7am` | `dev-cpu-c7am-queue` | `run-cpu-c7am-queue` | `rtrrl-cpu-c7am-ce` | `c7a.medium` | 1 vCPU, 1600 MiB |
+| `c7al` | `dev-cpu-c7al-queue` | `run-cpu-c7al-queue` | `rtrrl-cpu-c7al-ce` | `c7a.large` | 2 vCPU, 3200 MiB |
+| `c7ax` | `dev-cpu-c7ax-queue` | `run-cpu-c7ax-queue` | `rtrrl-cpu-c7ax-ce` | `c7a.xlarge` | 4 vCPU, 7168 MiB |
+| `g6x` | `dev-gpu-queue` | `run-gpu-queue` | `rtrrl-gpu-g6x-ce` | `g6.xlarge` | 4 vCPU, 12000 MiB, 1 GPU |
 
-All four profile checks passed. The S3 bucket/location/prefix check passed.
+All four profile and all eight queue checks passed. The S3
+bucket/location/prefix check passed.
 Both formal ECR tags are currently absent, which is the expected pre-push state.
 
 ## Raw Preflight Evidence
 
-- Path: `/tmp/complete-facility-task7-phase-a-review-preflight.json`
+- Canonical path: `/tmp/complete-facility-task7-phase-a-preflight.json`
 - SHA-256:
-  `961b41b81f360d1e198d381fdeed6e5d44bea7b424de2b5f30f549c575e28210`
+  `217222f683caa89b4fd1964df438e0148bb5bb54f4d206d03a62731808572132`
 - Schema version: `1`
 - Stable JSON status: `pass`
 
-The raw report contains no credential or token.
+The preflight writes this path through a same-directory temporary file followed
+by an atomic rename. The obsolete `phase-a-review-preflight.json` evidence was
+deleted and is superseded by this canonical report. The raw report contains no
+credential or token.
 
 ## Deployment Safety Properties
 
@@ -102,7 +111,9 @@ The raw report contains no credential or token.
   resolve the tag again.
 - Build verification checks the catalog label by real decode, the fixed worker
   path, `training_sdk`, both memo launcher imports, and CPU/GPU JAX package
-  variants.
+  variants. Every `--push` re-runs this full verification unconditionally for
+  both formal local tags before ECR login or push, including when no build was
+  requested in the same invocation.
 - The deploy script has no Batch submission or cleanup path.
 
 ## Paid Job Derivation
@@ -128,8 +139,8 @@ This is an estimate only. No job was submitted in Phase A.
 
 ## Verification
 
-- Targeted review suite: `64 passed`
-- Full control-plane suite: `495 passed`
+- Targeted Phase A suite: `205 passed`
+- Full control-plane suite: `497 passed`
 - Ruff over `src`, `tests`, and `scripts`: passed
 - IDE lint on changed implementation files: no findings
 - `git diff --check`: passed
@@ -155,6 +166,8 @@ At report generation time:
 - Metadata file:
   `/home/ubuntu/trainer/task7-aim-scratch/aim-server-53801.json`
 
-The preflight matched the recorded PID, exact command line, working directory,
-port, repository argument, isolated path, and live health endpoint. The PID is
-runtime-only evidence and is not a durable deployment identity.
+The preflight correlated the recorded PID with its exact command line, working
+directory, port and repository arguments, isolated path, and live health
+endpoint. This is process/configuration/health correlation; it does not claim
+operating-system socket ownership. The PID is runtime-only evidence and is not
+a durable deployment identity.
