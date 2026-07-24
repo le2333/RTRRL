@@ -7,7 +7,19 @@ import yaml
 
 ROOT = Path(__file__).parents[4]
 WORKFLOW = ROOT / ".github" / "workflows" / "build-infra-acceptance-image.yml"
-PUSH_CONDITION = "${{ inputs.push }}"
+PUSH_CONDITION = (
+    "${{ github.event_name == 'workflow_dispatch' && inputs.push == true }}"
+)
+PUSH_PATHS = [
+    ".github/workflows/build-infra-acceptance-image.yml",
+    "rtrrl/infra/mock-trainer/**",
+    "training-sdk/**",
+    "rtrrl/infra/worker/worker.py",
+    "rtrrl/infra/control-plane/src/trainer_infra/image_catalog.py",
+    "rtrrl/infra/control-plane/src/trainer_infra/models.py",
+    "rtrrl/infra/control-plane/pyproject.toml",
+    "rtrrl/infra/control-plane/uv.lock",
+]
 EXPECTED_ACTIONS = {
     "actions/checkout": "11d5960a326750d5838078e36cf38b85af677262",
     "astral-sh/setup-uv": "d0cc045d04ccac9d8b7881df0226f9e82c39688e",
@@ -48,11 +60,22 @@ def _step(job: dict, identifier: str) -> dict:
     return next(step for step in job["steps"] if step.get("id") == identifier)
 
 
+def _push_gate(payload: dict) -> bool:
+    return (
+        payload["github"]["event_name"] == "workflow_dispatch"
+        and payload["inputs"].get("push") is True
+    )
+
+
 def test_workflow_is_manual_build_only_by_default_with_isolated_matrix_runners() -> None:
     workflow = _workflow()
     trigger = workflow.get("on", workflow.get(True))
 
-    assert set(trigger) == {"workflow_dispatch"}
+    assert set(trigger) == {"push", "workflow_dispatch"}
+    assert trigger["push"] == {
+        "branches": ["feature/trainer-infra"],
+        "paths": PUSH_PATHS,
+    }
     inputs = trigger["workflow_dispatch"]["inputs"]
     assert inputs["push"] == {
         "description": "Push the two fixed acceptance test tags to the existing ECR repository",
@@ -75,9 +98,47 @@ def test_workflow_is_manual_build_only_by_default_with_isolated_matrix_runners()
         assert job["strategy"]["fail-fast"] is False
         assert job["strategy"]["matrix"]["include"] == MATRIX
     assert "permissions" not in build
+    assert "if" not in build
     assert push["if"] == PUSH_CONDITION
     assert push["needs"] == "build"
     assert push["permissions"] == {"contents": "read", "id-token": "write"}
+
+
+@pytest.mark.parametrize(
+    ("payload", "expected"),
+    [
+        (
+            {"github": {"event_name": "push"}, "inputs": {"push": True}},
+            False,
+        ),
+        (
+            {"github": {"event_name": "push"}, "inputs": {}},
+            False,
+        ),
+        (
+            {
+                "github": {"event_name": "workflow_dispatch"},
+                "inputs": {"push": False},
+            },
+            False,
+        ),
+        (
+            {
+                "github": {"event_name": "workflow_dispatch"},
+                "inputs": {"push": True},
+            },
+            True,
+        ),
+    ],
+)
+def test_push_job_gate_rejects_push_event_payloads(
+    payload: dict,
+    expected: bool,
+) -> None:
+    push = _job(_workflow(), "push")
+
+    assert push["if"] == PUSH_CONDITION
+    assert _push_gate(payload) is expected
 
 
 def test_every_third_party_action_is_locked_to_the_resolved_official_tag_sha() -> None:
@@ -180,6 +241,10 @@ def test_push_path_confirms_account_before_oidc_and_only_pushes_fixed_test_tag()
     ]
     assert [ordered_ids.index(identifier) for identifier in guarded_ids] == sorted(
         ordered_ids.index(identifier) for identifier in guarded_ids
+    )
+    assert all(
+        _step(job, identifier).get("if") == PUSH_CONDITION
+        for identifier in guarded_ids
     )
     assert ordered_ids.index("verify") < ordered_ids.index("confirm")
 
