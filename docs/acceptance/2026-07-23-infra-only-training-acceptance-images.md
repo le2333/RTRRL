@@ -30,11 +30,11 @@ was triggered by `push`, used the exact source commit above, and concluded
 Both build jobs passed catalog encoding, local image build, actual-label
 decode/equality, required-path checks, worker/import checks, runtime checks,
 JSON evidence creation, and artifact upload. The CPU image selected the CPU
-backend and completed a real JAX addition. The GPU image contained and imported
-the CUDA 12 JAX plugin on a non-GPU builder. The runtime checks also proved that
-neither image exposed an importable `memo` package or the control-plane
-`trainer_infra` package. No AWS credential, ECR login, ECR query, or image push
-step ran.
+backend and completed a real JAX addition. For the GPU image,
+the `jax_cuda12_plugin` module spec was discoverable and JAX imported on
+non-GPU runner. The runtime checks also proved that neither image exposed an
+importable `memo` package or the control-plane `trainer_infra` package. No AWS
+credential, ECR login, ECR query, or image push step ran.
 
 Downloaded evidence:
 
