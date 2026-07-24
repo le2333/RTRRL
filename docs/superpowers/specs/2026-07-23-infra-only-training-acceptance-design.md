@@ -144,6 +144,11 @@ branch and is clearly labelled as an example.
   repository, historical HPO data, or historical entry point is deleted.
 - Test images and job definitions remain until separately authorized cleanup.
 - Scratch S3 and Aim data are deleted only with exact-prefix authorization.
+- Exact cleanup first stops and validates the dedicated Aim scratch server,
+  then requires the saved dry-run manifest and its separately authorized
+  SHA-256. That manifest remains recovery authority if the final S3 sentinel
+  deletion has an uncertain network result; recovery may delete only subsets
+  of the original manifest and rejects all newly observed keys or Aim hashes.
 - No credentials, tokens, local Aim state, or generated acceptance artifacts
   are committed.
 

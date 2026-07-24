@@ -865,11 +865,13 @@ git commit -m "test(infra): accept facility without memo"
 **Files:**
 - Modify: `rtrrl/infra/control-plane/scripts/deploy_facility.py`
 - Modify: `rtrrl/infra/control-plane/scripts/facility_preflight.py`
+- Modify: `rtrrl/infra/control-plane/scripts/start_facility_aim.py`
 - Create: `rtrrl/infra/control-plane/scripts/cleanup_acceptance.py`
 - Modify: `rtrrl/infra/control-plane/config/facility.yaml`
 - Modify: `rtrrl/infra/control-plane/tests/test_facility_deployment.py`
 - Modify: `rtrrl/infra/control-plane/tests/test_facility_deploy_review.py`
 - Modify: `rtrrl/infra/control-plane/tests/test_facility_preflight_review.py`
+- Modify: `rtrrl/infra/control-plane/tests/test_aim_scratch.py`
 - Create: `rtrrl/infra/control-plane/tests/test_cleanup_acceptance.py`
 
 **Interfaces:**
@@ -877,7 +879,11 @@ git commit -m "test(infra): accept facility without memo"
   exposes no `--build`, `--push`, Docker subprocess, or ECR mutation.
 - `.github/workflows/build-infra-acceptance-image.yml` is the sole image
   build/runtime/push implementation.
-- `CleanupRequest(experiment_id: str, confirm_prefix: str | None, execute: bool)`.
+- `start_facility_aim.py --stop` validates the exact recorded PID, command,
+  cwd, repo, port, and endpoint before terminating only that scratch server;
+  cleanup refuses to enumerate or mutate Aim while it is active.
+- `CleanupRequest(experiment_id: str, confirm_prefix: str | None, execute:
+  bool, manifest: Path | None, confirm_manifest_sha256: str | None)`.
 - `cleanup(request, *, control, s3, aim_repo) -> CleanupReport`.
 
 - [ ] **Step 1: Write RED deployment/preflight tests**
@@ -967,10 +973,22 @@ python scripts/cleanup_acceptance.py --control config/facility.yaml \
 python scripts/cleanup_acceptance.py --control config/facility.yaml \
   --experiment-id ID \
   --confirm-prefix s3://rtrrl-artifacts-007122174918/experiments/ID/ \
+  --manifest /tmp/infra-only-training-acceptance-cleanup-dry-run.json \
+  --confirm-manifest-sha256 SHA256 \
   --execute
 ```
 
-Dry-run emits canonical JSON listing exact S3 keys and exact Aim run hashes with `writes_performed:false`. Execute re-lists immediately, refuses if the set changed, deletes only listed S3 objects and exact Aim hashes, then verifies both sets are empty. It does not expose ECR, Batch registration, queue, CE, IAM, bucket, or filesystem-recursive deletion APIs.
+Dry-run requires the dedicated scratch Aim server to be stopped, then emits
+canonical JSON listing exact S3 keys, exact Aim run hashes, report hash, and
+ownership metadata with `writes_performed:false`. Execute requires that saved
+manifest and its exact SHA-256, re-lists immediately, and refuses if the live
+set differs. The saved authorized manifest remains recovery evidence if a
+network response is uncertain after `report.json` is removed. A recovery may
+delete only a subset of the original manifest and rejects every new key or Aim
+hash. The command deletes only listed S3 objects and exact Aim hashes, removes
+`report.json` last, then verifies both S3 and Aim are empty. It does not expose
+ECR, Batch registration, queue, CE, IAM, bucket, or filesystem-recursive
+deletion APIs.
 
 - [ ] **Step 6: Verify GREEN and commit**
 
@@ -1299,13 +1317,22 @@ Run:
 
 ```bash
 cd rtrrl/infra/control-plane
+uv run python scripts/start_facility_aim.py \
+  --control config/facility.yaml --stop
 uv run python scripts/cleanup_acceptance.py \
   --control config/facility.yaml \
   --experiment-id "$EXPERIMENT_ID" \
   | tee /tmp/infra-only-training-acceptance-cleanup-dry-run.json
+MANIFEST_SHA256="$(
+  sha256sum /tmp/infra-only-training-acceptance-cleanup-dry-run.json |
+  awk '{print $1}'
+)"
 ```
 
-Expected: `writes_performed:false`; prefix equals `s3://rtrrl-artifacts-007122174918/experiments/$EXPERIMENT_ID/`; only exact S3 keys and Aim run hashes from the ten acceptance runs appear.
+Expected: only the exact recorded Aim scratch process is stopped;
+`writes_performed:false`; prefix equals
+`s3://rtrrl-artifacts-007122174918/experiments/$EXPERIMENT_ID/`; only exact S3
+keys and Aim run hashes from the ten acceptance runs appear.
 
 - [ ] **Step 2: Stop and request authorization for the exact manifest**
 
@@ -1322,11 +1349,16 @@ uv run python scripts/cleanup_acceptance.py \
   --control config/facility.yaml \
   --experiment-id "$EXPERIMENT_ID" \
   --confirm-prefix "$PREFIX" \
+  --manifest /tmp/infra-only-training-acceptance-cleanup-dry-run.json \
+  --confirm-manifest-sha256 "$MANIFEST_SHA256" \
   --execute \
   | tee /tmp/infra-only-training-acceptance-cleanup.json
 ```
 
-Expected: only the approved manifest is deleted; post-delete exact-prefix listing and exact Aim query are empty.
+Expected: only the approved manifest is deleted; post-delete exact-prefix
+listing and exact Aim query are empty. If a network failure makes the terminal
+delete result uncertain, the same saved manifest and SHA-256 are the only
+permitted recovery authority; new keys or Aim hashes are always rejected.
 
 - [ ] **Step 4: Verify preserved shared resources read-only**
 
