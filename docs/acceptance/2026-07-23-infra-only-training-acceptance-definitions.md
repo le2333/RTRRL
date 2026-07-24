@@ -21,8 +21,12 @@
   `/tmp/infra-only-training-acceptance-phase-a.json`
 - Phase A preflight SHA-256:
   `56bfb35f78f725e3b87527b7a6d99b4c33cdab03f4c278676328d47bf10b9ab3`
+- Fresh Task 11 preflight:
+  `/tmp/infra-only-task11-preflight.json`
+- Fresh Task 11 preflight SHA-256:
+  `e68d6ad932e15f199d4caa9ef14afa39783f3599a2aa9225055bdcd3271864d2`
 
-The three `/tmp` files are runtime evidence and are not committed. No AWS or
+The four `/tmp` files are runtime evidence and are not committed. No AWS or
 GitHub mutation was performed while preparing this document.
 
 ## Pre-registration evidence and chronology
@@ -43,13 +47,23 @@ immutable images visible:
 - GPU:
   `007122174918.dkr.ecr.eu-north-1.amazonaws.com/rtrrl@sha256:938fb1bfce6131ecd3f40a56475946e8865eed6f902b74f15c3e808f9da97e6a`
 
-The Phase A IAM simulation did not succeed.
+The fresh Task 11 preflight then returned overall `pass`, all four profiles
+`ready`, and Aim `ready`, healthy, isolated, with command, working directory,
+repository, and port checks all matching. Its ECR status was `visible`; the CPU
+tag resolved to
+`sha256:ec1ae1e426313dbbda1567dc48eb942f7b76c1b0d91b3738584ef5a9fda91a08`
+and the GPU tag resolved to
+`sha256:938fb1bfce6131ecd3f40a56475946e8865eed6f902b74f15c3e808f9da97e6a`,
+exactly matching Task 10 and the registration inputs. The report records
+top-level, ECR, and S3 `writes_performed:false`.
+
+The IAM simulation did not succeed in either preflight.
 `iam:SimulatePrincipalPolicy` returned `AccessDenied` for the controller role,
 so the canonical IAM result remains `unknown` / `unavailable`, with
 `blocking:false`. This evidence does not claim that the requested IAM actions
 were proven allowed and no permission was changed.
 
-## Initial CLI attempt and fail-closed boundary
+## Initial CLI attempt and bounded inference
 
 The first authorized registration invocation supplied bare
 `sha256:<64 lowercase hex>` values to `--cpu-digest` and `--gpu-digest`. After
@@ -60,9 +74,13 @@ with:
 ValueError: CPU digest must be 007122174918.dkr.ecr.eu-north-1.amazonaws.com/rtrrl@sha256:<64 lowercase hex>
 ```
 
-The process exited before ECR catalog verification and before
-`RegisterJobDefinition`; this attempt registered `0` definitions. The failure
-did not broaden authorization or trigger a Batch submission.
+This account is based on the deterministic ordering in `deploy_facility.py`
+together with this session's exit and traceback; no independent failure
+artifact was saved. In that code path, `_validated_digest` raised before ECR
+catalog verification and before `_register_definitions`, whose only AWS
+mutation call is `RegisterJobDefinition`. The evidence therefore proves that
+this invocation path failed before registration. It is not an account-level
+audit and makes no claim about unrelated AWS activity.
 
 ## Authorized retry
 
@@ -116,21 +134,19 @@ digest; the GPU definition name and container image contain the exact Task 10
 GPU digest. The registration output's four ARNs and both image references match
 the exact-ARN readback without substitution.
 
-## Authorization boundary and mutation counters
+## Authorization and deploy-code-path boundary
 
 The authorization covered only the four successful job-definition
 registrations. It did not authorize submission, cancellation, cleanup, S3
-writes, or IAM changes. The observed Task 11 counters are:
+writes, or IAM changes. For the successful invocation, this
+`deploy_facility.py` code path exposed and performed exactly four
+`RegisterJobDefinition` operations, corroborated by its four output ARNs and
+the exact readback. The script contains no submission, cancellation, cleanup,
+S3-write, S3-delete, or IAM-mutation API in this path.
 
-- Successful Batch job-definition registrations: `4`
-- Registrations from the rejected bare-digest attempt: `0`
-- Batch job submissions: `0`
-- Batch job cancellations: `0`
-- Acceptance cleanup operations: `0`
-- S3 object writes: `0`
-- S3 object deletes: `0`
-
-The deployment output explicitly records `submission_supported:false`. This
+The deployment command output contains no jobs and explicitly records
+`submission_supported:false`. These statements are scoped to this command and
+its deterministic code path; they are not account-global zero counters. This
 phase therefore proves only the four digest-bound definition contracts and
 does not claim a runnable Batch job, successful training, cleanup, or broader
 IAM readiness.
