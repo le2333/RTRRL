@@ -12,11 +12,11 @@ PUSH_CONDITION = (
 )
 PUSH_PATHS = [
     ".github/workflows/build-infra-acceptance-image.yml",
+    ".dockerignore",
     "rtrrl/infra/mock-trainer/**",
     "training-sdk/**",
     "rtrrl/infra/worker/worker.py",
-    "rtrrl/infra/control-plane/src/trainer_infra/image_catalog.py",
-    "rtrrl/infra/control-plane/src/trainer_infra/models.py",
+    "rtrrl/infra/control-plane/src/trainer_infra/**",
     "rtrrl/infra/control-plane/pyproject.toml",
     "rtrrl/infra/control-plane/uv.lock",
 ]
@@ -76,6 +76,9 @@ def test_workflow_is_manual_build_only_by_default_with_isolated_matrix_runners()
         "branches": ["feature/trainer-infra"],
         "paths": PUSH_PATHS,
     }
+    assert all("memo" not in pattern for pattern in trigger["push"]["paths"])
+    assert "rtrrl/infra/control-plane/**" not in trigger["push"]["paths"]
+    assert "rtrrl/infra/**" not in trigger["push"]["paths"]
     inputs = trigger["workflow_dispatch"]["inputs"]
     assert inputs["push"] == {
         "description": "Push the two fixed acceptance test tags to the existing ECR repository",
