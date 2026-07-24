@@ -686,6 +686,46 @@ def test_writable_repo_closes_without_delete_when_manual_server_starts_after_ope
     assert opened[0].as_posix().startswith("/proc/self/fd/")
 
 
+def test_writable_delete_body_error_remains_primary_when_repo_close_fails(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    module = _load(monkeypatch)
+    source = _snapshot_source(tmp_path)
+    opened: list[Path] = []
+    close_error = RuntimeError("writable repo close failure")
+    _fake_aim_modules(monkeypatch, opened, close_error=close_error)
+    gateway = module.TrustedAimRepoGateway(source)
+    primary = ValueError("delete body failure")
+
+    with pytest.raises(ValueError, match="delete body") as captured:
+        with gateway.cleanup_operation(_snapshot_control(source)):
+            with gateway.open_write_delete():
+                raise primary
+
+    assert captured.value is primary
+    assert "writable repo close failure" in "\n".join(captured.value.__notes__)
+
+
+def test_writable_delete_raises_repo_close_error_without_body_failure(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    module = _load(monkeypatch)
+    source = _snapshot_source(tmp_path)
+    _fake_aim_modules(
+        monkeypatch,
+        [],
+        close_error=RuntimeError("writable repo close failure"),
+    )
+    gateway = module.TrustedAimRepoGateway(source)
+
+    with pytest.raises(RuntimeError, match="writable repo close failure"):
+        with gateway.cleanup_operation(_snapshot_control(source)):
+            with gateway.open_write_delete():
+                pass
+
+
 def test_cleanup_operation_rejects_shared_launcher_lock(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,

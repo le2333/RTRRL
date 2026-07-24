@@ -409,12 +409,26 @@ class TrustedAimRepoGateway:
         source = self._source_path()
         self._require_updated(source)
         repo = Repo(str(source), init=False)
+        primary_error: BaseException | None = None
+        close_error: BaseException | None = None
         try:
             self._assert_inactive()
             yield repo
+        except BaseException as error:
+            primary_error = error
         finally:
-            repo.close()
-            gc.collect()
+            try:
+                repo.close()
+            except BaseException as error:
+                close_error = error
+            finally:
+                gc.collect()
+        if primary_error is not None:
+            if close_error is not None:
+                primary_error.add_note(f"writable Aim repo close also failed: {close_error!r}")
+            raise primary_error
+        if close_error is not None:
+            raise close_error
 
 
 def canonical_json(report: CleanupReport) -> str:

@@ -149,8 +149,8 @@ def test_launch_resumes_valid_recorded_process_without_duplicate(
     tmp_path: Path,
 ) -> None:
     control = _control(tmp_path)
-    control.metadata_file.write_text('{"pid":321}')
-    control.pid_file.write_text("321\n")
+    _recorded(control)
+    root_stat = control.repo.stat()
     popen_calls: list[object] = []
 
     result = launch_aim_scratch(
@@ -159,11 +159,20 @@ def test_launch_resumes_valid_recorded_process_without_duplicate(
         popen=lambda *_args, **_kwargs: popen_calls.append(object()),
         runtime_validator=lambda _control, **_kwargs: {
             "pid": 321,
+            "start_time_ticks": 12345,
+            "repo_root_dev": root_stat.st_dev,
+            "repo_root_ino": root_stat.st_ino,
             "status": "ready",
         },
+        pidfd_open=lambda pid: 91 if pid == 321 else pytest.fail("wrong PID"),
+        wait_pidfd=lambda fd, timeout: (
+            False if fd == 91 and timeout == 0 else pytest.fail("wrong pidfd poll")
+        ),
+        close_fd=lambda fd: None if fd == 91 else pytest.fail("wrong fd close"),
     )
 
-    assert result == {"pid": 321, "status": "resumed"}
+    assert result["pid"] == 321
+    assert result["status"] == "resumed"
     assert popen_calls == []
 
 
@@ -185,6 +194,91 @@ def test_launch_rejects_exclusive_cleanup_lock_without_starting(
         os.close(lock_fd)
         os.close(directory_fd)
     assert starts == []
+
+
+@pytest.mark.parametrize(
+    ("polls", "runtime", "message"),
+    [
+        ([True], None, "exited before"),
+        (
+            [False, False],
+            {
+                "pid": 999,
+                "start_time_ticks": 12345,
+                "repo_root_dev": 0,
+                "repo_root_ino": 0,
+            },
+            "identity mismatch",
+        ),
+        (
+            [False, True],
+            "expected",
+            "exited during",
+        ),
+    ],
+)
+def test_locked_resume_rejects_original_exit_or_pid_reuse(
+    tmp_path: Path,
+    polls: list[bool],
+    runtime: dict[str, Any] | str | None,
+    message: str,
+) -> None:
+    control = _control(tmp_path)
+    _recorded(control)
+    root_stat = control.repo.stat()
+    expected = {
+        "pid": 321,
+        "start_time_ticks": 12345,
+        "repo_root_dev": root_stat.st_dev,
+        "repo_root_ino": root_stat.st_ino,
+    }
+    directory_fd = aim_scratch.open_trusted_directory(control.repo)
+    lock_fd = aim_scratch.create_facility_lock(directory_fd)
+    validator_calls: list[object] = []
+    try:
+        with pytest.raises(ValueError, match="lock") as captured:
+            launch_aim_scratch(
+                control,
+                aim_executable="/must/not/start",
+                runtime_validator=lambda *_args, **_kwargs: (
+                    validator_calls.append(object())
+                    or (expected if runtime == "expected" else runtime)
+                ),
+                pidfd_open=lambda pid: 91 if pid == 321 else pytest.fail("wrong PID"),
+                wait_pidfd=lambda fd, timeout: (
+                    polls.pop(0) if fd == 91 and timeout == 0 else pytest.fail("wrong pidfd poll")
+                ),
+                close_fd=lambda fd: None if fd == 91 else pytest.fail("wrong fd close"),
+            )
+    finally:
+        os.close(lock_fd)
+        os.close(directory_fd)
+    assert message in repr(captured.value.__cause__)
+    assert len(validator_calls) == (0 if runtime is None else 1)
+
+
+def test_launch_log_open_failure_closes_all_pipe_fds_and_releases_lock(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    control = _control(tmp_path)
+    real_open = os.open
+    before = len(tuple(Path("/proc/self/fd").iterdir()))
+
+    def failing_open(path: Any, *args: Any, **kwargs: Any) -> int:
+        if path == control.log_file.name and kwargs.get("dir_fd") is not None:
+            raise OSError("injected log open failure")
+        return real_open(path, *args, **kwargs)
+
+    monkeypatch.setattr(aim_scratch.os, "open", failing_open)
+    with pytest.raises(OSError, match="log open"):
+        launch_aim_scratch(control, aim_executable="/venv/bin/aim")
+    after = len(tuple(Path("/proc/self/fd").iterdir()))
+    assert after == before
+    directory_fd = aim_scratch.open_trusted_directory(control.repo)
+    lock_fd = aim_scratch.open_facility_lock(directory_fd)
+    os.close(lock_fd)
+    os.close(directory_fd)
 
 
 def test_launch_health_timeout_pidfd_terminates_child_before_releasing_lock(

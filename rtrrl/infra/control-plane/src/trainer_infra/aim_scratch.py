@@ -408,8 +408,11 @@ def validate_aim_scratch(
             "pid": snapshot.pid,
             "pid_file": str(control.pid_file),
             "port_matches": True,
+            "repo_root_dev": _metadata["repo_root_dev"],
+            "repo_root_ino": _metadata["repo_root_ino"],
             "repo": str(repo),
             "repo_matches": True,
+            "start_time_ticks": snapshot.start_time_ticks,
             "status": "ready",
         }
     finally:
@@ -532,6 +535,72 @@ def _gate_environment() -> dict[str, str]:
     return {name: os.environ[name] for name in _GATE_ENVIRONMENT_KEYS if name in os.environ}
 
 
+def _expected_resume_identity(
+    control: AimScratchControl,
+    directory_fd: int,
+) -> tuple[int, int, int, int]:
+    if control.metadata_file.parent != control.repo or control.pid_file.parent != control.repo:
+        raise ValueError("Aim evidence files must be under trusted scratch")
+    metadata = json.loads(_read_regular_file_at(directory_fd, control.metadata_file.name).content)
+    pid_text = (
+        _read_regular_file_at(directory_fd, control.pid_file.name).content.decode("utf-8").strip()
+    )
+    if not isinstance(metadata, dict) or not pid_text.isdigit():
+        raise ValueError("Aim resume metadata is invalid")
+    identity = (
+        metadata.get("pid"),
+        metadata.get("start_time_ticks"),
+        metadata.get("repo_root_dev"),
+        metadata.get("repo_root_ino"),
+    )
+    if any(
+        not isinstance(value, int) or isinstance(value, bool) or value <= 0 for value in identity
+    ):
+        raise ValueError("Aim resume identity metadata is invalid")
+    if int(pid_text) != identity[0]:
+        raise ValueError("Aim resume PID metadata mismatch")
+    root_stat = os.fstat(directory_fd)
+    if identity[2:] != (root_stat.st_dev, root_stat.st_ino):
+        raise ValueError("Aim resume root identity metadata mismatch")
+    return identity
+
+
+def _resume_existing_process(
+    control: AimScratchControl,
+    *,
+    directory_fd: int,
+    runtime_validator: Callable[..., dict[str, Any]],
+    pidfd_open: Callable[[int], int],
+    wait_pidfd: Callable[[int, float], bool],
+    close_fd: Callable[[int], None],
+) -> dict[str, Any]:
+    expected = _expected_resume_identity(control, directory_fd)
+    resume_pidfd = pidfd_open(expected[0])
+    try:
+        if wait_pidfd(resume_pidfd, 0):
+            raise ValueError("recorded Aim process exited before runtime validation")
+        current = runtime_validator(control, directory_fd=directory_fd)
+        observed = (
+            current.get("pid"),
+            current.get("start_time_ticks"),
+            current.get("repo_root_dev"),
+            current.get("repo_root_ino"),
+        )
+        if (
+            any(
+                not isinstance(value, int) or isinstance(value, bool) or value <= 0
+                for value in observed
+            )
+            or observed != expected
+        ):
+            raise ValueError("Aim resume runtime identity mismatch")
+        if wait_pidfd(resume_pidfd, 0):
+            raise ValueError("recorded Aim process exited during runtime validation")
+        return {**current, "status": "resumed"}
+    finally:
+        close_fd(resume_pidfd)
+
+
 def _launch_aim_scratch_locked(
     control: AimScratchControl,
     *,
@@ -561,14 +630,19 @@ def _launch_aim_scratch_locked(
         raise ValueError(f"Aim repository metadata is missing under {control.repo}")
     if control.metadata_file.is_file() and control.pid_file.is_file():
         try:
-            current = runtime_validator(control, directory_fd=directory_fd)
+            return _resume_existing_process(
+                control,
+                directory_fd=directory_fd,
+                runtime_validator=runtime_validator,
+                pidfd_open=pidfd_open,
+                wait_pidfd=wait_pidfd,
+                close_fd=close_fd,
+            )
         except FileNotFoundError:
             if health_probe(control.host, control.port):
                 raise ValueError(
                     "Aim endpoint is occupied but recorded process is missing"
                 ) from None
-        else:
-            return {**current, "status": "resumed"}
     command = [
         aim_executable,
         "server",
@@ -581,27 +655,30 @@ def _launch_aim_scratch_locked(
         "-y",
     ]
     gate_read_fd, gate_write_fd = os.pipe2(os.O_CLOEXEC)
-    gate_command = [
-        sys.executable,
-        "-m",
-        "trainer_infra.aim_process_gate",
-        "--gate-fd",
-        str(gate_read_fd),
-        "--lock-fd",
-        str(inherited_lock_fd),
-        "--repo-fd",
-        str(directory_fd),
-        "--",
-        *command,
-    ]
-    log_fd = os.open(
-        control.log_file.name,
-        os.O_WRONLY | os.O_APPEND | os.O_CREAT | os.O_CLOEXEC,
-        0o600,
-        dir_fd=directory_fd,
-    )
+    parent_fds = {gate_read_fd, gate_write_fd}
     try:
+        gate_command = [
+            sys.executable,
+            "-m",
+            "trainer_infra.aim_process_gate",
+            "--gate-fd",
+            str(gate_read_fd),
+            "--lock-fd",
+            str(inherited_lock_fd),
+            "--repo-fd",
+            str(directory_fd),
+            "--",
+            *command,
+        ]
+        log_fd = os.open(
+            control.log_file.name,
+            os.O_WRONLY | os.O_APPEND | os.O_CREAT | os.O_CLOEXEC,
+            0o600,
+            dir_fd=directory_fd,
+        )
+        parent_fds.add(log_fd)
         with os.fdopen(log_fd, "ab", closefd=True) as log:
+            parent_fds.discard(log_fd)
             process = popen(
                 gate_command,
                 cwd=pinned_repo,
@@ -612,110 +689,112 @@ def _launch_aim_scratch_locked(
                 pass_fds=(gate_read_fd, inherited_lock_fd, directory_fd),
                 env=_gate_environment(),
             )
-    except BaseException:
-        os.close(gate_read_fd)
-        os.close(gate_write_fd)
-        raise
-    try:
-        child_pidfd = pidfd_open(process.pid)
-    except BaseException:
-        os.close(gate_write_fd)
-        os.close(gate_read_fd)
         try:
-            process.wait(timeout=10.0)
-        except subprocess.TimeoutExpired as error:
-            raise RuntimeError("gated Aim wrapper did not exit after pidfd_open failure") from error
-        raise RuntimeError("could not bind launched Aim child to a pidfd") from None
-    try:
-        try:
-            os.write(gate_write_fd, b"G")
-            os.close(gate_write_fd)
-            os.close(gate_read_fd)
-            deadline = time.monotonic() + 10
-            while not health_probe(control.host, control.port):
-                if time.monotonic() >= deadline:
-                    raise TimeoutError("Aim scratch did not become healthy")
-                sleep(0.1)
-            snapshot = discover_process(
-                control,
-                root_identity=(root_stat.st_dev, root_stat.st_ino),
-            )
-            if snapshot.pid != process.pid:
-                raise ValueError("launched Aim process PID mismatch")
-            repo_argument = _argument(snapshot.cmdline, "--repo")
-            if repo_argument is None or _process_repo_identity(snapshot, repo_argument) != (
-                root_stat.st_dev,
-                root_stat.st_ino,
-            ):
-                raise ValueError("launched Aim repo inode mismatch")
-            metadata = {
-                "command": list(snapshot.cmdline),
-                "cwd": str(snapshot.cwd.resolve()),
-                "endpoint": control.endpoint,
-                "pid": snapshot.pid,
-                "port": control.port,
-                "repo_fd": directory_fd,
-                "repo_root_dev": root_stat.st_dev,
-                "repo_root_ino": root_stat.st_ino,
-                "start_time_ticks": snapshot.start_time_ticks,
-                "started_at_utc": _utc_text(now()),
-                "trusted_repo": str(control.repo),
-            }
-            metadata_name = control.metadata_file.name
-            metadata_temporary = f".{metadata_name}.tmp-{process.pid}"
-            metadata_fd = os.open(
-                metadata_temporary,
-                os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_CLOEXEC,
-                0o600,
-                dir_fd=directory_fd,
-            )
-            try:
-                os.write(
-                    metadata_fd,
-                    (json.dumps(metadata, separators=(",", ":"), sort_keys=True) + "\n").encode(),
-                )
-            finally:
-                os.close(metadata_fd)
-            os.replace(
-                metadata_temporary,
-                metadata_name,
-                src_dir_fd=directory_fd,
-                dst_dir_fd=directory_fd,
-            )
-            pid_name = control.pid_file.name
-            pid_temporary = f".{pid_name}.tmp-{process.pid}"
-            pid_fd = os.open(
-                pid_temporary,
-                os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_CLOEXEC,
-                0o600,
-                dir_fd=directory_fd,
-            )
-            try:
-                os.write(pid_fd, f"{snapshot.pid}\n".encode())
-            finally:
-                os.close(pid_fd)
-            os.replace(
-                pid_temporary,
-                pid_name,
-                src_dir_fd=directory_fd,
-                dst_dir_fd=directory_fd,
-            )
-            return {**metadata, "status": "started"}
+            child_pidfd = pidfd_open(process.pid)
         except BaseException:
-            pidfd_send_signal(child_pidfd, signal.SIGTERM)
-            if not wait_pidfd(child_pidfd, 10.0):
-                raise RuntimeError("launched Aim child could not be terminated safely") from None
-            raise
-    finally:
-        try:
             os.close(gate_write_fd)
-        except OSError:
-            pass
+            parent_fds.discard(gate_write_fd)
+            try:
+                process.wait(timeout=10.0)
+            except subprocess.TimeoutExpired as error:
+                raise RuntimeError(
+                    "gated Aim wrapper did not exit after pidfd_open failure"
+                ) from error
+            raise RuntimeError("could not bind launched Aim child to a pidfd") from None
         try:
-            os.close(gate_read_fd)
-        except OSError:
-            pass
-        close_fd(child_pidfd)
+            try:
+                os.write(gate_write_fd, b"G")
+                os.close(gate_write_fd)
+                parent_fds.discard(gate_write_fd)
+                os.close(gate_read_fd)
+                parent_fds.discard(gate_read_fd)
+                deadline = time.monotonic() + 10
+                while not health_probe(control.host, control.port):
+                    if time.monotonic() >= deadline:
+                        raise TimeoutError("Aim scratch did not become healthy")
+                    sleep(0.1)
+                snapshot = discover_process(
+                    control,
+                    root_identity=(root_stat.st_dev, root_stat.st_ino),
+                )
+                if snapshot.pid != process.pid:
+                    raise ValueError("launched Aim process PID mismatch")
+                repo_argument = _argument(snapshot.cmdline, "--repo")
+                if repo_argument is None or _process_repo_identity(snapshot, repo_argument) != (
+                    root_stat.st_dev,
+                    root_stat.st_ino,
+                ):
+                    raise ValueError("launched Aim repo inode mismatch")
+                metadata = {
+                    "command": list(snapshot.cmdline),
+                    "cwd": str(snapshot.cwd.resolve()),
+                    "endpoint": control.endpoint,
+                    "pid": snapshot.pid,
+                    "port": control.port,
+                    "repo_fd": directory_fd,
+                    "repo_root_dev": root_stat.st_dev,
+                    "repo_root_ino": root_stat.st_ino,
+                    "start_time_ticks": snapshot.start_time_ticks,
+                    "started_at_utc": _utc_text(now()),
+                    "trusted_repo": str(control.repo),
+                }
+                metadata_name = control.metadata_file.name
+                metadata_temporary = f".{metadata_name}.tmp-{process.pid}"
+                metadata_fd = os.open(
+                    metadata_temporary,
+                    os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_CLOEXEC,
+                    0o600,
+                    dir_fd=directory_fd,
+                )
+                try:
+                    os.write(
+                        metadata_fd,
+                        (
+                            json.dumps(metadata, separators=(",", ":"), sort_keys=True) + "\n"
+                        ).encode(),
+                    )
+                finally:
+                    os.close(metadata_fd)
+                os.replace(
+                    metadata_temporary,
+                    metadata_name,
+                    src_dir_fd=directory_fd,
+                    dst_dir_fd=directory_fd,
+                )
+                pid_name = control.pid_file.name
+                pid_temporary = f".{pid_name}.tmp-{process.pid}"
+                pid_fd = os.open(
+                    pid_temporary,
+                    os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_CLOEXEC,
+                    0o600,
+                    dir_fd=directory_fd,
+                )
+                try:
+                    os.write(pid_fd, f"{snapshot.pid}\n".encode())
+                finally:
+                    os.close(pid_fd)
+                os.replace(
+                    pid_temporary,
+                    pid_name,
+                    src_dir_fd=directory_fd,
+                    dst_dir_fd=directory_fd,
+                )
+                return {**metadata, "status": "started"}
+            except BaseException:
+                pidfd_send_signal(child_pidfd, signal.SIGTERM)
+                if not wait_pidfd(child_pidfd, 10.0):
+                    raise RuntimeError(
+                        "launched Aim child could not be terminated safely"
+                    ) from None
+                raise
+        finally:
+            close_fd(child_pidfd)
+    finally:
+        for parent_fd in parent_fds:
+            try:
+                os.close(parent_fd)
+            except OSError:
+                pass
 
 
 def launch_aim_scratch(
@@ -741,24 +820,21 @@ def launch_aim_scratch(
             if "already held" not in str(lock_error):
                 raise
             try:
-                current = runtime_validator(control, directory_fd=directory_fd)
-                resume_pid = current.get("pid")
-                if not isinstance(resume_pid, int) or isinstance(resume_pid, bool):
-                    raise ValueError("runtime validator returned an invalid PID")
-                resume_pidfd = pidfd_open(resume_pid)
-                try:
-                    rebound = runtime_validator(control, directory_fd=directory_fd)
-                    if rebound.get("pid") != resume_pid:
-                        raise ValueError("runtime generation changed after pidfd_open")
-                finally:
-                    close_fd(resume_pidfd)
+                resumed = _resume_existing_process(
+                    control,
+                    directory_fd=directory_fd,
+                    runtime_validator=runtime_validator,
+                    pidfd_open=pidfd_open,
+                    wait_pidfd=wait_pidfd,
+                    close_fd=close_fd,
+                )
             except BaseException as validation_error:
                 occupied = ValueError(
                     "Aim scratch facility lock is occupied and holder validation failed"
                 )
                 occupied.add_note(f"lock acquisition failed: {lock_error!r}")
                 raise occupied from validation_error
-            return {**rebound, "status": "resumed"}
+            return resumed
         try:
             return _launch_aim_scratch_locked(
                 control,
