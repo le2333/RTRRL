@@ -359,6 +359,66 @@ def make_preflight_contract() -> AwsBatchPreflightContract:
     )
 
 
+def test_preflight_accepts_aws_canonical_empty_log_configuration_defaults() -> None:
+    client = FakePreflightBatch()
+    original = client.describe_job_definitions
+
+    def with_aws_defaults(**kwargs: Any) -> dict[str, Any]:
+        response = original(**kwargs)
+        response["jobDefinitions"][0]["containerProperties"]["logConfiguration"] = {
+            "logDriver": "awslogs",
+            "options": {},
+            "secretOptions": [],
+        }
+        return response
+
+    client.describe_job_definitions = with_aws_defaults  # type: ignore[method-assign]
+
+    assert len(AwsBatchPreflight(client).validate(make_preflight_contract())) == 4
+
+
+@pytest.mark.parametrize(
+    "log_configuration",
+    [
+        {"logDriver": "json-file", "options": {}, "secretOptions": []},
+        {
+            "logDriver": "awslogs",
+            "options": {"awslogs-group": "/unexpected"},
+            "secretOptions": [],
+        },
+        {
+            "logDriver": "awslogs",
+            "options": {},
+            "secretOptions": [{"name": "token", "valueFrom": "arn:secret"}],
+        },
+        {
+            "logDriver": "awslogs",
+            "options": {},
+            "secretOptions": [],
+            "unknownMeaningfulField": "unexpected",
+        },
+        ["not", "a", "mapping"],
+    ],
+)
+def test_preflight_rejects_meaningful_log_configuration_drift(
+    log_configuration: Any,
+) -> None:
+    client = FakePreflightBatch()
+    original = client.describe_job_definitions
+
+    def with_log_configuration(**kwargs: Any) -> dict[str, Any]:
+        response = original(**kwargs)
+        response["jobDefinitions"][0]["containerProperties"][
+            "logConfiguration"
+        ] = log_configuration
+        return response
+
+    client.describe_job_definitions = with_log_configuration  # type: ignore[method-assign]
+
+    with pytest.raises(ValueError, match="logConfiguration"):
+        AwsBatchPreflight(client).validate(make_preflight_contract())
+
+
 def test_preflight_accepts_aws_image_status_but_rejects_ami_override() -> None:
     client = FakePreflightBatch()
     original = client.describe_compute_environments

@@ -90,6 +90,19 @@ def _one(items: object, *, context: str) -> Mapping[str, Any]:
     return items[0]
 
 
+def _normalize_log_configuration(value: object) -> dict[str, Any]:
+    if not isinstance(value, Mapping):
+        raise ValueError("logConfiguration must be a mapping")
+    known_keys = {"logDriver", "options", "secretOptions"}
+    if "logDriver" not in value or set(value) - known_keys:
+        raise ValueError("logConfiguration does not match the known AWS schema")
+    return {
+        "logDriver": value["logDriver"],
+        "options": value.get("options", {}),
+        "secretOptions": value.get("secretOptions", []),
+    }
+
+
 class AwsBatchPreflight:
     """Read-only validation of formal queues, compute environments, and definitions."""
 
@@ -154,13 +167,18 @@ class AwsBatchPreflight:
             ],
             "jobRoleArn": expected.job_role_arn,
             "executionRoleArn": expected.execution_role_arn,
-            "logConfiguration": expected.log_configuration,
         }
         for field, wanted in expected_container_fields.items():
             if container.get(field) != wanted:
                 raise ValueError(
                     f"job definition {arn!r} {field} does not match expected contract"
                 )
+        if _normalize_log_configuration(
+            container.get("logConfiguration")
+        ) != _normalize_log_configuration(expected.log_configuration):
+            raise ValueError(
+                f"job definition {arn!r} logConfiguration does not match expected contract"
+            )
         return ValidatedJobDefinition(
             arn=arn,
             image_digest=resolved.reference,
