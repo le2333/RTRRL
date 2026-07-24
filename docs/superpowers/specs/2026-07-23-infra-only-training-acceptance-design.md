@@ -115,13 +115,16 @@ AWS mutation remains split into separately authorized phases:
 
 1. push test-labelled CPU and GPU images;
 2. register four digest-bound, single-attempt job definitions;
-3. run six paid jobs: three `c7am` and three `g6x`;
+3. run three paid jobs: two `c7am` and one `g6x`;
 4. separately delete only the exact scratch experiment prefix.
 
-The real experiment uses two five-trial groups, two configurations per HPO
-round, and two serial children per job. Any failed Batch job, child run,
-completion marker, Aim result, or objective terminates the foreground command.
-There is no retry or continuation.
+The real experiment uses a three-trial CPU explicit scan over learning rates
+`[0.0002, 0.0003, 0.0004]`, with two configurations per HPO round and two
+serial children per job. Its CPU rounds are `2+1`. The GPU group is one fixed
+trial at learning rate `0.0003`, with one configuration and one child in its
+single `g6x` job. Round one submits CPU and GPU in parallel; round two submits
+only CPU. Any failed Batch job, child run, completion marker, Aim result, or
+objective terminates the foreground command. There is no retry or continuation.
 
 The one-time reference memo image may be run as additional evidence after the
 generic acceptance trainer passes. It is not required for the infrastructure

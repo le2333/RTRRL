@@ -18,11 +18,11 @@
 - Acceptance package root is exactly `rtrrl/infra/mock-trainer/`; import package and script identity are exactly `brax_ppo_acceptance`.
 - CPU and GPU images expose the same protocol-version-1 catalog containing exactly the script key `brax_ppo_acceptance`.
 - The acceptance package imports `training_sdk`, JAX, and Brax; it must not import `memo` or `trainer_infra`.
-- The package runtime test and real AWS run perform real Brax PPO training and real JAX operations. The repeated fake-controller E2E may set `BRAX_ACCEPTANCE_E2E_FAST=1`; this still performs a real jitted Brax reset/step and complete SDK lifecycle but skips PPO optimization to avoid ten independent CPU compilations. The descriptor and normal runtime cannot enable this mode.
+- The package runtime test and real AWS run perform real Brax PPO training and real JAX operations. The local-only repeated fake-controller E2E may set `BRAX_ACCEPTANCE_E2E_FAST=1`; this still performs a real jitted Brax reset/step and complete SDK lifecycle but skips PPO optimization to avoid ten independent CPU compilations. The descriptor and normal runtime cannot enable this mode.
 - The launcher records resolved parameters/configuration, completed episode summaries, finite objective `eval/episode_return`, one complete evaluation `training_sdk.Episode`, one checkpoint, and exactly one terminal success or failure transition.
 - Test-only failure modes are exactly `none`, `before_training`, `after_training`, and `after_checkpoint`; descriptors expose only `none`, and non-`none` values require `BRAX_ACCEPTANCE_TEST_MODE=1`. `BRAX_ACCEPTANCE_E2E_FAST=1` is accepted only when `BRAX_ACCEPTANCE_TEST_MODE=1` is also present.
 - Profiles remain exactly `c7am`, `c7al`, `c7ax`, and `g6x`; formal queues remain `run-cpu-c7am-queue`, `run-cpu-c7al-queue`, `run-cpu-c7ax-queue`, and `run-gpu-queue`.
-- Real acceptance uses two independent groups, five trials per group, `configs_per_batch: 2`, `runs_per_job: 2`, rounds `2+2+1`, three `c7am` jobs, three `g6x` jobs, and six jobs total.
+- Real acceptance uses a three-trial CPU explicit scan over learning rates `[0.0002, 0.0003, 0.0004]`, `configs_per_batch: 2`, and `runs_per_job: 2`, producing `2+1` CPU rounds and two `c7am` jobs. The GPU group overrides to one fixed `0.0003` trial, `configs_per_batch: 1`, and `runs_per_job: 1`, producing one `g6x` job. Round one submits CPU and GPU in parallel; round two submits CPU only: four runs and three paid jobs total.
 - AWS native retry attempts and facility submission attempts remain exactly one. No resubmit, cancellation, continuation, or implicit cleanup is introduced.
 - The existing shared account is `007122174918`, region is `eu-north-1`, ECR repository is `rtrrl`, S3 bucket is `rtrrl-artifacts-007122174918`, and experiment root is `experiments/`.
 - Test labels are exactly `infra-acceptance-brax-ppo-cpu-20260723` and `infra-acceptance-brax-ppo-gpu-20260723`; they do not replace memo or historical image tags.
@@ -52,8 +52,8 @@
   CPU/GPU matrix on separate ephemeral runners; push is a separately confirmed
   input.
 - `rtrrl/infra/mock-trainer/tests/`: package, real-runtime, SDK artifact, catalog, and image contract tests.
-- `rtrrl/infra/control-plane/tests/test_end_to_end.py`: real worker plus real acceptance launcher fake-service lifecycle.
-- `rtrrl/infra/control-plane/examples/experiment-smoke.yaml`: exact two-group/six-job acceptance experiment.
+- `rtrrl/infra/control-plane/tests/test_end_to_end.py`: real worker plus real acceptance launcher fake-service lifecycle; its local-only fixture remains ten runs, six fake jobs, and `2+2+1` per group.
+- `rtrrl/infra/control-plane/examples/experiment-smoke.yaml`: exact two-group, four-run, three-paid-job real acceptance experiment.
 - `rtrrl/infra/control-plane/scripts/deploy_facility.py`: digest-bound
   job-definition registration only; it never invokes Docker or pushes images.
 - `rtrrl/infra/control-plane/scripts/facility_preflight.py`: acceptance tags and read-only readiness.
@@ -797,11 +797,13 @@ rollouts, SDK publication, and worker artifact upload. Package runtime tests
 unset the fast flag and execute real PPO once. Use non-`none` failure modes
 only in injected child-failure cases. Do not import anything under `memo/`.
 
-The fake ECR returns separate immutable CPU and GPU digests carrying the same one-script catalog. Fake preflight returns matching definitions for `c7am` and `g6x`, preserving image/profile partitioning into six jobs.
+The fake ECR returns separate immutable CPU and GPU digests carrying the same one-script catalog. Fake preflight returns matching definitions for `c7am` and `g6x`, preserving image/profile partitioning into six fake jobs. This is a local-only deterministic fixture; it does not define the paid AWS acceptance shape.
 
-- [ ] **Step 3: Replace the committed smoke experiment**
+- [ ] **Step 3: Define the local-only fake E2E experiment**
 
-Use exact defaults:
+In `tests/test_end_to_end.py`, use these exact local-only defaults. The
+committed `examples/experiment-smoke.yaml` is the smaller real AWS descriptor
+defined by Task 12 and is not the source for this fixture:
 
 ```yaml
 experiment:
@@ -849,12 +851,12 @@ uv run --project rtrrl/infra/control-plane pytest \
   rtrrl/infra/control-plane/examples/experiment-smoke.yaml
 ```
 
-Expected: tests pass; search returns no matches; success path has ten completed trials, `2+2+1` rounds per group, and exactly six jobs.
+Expected: tests pass; search returns no matches; the local fake success path has ten completed trials, `2+2+1` rounds per group, and exactly six fake jobs. These counts are local-only and do not authorize or describe paid AWS jobs.
 
 - [ ] **Step 5: Commit**
 
 ```bash
-git add rtrrl/infra/control-plane/tests rtrrl/infra/control-plane/examples/experiment-smoke.yaml
+git add rtrrl/infra/control-plane/tests
 git commit -m "test(infra): accept facility without memo"
 ```
 
@@ -1241,7 +1243,7 @@ git commit -m "docs(infra): record acceptance definitions"
 
 ---
 
-### Task 12: Run the Six-Job CPU/GPU AWS Acceptance After Paid-Run Authorization
+### Task 12: Run the Three-Job CPU/GPU AWS Acceptance After Paid-Run Authorization
 
 **Files:**
 - Create after execution: `docs/acceptance/2026-07-23-infra-only-training-acceptance-run.md`
@@ -1258,11 +1260,19 @@ cd rtrrl/infra/control-plane
 uv run trainerctl validate examples/experiment-smoke.yaml
 ```
 
-Expected: two groups; five trials each; `configs_per_batch:2`; `runs_per_job:2`; estimated jobs three per group; profiles `c7am` and `g6x`; both digest-bound catalogs expose `brax_ppo_acceptance`.
+Expected: two groups; CPU has three trials with explicit learning-rate values
+`[0.0002, 0.0003, 0.0004]`, `configs_per_batch:2`,
+`runs_per_job:2`, and two estimated jobs; GPU has one fixed learning-rate
+`0.0003` trial, `configs_per_batch:1`, `runs_per_job:1`, and one estimated job.
+Profiles are `c7am` and `g6x`; both digest-bound catalogs expose
+`brax_ppo_acceptance`.
 
 - [ ] **Step 2: Stop and request paid-job authorization**
 
-Request authorization for exactly six jobs: three `c7am` and three `g6x`, each native attempt one, with child counts `2,2,1` per group. Do not run `trainerctl run` before approval.
+The user's latest decision authorizes exactly three paid jobs: two `c7am` and
+one `g6x`, each native attempt one. CPU child counts are `2,1`; GPU child count
+is `1`. This authorization does not itself submit jobs. Do not run
+`trainerctl run` as part of this plan update.
 
 - [ ] **Step 3: Run once in the foreground after authorization**
 
@@ -1274,28 +1284,31 @@ uv run trainerctl run examples/experiment-smoke.yaml \
   | tee /tmp/infra-only-training-acceptance-run.json
 ```
 
-Expected: success report with ten completed runs and six submitted job IDs. Any failure stops the command; do not retry or continue.
+Expected: success report with four completed runs and three submitted job IDs.
+Round one submits the first CPU job and the GPU job in parallel; round two
+submits the remaining CPU job. Any failure stops the command; do not retry or
+continue.
 
 - [ ] **Step 4: Verify exact acceptance evidence read-only**
 
-For all six job IDs verify:
+For all three job IDs verify:
 
-- three `c7am`, three `g6x`;
+- two `c7am`, one `g6x`;
 - no job has more than one attempt;
-- first two rounds submit one job per group with two serial children; final round submits one job per group with one child;
+- round one submits CPU and GPU in parallel, with two serial CPU children and one GPU child; round two submits only CPU with one child;
 - GPU CloudWatch output reports backend `gpu`, device kind containing `NVIDIA L4`, and successful real JAX matrix operation;
 - CPU output reports backend `cpu`;
-- all ten completion markers have exit code zero;
-- all ten Aim runs have finite `eval/episode_return` and finalized marker;
-- all ten runs have one checkpoint and one complete Rerun evaluation episode;
-- both Optuna studies contain five COMPLETE trials and received one `study.tell()` per trial;
-- no resubmit, retry, cancellation, or seventh job exists.
+- all four completion markers have exit code zero;
+- all four Aim runs have finite `eval/episode_return` and finalized marker;
+- all four runs have one checkpoint and one complete Rerun evaluation episode;
+- the CPU Optuna study contains three COMPLETE trials and the GPU study contains one COMPLETE trial, with one `study.tell()` per trial;
+- no resubmit, retry, cancellation, or fourth job exists.
 
 - [ ] **Step 5: Commit evidence**
 
 ```bash
 git add docs/acceptance/2026-07-23-infra-only-training-acceptance-run.md
-git commit -m "docs(infra): record six-job acceptance"
+git commit -m "docs(infra): record three-job acceptance"
 ```
 
 The optional reference memo image may be tested only after this task passes and under its own authorization. Do not amend this generic acceptance result if the optional evidence fails or is skipped.
@@ -1333,7 +1346,7 @@ MANIFEST_SHA256="$(
 Expected: only the exact recorded Aim scratch process is stopped;
 `writes_performed:false`; prefix equals
 `s3://rtrrl-artifacts-007122174918/experiments/$EXPERIMENT_ID/`; only exact S3
-keys and Aim run hashes from the ten acceptance runs appear.
+keys and Aim run hashes from the four acceptance runs appear.
 
 - [ ] **Step 2: Stop and request authorization for the exact manifest**
 
@@ -1417,7 +1430,8 @@ Document:
 - four profiles, four dev queues at priority 10, four run queues at priority 100, shared capacity, and non-preemption;
 - local install/test commands and `scripts/verify-infra-only-acceptance.sh`;
 - CPU/GPU root-context image build, label decode, runtime tests, and test tags;
-- `trainerctl validate/run`, foreground lifecycle, one-attempt/fail-fast semantics, `2+2+1`, serial children, and artifact layout;
+- `trainerctl validate/run`, foreground lifecycle, one-attempt/fail-fast semantics, real CPU `2+1` rounds plus one fixed GPU trial, round-one CPU/GPU parallelism, serial children, and artifact layout;
+- the separate local fake E2E contract of ten runs, six fake jobs, and `2+2+1` per group;
 - Aim/Rerun/checkpoint/completion-marker/S3 lookup commands;
 - separate authorization boundaries for push, register, paid run, and exact cleanup;
 - preserved historical commands and resources;

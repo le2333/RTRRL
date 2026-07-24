@@ -9,7 +9,7 @@ defaults:
   logging: {aim_every_env_steps: 1, rerun_every_episodes: 1}
   resources: {profile: c7am}
   hpo:
-    total_trials: 5
+    total_trials: 3
     configs_per_batch: 2
     parameter_policy: explicit_scan
   execution:
@@ -19,10 +19,15 @@ groups:
   cpu:
     script: brax_ppo_acceptance
     parameters:
-      learning_rate: {values: [0.0002, 0.0003, 0.0004, 0.0005, 0.0006]}
+      learning_rate: {values: [0.0002, 0.0003, 0.0004]}
   gpu:
     script: brax_ppo_acceptance
     image: 007122174918.dkr.ecr.eu-north-1.amazonaws.com/rtrrl:infra-acceptance-brax-ppo-gpu-20260723
     resources: {profile: g6x}
+    hpo:
+      total_trials: 1
+      configs_per_batch: 1
+    execution:
+      runs_per_job: 1
     parameters:
-      learning_rate: {values: [0.0002, 0.0003, 0.0004, 0.0005, 0.0006]}
+      learning_rate: {values: [0.0003]}

@@ -188,9 +188,9 @@ def test_committed_smoke_resolves_real_acceptance_contract_and_materializes(
     )
 
     assert [group.name for group in resolved.groups] == ["cpu", "gpu"]
-    assert all(group.hpo.total_trials == 5 for group in resolved.groups)
-    assert all(group.hpo.configs_per_batch == 2 for group in resolved.groups)
-    assert all(group.execution.runs_per_job == 2 for group in resolved.groups)
+    assert [group.hpo.total_trials for group in resolved.groups] == [3, 1]
+    assert [group.hpo.configs_per_batch for group in resolved.groups] == [2, 1]
+    assert [group.execution.runs_per_job for group in resolved.groups] == [2, 1]
     assert all(group.script == "brax_ppo_acceptance" for group in resolved.groups)
     assert [group.resources.profile for group in resolved.groups] == ["c7am", "g6x"]
     assert [group.image for group in resolved.groups] == [
@@ -205,11 +205,12 @@ def test_committed_smoke_resolves_real_acceptance_contract_and_materializes(
     ]
     assert all(group.environment.name == "inverted_pendulum" for group in resolved.groups)
     assert all(group.environment.options == {"backend": "generalized"} for group in resolved.groups)
-    expected_values = (0.0002, 0.0003, 0.0004, 0.0005, 0.0006)
-    assert all(
-        group.searchable_parameters()["learning_rate"].values == expected_values
-        for group in resolved.groups
+    assert (
+        resolved.groups[0].searchable_parameters()["learning_rate"].values
+        == (0.0002, 0.0003, 0.0004)
     )
+    assert resolved.groups[1].searchable_parameters() == {}
+    assert resolved.groups[1].parameters["learning_rate"].fixed_value == 0.0003
 
     digests = {
         spec.defaults.image: (
@@ -250,21 +251,25 @@ def test_committed_smoke_resolves_real_acceptance_contract_and_materializes(
         bucket="unused",
     )
     validation = controller.validate(SMOKE_EXPERIMENT)
-    assert [group.estimated_jobs for group in validation.groups] == [3, 3]
+    assert [group.estimated_jobs for group in validation.groups] == [2, 1]
 
-    group = replace(resolved.groups[0], study_key="smoke-1:cpu")
-    concrete = materialize_run(
-        group,
-        FakeTrial(0),
-        {"learning_rate": 0.0002},
-        run_number=1,
+    cases = (
+        (resolved.groups[0], {"learning_rate": 0.0002}, 0.0002),
+        (resolved.groups[1], {}, 0.0003),
     )
-    path = tmp_path / "smoke-concrete.yaml"
-    path.write_text(concrete.config_yaml, encoding="utf-8")
-    acceptance = _load_acceptance(path)
-    assert acceptance["environment_name"] == "inverted_pendulum"
-    assert acceptance["learning_rate"] == 0.0002
-    assert acceptance["num_timesteps"] == 128
+    for group, sampled_parameters, expected_learning_rate in cases:
+        concrete = materialize_run(
+            replace(group, study_key=f"smoke-1:{group.name}"),
+            FakeTrial(0),
+            sampled_parameters,
+            run_number=1,
+        )
+        path = tmp_path / f"smoke-{group.name}-concrete.yaml"
+        path.write_text(concrete.config_yaml, encoding="utf-8")
+        acceptance = _load_acceptance(path)
+        assert acceptance["environment_name"] == "inverted_pendulum"
+        assert acceptance["learning_rate"] == expected_learning_rate
+        assert acceptance["num_timesteps"] == 128
 
 
 def test_acceptance_contract_import_does_not_pollute_interpreter() -> None:
