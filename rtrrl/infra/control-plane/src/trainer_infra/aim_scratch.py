@@ -29,6 +29,14 @@ class ProcessSnapshot:
     start_time_ticks: int
 
 
+@dataclass(frozen=True)
+class FileEvidence:
+    name: str
+    device: int
+    inode: int
+    content: bytes
+
+
 def inspect_process(pid: int) -> ProcessSnapshot:
     root = Path("/proc") / str(pid)
     command = tuple(
@@ -100,13 +108,7 @@ def open_trusted_directory(path: Path) -> int:
         raise
 
 
-def open_facility_lock(directory_fd: int, *, exclusive: bool) -> int:
-    lock_fd = os.open(
-        FACILITY_LOCK_NAME,
-        os.O_RDWR | os.O_CREAT | os.O_CLOEXEC | getattr(os, "O_NOFOLLOW", 0),
-        0o600,
-        dir_fd=directory_fd,
-    )
+def _validate_and_lock_facility_file(lock_fd: int) -> int:
     lock_stat = os.fstat(lock_fd)
     if (
         not stat.S_ISREG(lock_stat.st_mode)
@@ -115,13 +117,38 @@ def open_facility_lock(directory_fd: int, *, exclusive: bool) -> int:
     ):
         os.close(lock_fd)
         raise ValueError("Aim scratch facility lock file is not private and regular")
-    operation = fcntl.LOCK_EX if exclusive else fcntl.LOCK_SH
     try:
-        fcntl.flock(lock_fd, operation | fcntl.LOCK_NB)
+        fcntl.flock(lock_fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
     except BlockingIOError as error:
         os.close(lock_fd)
         raise ValueError("Aim scratch facility lock is already held") from error
     return lock_fd
+
+
+def create_facility_lock(directory_fd: int) -> int:
+    flags = os.O_RDWR | os.O_CLOEXEC | getattr(os, "O_NOFOLLOW", 0)
+    try:
+        lock_fd = os.open(
+            FACILITY_LOCK_NAME,
+            flags | os.O_CREAT | os.O_EXCL,
+            0o600,
+            dir_fd=directory_fd,
+        )
+    except FileExistsError:
+        lock_fd = os.open(FACILITY_LOCK_NAME, flags, dir_fd=directory_fd)
+    return _validate_and_lock_facility_file(lock_fd)
+
+
+def open_facility_lock(directory_fd: int) -> int:
+    try:
+        lock_fd = os.open(
+            FACILITY_LOCK_NAME,
+            os.O_RDWR | os.O_CLOEXEC | getattr(os, "O_NOFOLLOW", 0),
+            dir_fd=directory_fd,
+        )
+    except FileNotFoundError as error:
+        raise ValueError("existing Aim scratch facility lock is required") from error
+    return _validate_and_lock_facility_file(lock_fd)
 
 
 def probe_health(host: str, port: int) -> bool:
@@ -160,14 +187,120 @@ def _argument(command: tuple[str, ...], name: str) -> str | None:
         return None
 
 
+def _process_repo_path(snapshot: ProcessSnapshot, argument: str) -> Path:
+    self_fd_prefix = "/proc/self/fd/"
+    if argument.startswith(self_fd_prefix):
+        fd_text = argument.removeprefix(self_fd_prefix)
+        if not fd_text.isdigit():
+            raise ValueError("process repo fd argument is invalid")
+        return Path("/proc") / str(snapshot.pid) / "fd" / fd_text
+    path = Path(argument)
+    return path if path.is_absolute() else snapshot.cwd / path
+
+
+def _process_repo_identity(
+    snapshot: ProcessSnapshot,
+    argument: str,
+) -> tuple[int, int]:
+    repo_stat = _process_repo_path(snapshot, argument).stat()
+    return repo_stat.st_dev, repo_stat.st_ino
+
+
+def _read_regular_file_at(directory_fd: int, name: str) -> FileEvidence:
+    if not name or "/" in name:
+        raise ValueError("Aim evidence file must be directly under trusted scratch")
+    lexical = os.stat(name, dir_fd=directory_fd, follow_symlinks=False)
+    if not stat.S_ISREG(lexical.st_mode):
+        raise ValueError("Aim evidence must be a regular file")
+    file_fd = os.open(
+        name,
+        os.O_RDONLY | os.O_CLOEXEC | getattr(os, "O_NOFOLLOW", 0),
+        dir_fd=directory_fd,
+    )
+    try:
+        opened = os.fstat(file_fd)
+        if opened.st_dev != lexical.st_dev or opened.st_ino != lexical.st_ino:
+            raise ValueError("Aim evidence identity changed while opening")
+        chunks = []
+        while chunk := os.read(file_fd, 1024 * 1024):
+            chunks.append(chunk)
+        return FileEvidence(name, opened.st_dev, opened.st_ino, b"".join(chunks))
+    finally:
+        os.close(file_fd)
+
+
+def _evidence_unchanged(directory_fd: int, evidence: FileEvidence) -> bool:
+    try:
+        current = _read_regular_file_at(directory_fd, evidence.name)
+    except (FileNotFoundError, OSError, ValueError):
+        return False
+    return current == evidence
+
+
+def _remove_exact_evidence(
+    directory_fd: int,
+    evidence_items: tuple[FileEvidence, ...],
+    *,
+    nonce: int,
+) -> None:
+    moved: list[tuple[FileEvidence, str]] = []
+    try:
+        for evidence in evidence_items:
+            quarantine = f".{evidence.name}.remove-{nonce}"
+            os.rename(
+                evidence.name,
+                quarantine,
+                src_dir_fd=directory_fd,
+                dst_dir_fd=directory_fd,
+            )
+            moved.append((evidence, quarantine))
+        for evidence, quarantine in moved:
+            quarantined = _read_regular_file_at(directory_fd, quarantine)
+            if (
+                quarantined.device != evidence.device
+                or quarantined.inode != evidence.inode
+                or quarantined.content != evidence.content
+            ):
+                raise RuntimeError("Aim scratch evidence was replaced during removal")
+        for _evidence, quarantine in moved:
+            os.unlink(quarantine, dir_fd=directory_fd)
+    except BaseException:
+        for evidence, quarantine in reversed(moved):
+            try:
+                os.stat(evidence.name, dir_fd=directory_fd, follow_symlinks=False)
+            except FileNotFoundError:
+                try:
+                    os.rename(
+                        quarantine,
+                        evidence.name,
+                        src_dir_fd=directory_fd,
+                        dst_dir_fd=directory_fd,
+                    )
+                except FileNotFoundError:
+                    pass
+        raise
+
+
 def _recorded_identity(
     control: AimScratchControl,
     *,
     inspect: Callable[[int], ProcessSnapshot],
+    directory_fd: int | None = None,
 ) -> tuple[dict[str, Any], ProcessSnapshot, bytes, bytes]:
     try:
-        metadata_bytes = control.metadata_file.read_bytes()
-        pid_bytes = control.pid_file.read_bytes()
+        if (
+            control.metadata_file.parent != control.repo
+            or control.pid_file.parent != control.repo
+        ):
+            raise ValueError("Aim evidence files must be under trusted scratch")
+        if directory_fd is None:
+            metadata_bytes = control.metadata_file.read_bytes()
+            pid_bytes = control.pid_file.read_bytes()
+        else:
+            metadata_bytes = _read_regular_file_at(
+                directory_fd, control.metadata_file.name
+            ).content
+            pid_bytes = _read_regular_file_at(directory_fd, control.pid_file.name).content
         metadata = json.loads(metadata_bytes)
     except (FileNotFoundError, json.JSONDecodeError, OSError, UnicodeDecodeError) as error:
         raise ValueError("Aim scratch metadata is stale or unreadable") from error
@@ -181,7 +314,6 @@ def _recorded_identity(
         snapshot = inspect(pid)
     except (FileNotFoundError, ProcessLookupError) as error:
         raise ValueError("Aim scratch PID is stale") from error
-    repo = control.repo.resolve()
     start_time_ticks = metadata.get("start_time_ticks")
     if (
         not isinstance(start_time_ticks, int)
@@ -195,10 +327,25 @@ def _recorded_identity(
     expected_command = tuple(metadata.get("command", ()))
     if command != expected_command or "server" not in command:
         raise ValueError("cmdline mismatch")
-    if snapshot.cwd.resolve() != repo or metadata.get("cwd") != str(repo):
+    root_dev = metadata.get("repo_root_dev")
+    root_ino = metadata.get("repo_root_ino")
+    repo_fd = metadata.get("repo_fd")
+    trusted_repo = metadata.get("trusted_repo")
+    if (
+        not isinstance(root_dev, int)
+        or not isinstance(root_ino, int)
+        or not isinstance(repo_fd, int)
+        or trusted_repo != str(control.repo)
+    ):
+        raise ValueError("repo root identity metadata mismatch")
+    repo_argument = _argument(command, "--repo")
+    if repo_argument != f"/proc/self/fd/{repo_fd}":
+        raise ValueError("repo fd argument mismatch")
+    if _process_repo_identity(snapshot, repo_argument) != (root_dev, root_ino):
+        raise ValueError("repo root inode mismatch")
+    cwd_stat = snapshot.cwd.stat()
+    if (cwd_stat.st_dev, cwd_stat.st_ino) != (root_dev, root_ino):
         raise ValueError("cwd mismatch")
-    if _argument(command, "--repo") != str(repo) or metadata.get("repo") != str(repo):
-        raise ValueError("repo argument mismatch")
     if (
         _argument(command, "--host") != control.host
         or _argument(command, "--port") != str(control.port)
@@ -210,14 +357,26 @@ def _recorded_identity(
     return metadata, snapshot, metadata_bytes, pid_bytes
 
 
-def discover_aim_process(control: AimScratchControl) -> ProcessSnapshot:
+def discover_aim_process(
+    control: AimScratchControl,
+    *,
+    root_identity: tuple[int, int] | None = None,
+) -> ProcessSnapshot:
+    if root_identity is None:
+        repo_stat = control.repo.stat()
+        root_identity = (repo_stat.st_dev, repo_stat.st_ino)
     matches = []
     for snapshot in enumerate_processes():
+        repo_argument = _argument(snapshot.cmdline, "--repo")
+        if "server" not in snapshot.cmdline or repo_argument is None:
+            continue
+        try:
+            process_identity = _process_repo_identity(snapshot, repo_argument)
+        except OSError:
+            continue
         if (
-            "server" in snapshot.cmdline
-            and _argument(snapshot.cmdline, "--repo") == str(control.repo.resolve())
+            process_identity == root_identity
             and _argument(snapshot.cmdline, "--port") == str(control.port)
-            and snapshot.cwd.resolve() == control.repo.resolve()
         ):
             matches.append(snapshot)
     if not matches:
@@ -230,31 +389,40 @@ def validate_aim_scratch(
     *,
     inspect_process: Callable[[int], ProcessSnapshot] = inspect_process,
     health_probe: Callable[[str, int], bool] = probe_health,
+    directory_fd: int | None = None,
 ) -> dict[str, Any]:
-    repo = control.repo.resolve()
-    main = control.main_repo.resolve()
-    if repo == main or repo in main.parents or main in repo.parents:
-        raise ValueError("repo isolation mismatch")
-    _metadata, snapshot, _metadata_bytes, _pid_bytes = _recorded_identity(
-        control,
-        inspect=inspect_process,
-    )
-    if not health_probe(control.host, control.port):
-        raise ValueError("health endpoint is unavailable")
-    return {
-        "cmdline_matches": True,
-        "cwd_matches": True,
-        "endpoint": control.endpoint,
-        "healthy": True,
-        "isolated": True,
-        "metadata_file": str(control.metadata_file),
-        "pid": snapshot.pid,
-        "pid_file": str(control.pid_file),
-        "port_matches": True,
-        "repo": str(repo),
-        "repo_matches": True,
-        "status": "ready",
-    }
+    own_directory_fd = directory_fd is None
+    if directory_fd is None:
+        directory_fd = open_trusted_directory(control.repo)
+    try:
+        repo = control.repo.resolve()
+        main = control.main_repo.resolve()
+        if repo == main or repo in main.parents or main in repo.parents:
+            raise ValueError("repo isolation mismatch")
+        _metadata, snapshot, _metadata_bytes, _pid_bytes = _recorded_identity(
+            control,
+            inspect=inspect_process,
+            directory_fd=directory_fd,
+        )
+        if not health_probe(control.host, control.port):
+            raise ValueError("health endpoint is unavailable")
+        return {
+            "cmdline_matches": True,
+            "cwd_matches": True,
+            "endpoint": control.endpoint,
+            "healthy": True,
+            "isolated": True,
+            "metadata_file": str(control.metadata_file),
+            "pid": snapshot.pid,
+            "pid_file": str(control.pid_file),
+            "port_matches": True,
+            "repo": str(repo),
+            "repo_matches": True,
+            "status": "ready",
+        }
+    finally:
+        if own_directory_fd:
+            os.close(directory_fd)
 
 
 def assert_aim_scratch_inactive(
@@ -263,20 +431,18 @@ def assert_aim_scratch_inactive(
     process_enumerator: Callable[[], Iterable[ProcessSnapshot]] = enumerate_processes,
     health_probe: Callable[[str, int], bool] = probe_health,
 ) -> dict[str, Any]:
-    repo = control.repo.resolve(strict=True)
+    repo_stat = control.repo.stat()
+    repo_identity = (repo_stat.st_dev, repo_stat.st_ino)
     for snapshot in process_enumerator():
         command = snapshot.cmdline
         repo_argument = _argument(command, "--repo")
         if "server" not in command or repo_argument is None:
             continue
         try:
-            process_repo_path = Path(repo_argument)
-            if not process_repo_path.is_absolute():
-                process_repo_path = snapshot.cwd / process_repo_path
-            process_repo = process_repo_path.resolve(strict=True)
+            process_identity = _process_repo_identity(snapshot, repo_argument)
         except OSError:
             continue
-        if process_repo == repo:
+        if process_identity == repo_identity:
             raise ValueError("exact Aim scratch server is active")
     if health_probe(control.host, control.port):
         raise ValueError("Aim scratch endpoint is occupied")
@@ -294,60 +460,85 @@ def stop_aim_scratch(
     close_fd: Callable[[int], None] = os.close,
     timeout: float = 10.0,
 ) -> dict[str, Any]:
-    try:
-        pid_text = control.pid_file.read_text(encoding="utf-8").strip()
-        metadata = json.loads(control.metadata_file.read_bytes())
-    except (FileNotFoundError, OSError, UnicodeDecodeError, json.JSONDecodeError) as error:
-        raise ValueError("Aim scratch metadata is stale or unreadable") from error
     if (
-        not pid_text.isdigit()
-        or not isinstance(metadata, dict)
-        or int(pid_text) != metadata.get("pid")
+        control.metadata_file.parent != control.repo
+        or control.pid_file.parent != control.repo
     ):
-        raise ValueError("pid metadata mismatch")
-    pid = int(pid_text)
+        raise ValueError("Aim evidence files must be under trusted scratch")
+    directory_fd = open_trusted_directory(control.repo)
     try:
-        pidfd = pidfd_open(pid)
-    except (AttributeError, NotImplementedError) as error:
-        raise RuntimeError("Linux pidfd support is required to stop Aim safely") from error
-    try:
-        _metadata, snapshot, metadata_bytes, pid_bytes = _recorded_identity(
-            control,
-            inspect=inspect_process,
-        )
-        if not health_probe(control.host, control.port):
-            raise ValueError("recorded Aim scratch endpoint is unavailable")
         try:
-            before_signal = inspect_process(snapshot.pid)
-        except (FileNotFoundError, ProcessLookupError) as error:
-            raise RuntimeError("Aim scratch generation vanished before SIGTERM") from error
-        original_identity = (
-            snapshot.cmdline,
-            snapshot.cwd.resolve(),
-            snapshot.start_time_ticks,
-        )
-        before_signal_identity = (
-            before_signal.cmdline,
-            before_signal.cwd.resolve(),
-            before_signal.start_time_ticks,
-        )
-        if before_signal_identity != original_identity:
-            raise RuntimeError("PID reuse detected before SIGTERM")
-        pidfd_send_signal(pidfd, signal.SIGTERM)
-        if not wait_pidfd(pidfd, timeout):
-            raise TimeoutError("Aim scratch did not stop after SIGTERM")
-        if health_probe(control.host, control.port):
-            raise RuntimeError("Aim scratch endpoint remains occupied after termination")
+            metadata_evidence = _read_regular_file_at(
+                directory_fd, control.metadata_file.name
+            )
+            pid_evidence = _read_regular_file_at(directory_fd, control.pid_file.name)
+            metadata = json.loads(metadata_evidence.content)
+            pid_text = pid_evidence.content.decode("utf-8").strip()
+        except (
+            FileNotFoundError,
+            OSError,
+            UnicodeDecodeError,
+            json.JSONDecodeError,
+        ) as error:
+            raise ValueError("Aim scratch metadata is stale or unreadable") from error
         if (
-            control.metadata_file.read_bytes() != metadata_bytes
-            or control.pid_file.read_bytes() != pid_bytes
+            not pid_text.isdigit()
+            or not isinstance(metadata, dict)
+            or int(pid_text) != metadata.get("pid")
         ):
-            raise RuntimeError("Aim scratch evidence changed while stopping")
-        control.metadata_file.unlink()
-        control.pid_file.unlink()
-        return {"pid": snapshot.pid, "status": "stopped"}
+            raise ValueError("pid metadata mismatch")
+        pid = int(pid_text)
+        try:
+            pidfd = pidfd_open(pid)
+        except (AttributeError, NotImplementedError) as error:
+            raise RuntimeError("Linux pidfd support is required to stop Aim safely") from error
+        try:
+            _metadata, snapshot, _metadata_bytes, _pid_bytes = _recorded_identity(
+                control,
+                inspect=inspect_process,
+                directory_fd=directory_fd,
+            )
+            if not health_probe(control.host, control.port):
+                raise ValueError("recorded Aim scratch endpoint is unavailable")
+            try:
+                before_signal = inspect_process(snapshot.pid)
+            except (FileNotFoundError, ProcessLookupError) as error:
+                raise RuntimeError(
+                    "Aim scratch generation vanished before SIGTERM"
+                ) from error
+            original_identity = (
+                snapshot.cmdline,
+                snapshot.cwd.resolve(),
+                snapshot.start_time_ticks,
+            )
+            before_signal_identity = (
+                before_signal.cmdline,
+                before_signal.cwd.resolve(),
+                before_signal.start_time_ticks,
+            )
+            if before_signal_identity != original_identity:
+                raise RuntimeError("PID reuse detected before SIGTERM")
+            pidfd_send_signal(pidfd, signal.SIGTERM)
+            if not wait_pidfd(pidfd, timeout):
+                raise TimeoutError("Aim scratch did not stop after SIGTERM")
+            if health_probe(control.host, control.port):
+                raise RuntimeError(
+                    "Aim scratch endpoint remains occupied after termination"
+                )
+            if not _evidence_unchanged(
+                directory_fd, metadata_evidence
+            ) or not _evidence_unchanged(directory_fd, pid_evidence):
+                raise RuntimeError("Aim scratch evidence changed while stopping")
+            _remove_exact_evidence(
+                directory_fd,
+                (metadata_evidence, pid_evidence),
+                nonce=snapshot.pid,
+            )
+            return {"pid": snapshot.pid, "status": "stopped"}
+        finally:
+            close_fd(pidfd)
     finally:
-        close_fd(pidfd)
+        os.close(directory_fd)
 
 
 def _utc_text(value: datetime) -> str:
@@ -359,21 +550,33 @@ def _utc_text(value: datetime) -> str:
 def _launch_aim_scratch_locked(
     control: AimScratchControl,
     *,
+    directory_fd: int,
     inherited_lock_fd: int,
     aim_executable: str,
     popen: Callable[..., Any] = subprocess.Popen,
     health_probe: Callable[[str, int], bool] = probe_health,
-    discover_process: Callable[[AimScratchControl], ProcessSnapshot] = discover_aim_process,
-    runtime_validator: Callable[[AimScratchControl], dict[str, Any]] = validate_aim_scratch,
+    discover_process: Callable[..., ProcessSnapshot] = discover_aim_process,
+    runtime_validator: Callable[..., dict[str, Any]] = validate_aim_scratch,
     now: Callable[[], datetime] = lambda: datetime.now(timezone.utc),
     sleep: Callable[[float], None] = time.sleep,
+    pidfd_open: Callable[[int], int] = _open_pidfd,
+    pidfd_send_signal: Callable[[int, int], None] = _send_pidfd_signal,
+    wait_pidfd: Callable[[int, float], bool] = _wait_for_pidfd,
+    close_fd: Callable[[int], None] = os.close,
 ) -> dict[str, Any]:
-    repo = control.repo.resolve()
-    if not (repo / ".aim").is_dir():
-        raise ValueError(f"Aim repository metadata is missing under {repo}")
+    if (
+        control.metadata_file.parent != control.repo
+        or control.pid_file.parent != control.repo
+        or control.log_file.parent != control.repo
+    ):
+        raise ValueError("Aim lifecycle files must be under trusted scratch")
+    pinned_repo = Path("/proc/self/fd") / str(directory_fd)
+    root_stat = os.fstat(directory_fd)
+    if not (pinned_repo / ".aim").is_dir():
+        raise ValueError(f"Aim repository metadata is missing under {control.repo}")
     if control.metadata_file.is_file() and control.pid_file.is_file():
         try:
-            current = runtime_validator(control)
+            current = runtime_validator(control, directory_fd=directory_fd)
         except FileNotFoundError:
             if health_probe(control.host, control.port):
                 raise ValueError(
@@ -389,45 +592,112 @@ def _launch_aim_scratch_locked(
         "--port",
         str(control.port),
         "--repo",
-        str(repo),
+        str(pinned_repo),
         "-y",
     ]
-    with control.log_file.open("ab") as log:
-        popen(
+    log_fd = os.open(
+        control.log_file.name,
+        os.O_WRONLY | os.O_APPEND | os.O_CREAT | os.O_CLOEXEC,
+        0o600,
+        dir_fd=directory_fd,
+    )
+    with os.fdopen(log_fd, "ab", closefd=True) as log:
+        process = popen(
             command,
-            cwd=repo,
+            cwd=pinned_repo,
             start_new_session=True,
             stdin=subprocess.DEVNULL,
             stdout=log,
             stderr=subprocess.STDOUT,
-            pass_fds=(inherited_lock_fd,),
+            pass_fds=(inherited_lock_fd, directory_fd),
         )
-    deadline = time.monotonic() + 10
-    while not health_probe(control.host, control.port):
-        if time.monotonic() >= deadline:
-            raise TimeoutError("Aim scratch did not become healthy")
-        sleep(0.1)
-    snapshot = discover_process(control)
-    if snapshot.cwd.resolve() != repo:
-        raise ValueError("launched Aim cwd mismatch")
-    metadata = {
-        "command": list(snapshot.cmdline),
-        "cwd": str(snapshot.cwd.resolve()),
-        "endpoint": control.endpoint,
-        "pid": snapshot.pid,
-        "port": control.port,
-        "repo": str(repo),
-        "start_time_ticks": snapshot.start_time_ticks,
-        "started_at_utc": _utc_text(now()),
-    }
-    temporary = control.metadata_file.with_suffix(".json.tmp")
-    temporary.write_text(
-        json.dumps(metadata, separators=(",", ":"), sort_keys=True) + "\n",
-        encoding="utf-8",
-    )
-    temporary.replace(control.metadata_file)
-    control.pid_file.write_text(f"{snapshot.pid}\n", encoding="utf-8")
-    return {**metadata, "status": "started"}
+    try:
+        child_pidfd = pidfd_open(process.pid)
+    except BaseException:
+        raise RuntimeError("could not bind launched Aim child to a pidfd") from None
+    try:
+        try:
+            deadline = time.monotonic() + 10
+            while not health_probe(control.host, control.port):
+                if time.monotonic() >= deadline:
+                    raise TimeoutError("Aim scratch did not become healthy")
+                sleep(0.1)
+            snapshot = discover_process(
+                control,
+                root_identity=(root_stat.st_dev, root_stat.st_ino),
+            )
+            if snapshot.pid != process.pid:
+                raise ValueError("launched Aim process PID mismatch")
+            repo_argument = _argument(snapshot.cmdline, "--repo")
+            if repo_argument is None or _process_repo_identity(
+                snapshot, repo_argument
+            ) != (root_stat.st_dev, root_stat.st_ino):
+                raise ValueError("launched Aim repo inode mismatch")
+            metadata = {
+                "command": list(snapshot.cmdline),
+                "cwd": str(snapshot.cwd.resolve()),
+                "endpoint": control.endpoint,
+                "pid": snapshot.pid,
+                "port": control.port,
+                "repo_fd": directory_fd,
+                "repo_root_dev": root_stat.st_dev,
+                "repo_root_ino": root_stat.st_ino,
+                "start_time_ticks": snapshot.start_time_ticks,
+                "started_at_utc": _utc_text(now()),
+                "trusted_repo": str(control.repo),
+            }
+            metadata_name = control.metadata_file.name
+            metadata_temporary = f".{metadata_name}.tmp-{process.pid}"
+            metadata_fd = os.open(
+                metadata_temporary,
+                os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_CLOEXEC,
+                0o600,
+                dir_fd=directory_fd,
+            )
+            try:
+                os.write(
+                    metadata_fd,
+                    (
+                        json.dumps(metadata, separators=(",", ":"), sort_keys=True)
+                        + "\n"
+                    ).encode(),
+                )
+            finally:
+                os.close(metadata_fd)
+            os.replace(
+                metadata_temporary,
+                metadata_name,
+                src_dir_fd=directory_fd,
+                dst_dir_fd=directory_fd,
+            )
+            pid_name = control.pid_file.name
+            pid_temporary = f".{pid_name}.tmp-{process.pid}"
+            pid_fd = os.open(
+                pid_temporary,
+                os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_CLOEXEC,
+                0o600,
+                dir_fd=directory_fd,
+            )
+            try:
+                os.write(pid_fd, f"{snapshot.pid}\n".encode())
+            finally:
+                os.close(pid_fd)
+            os.replace(
+                pid_temporary,
+                pid_name,
+                src_dir_fd=directory_fd,
+                dst_dir_fd=directory_fd,
+            )
+            return {**metadata, "status": "started"}
+        except BaseException:
+            pidfd_send_signal(child_pidfd, signal.SIGTERM)
+            if not wait_pidfd(child_pidfd, 10.0):
+                raise RuntimeError(
+                    "launched Aim child could not be terminated safely"
+                ) from None
+            raise
+    finally:
+        close_fd(child_pidfd)
 
 
 def launch_aim_scratch(
@@ -436,17 +706,22 @@ def launch_aim_scratch(
     aim_executable: str,
     popen: Callable[..., Any] = subprocess.Popen,
     health_probe: Callable[[str, int], bool] = probe_health,
-    discover_process: Callable[[AimScratchControl], ProcessSnapshot] = discover_aim_process,
-    runtime_validator: Callable[[AimScratchControl], dict[str, Any]] = validate_aim_scratch,
+    discover_process: Callable[..., ProcessSnapshot] = discover_aim_process,
+    runtime_validator: Callable[..., dict[str, Any]] = validate_aim_scratch,
     now: Callable[[], datetime] = lambda: datetime.now(timezone.utc),
     sleep: Callable[[float], None] = time.sleep,
+    pidfd_open: Callable[[int], int] = _open_pidfd,
+    pidfd_send_signal: Callable[[int, int], None] = _send_pidfd_signal,
+    wait_pidfd: Callable[[int, float], bool] = _wait_for_pidfd,
+    close_fd: Callable[[int], None] = os.close,
 ) -> dict[str, Any]:
     directory_fd = open_trusted_directory(control.repo)
     try:
-        lock_fd = open_facility_lock(directory_fd, exclusive=False)
+        lock_fd = create_facility_lock(directory_fd)
         try:
             return _launch_aim_scratch_locked(
                 control,
+                directory_fd=directory_fd,
                 inherited_lock_fd=lock_fd,
                 aim_executable=aim_executable,
                 popen=popen,
@@ -455,6 +730,10 @@ def launch_aim_scratch(
                 runtime_validator=runtime_validator,
                 now=now,
                 sleep=sleep,
+                pidfd_open=pidfd_open,
+                pidfd_send_signal=pidfd_send_signal,
+                wait_pidfd=wait_pidfd,
+                close_fd=close_fd,
             )
         finally:
             os.close(lock_fd)

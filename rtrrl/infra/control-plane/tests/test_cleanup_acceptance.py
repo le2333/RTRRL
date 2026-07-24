@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from contextlib import contextmanager
+import gc
 from io import BytesIO
 import hashlib
 import importlib.util
@@ -15,6 +16,7 @@ import uuid
 
 import pytest
 
+import trainer_infra.aim_scratch as aim_scratch
 from trainer_infra.facility_control import AimScratchControl, load_facility_control
 
 
@@ -538,6 +540,7 @@ def _fake_aim_modules(
     monkeypatch: pytest.MonkeyPatch,
     opened: list[Path],
     closed: list[Path] | None = None,
+    close_error: BaseException | None = None,
 ) -> None:
     updated = object()
 
@@ -564,6 +567,8 @@ def _fake_aim_modules(
         def close(self) -> None:
             if closed is not None:
                 closed.append(self.path)
+            if close_error is not None:
+                raise close_error
 
     aim = ModuleType("aim")
     aim.Repo = Repo  # type: ignore[attr-defined]
@@ -583,6 +588,10 @@ def _snapshot_source(tmp_path: Path) -> Path:
     data = aim / "data"
     data.mkdir()
     (data / "value").write_bytes(b"stable")
+    directory_fd = aim_scratch.open_trusted_directory(source)
+    lock_fd = aim_scratch.create_facility_lock(directory_fd)
+    os.close(lock_fd)
+    os.close(directory_fd)
     return source
 
 
@@ -604,7 +613,7 @@ def test_trusted_gateway_opens_only_verified_temp_snapshot_and_cleans_it(
 ) -> None:
     module = _load(monkeypatch)
     source = _snapshot_source(tmp_path)
-    before = module._source_tree_fingerprint(source / ".aim")
+    before = module._source_tree_fingerprint(source)
     opened: list[Path] = []
     _fake_aim_modules(monkeypatch, opened)
 
@@ -618,7 +627,7 @@ def test_trusted_gateway_opens_only_verified_temp_snapshot_and_cleans_it(
             temporary = opened[0]
 
     assert not temporary.exists()
-    assert module._source_tree_fingerprint(source / ".aim") == before
+    assert module._source_tree_fingerprint(source) == before
 
 
 def test_snapshot_capacity_preflight_fails_before_copy_or_open(
@@ -686,7 +695,7 @@ def test_cleanup_operation_rejects_shared_launcher_lock(
     module = _load(monkeypatch)
     source = _snapshot_source(tmp_path)
     directory_fd = aim_scratch.open_trusted_directory(source)
-    lock_fd = aim_scratch.open_facility_lock(directory_fd, exclusive=False)
+    lock_fd = aim_scratch.create_facility_lock(directory_fd)
     try:
         gateway = module.TrustedAimRepoGateway(source)
         with pytest.raises(ValueError, match="lock"):
@@ -746,6 +755,32 @@ def test_gateway_reuses_stable_snapshot_until_write_then_refreshes(
         with gateway.open_read_only():
             pass
         assert copies == 2
+
+
+def test_snapshot_close_failure_still_removes_temp_and_releases_all_locks(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    module = _load(monkeypatch)
+    source = _snapshot_source(tmp_path)
+    opened: list[Path] = []
+    _fake_aim_modules(
+        monkeypatch,
+        opened,
+        close_error=RuntimeError("injected repo close"),
+    )
+    gateway = module.TrustedAimRepoGateway(source)
+
+    with pytest.raises(RuntimeError, match="repo close"):
+        with gateway.cleanup_operation(_snapshot_control(source)):
+            with gateway.open_read_only():
+                temporary = opened[0]
+    assert not temporary.exists()
+    assert gateway._directory_fd is None
+    directory_fd = aim_scratch.open_trusted_directory(source)
+    lock_fd = aim_scratch.open_facility_lock(directory_fd)
+    os.close(lock_fd)
+    os.close(directory_fd)
 
 
 @pytest.mark.parametrize(
@@ -816,6 +851,11 @@ def test_real_aim_328_snapshot_lists_runs_without_source_change(tmp_path: Path) 
     run["context"] = {"experiment_id": EXPERIMENT_ID}
     run_hash = run.hash
     run.close()
+    gc.collect()
+    directory_fd = aim_scratch.open_trusted_directory(source)
+    lock_fd = aim_scratch.create_facility_lock(directory_fd)
+    os.close(lock_fd)
+    os.close(directory_fd)
     before = module._source_tree_fingerprint(source / ".aim")
     module.assert_aim_scratch_inactive = lambda _control: {"status": "inactive"}
 
@@ -825,6 +865,47 @@ def test_real_aim_328_snapshot_lists_runs_without_source_change(tmp_path: Path) 
             assert run_hash in {item.hash for item in repo.iter_runs()}
 
     assert module._source_tree_fingerprint(source / ".aim") == before
+
+
+def test_real_aim_writable_delete_uses_pinned_inode_after_lexical_swap(
+    tmp_path: Path,
+) -> None:
+    from aim import Repo, Run
+
+    spec = importlib.util.spec_from_file_location("cleanup_real_delete", SCRIPT)
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    source = tmp_path / "real-delete"
+    run = Run(repo=str(source), experiment="acceptance")
+    run_hash = run.hash
+    run.close()
+    gc.collect()
+    directory_fd = aim_scratch.open_trusted_directory(source)
+    lock_fd = aim_scratch.create_facility_lock(directory_fd)
+    os.close(lock_fd)
+    os.close(directory_fd)
+    module.assert_aim_scratch_inactive = lambda _control: {"status": "inactive"}
+    gateway = module.TrustedAimRepoGateway(source)
+
+    with gateway.cleanup_operation(_snapshot_control(source)):
+        moved = tmp_path / "pinned-original"
+        source.rename(moved)
+        source.mkdir()
+        shutil.copytree(moved / ".aim", source / ".aim")
+        with gateway.open_write_delete() as repo:
+            assert repo.delete_run(run_hash) is True
+
+    original = Repo(str(moved), init=False)
+    try:
+        assert run_hash not in {item.hash for item in original.iter_runs()}
+    finally:
+        original.close()
+    replacement = Repo(str(source), init=False)
+    try:
+        assert run_hash in {item.hash for item in replacement.iter_runs()}
+    finally:
+        replacement.close()
 
 
 @pytest.mark.parametrize(

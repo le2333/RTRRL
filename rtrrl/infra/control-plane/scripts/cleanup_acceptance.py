@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 from collections.abc import Iterator, Mapping
 from contextlib import contextmanager
+import gc
 import hashlib
 import json
 import os
@@ -300,12 +301,28 @@ class TrustedAimRepoGateway:
         assert_aim_scratch_inactive(secured)
 
     def _close_snapshot(self) -> None:
-        if self._snapshot_repo is not None:
-            self._snapshot_repo.close()
-            self._snapshot_repo = None
-        if self._snapshot_context is not None:
-            self._snapshot_context.__exit__(None, None, None)
-            self._snapshot_context = None
+        repo = self._snapshot_repo
+        snapshot_context = self._snapshot_context
+        self._snapshot_repo = None
+        self._snapshot_context = None
+        close_error: BaseException | None = None
+        try:
+            if repo is not None:
+                repo.close()
+                gc.collect()
+        except BaseException as error:
+            close_error = error
+        finally:
+            try:
+                if snapshot_context is not None:
+                    snapshot_context.__exit__(None, None, None)
+            except BaseException as error:
+                if close_error is None:
+                    close_error = error
+                else:
+                    close_error.add_note(f"snapshot cleanup also failed: {error!r}")
+        if close_error is not None:
+            raise close_error
 
     @contextmanager
     def cleanup_operation(self, control: AimScratchControl) -> Iterator[None]:
@@ -313,7 +330,7 @@ class TrustedAimRepoGateway:
             raise RuntimeError("Aim cleanup operation is already active")
         directory_fd = open_trusted_directory(self.path)
         try:
-            lock_fd = open_facility_lock(directory_fd, exclusive=True)
+            lock_fd = open_facility_lock(directory_fd)
         except BaseException:
             os.close(directory_fd)
             raise
@@ -324,12 +341,16 @@ class TrustedAimRepoGateway:
             self._assert_inactive()
             yield
         finally:
-            self._close_snapshot()
-            self._control = None
-            self._directory_fd = None
-            self._lock_fd = None
-            os.close(lock_fd)
-            os.close(directory_fd)
+            try:
+                self._close_snapshot()
+            finally:
+                self._control = None
+                self._directory_fd = None
+                self._lock_fd = None
+                try:
+                    os.close(lock_fd)
+                finally:
+                    os.close(directory_fd)
 
     @staticmethod
     def _require_updated(path: Path) -> None:
@@ -379,6 +400,7 @@ class TrustedAimRepoGateway:
             yield repo
         finally:
             repo.close()
+            gc.collect()
 
 
 def canonical_json(report: CleanupReport) -> str:
