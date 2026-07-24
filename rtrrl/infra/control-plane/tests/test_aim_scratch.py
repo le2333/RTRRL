@@ -3,10 +3,11 @@ from __future__ import annotations
 from datetime import datetime, timezone
 import importlib.util
 import json
+import os
 from pathlib import Path
 import signal
 from types import SimpleNamespace
-from typing import Any
+from typing import Any, get_type_hints
 
 import pytest
 
@@ -40,7 +41,12 @@ def _control(tmp_path: Path) -> AimScratchControl:
     )
 
 
-def _recorded(control: AimScratchControl, *, pid: int = 321) -> tuple[str, ...]:
+def _recorded(
+    control: AimScratchControl,
+    *,
+    pid: int = 321,
+    start_time_ticks: int = 12345,
+) -> tuple[str, ...]:
     command = (
         "/venv/bin/aim",
         "server",
@@ -61,6 +67,7 @@ def _recorded(control: AimScratchControl, *, pid: int = 321) -> tuple[str, ...]:
                 "pid": pid,
                 "port": control.port,
                 "repo": str(control.repo.resolve()),
+                "start_time_ticks": start_time_ticks,
                 "started_at_utc": "2026-07-23T18:00:00Z",
             }
         )
@@ -97,6 +104,7 @@ def test_launch_writes_pid_and_reproducible_runtime_metadata(tmp_path: Path) -> 
                 "-y",
             ),
             cwd=control.repo,
+            start_time_ticks=12345,
         ),
         now=lambda: datetime(2026, 7, 23, 18, 0, tzinfo=timezone.utc),
     )
@@ -122,6 +130,7 @@ def test_launch_writes_pid_and_reproducible_runtime_metadata(tmp_path: Path) -> 
         "pid": 321,
         "port": 53801,
         "repo": str(control.repo),
+        "start_time_ticks": 12345,
         "started_at_utc": "2026-07-23T18:00:00Z",
     }
     assert calls[0]["cwd"] == control.repo
@@ -171,6 +180,7 @@ def test_preflight_validates_metadata_pid_cmdline_cwd_port_and_repo(
         "pid": 321,
         "port": control.port,
         "repo": str(control.repo),
+        "start_time_ticks": 12345,
         "started_at_utc": "2026-07-23T18:00:00Z",
     }
     control.metadata_file.write_text(json.dumps(metadata))
@@ -182,6 +192,7 @@ def test_preflight_validates_metadata_pid_cmdline_cwd_port_and_repo(
             pid=321,
             cmdline=tuple(metadata["command"]),
             cwd=control.repo,
+            start_time_ticks=12345,
         ),
         health_probe=lambda host, port: host == "127.0.0.1" and port == 53801,
     )
@@ -217,6 +228,7 @@ def test_preflight_rejects_aim_runtime_drift(tmp_path: Path, drift: str) -> None
                 "pid": 321,
                 "port": control.port,
                 "repo": str(control.repo),
+                "start_time_ticks": 12345,
                 "started_at_utc": "2026-07-23T18:00:00Z",
             }
         )
@@ -228,6 +240,7 @@ def test_preflight_rejects_aim_runtime_drift(tmp_path: Path, drift: str) -> None
         if drift == "cmdline"
         else command,
         cwd=control.main_repo if drift == "cwd" else control.repo,
+        start_time_ticks=12345,
     )
 
     with pytest.raises(ValueError, match=drift):
@@ -245,7 +258,7 @@ def test_inactive_accepts_stale_files_but_rejects_live_or_occupied_endpoint(
     command = _recorded(control)
     stale = aim_scratch.assert_aim_scratch_inactive(
         control,
-        inspect_process=lambda _pid: (_ for _ in ()).throw(FileNotFoundError()),
+        process_enumerator=lambda: (),
         health_probe=lambda _host, _port: False,
     )
     assert stale["status"] == "inactive"
@@ -255,7 +268,9 @@ def test_inactive_accepts_stale_files_but_rejects_live_or_occupied_endpoint(
     with pytest.raises(ValueError, match="active"):
         aim_scratch.assert_aim_scratch_inactive(
             control,
-            inspect_process=lambda pid: ProcessSnapshot(pid, command, control.repo),
+            process_enumerator=lambda: (
+                ProcessSnapshot(321, command, control.repo, 12345),
+            ),
             health_probe=lambda _host, _port: True,
         )
     metadata = json.loads(control.metadata_file.read_text())
@@ -264,7 +279,9 @@ def test_inactive_accepts_stale_files_but_rejects_live_or_occupied_endpoint(
     with pytest.raises(ValueError, match="active"):
         aim_scratch.assert_aim_scratch_inactive(
             control,
-            inspect_process=lambda pid: ProcessSnapshot(pid, command, control.repo),
+            process_enumerator=lambda: (
+                ProcessSnapshot(321, command, control.repo, 12345),
+            ),
             health_probe=lambda _host, _port: False,
         )
     control.metadata_file.unlink()
@@ -285,7 +302,8 @@ def test_stop_validates_exact_identity_then_terms_only_recorded_process(
     unrelated.write_text("keep")
     inspections = iter(
         [
-            ProcessSnapshot(321, command, control.repo),
+            ProcessSnapshot(321, command, control.repo, 12345),
+            ProcessSnapshot(321, command, control.repo, 12345),
             FileNotFoundError(),
             FileNotFoundError(),
         ]
@@ -323,11 +341,11 @@ def test_stop_rejects_wrong_identity_without_signaling(
     control = _control(tmp_path)
     command = list(_recorded(control))
     metadata = json.loads(control.metadata_file.read_text())
-    snapshot = ProcessSnapshot(321, tuple(command), control.repo)
+    snapshot = ProcessSnapshot(321, tuple(command), control.repo, 12345)
     if drift == "cmdline":
-        snapshot = ProcessSnapshot(321, ("other",), control.repo)
+        snapshot = ProcessSnapshot(321, ("other",), control.repo, 12345)
     elif drift == "cwd":
-        snapshot = ProcessSnapshot(321, tuple(command), control.main_repo)
+        snapshot = ProcessSnapshot(321, tuple(command), control.main_repo, 12345)
     elif drift == "repo":
         metadata["repo"] = str(control.main_repo)
     elif drift == "port":
@@ -366,8 +384,9 @@ def test_stop_rejects_stale_pid_and_pid_reuse_without_other_signal(
 
     inspections = iter(
         [
-            ProcessSnapshot(321, command, control.repo),
-            ProcessSnapshot(321, ("unrelated",), control.main_repo),
+            ProcessSnapshot(321, command, control.repo, 12345),
+            ProcessSnapshot(321, command, control.repo, 12345),
+            ProcessSnapshot(321, command, control.repo, 99999),
         ]
     )
     with pytest.raises(RuntimeError, match="PID reuse"):
@@ -393,7 +412,12 @@ def test_stop_timeout_never_sigkills_or_removes_evidence(tmp_path: Path) -> None
     with pytest.raises(TimeoutError, match="SIGTERM"):
         aim_scratch.stop_aim_scratch(
             control,
-            inspect_process=lambda pid: ProcessSnapshot(pid, command, control.repo),
+            inspect_process=lambda pid: ProcessSnapshot(
+                pid,
+                command,
+                control.repo,
+                12345,
+            ),
             health_probe=lambda _host, _port: True,
             send_signal=lambda pid, value: signals.append((pid, value)),
             timeout=1.0,
@@ -402,6 +426,29 @@ def test_stop_timeout_never_sigkills_or_removes_evidence(tmp_path: Path) -> None
         )
     assert signals == [(321, signal.SIGTERM)]
     assert signal.SIGKILL not in [value for _pid, value in signals]
+    assert control.metadata_file.exists()
+    assert control.pid_file.exists()
+
+
+def test_stop_rechecks_generation_immediately_before_signal(tmp_path: Path) -> None:
+    control = _control(tmp_path)
+    command = _recorded(control)
+    inspections = iter(
+        [
+            ProcessSnapshot(321, command, control.repo, 12345),
+            ProcessSnapshot(321, command, control.repo, 99999),
+        ]
+    )
+    signals: list[tuple[int, int]] = []
+
+    with pytest.raises(RuntimeError, match="before SIGTERM"):
+        aim_scratch.stop_aim_scratch(
+            control,
+            inspect_process=lambda _pid: next(inspections),
+            health_probe=lambda _host, _port: True,
+            send_signal=lambda pid, value: signals.append((pid, value)),
+        )
+    assert signals == []
     assert control.metadata_file.exists()
     assert control.pid_file.exists()
 
@@ -429,3 +476,55 @@ def test_start_script_stop_flag_calls_only_validated_stop(
     assert module.main(["--control", str(CONTROL), "--stop"]) == 0
     assert calls == [Path("/home/ubuntu/trainer/task7-aim-scratch")]
     assert json.loads(capsys.readouterr().out) == {"pid": 321, "status": "stopped"}
+
+
+def test_process_snapshot_records_proc_start_generation() -> None:
+    assert get_type_hints(ProcessSnapshot)["start_time_ticks"] is int
+    snapshot = aim_scratch.inspect_process(os.getpid())
+    stat_text = Path("/proc/self/stat").read_text()
+    fields_after_command = stat_text[stat_text.rfind(")") + 2 :].split()
+    assert snapshot.start_time_ticks == int(fields_after_command[19])
+
+
+def test_inactive_scans_all_processes_without_metadata_or_endpoint_health(
+    tmp_path: Path,
+) -> None:
+    control = _control(tmp_path)
+    command = (
+        "python",
+        "server",
+        "--repo",
+        ".",
+        "--port",
+        "9999",
+    )
+
+    with pytest.raises(ValueError, match="active"):
+        aim_scratch.assert_aim_scratch_inactive(
+            control,
+            process_enumerator=lambda: (
+                ProcessSnapshot(777, command, control.repo, 12345),
+            ),
+            health_probe=lambda _host, _port: False,
+        )
+
+
+def test_validate_fails_closed_when_generation_metadata_is_missing(
+    tmp_path: Path,
+) -> None:
+    control = _control(tmp_path)
+    command = _recorded(control)
+    metadata = json.loads(control.metadata_file.read_text())
+    del metadata["start_time_ticks"]
+    control.metadata_file.write_text(json.dumps(metadata))
+    with pytest.raises(ValueError, match="start_time_ticks"):
+        validate_aim_scratch(
+            control,
+            inspect_process=lambda _pid: ProcessSnapshot(
+                321,
+                command,
+                control.repo,
+                12345,
+            ),
+            health_probe=lambda _host, _port: True,
+        )

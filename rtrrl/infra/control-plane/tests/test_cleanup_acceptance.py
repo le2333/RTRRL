@@ -5,7 +5,9 @@ from io import BytesIO
 import hashlib
 import importlib.util
 import json
+import os
 from pathlib import Path
+import shutil
 import sys
 from typing import Any
 from types import ModuleType
@@ -487,27 +489,35 @@ def test_public_cleanup_uses_gateway_not_repo_factory(
     module = _load(monkeypatch)
     assert "aim_repo" in module.cleanup.__annotations__
     assert "repo_factory" not in module.cleanup.__annotations__
-    source = SCRIPT.read_text(encoding="utf-8")
-    assert "copytree" not in source
-    assert "TemporaryDirectory" not in source
 
 
-def test_trusted_gateway_attempts_only_direct_read_only_open_and_fails_closed(
+def _fake_aim_modules(
     monkeypatch: pytest.MonkeyPatch,
+    opened: list[Path],
 ) -> None:
-    module = _load(monkeypatch)
-    calls: list[tuple[str, bool, bool]] = []
     updated = object()
 
     class Repo:
         @staticmethod
-        def check_repo_status(path: str) -> object:
-            assert path == str(module.ACCEPTANCE_AIM_SCRATCH)
+        def check_repo_status(_path: str) -> object:
             return updated
 
-        def __init__(self, path: str, *, read_only: bool, init: bool) -> None:
-            calls.append((path, read_only, init))
-            raise NotImplementedError("Aim 3.28")
+        def __init__(
+            self,
+            path: str,
+            *,
+            read_only: bool | None = None,
+            init: bool,
+        ) -> None:
+            assert read_only is None
+            assert init is False
+            opened.append(Path(path))
+
+        def iter_runs(self):
+            return iter(())
+
+        def close(self) -> None:
+            return None
 
     aim = ModuleType("aim")
     aim.Repo = Repo  # type: ignore[attr-defined]
@@ -518,11 +528,112 @@ def test_trusted_gateway_attempts_only_direct_read_only_open_and_fails_closed(
     monkeypatch.setitem(sys.modules, "aim.sdk", sdk)
     monkeypatch.setitem(sys.modules, "aim.sdk.repo", repo_module)
 
-    gateway = module.TrustedAimRepoGateway(module.ACCEPTANCE_AIM_SCRATCH)
-    with pytest.raises(RuntimeError, match="pre-upgrade"):
-        with gateway.open_read_only():
-            raise AssertionError("must not yield")
-    assert calls == [(str(module.ACCEPTANCE_AIM_SCRATCH), True, False)]
+
+def _snapshot_source(tmp_path: Path) -> Path:
+    source = tmp_path / "scratch"
+    aim = source / ".aim"
+    aim.mkdir(parents=True)
+    (aim / "VERSION").write_text("3.28\n")
+    data = aim / "data"
+    data.mkdir()
+    (data / "value").write_bytes(b"stable")
+    return source
+
+
+def test_trusted_gateway_opens_only_verified_temp_snapshot_and_cleans_it(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    module = _load(monkeypatch)
+    source = _snapshot_source(tmp_path)
+    before = module._source_tree_fingerprint(source / ".aim")
+    opened: list[Path] = []
+    _fake_aim_modules(monkeypatch, opened)
+
+    gateway = module.TrustedAimRepoGateway(source)
+    with gateway.open_read_only() as repo:
+        assert list(repo.iter_runs()) == []
+        assert opened[0] != source
+        assert opened[0].parent != source
+        assert (opened[0] / ".aim" / "data" / "value").read_bytes() == b"stable"
+        temporary = opened[0]
+
+    assert not temporary.exists()
+    assert module._source_tree_fingerprint(source / ".aim") == before
+
+
+@pytest.mark.parametrize(
+    "failure",
+    [
+        "source-symlink",
+        "source-special",
+        "source-mutation",
+        "copy-mismatch",
+        "copy-symlink",
+    ],
+)
+def test_snapshot_rejects_unsafe_or_changed_tree_and_fail_cleans_temp(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    failure: str,
+) -> None:
+    module = _load(monkeypatch)
+    source = _snapshot_source(tmp_path)
+    opened: list[Path] = []
+    _fake_aim_modules(monkeypatch, opened)
+    copied: list[Path] = []
+    real_copytree = shutil.copytree
+
+    if failure == "source-symlink":
+        (source / ".aim" / "link").symlink_to(source / ".aim" / "VERSION")
+    elif failure == "source-special":
+        os.mkfifo(source / ".aim" / "fifo")
+    else:
+        def changed_copytree(src: Path, dst: Path) -> Path:
+            result = real_copytree(
+                src,
+                dst,
+                symlinks=True,
+                copy_function=shutil.copy2,
+            )
+            copied.append(Path(dst).parent)
+            if failure == "source-mutation":
+                (source / ".aim" / "data" / "value").write_bytes(b"mutated")
+            elif failure == "copy-mismatch":
+                (Path(dst) / "data" / "value").write_bytes(b"mismatch")
+            else:
+                (Path(dst) / "late-link").symlink_to(Path(dst) / "VERSION")
+            return result
+
+        monkeypatch.setattr(module, "_copy_aim_tree", changed_copytree)
+
+    with pytest.raises(ValueError, match="symlink|special|changed|mismatch"):
+        with module.TrustedAimRepoGateway(source).open_read_only():
+            raise AssertionError("unsafe snapshot must never open")
+    assert opened == []
+    assert all(not path.exists() for path in copied)
+
+
+def test_real_aim_328_snapshot_lists_runs_without_source_change(tmp_path: Path) -> None:
+    from aim import Run
+
+    module = importlib.util.module_from_spec(
+        importlib.util.spec_from_file_location("cleanup_real_aim", SCRIPT)
+    )
+    spec = module.__spec__
+    assert spec is not None and spec.loader is not None
+    spec.loader.exec_module(module)
+    source = tmp_path / "real-aim"
+    run = Run(repo=str(source), experiment="acceptance")
+    run["context"] = {"experiment_id": EXPERIMENT_ID}
+    run_hash = run.hash
+    run.close()
+    before = module._source_tree_fingerprint(source / ".aim")
+
+    with module.TrustedAimRepoGateway(source).open_read_only() as repo:
+        assert run_hash in {item.hash for item in repo.iter_runs()}
+
+    assert module._source_tree_fingerprint(source / ".aim") == before
 
 
 @pytest.mark.parametrize(
@@ -550,6 +661,31 @@ def test_cleanup_rejects_untrusted_gateway_path(
     gateway = _gateway(control)
     gateway.path = control.aim.main_repo
     with pytest.raises(ValueError, match="audited"):
+        module.cleanup(
+            _dry_request(module),
+            control=control,
+            s3=FakeS3(),
+            aim_repo=gateway,
+        )
+    assert gateway.calls == []
+
+
+def test_cleanup_rejects_lexical_trusted_scratch_symlink_to_other_repo(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    module = _load(monkeypatch)
+    target = tmp_path / "other"
+    (target / ".aim").mkdir(parents=True)
+    lexical = tmp_path / "trusted-scratch"
+    lexical.symlink_to(target, target_is_directory=True)
+    control = load_facility_control(CONTROL)
+    aim = control.aim.model_copy(update={"repo": lexical})
+    control = control.model_copy(update={"aim": aim})
+    monkeypatch.setattr(module, "ACCEPTANCE_AIM_SCRATCH", lexical)
+    gateway = FakeAimGateway(lexical)
+
+    with pytest.raises(ValueError, match="symlink|canonical"):
         module.cleanup(
             _dry_request(module),
             control=control,

@@ -5,9 +5,13 @@ from collections.abc import Iterator, Mapping
 from contextlib import contextmanager
 import hashlib
 import json
+import os
 from pathlib import Path
 import re
+import shutil
+import stat
 import sys
+import tempfile
 from typing import Any, NamedTuple, Protocol
 import uuid
 
@@ -73,6 +77,185 @@ class AimRepoGateway(Protocol):
     def open_write_delete(self) -> Any: ...
 
 
+class _TreeEntry(NamedTuple):
+    relative_path: str
+    entry_type: str
+    mode: int
+    size: int
+    sha256: str
+    inode: int
+    mtime_ns: int
+
+
+def _tree_entry(
+    *,
+    relative_path: str,
+    entry_type: str,
+    file_stat: os.stat_result,
+    size: int,
+    sha256: str,
+) -> _TreeEntry:
+    return _TreeEntry(
+        relative_path=relative_path,
+        entry_type=entry_type,
+        mode=stat.S_IMODE(file_stat.st_mode),
+        size=size,
+        sha256=sha256,
+        inode=file_stat.st_ino,
+        mtime_ns=file_stat.st_mtime_ns,
+    )
+
+
+def _source_tree_fingerprint(root: Path) -> tuple[_TreeEntry, ...]:
+    nofollow = getattr(os, "O_NOFOLLOW", 0)
+    directory_flags = os.O_RDONLY | os.O_DIRECTORY | nofollow
+    try:
+        root_fd = os.open(root, directory_flags)
+    except OSError as error:
+        raise ValueError(f"Aim tree root is not a safe directory: {root}") from error
+    entries: list[_TreeEntry] = []
+
+    def visit(directory_fd: int, relative: str) -> None:
+        directory_stat = os.fstat(directory_fd)
+        if not stat.S_ISDIR(directory_stat.st_mode):
+            raise ValueError("Aim tree contains a special file")
+        entries.append(
+            _tree_entry(
+                relative_path=relative,
+                entry_type="directory",
+                file_stat=directory_stat,
+                size=0,
+                sha256=hashlib.sha256(b"").hexdigest(),
+            )
+        )
+        for name in sorted(os.listdir(directory_fd)):
+            child_relative = name if relative == "." else f"{relative}/{name}"
+            child_stat = os.stat(name, dir_fd=directory_fd, follow_symlinks=False)
+            if stat.S_ISLNK(child_stat.st_mode):
+                raise ValueError(f"Aim tree contains a symlink: {child_relative}")
+            if stat.S_ISDIR(child_stat.st_mode):
+                child_fd = os.open(name, directory_flags, dir_fd=directory_fd)
+                try:
+                    opened_stat = os.fstat(child_fd)
+                    if (
+                        opened_stat.st_dev != child_stat.st_dev
+                        or opened_stat.st_ino != child_stat.st_ino
+                    ):
+                        raise ValueError("Aim tree changed during directory inspection")
+                    visit(child_fd, child_relative)
+                finally:
+                    os.close(child_fd)
+                continue
+            if not stat.S_ISREG(child_stat.st_mode):
+                raise ValueError(
+                    f"Aim tree contains a special file: {child_relative}"
+                )
+            file_fd = os.open(name, os.O_RDONLY | nofollow, dir_fd=directory_fd)
+            try:
+                opened_stat = os.fstat(file_fd)
+                if (
+                    opened_stat.st_dev != child_stat.st_dev
+                    or opened_stat.st_ino != child_stat.st_ino
+                ):
+                    raise ValueError("Aim tree changed during file inspection")
+                digest = hashlib.sha256()
+                size = 0
+                while chunk := os.read(file_fd, 1024 * 1024):
+                    digest.update(chunk)
+                    size += len(chunk)
+                final_stat = os.fstat(file_fd)
+                if (
+                    final_stat.st_ino != opened_stat.st_ino
+                    or final_stat.st_size != opened_stat.st_size
+                    or final_stat.st_mtime_ns != opened_stat.st_mtime_ns
+                    or size != opened_stat.st_size
+                ):
+                    raise ValueError("Aim tree changed during file hashing")
+                entries.append(
+                    _tree_entry(
+                        relative_path=child_relative,
+                        entry_type="file",
+                        file_stat=final_stat,
+                        size=size,
+                        sha256=digest.hexdigest(),
+                    )
+                )
+            finally:
+                os.close(file_fd)
+
+    try:
+        visit(root_fd, ".")
+    finally:
+        os.close(root_fd)
+    return tuple(entries)
+
+
+def _content_manifest(
+    fingerprint: tuple[_TreeEntry, ...],
+) -> tuple[tuple[str, str, int, int, str], ...]:
+    return tuple(
+        (
+            entry.relative_path,
+            entry.entry_type,
+            entry.mode,
+            entry.size,
+            entry.sha256,
+        )
+        for entry in fingerprint
+    )
+
+
+def _require_lexical_directory(path: Path) -> Path:
+    if not path.is_absolute() or Path(os.path.abspath(path)) != path:
+        raise ValueError("trusted Aim path must be absolute and lexically canonical")
+    for component in reversed((path, *path.parents)):
+        try:
+            component_stat = component.lstat()
+        except OSError as error:
+            raise ValueError("trusted Aim path must exist") from error
+        if stat.S_ISLNK(component_stat.st_mode):
+            raise ValueError("trusted Aim path cannot contain a symlink")
+    resolved = path.resolve(strict=True)
+    if resolved != path:
+        raise ValueError("trusted Aim path must equal its strict canonical path")
+    if not path.is_dir():
+        raise ValueError("trusted Aim path must be a directory")
+    return path
+
+
+def _copy_aim_tree(source: Path, destination: Path) -> Path:
+    nofollow = getattr(os, "O_NOFOLLOW", 0)
+    source_fd = os.open(source, os.O_RDONLY | os.O_DIRECTORY | nofollow)
+    try:
+        stable_source = Path("/proc/self/fd") / str(source_fd)
+        return shutil.copytree(
+            stable_source,
+            destination,
+            symlinks=True,
+            copy_function=shutil.copy2,
+        )
+    finally:
+        os.close(source_fd)
+
+
+@contextmanager
+def _verified_aim_snapshot(source_repo: Path) -> Iterator[Path]:
+    source_aim = source_repo / ".aim"
+    before = _source_tree_fingerprint(source_aim)
+    with tempfile.TemporaryDirectory(prefix="acceptance-aim-snapshot-") as temporary:
+        temporary_repo = Path(temporary) / "repo"
+        temporary_repo.mkdir()
+        copied_aim = temporary_repo / ".aim"
+        _copy_aim_tree(source_aim, copied_aim)
+        after = _source_tree_fingerprint(source_aim)
+        copied = _source_tree_fingerprint(copied_aim)
+        if before != after:
+            raise ValueError("Aim source tree changed while snapshotting")
+        if _content_manifest(before) != _content_manifest(copied):
+            raise ValueError("Aim snapshot content manifest mismatch")
+        yield temporary_repo
+
+
 class TrustedAimRepoGateway:
     def __init__(self, path: Path) -> None:
         self.path = path
@@ -90,24 +273,25 @@ class TrustedAimRepoGateway:
     @contextmanager
     def open_read_only(self) -> Iterator[AimReadSession]:
         from aim import Repo
+        from aim.sdk.repo import RepoStatus
 
-        self._require_updated(self.path)
-        try:
-            repo = Repo(str(self.path), read_only=True, init=False)
-        except NotImplementedError as error:
-            raise RuntimeError(
-                "installed Aim cannot open the repository read-only; "
-                "pre-upgrade Aim before cleanup"
-            ) from error
-        try:
-            yield repo
-        finally:
-            repo.close()
+        _require_lexical_directory(self.path)
+        with _verified_aim_snapshot(self.path) as snapshot:
+            # Aim 3.28 raises NotImplementedError for any explicit read_only
+            # value. The verified temporary copy is intentionally writable.
+            repo = Repo(str(snapshot), init=False)
+            try:
+                if Repo.check_repo_status(str(snapshot)) is not RepoStatus.UPDATED:
+                    raise RuntimeError("temporary Aim snapshot could not be upgraded")
+                yield repo
+            finally:
+                repo.close()
 
     @contextmanager
     def open_write_delete(self) -> Iterator[AimDeleteSession]:
         from aim import Repo
 
+        _require_lexical_directory(self.path)
         self._require_updated(self.path)
         repo = Repo(str(self.path), init=False)
         try:
@@ -147,6 +331,7 @@ def _validate_aim_boundary(
         or gateway_path != ACCEPTANCE_AIM_SCRATCH
     ):
         raise ValueError("Aim paths must match audited acceptance-only constants")
+    _require_lexical_directory(scratch)
     resolved_scratch = scratch.resolve()
     resolved_main = main.resolve()
     resolved_gateway = gateway_path.resolve()

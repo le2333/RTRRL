@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from collections.abc import Callable
+from collections.abc import Callable, Iterable, Iterator
 from dataclasses import dataclass
 from datetime import datetime, timezone
 import json
@@ -20,6 +20,7 @@ class ProcessSnapshot:
     pid: int
     cmdline: tuple[str, ...]
     cwd: Path
+    start_time_ticks: int
 
 
 def inspect_process(pid: int) -> ProcessSnapshot:
@@ -29,7 +30,31 @@ def inspect_process(pid: int) -> ProcessSnapshot:
         for item in (root / "cmdline").read_bytes().split(b"\0")
         if item
     )
-    return ProcessSnapshot(pid=pid, cmdline=command, cwd=(root / "cwd").resolve())
+    stat_text = (root / "stat").read_text(encoding="utf-8")
+    command_end = stat_text.rfind(")")
+    fields = stat_text[command_end + 2 :].split()
+    if command_end < 0 or len(fields) <= 19:
+        raise ValueError(f"malformed process stat for PID {pid}")
+    start_time_ticks = int(fields[19])
+    return ProcessSnapshot(
+        pid=pid,
+        cmdline=command,
+        cwd=(root / "cwd").resolve(),
+        start_time_ticks=start_time_ticks,
+    )
+
+
+def enumerate_processes(
+    *,
+    inspector: Callable[[int], ProcessSnapshot] = inspect_process,
+) -> Iterator[ProcessSnapshot]:
+    for item in Path("/proc").iterdir():
+        if not item.name.isdigit():
+            continue
+        try:
+            yield inspector(int(item.name))
+        except (FileNotFoundError, OSError, UnicodeDecodeError, ValueError):
+            continue
 
 
 def probe_health(host: str, port: int) -> bool:
@@ -70,6 +95,15 @@ def _recorded_identity(
     except (FileNotFoundError, ProcessLookupError) as error:
         raise ValueError("Aim scratch PID is stale") from error
     repo = control.repo.resolve()
+    start_time_ticks = metadata.get("start_time_ticks")
+    if (
+        not isinstance(start_time_ticks, int)
+        or isinstance(start_time_ticks, bool)
+        or start_time_ticks <= 0
+    ):
+        raise ValueError("start_time_ticks metadata mismatch")
+    if snapshot.start_time_ticks != start_time_ticks:
+        raise ValueError("start_time_ticks mismatch")
     command = snapshot.cmdline
     expected_command = tuple(metadata.get("command", ()))
     if command != expected_command or "server" not in command:
@@ -91,13 +125,7 @@ def _recorded_identity(
 
 def discover_aim_process(control: AimScratchControl) -> ProcessSnapshot:
     matches = []
-    for item in Path("/proc").iterdir():
-        if not item.name.isdigit():
-            continue
-        try:
-            snapshot = inspect_process(int(item.name))
-        except (FileNotFoundError, OSError, UnicodeDecodeError):
-            continue
+    for snapshot in enumerate_processes():
         if (
             "server" in snapshot.cmdline
             and _argument(snapshot.cmdline, "--repo") == str(control.repo.resolve())
@@ -145,37 +173,23 @@ def validate_aim_scratch(
 def assert_aim_scratch_inactive(
     control: AimScratchControl,
     *,
-    inspect_process: Callable[[int], ProcessSnapshot] = inspect_process,
+    process_enumerator: Callable[[], Iterable[ProcessSnapshot]] = enumerate_processes,
     health_probe: Callable[[str, int], bool] = probe_health,
 ) -> dict[str, Any]:
-    candidate_pids: set[int] = set()
-    try:
-        pid_text = control.pid_file.read_text(encoding="utf-8").strip()
-        if pid_text.isdigit():
-            candidate_pids.add(int(pid_text))
-    except OSError:
-        pass
-    try:
-        metadata = json.loads(control.metadata_file.read_text(encoding="utf-8"))
-        metadata_pid = metadata.get("pid") if isinstance(metadata, dict) else None
-        if isinstance(metadata_pid, int) and not isinstance(metadata_pid, bool):
-            candidate_pids.add(metadata_pid)
-    except (OSError, json.JSONDecodeError):
-        pass
-    repo = control.repo.resolve()
-    for pid in candidate_pids:
-        try:
-            snapshot = inspect_process(pid)
-        except (FileNotFoundError, ProcessLookupError, OSError):
-            continue
+    repo = control.repo.resolve(strict=True)
+    for snapshot in process_enumerator():
         command = snapshot.cmdline
-        if (
-            "server" in command
-            and snapshot.cwd.resolve() == repo
-            and _argument(command, "--host") == control.host
-            and _argument(command, "--port") == str(control.port)
-            and _argument(command, "--repo") == str(repo)
-        ):
+        repo_argument = _argument(command, "--repo")
+        if "server" not in command or repo_argument is None:
+            continue
+        try:
+            process_repo_path = Path(repo_argument)
+            if not process_repo_path.is_absolute():
+                process_repo_path = snapshot.cwd / process_repo_path
+            process_repo = process_repo_path.resolve(strict=True)
+        except OSError:
+            continue
+        if process_repo == repo:
             raise ValueError("exact Aim scratch server is active")
     if health_probe(control.host, control.port):
         raise ValueError("Aim scratch endpoint is occupied")
@@ -198,7 +212,22 @@ def stop_aim_scratch(
     )
     if not health_probe(control.host, control.port):
         raise ValueError("recorded Aim scratch endpoint is unavailable")
-    original_identity = (snapshot.cmdline, snapshot.cwd.resolve())
+    original_identity = (
+        snapshot.cmdline,
+        snapshot.cwd.resolve(),
+        snapshot.start_time_ticks,
+    )
+    try:
+        before_signal = inspect_process(snapshot.pid)
+    except (FileNotFoundError, ProcessLookupError) as error:
+        raise RuntimeError("Aim scratch generation vanished before SIGTERM") from error
+    before_signal_identity = (
+        before_signal.cmdline,
+        before_signal.cwd.resolve(),
+        before_signal.start_time_ticks,
+    )
+    if before_signal_identity != original_identity:
+        raise RuntimeError("PID reuse detected before SIGTERM")
     send_signal(snapshot.pid, signal.SIGTERM)
     deadline = monotonic() + timeout
     while True:
@@ -208,7 +237,11 @@ def stop_aim_scratch(
             if not health_probe(control.host, control.port):
                 break
         else:
-            current_identity = (current.cmdline, current.cwd.resolve())
+            current_identity = (
+                current.cmdline,
+                current.cwd.resolve(),
+                current.start_time_ticks,
+            )
             if current_identity != original_identity:
                 raise RuntimeError("PID reuse detected after SIGTERM")
         if monotonic() >= deadline:
@@ -220,7 +253,11 @@ def stop_aim_scratch(
     except (FileNotFoundError, ProcessLookupError):
         pass
     else:
-        replacement_identity = (replacement.cmdline, replacement.cwd.resolve())
+        replacement_identity = (
+            replacement.cmdline,
+            replacement.cwd.resolve(),
+            replacement.start_time_ticks,
+        )
         if replacement_identity != original_identity:
             raise RuntimeError("PID reuse detected before evidence removal")
         raise RuntimeError("Aim scratch process remained after endpoint stopped")
@@ -299,6 +336,7 @@ def launch_aim_scratch(
         "pid": snapshot.pid,
         "port": control.port,
         "repo": str(repo),
+        "start_time_ticks": snapshot.start_time_ticks,
         "started_at_utc": _utc_text(now()),
     }
     temporary = control.metadata_file.with_suffix(".json.tmp")
