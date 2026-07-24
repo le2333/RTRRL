@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+from pathlib import Path
 
 import pytest
 
@@ -51,6 +52,42 @@ class FakeRun:
 
     def close(self) -> None:
         return None
+
+
+def test_reader_safely_closes_real_read_only_aim_run(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from aim import Run
+
+    run_id = "experiment:cpu:0001"
+    objective = "eval/episode_return"
+    repo = str(tmp_path / "aim")
+    run_hash = hashlib.sha256(run_id.encode()).hexdigest()[:24]
+    monkeypatch.setattr(
+        "aim.sdk.base_run.generate_run_hash",
+        lambda: run_hash,
+    )
+    writer = Run(repo=repo)
+    writer["hparams"] = {"identity": {"run_id": run_id}}
+    writer["sdk/finalized"] = True
+    writer["sdk/objective_metric"] = objective
+    writer.track(23.0, name=objective, context={"sdk_stream": "final"})
+    writer.close()
+
+    result = AimReader(repo=repo).wait_for_result(run_id, objective, timeout=0)
+
+    assert result == 23.0
+
+
+def test_reader_does_not_swallow_unrelated_close_attribute_error() -> None:
+    class BrokenCloseRun(FakeRun):
+        def close(self) -> None:
+            raise AttributeError("other close failure")
+
+    with pytest.raises(AttributeError, match="other close failure"):
+        AimReader(run_factory=lambda **_: BrokenCloseRun("run")).wait_for_result(
+            "run", "eval/reward", timeout=0
+        )
 
 
 def test_reader_replays_spool_and_opens_only_the_hash_of_exact_run_id() -> None:

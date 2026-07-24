@@ -21,6 +21,18 @@ def _open_aim_run(**kwargs: Any) -> Any:
     return Run(**kwargs)
 
 
+def _prepare_aim_read_only_close(run: Any) -> None:
+    tracker = getattr(run, "_tracker", None)
+    if (
+        getattr(run, "read_only", None) is True
+        and tracker is not None
+        and not hasattr(tracker, "sequence_infos")
+    ):
+        # Aim 3.28.0 omits this mapping for read-only trackers, but Run.close()
+        # unconditionally clears it. Supply the missing state so Aim can finish cleanup.
+        tracker.sequence_infos = {}
+
+
 class AimReader:
     def __init__(
         self,
@@ -94,6 +106,7 @@ class AimReader:
             finally:
                 close = getattr(run, "close", None)
                 if callable(close):
+                    _prepare_aim_read_only_close(run)
                     close()
 
             now = self._clock()

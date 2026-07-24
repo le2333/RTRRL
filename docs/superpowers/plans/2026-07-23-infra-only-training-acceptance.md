@@ -1281,13 +1281,16 @@ Run:
 ```bash
 cd rtrrl/infra/control-plane
 uv run trainerctl run examples/experiment-smoke.yaml \
-  | tee /tmp/infra-only-training-acceptance-run.json
+  > /tmp/infra-only-training-acceptance-run.json \
+  2> /tmp/infra-only-training-acceptance-run.stderr.log
 ```
 
 Expected: success report with four completed runs and three submitted job IDs.
 Round one submits the first CPU job and the GPU job in parallel; round two
 submits the remaining CPU job. Any failure stops the command; do not retry or
-continue.
+continue. The command deliberately uses direct stdout/stderr redirection rather
+than a pipeline, so the shell preserves the real `trainerctl` exit status and
+stderr remains separate failure evidence.
 
 - [ ] **Step 4: Verify exact acceptance evidence read-only**
 
