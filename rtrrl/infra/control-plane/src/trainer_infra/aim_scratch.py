@@ -148,16 +148,35 @@ def assert_aim_scratch_inactive(
     inspect_process: Callable[[int], ProcessSnapshot] = inspect_process,
     health_probe: Callable[[str, int], bool] = probe_health,
 ) -> dict[str, Any]:
-    exact_process_active = False
-    if control.metadata_file.exists() and control.pid_file.exists():
+    candidate_pids: set[int] = set()
+    try:
+        pid_text = control.pid_file.read_text(encoding="utf-8").strip()
+        if pid_text.isdigit():
+            candidate_pids.add(int(pid_text))
+    except OSError:
+        pass
+    try:
+        metadata = json.loads(control.metadata_file.read_text(encoding="utf-8"))
+        metadata_pid = metadata.get("pid") if isinstance(metadata, dict) else None
+        if isinstance(metadata_pid, int) and not isinstance(metadata_pid, bool):
+            candidate_pids.add(metadata_pid)
+    except (OSError, json.JSONDecodeError):
+        pass
+    repo = control.repo.resolve()
+    for pid in candidate_pids:
         try:
-            _recorded_identity(control, inspect=inspect_process)
-        except (ValueError, OSError):
-            pass
-        else:
-            exact_process_active = True
-    if exact_process_active:
-        raise ValueError("exact Aim scratch server is active")
+            snapshot = inspect_process(pid)
+        except (FileNotFoundError, ProcessLookupError, OSError):
+            continue
+        command = snapshot.cmdline
+        if (
+            "server" in command
+            and snapshot.cwd.resolve() == repo
+            and _argument(command, "--host") == control.host
+            and _argument(command, "--port") == str(control.port)
+            and _argument(command, "--repo") == str(repo)
+        ):
+            raise ValueError("exact Aim scratch server is active")
     if health_probe(control.host, control.port):
         raise ValueError("Aim scratch endpoint is occupied")
     return {"endpoint": control.endpoint, "status": "inactive"}

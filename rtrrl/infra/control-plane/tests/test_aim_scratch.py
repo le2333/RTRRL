@@ -258,6 +258,15 @@ def test_inactive_accepts_stale_files_but_rejects_live_or_occupied_endpoint(
             inspect_process=lambda pid: ProcessSnapshot(pid, command, control.repo),
             health_probe=lambda _host, _port: True,
         )
+    metadata = json.loads(control.metadata_file.read_text())
+    metadata["endpoint"] = "stale"
+    control.metadata_file.write_text(json.dumps(metadata))
+    with pytest.raises(ValueError, match="active"):
+        aim_scratch.assert_aim_scratch_inactive(
+            control,
+            inspect_process=lambda pid: ProcessSnapshot(pid, command, control.repo),
+            health_probe=lambda _host, _port: False,
+        )
     control.metadata_file.unlink()
     control.pid_file.unlink()
     with pytest.raises(ValueError, match="occupied"):
