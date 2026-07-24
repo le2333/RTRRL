@@ -239,6 +239,14 @@ class FakeAim:
     def wait_for_result(self, run_id: str, objective: str, timeout: float) -> float:
         return self.reader.wait_for_result(run_id, objective, timeout)
 
+    def objective_for_run(self, run_id: str, metric: str) -> float:
+        record = self.records[self._hash(run_id)]
+        assert record["sdk/objective_metric"] == metric
+        return float(record["objective"])
+
+    def spool_events_for_run(self, run_id: str) -> tuple[Any, ...]:
+        return EventSpool(self.temporary / f"{self._hash(run_id)}.jsonl").events
+
 
 class FakePreflight:
     def validate(self, resolved: Any) -> dict[str, ValidatedJobDefinition]:
@@ -606,6 +614,14 @@ def test_real_facility_lifecycle_mixes_groups_and_preserves_artifact_identity(
     assert report.experiment_metadata == {"purpose": "infra-acceptance"}
     assert report.completed_runs == 10
     assert len(report.submitted_job_ids) == 6
+    assert report.submitted_job_ids == (
+        "batch-1",
+        "batch-2",
+        "batch-3",
+        "batch-4",
+        "batch-5",
+        "batch-6",
+    )
     assert [len(call) for call in batch.query_calls] == [2, 2, 2]
     assert batch.events == [
         ("submit", "batch-1"),
@@ -739,11 +755,11 @@ def test_real_facility_lifecycle_mixes_groups_and_preserves_artifact_identity(
     for bundle in bundles:
         for run in bundle.runs:
             run_id = run.run_id
-            aim_record = aim.records[aim._hash(run_id)]
-            aim_objective = float(aim_record["objective"])
-            spool_events = EventSpool(
-                aim.temporary / f"{aim._hash(run_id)}.jsonl"
-            ).events
+            aim_objective = aim.objective_for_run(
+                run_id,
+                "eval/episode_return",
+            )
+            spool_events = aim.spool_events_for_run(run_id)
             finalized = next(
                 event
                 for event in spool_events

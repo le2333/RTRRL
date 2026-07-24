@@ -6,14 +6,14 @@ import os
 import sys
 from pathlib import Path
 import subprocess
-from types import MappingProxyType
+from types import MappingProxyType, SimpleNamespace
 
 import pytest
 import yaml
 
-from trainer_infra.controller import _estimated_jobs
+from trainer_infra.controller import ExperimentController
 from trainer_infra.execution import build_run_context
-from trainer_infra.image_catalog import load_catalog_index
+from trainer_infra.image_catalog import ResolvedImage, load_catalog_index
 from trainer_infra.loaders import load_experiment
 from trainer_infra.materialize import materialize_run
 from trainer_infra.models import (
@@ -65,8 +65,27 @@ def _load_acceptance(path: Path) -> dict[str, object]:
         check=True,
         capture_output=True,
         text=True,
+        timeout=10,
     )
     return json.loads(result.stdout)
+
+
+def test_acceptance_loader_has_bounded_subprocess_timeout(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    captured: dict[str, object] = {}
+
+    def expire(*args: object, **kwargs: object) -> subprocess.CompletedProcess[str]:
+        del args
+        captured.update(kwargs)
+        raise subprocess.TimeoutExpired("acceptance-loader", 0.01)
+
+    monkeypatch.setattr(subprocess, "run", expire)
+
+    with pytest.raises(subprocess.TimeoutExpired):
+        _load_acceptance(tmp_path / "config.yaml")
+    assert captured["timeout"] == 10
 
 
 def _spec(image: str) -> ExperimentSpec:
@@ -172,7 +191,6 @@ def test_committed_smoke_resolves_real_acceptance_contract_and_materializes(
     assert all(group.hpo.total_trials == 5 for group in resolved.groups)
     assert all(group.hpo.configs_per_batch == 2 for group in resolved.groups)
     assert all(group.execution.runs_per_job == 2 for group in resolved.groups)
-    assert [_estimated_jobs(group) for group in resolved.groups] == [3, 3]
     assert all(group.script == "brax_ppo_acceptance" for group in resolved.groups)
     assert [group.resources.profile for group in resolved.groups] == ["c7am", "g6x"]
     assert [group.image for group in resolved.groups] == [
@@ -192,6 +210,47 @@ def test_committed_smoke_resolves_real_acceptance_contract_and_materializes(
         group.searchable_parameters()["learning_rate"].values == expected_values
         for group in resolved.groups
     )
+
+    digests = {
+        spec.defaults.image: (
+            "007122174918.dkr.ecr.eu-north-1.amazonaws.com/rtrrl@sha256:" + "a" * 64
+        ),
+        str(spec.groups["gpu"].image): (
+            "007122174918.dkr.ecr.eu-north-1.amazonaws.com/rtrrl@sha256:" + "b" * 64
+        ),
+    }
+
+    class CatalogReader:
+        def resolve_and_fetch(self, reference: str) -> ResolvedImage:
+            digest = digests[reference]
+            return ResolvedImage(
+                reference=digest,
+                repository=digest.split("@", 1)[0],
+                digest=digest.split("@", 1)[1],
+                catalog=catalog,
+            )
+
+    class Preflight:
+        def validate(self, experiment: object) -> dict[str, SimpleNamespace]:
+            groups = experiment.groups  # type: ignore[attr-defined]
+            return {
+                group.resources.profile: SimpleNamespace(
+                    image_digest=group.image,
+                    resource_profile=group.resources.profile,
+                )
+                for group in groups
+            }
+
+    controller = ExperimentController(
+        catalog_reader=CatalogReader(),
+        preflight=Preflight(),
+        store_factory=lambda *_: pytest.fail("validate created a store"),
+        batch_factory=lambda *_: pytest.fail("validate created a Batch adapter"),
+        aim_reader=SimpleNamespace(),
+        bucket="unused",
+    )
+    validation = controller.validate(SMOKE_EXPERIMENT)
+    assert [group.estimated_jobs for group in validation.groups] == [3, 3]
 
     group = replace(resolved.groups[0], study_key="smoke-1:cpu")
     concrete = materialize_run(
