@@ -1317,6 +1317,7 @@ Run:
 
 ```bash
 cd rtrrl/infra/control-plane
+umask 077
 uv run python scripts/start_facility_aim.py \
   --control config/facility.yaml --stop
 uv run python scripts/cleanup_acceptance.py \
