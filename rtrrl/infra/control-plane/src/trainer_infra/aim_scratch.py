@@ -4,7 +4,9 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import datetime, timezone
 import json
+import os
 from pathlib import Path
+import signal
 import socket
 import subprocess
 import time
@@ -46,6 +48,47 @@ def _argument(command: tuple[str, ...], name: str) -> str | None:
         return None
 
 
+def _recorded_identity(
+    control: AimScratchControl,
+    *,
+    inspect: Callable[[int], ProcessSnapshot],
+) -> tuple[dict[str, Any], ProcessSnapshot, bytes, bytes]:
+    try:
+        metadata_bytes = control.metadata_file.read_bytes()
+        pid_bytes = control.pid_file.read_bytes()
+        metadata = json.loads(metadata_bytes)
+    except (FileNotFoundError, json.JSONDecodeError, OSError, UnicodeDecodeError) as error:
+        raise ValueError("Aim scratch metadata is stale or unreadable") from error
+    if not isinstance(metadata, dict):
+        raise ValueError("Aim scratch metadata mismatch")
+    pid_text = pid_bytes.decode("utf-8").strip()
+    if not pid_text.isdigit() or int(pid_text) != metadata.get("pid"):
+        raise ValueError("pid metadata mismatch")
+    pid = int(pid_text)
+    try:
+        snapshot = inspect(pid)
+    except (FileNotFoundError, ProcessLookupError) as error:
+        raise ValueError("Aim scratch PID is stale") from error
+    repo = control.repo.resolve()
+    command = snapshot.cmdline
+    expected_command = tuple(metadata.get("command", ()))
+    if command != expected_command or "server" not in command:
+        raise ValueError("cmdline mismatch")
+    if snapshot.cwd.resolve() != repo or metadata.get("cwd") != str(repo):
+        raise ValueError("cwd mismatch")
+    if _argument(command, "--repo") != str(repo) or metadata.get("repo") != str(repo):
+        raise ValueError("repo argument mismatch")
+    if (
+        _argument(command, "--host") != control.host
+        or _argument(command, "--port") != str(control.port)
+        or metadata.get("port") != control.port
+    ):
+        raise ValueError("port argument mismatch")
+    if metadata.get("endpoint") != control.endpoint:
+        raise ValueError("endpoint mismatch")
+    return metadata, snapshot, metadata_bytes, pid_bytes
+
+
 def discover_aim_process(control: AimScratchControl) -> ProcessSnapshot:
     matches = []
     for item in Path("/proc").iterdir():
@@ -77,33 +120,10 @@ def validate_aim_scratch(
     main = control.main_repo.resolve()
     if repo == main or repo in main.parents or main in repo.parents:
         raise ValueError("repo isolation mismatch")
-    metadata = json.loads(control.metadata_file.read_text(encoding="utf-8"))
-    pid_text = control.pid_file.read_text(encoding="utf-8").strip()
-    if not pid_text.isdigit() or int(pid_text) != metadata.get("pid"):
-        raise ValueError("pid metadata mismatch")
-    pid = int(pid_text)
-    snapshot = inspect_process(pid)
-    command = snapshot.cmdline
-    expected_command = tuple(metadata.get("command", ()))
-    cmdline_matches = command == expected_command
-    if not cmdline_matches or "server" not in command:
-        raise ValueError("cmdline mismatch")
-    cwd_matches = snapshot.cwd.resolve() == repo and metadata.get("cwd") == str(repo)
-    if not cwd_matches:
-        raise ValueError("cwd mismatch")
-    repo_matches = (
-        _argument(command, "--repo") == str(repo)
-        and metadata.get("repo") == str(repo)
+    _metadata, snapshot, _metadata_bytes, _pid_bytes = _recorded_identity(
+        control,
+        inspect=inspect_process,
     )
-    if not repo_matches:
-        raise ValueError("repo argument mismatch")
-    port_matches = (
-        _argument(command, "--port") == str(control.port)
-        and metadata.get("port") == control.port
-        and metadata.get("endpoint") == control.endpoint
-    )
-    if not port_matches:
-        raise ValueError("port argument mismatch")
     if not health_probe(control.host, control.port):
         raise ValueError("health endpoint is unavailable")
     return {
@@ -113,13 +133,86 @@ def validate_aim_scratch(
         "healthy": True,
         "isolated": True,
         "metadata_file": str(control.metadata_file),
-        "pid": pid,
+        "pid": snapshot.pid,
         "pid_file": str(control.pid_file),
         "port_matches": True,
         "repo": str(repo),
         "repo_matches": True,
         "status": "ready",
     }
+
+
+def assert_aim_scratch_inactive(
+    control: AimScratchControl,
+    *,
+    inspect_process: Callable[[int], ProcessSnapshot] = inspect_process,
+    health_probe: Callable[[str, int], bool] = probe_health,
+) -> dict[str, Any]:
+    exact_process_active = False
+    if control.metadata_file.exists() and control.pid_file.exists():
+        try:
+            _recorded_identity(control, inspect=inspect_process)
+        except (ValueError, OSError):
+            pass
+        else:
+            exact_process_active = True
+    if exact_process_active:
+        raise ValueError("exact Aim scratch server is active")
+    if health_probe(control.host, control.port):
+        raise ValueError("Aim scratch endpoint is occupied")
+    return {"endpoint": control.endpoint, "status": "inactive"}
+
+
+def stop_aim_scratch(
+    control: AimScratchControl,
+    *,
+    inspect_process: Callable[[int], ProcessSnapshot] = inspect_process,
+    health_probe: Callable[[str, int], bool] = probe_health,
+    send_signal: Callable[[int, int], None] = os.kill,
+    timeout: float = 10.0,
+    monotonic: Callable[[], float] = time.monotonic,
+    sleep: Callable[[float], None] = time.sleep,
+) -> dict[str, Any]:
+    _metadata, snapshot, metadata_bytes, pid_bytes = _recorded_identity(
+        control,
+        inspect=inspect_process,
+    )
+    if not health_probe(control.host, control.port):
+        raise ValueError("recorded Aim scratch endpoint is unavailable")
+    original_identity = (snapshot.cmdline, snapshot.cwd.resolve())
+    send_signal(snapshot.pid, signal.SIGTERM)
+    deadline = monotonic() + timeout
+    while True:
+        try:
+            current = inspect_process(snapshot.pid)
+        except (FileNotFoundError, ProcessLookupError):
+            if not health_probe(control.host, control.port):
+                break
+        else:
+            current_identity = (current.cmdline, current.cwd.resolve())
+            if current_identity != original_identity:
+                raise RuntimeError("PID reuse detected after SIGTERM")
+        if monotonic() >= deadline:
+            raise TimeoutError("Aim scratch did not stop after SIGTERM")
+        sleep(0.1)
+
+    try:
+        replacement = inspect_process(snapshot.pid)
+    except (FileNotFoundError, ProcessLookupError):
+        pass
+    else:
+        replacement_identity = (replacement.cmdline, replacement.cwd.resolve())
+        if replacement_identity != original_identity:
+            raise RuntimeError("PID reuse detected before evidence removal")
+        raise RuntimeError("Aim scratch process remained after endpoint stopped")
+    if (
+        control.metadata_file.read_bytes() != metadata_bytes
+        or control.pid_file.read_bytes() != pid_bytes
+    ):
+        raise RuntimeError("Aim scratch evidence changed while stopping")
+    control.metadata_file.unlink()
+    control.pid_file.unlink()
+    return {"pid": snapshot.pid, "status": "stopped"}
 
 
 def _utc_text(value: datetime) -> str:

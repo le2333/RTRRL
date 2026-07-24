@@ -1,39 +1,48 @@
 from __future__ import annotations
 
 import argparse
+from collections.abc import Iterator, Mapping
+from contextlib import contextmanager
+import hashlib
 import json
-import shutil
-from collections.abc import Callable, Mapping
 from pathlib import Path
+import re
 import sys
-import tempfile
-from typing import Any, NamedTuple
+from typing import Any, NamedTuple, Protocol
 import uuid
 
 import boto3
 
+from trainer_infra.aim_scratch import assert_aim_scratch_inactive
 from trainer_infra.facility_control import FacilityControl, load_facility_control
 
 
-# Audited constants for this test acceptance facility only. Control data cannot
-# authorize a different local repository.
 ACCEPTANCE_AIM_SCRATCH = Path("/home/ubuntu/trainer/task7-aim-scratch")
 ACCEPTANCE_MAIN_REPO = Path("/home/ubuntu/trainer/streaming-rtrrl")
+MANIFEST_SCHEMA = "infra-acceptance-cleanup"
+MANIFEST_VERSION = 1
 _DELETE_BATCH_SIZE = 1000
+_SHA256 = re.compile(r"[0-9a-f]{64}")
 
 
 class CleanupRequest(NamedTuple):
     experiment_id: str
     confirm_prefix: str | None
     execute: bool
+    manifest: Path | None
+    confirm_manifest_sha256: str | None
 
 
 class CleanupReport(NamedTuple):
     aim_run_hashes: tuple[str, ...]
     expected_prefix: str
     experiment_id: str
-    mode: str
+    ownership: dict[str, str]
+    report_key: str
+    report_sha256: str
     s3_keys: tuple[str, ...]
+    schema: str
+    version: int
     writes_performed: bool
 
 
@@ -42,7 +51,69 @@ class _Snapshot(NamedTuple):
     s3_keys: tuple[str, ...]
 
 
-RepoFactory = Callable[..., Any]
+class _ReportEvidence(NamedTuple):
+    key: str
+    ownership: dict[str, str]
+    sha256: str
+
+
+class AimReadSession(Protocol):
+    def iter_runs(self) -> Iterator[Any]: ...
+
+
+class AimDeleteSession(AimReadSession, Protocol):
+    def delete_run(self, run_hash: str) -> bool: ...
+
+
+class AimRepoGateway(Protocol):
+    path: Path
+
+    def open_read_only(self) -> Any: ...
+
+    def open_write_delete(self) -> Any: ...
+
+
+class TrustedAimRepoGateway:
+    def __init__(self, path: Path) -> None:
+        self.path = path
+
+    @staticmethod
+    def _require_updated(path: Path) -> None:
+        from aim import Repo
+        from aim.sdk.repo import RepoStatus
+
+        if Repo.check_repo_status(str(path)) is not RepoStatus.UPDATED:
+            raise RuntimeError(
+                "Aim repository must be pre-upgraded before acceptance cleanup"
+            )
+
+    @contextmanager
+    def open_read_only(self) -> Iterator[AimReadSession]:
+        from aim import Repo
+
+        self._require_updated(self.path)
+        try:
+            repo = Repo(str(self.path), read_only=True, init=False)
+        except NotImplementedError as error:
+            raise RuntimeError(
+                "installed Aim cannot open the repository read-only; "
+                "pre-upgrade Aim before cleanup"
+            ) from error
+        try:
+            yield repo
+        finally:
+            repo.close()
+
+    @contextmanager
+    def open_write_delete(self) -> Iterator[AimDeleteSession]:
+        from aim import Repo
+
+        self._require_updated(self.path)
+        repo = Repo(str(self.path), init=False)
+        try:
+            yield repo
+        finally:
+            repo.close()
 
 
 def canonical_json(report: CleanupReport) -> str:
@@ -60,72 +131,37 @@ def _canonical_experiment_id(value: str) -> str:
 
 
 def _paths_overlap(first: Path, second: Path) -> bool:
-    return (
-        first == second
-        or first in second.parents
-        or second in first.parents
-    )
+    return first == second or first in second.parents or second in first.parents
 
 
-def _has_dot_aim_ancestor(path: Path) -> bool:
-    return any(parent.name == ".aim" for parent in (path, *path.parents))
-
-
-def _validate_control_aim_paths(control: FacilityControl) -> Path:
+def _validate_aim_boundary(
+    control: FacilityControl,
+    aim_repo: AimRepoGateway,
+) -> Path:
     scratch = Path(control.aim.repo)
     main = Path(control.aim.main_repo)
-    if scratch != ACCEPTANCE_AIM_SCRATCH or main != ACCEPTANCE_MAIN_REPO:
-        raise ValueError("Aim paths must match the audited acceptance-only constants")
-
+    gateway_path = Path(aim_repo.path)
+    if (
+        scratch != ACCEPTANCE_AIM_SCRATCH
+        or main != ACCEPTANCE_MAIN_REPO
+        or gateway_path != ACCEPTANCE_AIM_SCRATCH
+    ):
+        raise ValueError("Aim paths must match audited acceptance-only constants")
     resolved_scratch = scratch.resolve()
     resolved_main = main.resolve()
-    lexical_overlap = _paths_overlap(scratch, main)
-    resolved_overlap = _paths_overlap(resolved_scratch, resolved_main)
-    dot_aim_overlap = (
-        _has_dot_aim_ancestor(scratch)
-        or _has_dot_aim_ancestor(main)
-        or _has_dot_aim_ancestor(resolved_scratch)
-        or _has_dot_aim_ancestor(resolved_main)
-        or _paths_overlap(resolved_scratch / ".aim", resolved_main / ".aim")
-    )
-    if lexical_overlap or resolved_overlap or dot_aim_overlap:
+    resolved_gateway = gateway_path.resolve()
+    if resolved_gateway != resolved_scratch or _paths_overlap(
+        resolved_scratch, resolved_main
+    ):
         raise ValueError("Aim scratch and main repository paths overlap")
-    return scratch
+    return resolved_scratch
 
 
-def _default_repo_factory(path: str, *, read_only: bool, init: bool) -> Any:
-    from aim import Repo
-    from aim.sdk.repo import RepoStatus
-
-    if init:
-        raise ValueError("acceptance cleanup never initializes an Aim repository")
-    if Repo.check_repo_status(path) is not RepoStatus.UPDATED:
-        raise ValueError("Aim repository must already be updated before cleanup")
-    try:
-        return Repo(path, read_only=read_only, init=False)
-    except NotImplementedError:
-        if not read_only:
-            return Repo(path, init=False)
-
-        temporary = tempfile.TemporaryDirectory(prefix="acceptance-aim-readonly-")
-        mirror_root = Path(temporary.name) / "repo"
-        mirror_root.mkdir()
-        shutil.copytree(Path(path) / ".aim", mirror_root / ".aim", symlinks=True)
-        mirror = Repo(str(mirror_root), init=False)
-        mirror.read_only = True
-
-        class ReadOnlyAcceptanceRepo:
-            def iter_runs(self) -> Any:
-                return mirror.iter_runs()
-
-            def close(self) -> None:
-                mirror.close()
-                temporary.cleanup()
-
-        return ReadOnlyAcceptanceRepo()
-
-
-def _list_s3_keys(s3: Any, control: FacilityControl, experiment_id: str) -> tuple[str, ...]:
+def _list_s3_keys(
+    s3: Any,
+    control: FacilityControl,
+    experiment_id: str,
+) -> tuple[str, ...]:
     key_prefix = f"{control.prefix}/{experiment_id}/"
     keys: list[str] = []
     continuation: str | None = None
@@ -157,33 +193,41 @@ def _list_s3_keys(s3: Any, control: FacilityControl, experiment_id: str) -> tupl
     return tuple(sorted(keys))
 
 
-def _validate_report(
+def _report_evidence(
     s3: Any,
     control: FacilityControl,
     experiment_id: str,
     keys: tuple[str, ...],
-) -> str:
+) -> _ReportEvidence:
     report_key = f"{control.prefix}/{experiment_id}/report.json"
     if report_key not in keys:
         raise ValueError("canonical report.json is missing")
     try:
         body = s3.get_object(Bucket=control.bucket, Key=report_key)["Body"].read()
         report = json.loads(body)
-    except (KeyError, TypeError, ValueError) as error:
+    except (KeyError, TypeError, ValueError, json.JSONDecodeError) as error:
         raise ValueError("canonical report.json is unreadable") from error
-    if not isinstance(report, Mapping):
-        raise ValueError("canonical report.json must be an object")
+    if not isinstance(body, bytes) or not isinstance(report, Mapping):
+        raise ValueError("canonical report.json must be a byte-backed object")
     metadata = report.get("experiment_metadata")
-    if (
-        report.get("experiment_name") != "infra-brax-ppo-acceptance"
-        or not isinstance(metadata, Mapping)
-        or metadata.get("purpose") != "infra-acceptance"
-    ):
-        raise ValueError("canonical report.json metadata does not prove acceptance ownership")
-    return report_key
+    ownership = {
+        "experiment_name": report.get("experiment_name"),
+        "purpose": metadata.get("purpose") if isinstance(metadata, Mapping) else None,
+    }
+    expected = {
+        "experiment_name": "infra-brax-ppo-acceptance",
+        "purpose": "infra-acceptance",
+    }
+    if ownership != expected:
+        raise ValueError("canonical report.json metadata does not prove ownership")
+    return _ReportEvidence(
+        key=report_key,
+        ownership=expected,
+        sha256=hashlib.sha256(body).hexdigest(),
+    )
 
 
-def _list_aim_hashes(repo: Any, experiment_id: str) -> tuple[str, ...]:
+def _list_aim_hashes(repo: AimReadSession, experiment_id: str) -> tuple[str, ...]:
     hashes: list[str] = []
     for run in repo.iter_runs():
         context = run.get("context", None)
@@ -199,36 +243,31 @@ def _list_aim_hashes(repo: Any, experiment_id: str) -> tuple[str, ...]:
 
 
 def _read_aim_hashes(
-    repo_factory: RepoFactory,
-    repo_path: Path,
+    aim_repo: AimRepoGateway,
     experiment_id: str,
 ) -> tuple[str, ...]:
-    repo = repo_factory(str(repo_path), read_only=True, init=False)
-    try:
+    with aim_repo.open_read_only() as repo:
         return _list_aim_hashes(repo, experiment_id)
-    finally:
-        repo.close()
 
 
 def _snapshot(
     *,
     control: FacilityControl,
     s3: Any,
-    repo_factory: RepoFactory,
-    repo_path: Path,
+    aim_repo: AimRepoGateway,
     experiment_id: str,
-    validate_report: bool,
 ) -> _Snapshot:
-    s3_keys = _list_s3_keys(s3, control, experiment_id)
-    if validate_report:
-        _validate_report(s3, control, experiment_id, s3_keys)
     return _Snapshot(
-        aim_run_hashes=_read_aim_hashes(repo_factory, repo_path, experiment_id),
-        s3_keys=s3_keys,
+        aim_run_hashes=_read_aim_hashes(aim_repo, experiment_id),
+        s3_keys=_list_s3_keys(s3, control, experiment_id),
     )
 
 
-def _delete_s3_keys(s3: Any, control: FacilityControl, keys: tuple[str, ...]) -> None:
+def _delete_s3_keys(
+    s3: Any,
+    control: FacilityControl,
+    keys: tuple[str, ...],
+) -> None:
     for offset in range(0, len(keys), _DELETE_BATCH_SIZE):
         batch = keys[offset : offset + _DELETE_BATCH_SIZE]
         response = s3.delete_objects(
@@ -248,19 +287,94 @@ def _delete_s3_keys(s3: Any, control: FacilityControl, keys: tuple[str, ...]) ->
 
 
 def _delete_aim_hashes(
-    repo_factory: RepoFactory,
-    repo_path: Path,
+    aim_repo: AimRepoGateway,
     hashes: tuple[str, ...],
 ) -> None:
     if not hashes:
         return
-    repo = repo_factory(str(repo_path), read_only=False, init=False)
-    try:
+    with aim_repo.open_write_delete() as repo:
         for run_hash in hashes:
             if repo.delete_run(run_hash) is not True:
                 raise RuntimeError(f"Aim refused exact run deletion: {run_hash}")
-    finally:
-        repo.close()
+
+
+def _manifest_report(data: Any) -> CleanupReport:
+    if not isinstance(data, Mapping) or set(data) != set(CleanupReport._fields):
+        raise ValueError("cleanup manifest schema fields are invalid")
+    try:
+        return CleanupReport(
+            aim_run_hashes=tuple(data["aim_run_hashes"]),
+            expected_prefix=data["expected_prefix"],
+            experiment_id=data["experiment_id"],
+            ownership=dict(data["ownership"]),
+            report_key=data["report_key"],
+            report_sha256=data["report_sha256"],
+            s3_keys=tuple(data["s3_keys"]),
+            schema=data["schema"],
+            version=data["version"],
+            writes_performed=data["writes_performed"],
+        )
+    except (KeyError, TypeError, ValueError) as error:
+        raise ValueError("cleanup manifest values are invalid") from error
+
+
+def _load_authorized_manifest(request: CleanupRequest) -> CleanupReport:
+    if request.manifest is None or request.confirm_manifest_sha256 is None:
+        raise ValueError("execute requires manifest path and SHA-256")
+    if not _SHA256.fullmatch(request.confirm_manifest_sha256):
+        raise ValueError("execute requires a lowercase SHA-256")
+    try:
+        payload = request.manifest.read_bytes()
+    except OSError as error:
+        raise ValueError("cleanup manifest cannot be read") from error
+    actual_sha = hashlib.sha256(payload).hexdigest()
+    if actual_sha != request.confirm_manifest_sha256:
+        raise ValueError("cleanup manifest SHA-256 does not match exact file bytes")
+    try:
+        data = json.loads(payload)
+    except (UnicodeDecodeError, json.JSONDecodeError) as error:
+        raise ValueError("cleanup manifest JSON is invalid") from error
+    canonical = (json.dumps(data, separators=(",", ":"), sort_keys=True) + "\n").encode()
+    if payload != canonical:
+        raise ValueError("cleanup manifest is not canonical JSON with one newline")
+    report = _manifest_report(data)
+    if (
+        report.schema != MANIFEST_SCHEMA
+        or report.version != MANIFEST_VERSION
+        or type(report.version) is not int
+        or not isinstance(report.expected_prefix, str)
+        or not isinstance(report.experiment_id, str)
+        or not isinstance(report.report_key, str)
+        or report.writes_performed is not False
+        or any(not isinstance(value, str) or not value for value in report.s3_keys)
+        or any(
+            not isinstance(value, str) or not value
+            for value in report.aim_run_hashes
+        )
+        or tuple(sorted(report.s3_keys)) != report.s3_keys
+        or tuple(sorted(report.aim_run_hashes)) != report.aim_run_hashes
+        or len(set(report.s3_keys)) != len(report.s3_keys)
+        or len(set(report.aim_run_hashes)) != len(report.aim_run_hashes)
+        or report.report_key not in report.s3_keys
+        or report.ownership
+        != {
+            "experiment_name": "infra-brax-ppo-acceptance",
+            "purpose": "infra-acceptance",
+        }
+        or not _SHA256.fullmatch(report.report_sha256)
+    ):
+        raise ValueError("cleanup manifest authorization fields are invalid")
+    return report
+
+
+def _validate_live_subset(
+    live: _Snapshot,
+    authorized: CleanupReport,
+) -> None:
+    if not set(live.s3_keys).issubset(authorized.s3_keys):
+        raise ValueError("live S3 set contains a new target")
+    if not set(live.aim_run_hashes).issubset(authorized.aim_run_hashes):
+        raise ValueError("live Aim set contains a new target")
 
 
 def cleanup(
@@ -268,66 +382,81 @@ def cleanup(
     *,
     control: FacilityControl,
     s3: Any,
-    repo_factory: RepoFactory = _default_repo_factory,
+    aim_repo: AimRepoGateway,
 ) -> CleanupReport:
     experiment_id = _canonical_experiment_id(request.experiment_id)
-    repo_path = _validate_control_aim_paths(control)
+    _validate_aim_boundary(control, aim_repo)
     expected_prefix = f"s3://{control.bucket}/{control.prefix}/{experiment_id}/"
-    if request.execute and request.confirm_prefix != expected_prefix:
-        raise ValueError(f"execute requires confirm_prefix {expected_prefix}")
+    assert_aim_scratch_inactive(control.aim)
 
-    planned = _snapshot(
-        control=control,
-        s3=s3,
-        repo_factory=repo_factory,
-        repo_path=repo_path,
-        experiment_id=experiment_id,
-        validate_report=True,
-    )
     if not request.execute:
+        planned = _snapshot(
+            control=control,
+            s3=s3,
+            aim_repo=aim_repo,
+            experiment_id=experiment_id,
+        )
+        evidence = _report_evidence(s3, control, experiment_id, planned.s3_keys)
         return CleanupReport(
             aim_run_hashes=planned.aim_run_hashes,
             expected_prefix=expected_prefix,
             experiment_id=experiment_id,
-            mode="dry-run",
+            ownership=evidence.ownership,
+            report_key=evidence.key,
+            report_sha256=evidence.sha256,
             s3_keys=planned.s3_keys,
+            schema=MANIFEST_SCHEMA,
+            version=MANIFEST_VERSION,
             writes_performed=False,
         )
 
-    confirmed = _snapshot(
+    if request.confirm_prefix != expected_prefix:
+        raise ValueError(f"execute requires confirm_prefix {expected_prefix}")
+    authorized = _load_authorized_manifest(request)
+    if (
+        authorized.experiment_id != experiment_id
+        or authorized.expected_prefix != expected_prefix
+        or authorized.report_key
+        != f"{control.prefix}/{experiment_id}/report.json"
+    ):
+        raise ValueError("cleanup manifest does not authorize this experiment and prefix")
+
+    live = _snapshot(
         control=control,
         s3=s3,
-        repo_factory=repo_factory,
-        repo_path=repo_path,
+        aim_repo=aim_repo,
         experiment_id=experiment_id,
-        validate_report=True,
     )
-    if confirmed != planned:
-        raise RuntimeError("cleanup target set changed after confirmation")
+    _validate_live_subset(live, authorized)
+    report_present = authorized.report_key in live.s3_keys
+    if report_present:
+        evidence = _report_evidence(s3, control, experiment_id, live.s3_keys)
+        if (
+            evidence.key != authorized.report_key
+            or evidence.sha256 != authorized.report_sha256
+            or evidence.ownership != authorized.ownership
+        ):
+            raise ValueError("live report does not match the authorized manifest")
 
-    report_key = _validate_report(s3, control, experiment_id, confirmed.s3_keys)
-    nonreport_keys = tuple(key for key in confirmed.s3_keys if key != report_key)
+    nonreport_keys = tuple(
+        key for key in live.s3_keys if key != authorized.report_key
+    )
     _delete_s3_keys(s3, control, nonreport_keys)
-    _delete_aim_hashes(repo_factory, repo_path, confirmed.aim_run_hashes)
+    _delete_aim_hashes(aim_repo, live.aim_run_hashes)
 
     remaining_keys = _list_s3_keys(s3, control, experiment_id)
-    _validate_report(s3, control, experiment_id, remaining_keys)
-    remaining_nonreport = tuple(key for key in remaining_keys if key != report_key)
-    remaining_hashes = _read_aim_hashes(repo_factory, repo_path, experiment_id)
-    if remaining_nonreport or remaining_hashes:
-        raise RuntimeError("cleanup postverification found remaining non-sentinel targets")
+    remaining_hashes = _read_aim_hashes(aim_repo, experiment_id)
+    expected_remaining = (authorized.report_key,) if report_present else ()
+    if remaining_keys != expected_remaining or remaining_hashes:
+        raise RuntimeError("cleanup verification found remaining non-report targets")
 
-    _delete_s3_keys(s3, control, (report_key,))
-    if _list_s3_keys(s3, control, experiment_id):
-        raise RuntimeError("cleanup postverification found remaining S3 targets")
-    return CleanupReport(
-        aim_run_hashes=confirmed.aim_run_hashes,
-        expected_prefix=expected_prefix,
-        experiment_id=experiment_id,
-        mode="execute",
-        s3_keys=confirmed.s3_keys,
-        writes_performed=True,
-    )
+    if report_present:
+        _delete_s3_keys(s3, control, (authorized.report_key,))
+    final_keys = _list_s3_keys(s3, control, experiment_id)
+    final_hashes = _read_aim_hashes(aim_repo, experiment_id)
+    if final_keys or final_hashes:
+        raise RuntimeError("cleanup final verification found remaining targets")
+    return authorized._replace(writes_performed=True)
 
 
 def _parser() -> argparse.ArgumentParser:
@@ -337,6 +466,8 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--control", required=True, type=Path)
     parser.add_argument("--experiment-id", required=True)
     parser.add_argument("--confirm-prefix")
+    parser.add_argument("--manifest", type=Path)
+    parser.add_argument("--confirm-manifest-sha256")
     parser.add_argument("--execute", action="store_true")
     return parser
 
@@ -348,12 +479,15 @@ def main(argv: list[str] | None = None) -> int:
         experiment_id=arguments.experiment_id,
         confirm_prefix=arguments.confirm_prefix,
         execute=arguments.execute,
+        manifest=arguments.manifest,
+        confirm_manifest_sha256=arguments.confirm_manifest_sha256,
     )
     session = boto3.Session(region_name=control.region)
     report = cleanup(
         request,
         control=control,
         s3=session.client("s3"),
+        aim_repo=TrustedAimRepoGateway(ACCEPTANCE_AIM_SCRATCH),
     )
     print(canonical_json(report))
     return 0

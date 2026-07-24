@@ -1,11 +1,14 @@
 from __future__ import annotations
 
-from copy import deepcopy
+from contextlib import contextmanager
 from io import BytesIO
+import hashlib
 import importlib.util
 import json
 from pathlib import Path
+import sys
 from typing import Any
+from types import ModuleType
 import uuid
 
 import pytest
@@ -18,19 +21,86 @@ CONTROL = Path(__file__).parents[1] / "config" / "facility.yaml"
 EXPERIMENT_ID = "12345678-1234-5678-9234-567812345678"
 KEY_PREFIX = f"experiments/{EXPERIMENT_ID}/"
 REPORT_KEY = f"{KEY_PREFIX}report.json"
+RUN_KEY = f"{KEY_PREFIX}runs/run-1.json"
 PREFIX = f"s3://rtrrl-artifacts-007122174918/{KEY_PREFIX}"
 REPORT = {
     "experiment_name": "infra-brax-ppo-acceptance",
     "experiment_metadata": {"purpose": "infra-acceptance"},
 }
+REPORT_BYTES = json.dumps(REPORT, sort_keys=True).encode()
+REPORT_SHA = hashlib.sha256(REPORT_BYTES).hexdigest()
 
 
-def _load() -> Any:
+def _load(monkeypatch: pytest.MonkeyPatch) -> Any:
     spec = importlib.util.spec_from_file_location("cleanup_acceptance", SCRIPT)
     assert spec is not None and spec.loader is not None
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
+    monkeypatch.setattr(
+        module,
+        "assert_aim_scratch_inactive",
+        lambda _control: {"status": "inactive"},
+    )
     return module
+
+
+class FakeRun:
+    def __init__(self, run_hash: str, experiment_id: str) -> None:
+        self.hash = run_hash
+        self.context = {"experiment_id": experiment_id}
+
+    def get(self, key: str, default: object = None) -> object:
+        return self.context if key == "context" else default
+
+
+class AimHandle:
+    def __init__(self, gateway: FakeAimGateway, *, writable: bool) -> None:
+        self.gateway = gateway
+        self.writable = writable
+
+    def iter_runs(self):
+        return iter(list(self.gateway.runs.values()))
+
+    def delete_run(self, run_hash: str) -> bool:
+        assert self.writable
+        if self.gateway.fail_hash_once == run_hash:
+            self.gateway.fail_hash_once = None
+            return False
+        del self.gateway.runs[run_hash]
+        self.gateway.deleted.append(run_hash)
+        return True
+
+
+class FakeAimGateway:
+    def __init__(self, path: Path) -> None:
+        self.path = path
+        self.runs = {
+            "exact-b": FakeRun("exact-b", EXPERIMENT_ID),
+            "exact-a": FakeRun("exact-a", EXPERIMENT_ID),
+            "other": FakeRun("other", str(uuid.uuid4())),
+        }
+        self.calls: list[str] = []
+        self.deleted: list[str] = []
+        self.fail_hash_once: str | None = None
+        self.inject_after_delete: str | None = None
+
+    @contextmanager
+    def open_read_only(self):
+        self.calls.append("read")
+        yield AimHandle(self, writable=False)
+        self.calls.append("read-close")
+
+    @contextmanager
+    def open_write_delete(self):
+        self.calls.append("write")
+        try:
+            yield AimHandle(self, writable=True)
+        finally:
+            if self.inject_after_delete is not None:
+                value = self.inject_after_delete
+                self.runs[value] = FakeRun(value, EXPERIMENT_ID)
+                self.inject_after_delete = None
+            self.calls.append("write-close")
 
 
 class FakeS3:
@@ -38,28 +108,20 @@ class FakeS3:
         self,
         *,
         keys: list[str] | None = None,
-        report: dict[str, Any] | None = None,
-        change_on_list: int | None = None,
-        fail_nonreport_once: bool = False,
-        fail_report_once: bool = False,
+        report_bytes: bytes = REPORT_BYTES,
     ) -> None:
-        self.keys = set(keys or [REPORT_KEY, f"{KEY_PREFIX}runs/run-1.json"])
-        self.report = deepcopy(REPORT if report is None else report)
-        self.change_on_list = change_on_list
-        self.fail_nonreport_once = fail_nonreport_once
-        self.fail_report_once = fail_report_once
-        self.list_calls = 0
+        self.keys = set([REPORT_KEY, RUN_KEY] if keys is None else keys)
+        self.report_bytes = report_bytes
         self.deleted: list[str] = []
         self.delete_batches: list[tuple[str, ...]] = []
+        self.fail_nonreport_once = False
+        self.fail_aim_stage_new_key: str | None = None
+        self.fail_report_once = False
+        self.remove_report_before_error = False
 
     def list_objects_v2(self, **kwargs: Any) -> dict[str, Any]:
-        assert kwargs == {
-            "Bucket": "rtrrl-artifacts-007122174918",
-            "Prefix": KEY_PREFIX,
-        }
-        self.list_calls += 1
-        if self.change_on_list == self.list_calls:
-            self.keys.add(f"{KEY_PREFIX}late.json")
+        assert kwargs["Bucket"] == "rtrrl-artifacts-007122174918"
+        assert kwargs["Prefix"] == KEY_PREFIX
         return {
             "Contents": [{"Key": key} for key in sorted(self.keys)],
             "IsTruncated": False,
@@ -72,27 +134,24 @@ class FakeS3:
         }
         if REPORT_KEY not in self.keys:
             raise KeyError(REPORT_KEY)
-        return {"Body": BytesIO(json.dumps(self.report).encode("utf-8"))}
+        return {"Body": BytesIO(self.report_bytes)}
 
     def delete_objects(self, **kwargs: Any) -> dict[str, Any]:
-        assert kwargs["Bucket"] == "rtrrl-artifacts-007122174918"
         objects = tuple(item["Key"] for item in kwargs["Delete"]["Objects"])
-        assert kwargs["Delete"]["Quiet"] is False
         self.delete_batches.append(objects)
-        failure: str | None = None
-        if REPORT_KEY in objects and self.fail_report_once:
+        if objects == (REPORT_KEY,) and self.fail_report_once:
             self.fail_report_once = False
-            failure = REPORT_KEY
-        elif REPORT_KEY not in objects and self.fail_nonreport_once:
-            self.fail_nonreport_once = False
-            failure = objects[-1]
+            if self.remove_report_before_error:
+                self.keys.remove(REPORT_KEY)
+            raise TimeoutError("uncertain report deletion")
+        failure = objects[-1] if REPORT_KEY not in objects and self.fail_nonreport_once else None
+        self.fail_nonreport_once = False
         deleted = []
         errors = []
         for key in objects:
             if key == failure:
-                errors.append({"Key": key, "Code": "InternalError", "Message": "injected"})
+                errors.append({"Key": key, "Code": "InternalError"})
                 continue
-            assert key in self.keys
             self.keys.remove(key)
             self.deleted.append(key)
             deleted.append({"Key": key})
@@ -103,451 +162,398 @@ class FakeS3:
         }
 
 
-class PagedS3:
-    def __init__(self, pages: dict[str | None, dict[str, Any]]) -> None:
-        self.pages = pages
-        self.calls: list[str | None] = []
-
-    def list_objects_v2(self, **kwargs: Any) -> dict[str, Any]:
-        assert kwargs["Bucket"] == "rtrrl-artifacts-007122174918"
-        assert kwargs["Prefix"] == KEY_PREFIX
-        token = kwargs.get("ContinuationToken")
-        self.calls.append(token)
-        return deepcopy(self.pages[token])
+def _gateway(control: Any) -> FakeAimGateway:
+    return FakeAimGateway(control.aim.repo)
 
 
-class FakeRun:
-    def __init__(self, run_hash: str, experiment_id: str) -> None:
-        self.hash = run_hash
-        self._context = {"experiment_id": experiment_id}
-
-    def get(self, key: str, default: object = None) -> object:
-        return self._context if key == "context" else default
+def _dry_request(module: Any) -> Any:
+    return module.CleanupRequest(EXPERIMENT_ID, None, False, None, None)
 
 
-class AimState:
-    def __init__(self) -> None:
-        self.runs = {
-            "exact-b": FakeRun("exact-b", EXPERIMENT_ID),
-            "other": FakeRun("other", str(uuid.uuid4())),
-            "exact-a": FakeRun("exact-a", EXPERIMENT_ID),
-        }
-        self.deleted: list[str] = []
-        self.fail_hash_once: str | None = None
+def _save_manifest(
+    module: Any,
+    tmp_path: Path,
+    report: Any,
+) -> tuple[Path, str]:
+    path = tmp_path / "cleanup-manifest.json"
+    payload = (module.canonical_json(report) + "\n").encode()
+    path.write_bytes(payload)
+    return path, hashlib.sha256(payload).hexdigest()
 
 
-class FakeAimRepo:
-    def __init__(self, path: Path, state: AimState, *, read_only: bool) -> None:
-        self.path = path / ".aim"
-        self.state = state
-        self.read_only = read_only
-        self.closed = 0
-
-    def iter_runs(self):
-        return iter(list(self.state.runs.values()))
-
-    def delete_run(self, run_hash: str) -> bool:
-        assert self.read_only is False
-        if self.state.fail_hash_once == run_hash:
-            self.state.fail_hash_once = None
-            return False
-        assert run_hash in self.state.runs
-        del self.state.runs[run_hash]
-        self.state.deleted.append(run_hash)
-        return True
-
-    def close(self) -> None:
-        self.closed += 1
-
-
-class RepoFactory:
-    def __init__(self, path: Path) -> None:
-        self.path = path
-        self.state = AimState()
-        self.calls: list[tuple[str, bool, bool]] = []
-        self.repos: list[FakeAimRepo] = []
-
-    def __call__(self, path: str, *, read_only: bool, init: bool) -> FakeAimRepo:
-        self.calls.append((path, read_only, init))
-        repo = FakeAimRepo(self.path, self.state, read_only=read_only)
-        self.repos.append(repo)
-        return repo
-
-
-def _request(cleanup_module: Any, *, execute: bool = False, confirm: str | None = None):
-    return cleanup_module.CleanupRequest(
-        experiment_id=EXPERIMENT_ID,
-        confirm_prefix=confirm,
-        execute=execute,
+def _execute_request(module: Any, manifest: Path, digest: str) -> Any:
+    return module.CleanupRequest(
+        EXPERIMENT_ID,
+        PREFIX,
+        True,
+        manifest,
+        digest,
     )
 
 
-def _factory(control: Any) -> RepoFactory:
-    return RepoFactory(control.aim.repo)
-
-
-def test_dry_run_is_canonical_read_only_closed_and_performs_zero_writes() -> None:
-    cleanup_module = _load()
+def _manifest(
+    module: Any,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    s3: FakeS3,
+    gateway: FakeAimGateway,
+) -> tuple[Path, str, Any]:
     control = load_facility_control(CONTROL)
-    s3 = FakeS3()
-    factory = _factory(control)
-
-    report = cleanup_module.cleanup(
-        _request(cleanup_module),
+    report = module.cleanup(
+        _dry_request(module),
         control=control,
         s3=s3,
-        repo_factory=factory,
+        aim_repo=gateway,
+    )
+    path, digest = _save_manifest(module, tmp_path, report)
+    return path, digest, report
+
+
+def test_dry_run_emits_complete_canonical_recovery_manifest(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    module = _load(monkeypatch)
+    control = load_facility_control(CONTROL)
+    s3 = FakeS3()
+    gateway = _gateway(control)
+
+    report = module.cleanup(
+        _dry_request(module),
+        control=control,
+        s3=s3,
+        aim_repo=gateway,
     )
 
+    assert report.schema == "infra-acceptance-cleanup"
+    assert report.version == 1
+    assert report.experiment_id == EXPERIMENT_ID
     assert report.expected_prefix == PREFIX
-    assert report.s3_keys == (REPORT_KEY, f"{KEY_PREFIX}runs/run-1.json")
+    assert report.s3_keys == (REPORT_KEY, RUN_KEY)
     assert report.aim_run_hashes == ("exact-a", "exact-b")
+    assert report.report_key == REPORT_KEY
+    assert report.report_sha256 == REPORT_SHA
+    assert report.ownership == {
+        "experiment_name": "infra-brax-ppo-acceptance",
+        "purpose": "infra-acceptance",
+    }
     assert report.writes_performed is False
-    assert s3.deleted == []
-    assert factory.state.deleted == []
-    assert factory.calls == [(str(control.aim.repo), True, False)]
-    assert [repo.closed for repo in factory.repos] == [1]
-    rendered = cleanup_module.canonical_json(report)
+    assert gateway.calls == ["read", "read-close"]
+    rendered = module.canonical_json(report)
     assert rendered == json.dumps(json.loads(rendered), separators=(",", ":"), sort_keys=True)
+
+
+def test_cleanup_refuses_active_scratch_before_enumeration(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    module = _load(monkeypatch)
+    monkeypatch.setattr(
+        module,
+        "assert_aim_scratch_inactive",
+        lambda _control: (_ for _ in ()).throw(ValueError("Aim scratch is active")),
+    )
+    control = load_facility_control(CONTROL)
+    gateway = _gateway(control)
+
+    with pytest.raises(ValueError, match="active"):
+        module.cleanup(
+            _dry_request(module),
+            control=control,
+            s3=FakeS3(),
+            aim_repo=gateway,
+        )
+    assert gateway.calls == []
+
+
+def test_execute_requires_exact_manifest_path_hash_and_prefix(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    module = _load(monkeypatch)
+    control = load_facility_control(CONTROL)
+    s3 = FakeS3()
+    gateway = _gateway(control)
+    manifest, digest, _report = _manifest(module, monkeypatch, tmp_path, s3, gateway)
+
+    for request in (
+        module.CleanupRequest(EXPERIMENT_ID, PREFIX, True, None, digest),
+        module.CleanupRequest(EXPERIMENT_ID, PREFIX, True, manifest, None),
+        module.CleanupRequest(EXPERIMENT_ID, PREFIX, True, manifest, "0" * 64),
+        module.CleanupRequest(EXPERIMENT_ID, PREFIX.rstrip("/"), True, manifest, digest),
+    ):
+        with pytest.raises(ValueError):
+            module.cleanup(request, control=control, s3=s3, aim_repo=gateway)
+
+    manifest.write_bytes(manifest.read_bytes() + b" ")
+    with pytest.raises(ValueError, match="SHA-256"):
+        module.cleanup(
+            _execute_request(module, manifest, digest),
+            control=control,
+            s3=s3,
+            aim_repo=gateway,
+        )
+
+
+def test_execute_deletes_in_order_and_finally_verifies_both_empty(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    module = _load(monkeypatch)
+    control = load_facility_control(CONTROL)
+    s3 = FakeS3()
+    gateway = _gateway(control)
+    manifest, digest, _report = _manifest(module, monkeypatch, tmp_path, s3, gateway)
+
+    result = module.cleanup(
+        _execute_request(module, manifest, digest),
+        control=control,
+        s3=s3,
+        aim_repo=gateway,
+    )
+
+    assert result.writes_performed is True
+    assert s3.delete_batches == [(RUN_KEY,), (REPORT_KEY,)]
+    assert s3.keys == set()
+    assert set(gateway.runs) == {"other"}
+    assert gateway.calls.count("write") == 1
+    assert gateway.calls[-2:] == ["read", "read-close"]
+
+
+@pytest.mark.parametrize("new_target", ["s3", "aim"])
+def test_manifest_rejects_every_new_live_target(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    new_target: str,
+) -> None:
+    module = _load(monkeypatch)
+    control = load_facility_control(CONTROL)
+    s3 = FakeS3()
+    gateway = _gateway(control)
+    manifest, digest, _report = _manifest(module, monkeypatch, tmp_path, s3, gateway)
+    if new_target == "s3":
+        s3.keys.add(f"{KEY_PREFIX}new.json")
+    else:
+        gateway.runs["new"] = FakeRun("new", EXPERIMENT_ID)
+
+    with pytest.raises(ValueError, match="new"):
+        module.cleanup(
+            _execute_request(module, manifest, digest),
+            control=control,
+            s3=s3,
+            aim_repo=gateway,
+        )
+    assert s3.deleted == []
+    assert gateway.deleted == []
+
+
+@pytest.mark.parametrize("report_present", [True, False])
+def test_manifest_authorizes_subset_recovery_with_or_without_report(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    report_present: bool,
+) -> None:
+    module = _load(monkeypatch)
+    control = load_facility_control(CONTROL)
+    original_s3 = FakeS3()
+    original_gateway = _gateway(control)
+    manifest, digest, _report = _manifest(
+        module,
+        monkeypatch,
+        tmp_path,
+        original_s3,
+        original_gateway,
+    )
+    s3 = FakeS3(keys=[REPORT_KEY] if report_present else [])
+    gateway = _gateway(control)
+    del gateway.runs["exact-a"]
+
+    module.cleanup(
+        _execute_request(module, manifest, digest),
+        control=control,
+        s3=s3,
+        aim_repo=gateway,
+    )
+    assert s3.keys == set()
+    assert set(gateway.runs) == {"other"}
+
+
+def test_report_present_is_rehashed_and_ownership_revalidated(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    module = _load(monkeypatch)
+    control = load_facility_control(CONTROL)
+    s3 = FakeS3()
+    gateway = _gateway(control)
+    manifest, digest, _report = _manifest(module, monkeypatch, tmp_path, s3, gateway)
+    s3.report_bytes = json.dumps(
+        {
+            "experiment_name": "other",
+            "experiment_metadata": {"purpose": "infra-acceptance"},
+        }
+    ).encode()
+
+    with pytest.raises(ValueError, match="report"):
+        module.cleanup(
+            _execute_request(module, manifest, digest),
+            control=control,
+            s3=s3,
+            aim_repo=gateway,
+        )
+
+
+def test_partial_nonreport_and_aim_failures_preserve_manifest_for_retry(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    module = _load(monkeypatch)
+    control = load_facility_control(CONTROL)
+    s3 = FakeS3(keys=[REPORT_KEY, RUN_KEY, f"{KEY_PREFIX}other.json"])
+    gateway = _gateway(control)
+    manifest, digest, _report = _manifest(module, monkeypatch, tmp_path, s3, gateway)
+    request = _execute_request(module, manifest, digest)
+    s3.fail_nonreport_once = True
+
+    with pytest.raises(RuntimeError, match="S3 deletion"):
+        module.cleanup(request, control=control, s3=s3, aim_repo=gateway)
+    assert manifest.exists()
+    assert REPORT_KEY in s3.keys
+
+    gateway.fail_hash_once = "exact-b"
+    with pytest.raises(RuntimeError, match="Aim refused"):
+        module.cleanup(request, control=control, s3=s3, aim_repo=gateway)
+    assert manifest.exists()
+    assert REPORT_KEY in s3.keys
+
+    module.cleanup(request, control=control, s3=s3, aim_repo=gateway)
+    assert s3.keys == set()
+
+
+def test_uncertain_final_report_delete_recovers_from_missing_report(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    module = _load(monkeypatch)
+    control = load_facility_control(CONTROL)
+    s3 = FakeS3()
+    gateway = _gateway(control)
+    manifest, digest, _report = _manifest(module, monkeypatch, tmp_path, s3, gateway)
+    request = _execute_request(module, manifest, digest)
+    s3.fail_report_once = True
+    s3.remove_report_before_error = True
+
+    with pytest.raises(TimeoutError, match="uncertain"):
+        module.cleanup(request, control=control, s3=s3, aim_repo=gateway)
+    assert manifest.exists()
+    assert s3.keys == set()
+    module.cleanup(request, control=control, s3=s3, aim_repo=gateway)
+
+
+@pytest.mark.parametrize("new_target", ["s3", "aim"])
+def test_final_new_target_fails_and_same_manifest_keeps_rejecting_it(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    new_target: str,
+) -> None:
+    module = _load(monkeypatch)
+    control = load_facility_control(CONTROL)
+    s3 = FakeS3()
+    gateway = _gateway(control)
+    manifest, digest, _report = _manifest(module, monkeypatch, tmp_path, s3, gateway)
+    request = _execute_request(module, manifest, digest)
+    if new_target == "aim":
+        gateway.inject_after_delete = "late"
+    else:
+        original = s3.list_objects_v2
+        calls = 0
+
+        def listing(**kwargs: Any) -> dict[str, Any]:
+            nonlocal calls
+            calls += 1
+            if calls == 3:
+                s3.keys.add(f"{KEY_PREFIX}late.json")
+            return original(**kwargs)
+
+        s3.list_objects_v2 = listing  # type: ignore[method-assign]
+
+    with pytest.raises((RuntimeError, ValueError), match="remaining|new"):
+        module.cleanup(request, control=control, s3=s3, aim_repo=gateway)
+    with pytest.raises(ValueError, match="new"):
+        module.cleanup(request, control=control, s3=s3, aim_repo=gateway)
+
+
+def test_public_cleanup_uses_gateway_not_repo_factory(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    module = _load(monkeypatch)
+    assert "aim_repo" in module.cleanup.__annotations__
+    assert "repo_factory" not in module.cleanup.__annotations__
+    source = SCRIPT.read_text(encoding="utf-8")
+    assert "copytree" not in source
+    assert "TemporaryDirectory" not in source
+
+
+def test_trusted_gateway_attempts_only_direct_read_only_open_and_fails_closed(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    module = _load(monkeypatch)
+    calls: list[tuple[str, bool, bool]] = []
+    updated = object()
+
+    class Repo:
+        @staticmethod
+        def check_repo_status(path: str) -> object:
+            assert path == str(module.ACCEPTANCE_AIM_SCRATCH)
+            return updated
+
+        def __init__(self, path: str, *, read_only: bool, init: bool) -> None:
+            calls.append((path, read_only, init))
+            raise NotImplementedError("Aim 3.28")
+
+    aim = ModuleType("aim")
+    aim.Repo = Repo  # type: ignore[attr-defined]
+    sdk = ModuleType("aim.sdk")
+    repo_module = ModuleType("aim.sdk.repo")
+    repo_module.RepoStatus = type("RepoStatus", (), {"UPDATED": updated})  # type: ignore[attr-defined]
+    monkeypatch.setitem(sys.modules, "aim", aim)
+    monkeypatch.setitem(sys.modules, "aim.sdk", sdk)
+    monkeypatch.setitem(sys.modules, "aim.sdk.repo", repo_module)
+
+    gateway = module.TrustedAimRepoGateway(module.ACCEPTANCE_AIM_SCRATCH)
+    with pytest.raises(RuntimeError, match="pre-upgrade"):
+        with gateway.open_read_only():
+            raise AssertionError("must not yield")
+    assert calls == [(str(module.ACCEPTANCE_AIM_SCRATCH), True, False)]
 
 
 @pytest.mark.parametrize(
     "experiment_id",
-    ["", "/", "abc/def", "..", "../escape", f"{EXPERIMENT_ID}/"],
+    ["", "..", "not-a-uuid", "12345678/1234-5678-9234-567812345678"],
 )
-def test_cleanup_rejects_noncanonical_or_traversing_ids(experiment_id: str) -> None:
-    cleanup_module = _load()
+def test_cleanup_rejects_noncanonical_ids_before_any_gateway_open(
+    monkeypatch: pytest.MonkeyPatch,
+    experiment_id: str,
+) -> None:
+    module = _load(monkeypatch)
     control = load_facility_control(CONTROL)
+    gateway = _gateway(control)
+    request = module.CleanupRequest(experiment_id, None, False, None, None)
     with pytest.raises(ValueError, match="canonical UUID"):
-        cleanup_module.cleanup(
-            cleanup_module.CleanupRequest(experiment_id, None, False),
-            control=control,
-            s3=FakeS3(),
-            repo_factory=_factory(control),
-        )
+        module.cleanup(request, control=control, s3=FakeS3(), aim_repo=gateway)
+    assert gateway.calls == []
 
 
-@pytest.mark.parametrize(
-    "report",
-    [
-        {},
-        {"experiment_name": "other", "experiment_metadata": {"purpose": "infra-acceptance"}},
-        {
-            "experiment_name": "infra-brax-ppo-acceptance",
-            "experiment_metadata": {"purpose": "other"},
-        },
-    ],
-)
-def test_cleanup_rejects_missing_or_mismatched_canonical_report(
-    report: dict[str, Any],
-) -> None:
-    cleanup_module = _load()
-    control = load_facility_control(CONTROL)
-    with pytest.raises(ValueError, match="canonical report"):
-        cleanup_module.cleanup(
-            _request(cleanup_module),
-            control=control,
-            s3=FakeS3(report=report),
-            repo_factory=_factory(control),
-        )
-
-
-def test_control_cannot_self_authorize_a_different_aim_repo() -> None:
-    cleanup_module = _load()
-    control = load_facility_control(CONTROL)
-    forged = control.model_copy(
-        update={
-            "aim": control.aim.model_copy(
-                update={
-                    "repo": Path("/tmp/forged-scratch"),
-                    "main_repo": Path("/tmp/forged-main"),
-                }
-            )
-        }
-    )
-    factory = RepoFactory(forged.aim.repo)
-
-    with pytest.raises(ValueError, match="audited acceptance"):
-        cleanup_module.cleanup(
-            _request(cleanup_module),
-            control=forged,
-            s3=FakeS3(),
-            repo_factory=factory,
-        )
-    assert factory.calls == []
-
-
-@pytest.mark.parametrize("relation", ["same", "ancestor", "descendant", "aim-ancestor"])
-def test_aim_trust_rejects_lexical_and_dot_aim_overlap(
-    monkeypatch: pytest.MonkeyPatch,
-    tmp_path: Path,
-    relation: str,
-) -> None:
-    cleanup_module = _load()
-    control = load_facility_control(CONTROL)
-    if relation == "same":
-        scratch = main = tmp_path / "repo"
-    elif relation == "ancestor":
-        scratch, main = tmp_path / "repo", tmp_path / "repo" / "main"
-    elif relation == "descendant":
-        main, scratch = tmp_path / "repo", tmp_path / "repo" / "scratch"
-    else:
-        main, scratch = tmp_path / "main", tmp_path / ".aim" / "scratch"
-    monkeypatch.setattr(cleanup_module, "ACCEPTANCE_AIM_SCRATCH", scratch)
-    monkeypatch.setattr(cleanup_module, "ACCEPTANCE_MAIN_REPO", main)
-    forged = control.model_copy(
-        update={"aim": control.aim.model_copy(update={"repo": scratch, "main_repo": main})}
-    )
-
-    with pytest.raises(ValueError, match="overlap"):
-        cleanup_module.cleanup(
-            _request(cleanup_module),
-            control=forged,
-            s3=FakeS3(),
-            repo_factory=RepoFactory(scratch),
-        )
-
-
-def test_aim_trust_rejects_symlink_resolved_overlap(
-    monkeypatch: pytest.MonkeyPatch,
-    tmp_path: Path,
-) -> None:
-    cleanup_module = _load()
-    control = load_facility_control(CONTROL)
-    main = tmp_path / "main"
-    main.mkdir()
-    nested = main / "nested"
-    nested.mkdir()
-    scratch = tmp_path / "scratch-link"
-    scratch.symlink_to(nested, target_is_directory=True)
-    monkeypatch.setattr(cleanup_module, "ACCEPTANCE_AIM_SCRATCH", scratch)
-    monkeypatch.setattr(cleanup_module, "ACCEPTANCE_MAIN_REPO", main)
-    forged = control.model_copy(
-        update={"aim": control.aim.model_copy(update={"repo": scratch, "main_repo": main})}
-    )
-
-    with pytest.raises(ValueError, match="overlap"):
-        cleanup_module.cleanup(
-            _request(cleanup_module),
-            control=forged,
-            s3=FakeS3(),
-            repo_factory=RepoFactory(scratch),
-        )
-
-
-def test_s3_pagination_accepts_multiple_pages_and_empty_middle_page() -> None:
-    cleanup_module = _load()
-    control = load_facility_control(CONTROL)
-    s3 = PagedS3(
-        {
-            None: {
-                "Contents": [{"Key": f"{KEY_PREFIX}z.json"}],
-                "IsTruncated": True,
-                "NextContinuationToken": "a",
-            },
-            "a": {
-                "Contents": [],
-                "IsTruncated": True,
-                "NextContinuationToken": "b",
-            },
-            "b": {
-                "Contents": [{"Key": REPORT_KEY}],
-                "IsTruncated": False,
-            },
-        }
-    )
-
-    assert cleanup_module._list_s3_keys(s3, control, EXPERIMENT_ID) == (
-        REPORT_KEY,
-        f"{KEY_PREFIX}z.json",
-    )
-    assert s3.calls == [None, "a", "b"]
-
-
-def test_s3_pagination_rejects_repeated_or_cyclic_continuation_token() -> None:
-    cleanup_module = _load()
-    control = load_facility_control(CONTROL)
-    s3 = PagedS3(
-        {
-            None: {"Contents": [], "IsTruncated": True, "NextContinuationToken": "a"},
-            "a": {"Contents": [], "IsTruncated": True, "NextContinuationToken": "a"},
-        }
-    )
-
-    with pytest.raises(ValueError, match="continuation token"):
-        cleanup_module._list_s3_keys(s3, control, EXPERIMENT_ID)
-    assert s3.calls == [None, "a"]
-
-
-def test_execute_refuses_changed_snapshot_before_any_write() -> None:
-    cleanup_module = _load()
-    control = load_facility_control(CONTROL)
-    s3 = FakeS3(change_on_list=2)
-    factory = _factory(control)
-
-    with pytest.raises(RuntimeError, match="changed"):
-        cleanup_module.cleanup(
-            _request(cleanup_module, execute=True, confirm=PREFIX),
-            control=control,
-            s3=s3,
-            repo_factory=factory,
-        )
-    assert s3.deleted == []
-    assert factory.state.deleted == []
-    assert all(read_only for _path, read_only, _init in factory.calls)
-    assert all(repo.closed == 1 for repo in factory.repos)
-
-
-def test_nonreport_s3_partial_failure_preserves_report_and_retry_succeeds() -> None:
-    cleanup_module = _load()
-    control = load_facility_control(CONTROL)
-    s3 = FakeS3(
-        keys=[REPORT_KEY, f"{KEY_PREFIX}a.json", f"{KEY_PREFIX}b.json"],
-        fail_nonreport_once=True,
-    )
-    factory = _factory(control)
-    request = _request(cleanup_module, execute=True, confirm=PREFIX)
-
-    with pytest.raises(RuntimeError, match="S3 deletion"):
-        cleanup_module.cleanup(request, control=control, s3=s3, repo_factory=factory)
-    assert REPORT_KEY in s3.keys
-    assert factory.state.deleted == []
-
-    report = cleanup_module.cleanup(
-        request,
-        control=control,
-        s3=s3,
-        repo_factory=factory,
-    )
-    assert report.writes_performed is True
-    assert s3.keys == set()
-
-
-def test_aim_partial_failure_preserves_report_and_retry_uses_remaining_hashes() -> None:
-    cleanup_module = _load()
-    control = load_facility_control(CONTROL)
-    s3 = FakeS3()
-    factory = _factory(control)
-    factory.state.fail_hash_once = "exact-b"
-    request = _request(cleanup_module, execute=True, confirm=PREFIX)
-
-    with pytest.raises(RuntimeError, match="Aim refused"):
-        cleanup_module.cleanup(request, control=control, s3=s3, repo_factory=factory)
-    assert REPORT_KEY in s3.keys
-    assert factory.state.deleted == ["exact-a"]
-
-    cleanup_module.cleanup(request, control=control, s3=s3, repo_factory=factory)
-    assert s3.keys == set()
-    assert set(factory.state.runs) == {"other"}
-
-
-def test_final_report_delete_failure_preserves_sentinel_and_is_safely_retryable() -> None:
-    cleanup_module = _load()
-    control = load_facility_control(CONTROL)
-    s3 = FakeS3(fail_report_once=True)
-    factory = _factory(control)
-    request = _request(cleanup_module, execute=True, confirm=PREFIX)
-
-    with pytest.raises(RuntimeError, match="S3 deletion"):
-        cleanup_module.cleanup(request, control=control, s3=s3, repo_factory=factory)
-    assert s3.keys == {REPORT_KEY}
-    assert set(factory.state.runs) == {"other"}
-
-    cleanup_module.cleanup(request, control=control, s3=s3, repo_factory=factory)
-    assert s3.keys == set()
-
-
-def test_execute_uses_short_writable_repo_only_after_stable_read_only_snapshots() -> None:
-    cleanup_module = _load()
-    control = load_facility_control(CONTROL)
-    factory = _factory(control)
-    s3 = FakeS3()
-
-    cleanup_module.cleanup(
-        _request(cleanup_module, execute=True, confirm=PREFIX),
-        control=control,
-        s3=s3,
-        repo_factory=factory,
-    )
-
-    assert factory.calls == [
-        (str(control.aim.repo), True, False),
-        (str(control.aim.repo), True, False),
-        (str(control.aim.repo), False, False),
-        (str(control.aim.repo), True, False),
-    ]
-    assert all(repo.closed == 1 for repo in factory.repos)
-    assert s3.delete_batches == [
-        (f"{KEY_PREFIX}runs/run-1.json",),
-        (REPORT_KEY,),
-    ]
-
-
-def test_real_aim_read_only_open_does_not_change_repository_files(tmp_path: Path) -> None:
-    from aim import Run
-
-    cleanup_module = _load()
-    repo_path = tmp_path / "aim-scratch"
-    run = Run(repo=str(repo_path), experiment="infra")
-    run["context"] = {"experiment_id": EXPERIMENT_ID}
-    run.close()
-
-    def snapshot() -> dict[str, tuple[bytes, int]]:
-        return {
-            str(path.relative_to(repo_path)): (path.read_bytes(), path.stat().st_mtime_ns)
-            for path in repo_path.rglob("*")
-            if path.is_file()
-        }
-
-    before = snapshot()
-    repo = cleanup_module._default_repo_factory(
-        str(repo_path),
-        read_only=True,
-        init=False,
-    )
-    try:
-        assert [item.hash for item in repo.iter_runs()]
-    finally:
-        repo.close()
-    assert snapshot() == before
-
-
-def test_cleanup_source_exposes_no_shared_resource_or_recursive_deletion() -> None:
-    source = SCRIPT.read_text(encoding="utf-8")
-    for forbidden in (
-        "delete_bucket",
-        "delete_repository",
-        "deregister_job_definition",
-        "delete_job_queue",
-        "delete_compute_environment",
-        "shutil.rmtree",
-        "query_runs",
-    ):
-        assert forbidden not in source
-
-
-def test_cli_error_writes_nothing_to_canonical_stdout(
-    capsys: pytest.CaptureFixture[str],
+def test_cleanup_rejects_untrusted_gateway_path(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    cleanup_module = _load()
-
-    class Session:
-        def __init__(self, *, region_name: str) -> None:
-            assert region_name == "eu-north-1"
-
-        def client(self, name: str) -> FakeS3:
-            assert name == "s3"
-            return FakeS3()
-
-    monkeypatch.setattr(cleanup_module.boto3, "Session", Session)
-    with pytest.raises(ValueError, match="canonical UUID"):
-        cleanup_module.main(
-            [
-                "--control",
-                str(CONTROL),
-                "--experiment-id",
-                "invalid",
-            ]
+    module = _load(monkeypatch)
+    control = load_facility_control(CONTROL)
+    gateway = _gateway(control)
+    gateway.path = control.aim.main_repo
+    with pytest.raises(ValueError, match="audited"):
+        module.cleanup(
+            _dry_request(module),
+            control=control,
+            s3=FakeS3(),
+            aim_repo=gateway,
         )
-    assert capsys.readouterr().out == ""
+    assert gateway.calls == []
