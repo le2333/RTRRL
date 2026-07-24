@@ -158,9 +158,7 @@ def _source_tree_fingerprint(root: Path) -> tuple[_TreeEntry, ...]:
                     os.close(child_fd)
                 continue
             if not stat.S_ISREG(child_stat.st_mode):
-                raise ValueError(
-                    f"Aim tree contains a special file: {child_relative}"
-                )
+                raise ValueError(f"Aim tree contains a special file: {child_relative}")
             file_fd = os.open(name, os.O_RDONLY | nofollow, dir_fd=directory_fd)
             try:
                 opened_stat = os.fstat(file_fd)
@@ -257,15 +255,11 @@ def _verified_aim_snapshot(
 ) -> Iterator[Path]:
     source_aim = source_repo / ".aim"
     before = _source_tree_fingerprint(source_aim)
-    source_size = sum(
-        entry.size for entry in before if entry.entry_type == "file"
-    )
+    source_size = sum(entry.size for entry in before if entry.entry_type == "file")
     with tempfile.TemporaryDirectory(prefix="acceptance-aim-snapshot-") as temporary:
         required = 3 * source_size + 512 * 1024 * 1024
         if disk_usage(temporary).free < required:
-            raise ValueError(
-                f"insufficient temporary snapshot capacity: require {required} bytes"
-            )
+            raise ValueError(f"insufficient temporary snapshot capacity: require {required} bytes")
         temporary_repo = Path(temporary) / "repo"
         temporary_repo.mkdir()
         copied_aim = temporary_repo / ".aim"
@@ -337,20 +331,42 @@ class TrustedAimRepoGateway:
         self._control = control
         self._directory_fd = directory_fd
         self._lock_fd = lock_fd
+        primary_error: BaseException | None = None
+        close_errors: list[BaseException] = []
         try:
             self._assert_inactive()
             yield
+        except BaseException as error:
+            primary_error = error
         finally:
             try:
                 self._close_snapshot()
-            finally:
-                self._control = None
-                self._directory_fd = None
-                self._lock_fd = None
+            except BaseException as error:
+                close_errors.append(error)
+            self._control = None
+            self._directory_fd = None
+            self._lock_fd = None
+            try:
                 try:
                     os.close(lock_fd)
-                finally:
+                except BaseException as error:
+                    close_errors.append(error)
+            finally:
+                try:
                     os.close(directory_fd)
+                except BaseException as error:
+                    close_errors.append(error)
+        if primary_error is not None:
+            for error in close_errors:
+                primary_error.add_note(f"cleanup close also failed: {error!r}")
+                for note in getattr(error, "__notes__", ()):
+                    primary_error.add_note(note)
+            raise primary_error
+        if close_errors:
+            first, *additional = close_errors
+            for error in additional:
+                first.add_note(f"additional cleanup close failed: {error!r}")
+            raise first
 
     @staticmethod
     def _require_updated(path: Path) -> None:
@@ -358,9 +374,7 @@ class TrustedAimRepoGateway:
         from aim.sdk.repo import RepoStatus
 
         if Repo.check_repo_status(str(path)) is not RepoStatus.UPDATED:
-            raise RuntimeError(
-                "Aim repository must be pre-upgraded before acceptance cleanup"
-            )
+            raise RuntimeError("Aim repository must be pre-upgraded before acceptance cleanup")
 
     @contextmanager
     def open_read_only(self) -> Iterator[AimReadSession]:
@@ -438,9 +452,7 @@ def _validate_aim_boundary(
     resolved_scratch = scratch.resolve()
     resolved_main = main.resolve()
     resolved_gateway = gateway_path.resolve()
-    if resolved_gateway != resolved_scratch or _paths_overlap(
-        resolved_scratch, resolved_main
-    ):
+    if resolved_gateway != resolved_scratch or _paths_overlap(resolved_scratch, resolved_main):
         raise ValueError("Aim scratch and main repository paths overlap")
     return resolved_scratch
 
@@ -565,9 +577,7 @@ def _delete_s3_keys(
         status = response.get("ResponseMetadata", {}).get("HTTPStatusCode")
         errors = response.get("Errors", [])
         deleted = response.get("Deleted", [])
-        deleted_keys = {
-            item.get("Key") for item in deleted if isinstance(item, Mapping)
-        }
+        deleted_keys = {item.get("Key") for item in deleted if isinstance(item, Mapping)}
         if status != 200 or errors or deleted_keys != set(batch):
             raise RuntimeError(
                 f"S3 deletion failed for exact batch: status={status!r}, errors={errors!r}"
@@ -664,10 +674,7 @@ def _load_authorized_manifest(request: CleanupRequest) -> CleanupReport:
         or not isinstance(report.report_key, str)
         or report.writes_performed is not False
         or any(not isinstance(value, str) or not value for value in report.s3_keys)
-        or any(
-            not isinstance(value, str) or not value
-            for value in report.aim_run_hashes
-        )
+        or any(not isinstance(value, str) or not value for value in report.aim_run_hashes)
         or tuple(sorted(report.s3_keys)) != report.s3_keys
         or tuple(sorted(report.aim_run_hashes)) != report.aim_run_hashes
         or len(set(report.s3_keys)) != len(report.s3_keys)
@@ -733,8 +740,7 @@ def _cleanup_locked(
     if (
         authorized.experiment_id != experiment_id
         or authorized.expected_prefix != expected_prefix
-        or authorized.report_key
-        != f"{control.prefix}/{experiment_id}/report.json"
+        or authorized.report_key != f"{control.prefix}/{experiment_id}/report.json"
     ):
         raise ValueError("cleanup manifest does not authorize this experiment and prefix")
 
@@ -755,9 +761,7 @@ def _cleanup_locked(
         ):
             raise ValueError("live report does not match the authorized manifest")
 
-    nonreport_keys = tuple(
-        key for key in live.s3_keys if key != authorized.report_key
-    )
+    nonreport_keys = tuple(key for key in live.s3_keys if key != authorized.report_key)
     _delete_s3_keys(s3, control, nonreport_keys)
     _delete_aim_hashes(aim_repo, live.aim_run_hashes)
 

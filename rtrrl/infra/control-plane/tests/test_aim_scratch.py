@@ -53,6 +53,11 @@ def _control(tmp_path: Path) -> AimScratchControl:
     )
 
 
+def _gated_target(call: dict[str, Any]) -> tuple[str, ...]:
+    command = call["command"]
+    return tuple(command[command.index("--") + 1 :])
+
+
 def _recorded(
     control: AimScratchControl,
     *,
@@ -107,7 +112,7 @@ def test_launch_writes_pid_and_reproducible_runtime_metadata(tmp_path: Path) -> 
         health_probe=lambda _host, _port: True,
         discover_process=lambda _control, **_kwargs: ProcessSnapshot(
             pid=321,
-            cmdline=tuple(calls[0]["command"]),
+            cmdline=_gated_target(calls[0]),
             cwd=control.repo,
             start_time_ticks=12345,
         ),
@@ -122,12 +127,12 @@ def test_launch_writes_pid_and_reproducible_runtime_metadata(tmp_path: Path) -> 
     assert result["status"] == "started"
     assert control.pid_file.read_text() == "321\n"
     assert metadata == {
-        "command": calls[0]["command"],
+        "command": list(_gated_target(calls[0])),
         "cwd": str(control.repo),
         "endpoint": "aim://127.0.0.1:53801",
         "pid": 321,
         "port": 53801,
-        "repo_fd": calls[0]["pass_fds"][1],
+        "repo_fd": calls[0]["pass_fds"][2],
         "repo_root_dev": control.repo.stat().st_dev,
         "repo_root_ino": control.repo.stat().st_ino,
         "start_time_ticks": 12345,
@@ -136,7 +141,7 @@ def test_launch_writes_pid_and_reproducible_runtime_metadata(tmp_path: Path) -> 
     }
     assert str(calls[0]["cwd"]).startswith("/proc/self/fd/")
     assert calls[0]["start_new_session"] is True
-    assert len(calls[0]["pass_fds"]) == 2
+    assert len(calls[0]["pass_fds"]) == 3
     assert (control.repo / ".trainer-aim-scratch.lock").is_file()
 
 
@@ -212,6 +217,31 @@ def test_launch_health_timeout_pidfd_terminates_child_before_releasing_lock(
     os.close(directory_fd)
 
 
+def test_real_gate_pidfd_open_failure_leaves_no_child_or_lock(
+    tmp_path: Path,
+) -> None:
+    control = _control(tmp_path)
+    processes: list[subprocess.Popen[bytes]] = []
+
+    def popen(*args: Any, **kwargs: Any) -> subprocess.Popen[bytes]:
+        process = subprocess.Popen(*args, **kwargs)
+        processes.append(process)
+        return process
+
+    with pytest.raises(RuntimeError, match="pidfd"):
+        launch_aim_scratch(
+            control,
+            aim_executable=sys.executable,
+            popen=popen,
+            pidfd_open=lambda _pid: (_ for _ in ()).throw(OSError("injected")),
+        )
+    assert processes[0].poll() == 0
+    directory_fd = aim_scratch.open_trusted_directory(control.repo)
+    lock_fd = aim_scratch.open_facility_lock(directory_fd)
+    os.close(lock_fd)
+    os.close(directory_fd)
+
+
 def test_launch_keeps_pinned_inode_when_lexical_repo_is_swapped(
     tmp_path: Path,
 ) -> None:
@@ -236,7 +266,7 @@ def test_launch_keeps_pinned_inode_when_lexical_repo_is_swapped(
         health_probe=health,
         discover_process=lambda _control, **_kwargs: ProcessSnapshot(
             321,
-            tuple(calls[0]["command"]),
+            _gated_target(calls[0]),
             moved,
             12345,
         ),
@@ -304,6 +334,64 @@ def test_process_self_fd_argument_is_resolved_in_target_pid_namespace(
         os.close(directory_fd)
 
 
+def test_real_locked_child_validates_and_resumes_without_second_start(
+    tmp_path: Path,
+) -> None:
+    control = _control(tmp_path)
+    directory_fd = aim_scratch.open_trusted_directory(control.repo)
+    lock_fd = aim_scratch.create_facility_lock(directory_fd)
+    pinned = f"/proc/self/fd/{directory_fd}"
+    command = [
+        sys.executable,
+        "-c",
+        "import time; time.sleep(30)",
+        "server",
+        "--host",
+        control.host,
+        "--port",
+        str(control.port),
+        "--repo",
+        pinned,
+        "-y",
+    ]
+    child = subprocess.Popen(
+        command,
+        cwd=pinned,
+        pass_fds=(lock_fd, directory_fd),
+    )
+    os.close(lock_fd)
+    root_stat = control.repo.stat()
+    try:
+        snapshot = aim_scratch.inspect_process(child.pid)
+        metadata = {
+            "command": list(snapshot.cmdline),
+            "cwd": str(snapshot.cwd),
+            "endpoint": control.endpoint,
+            "pid": child.pid,
+            "port": control.port,
+            "repo_fd": directory_fd,
+            "repo_root_dev": root_stat.st_dev,
+            "repo_root_ino": root_stat.st_ino,
+            "start_time_ticks": snapshot.start_time_ticks,
+            "started_at_utc": "2026-07-24T00:00:00Z",
+            "trusted_repo": str(control.repo),
+        }
+        control.metadata_file.write_text(json.dumps(metadata))
+        control.pid_file.write_text(f"{child.pid}\n")
+        result = launch_aim_scratch(
+            control,
+            aim_executable="/must/not/start",
+            popen=lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("must not start")),
+            health_probe=lambda _host, _port: True,
+        )
+        assert result["status"] == "resumed"
+        assert result["pid"] == child.pid
+    finally:
+        child.terminate()
+        child.wait(timeout=5)
+        os.close(directory_fd)
+
+
 def test_preflight_validates_metadata_pid_cmdline_cwd_port_and_repo(
     tmp_path: Path,
 ) -> None:
@@ -317,7 +405,7 @@ def test_preflight_validates_metadata_pid_cmdline_cwd_port_and_repo(
             "--port",
             str(control.port),
             "--repo",
-        "/proc/self/fd/99",
+            "/proc/self/fd/99",
             "-y",
         ],
         "cwd": str(control.repo),
@@ -387,9 +475,7 @@ def test_preflight_rejects_aim_runtime_drift(tmp_path: Path, drift: str) -> None
     control.pid_file.write_text("999\n" if drift == "pid" else "321\n")
     snapshot = ProcessSnapshot(
         pid=321,
-        cmdline=("aim", "server", "--repo", "/wrong")
-        if drift == "cmdline"
-        else command,
+        cmdline=("aim", "server", "--repo", "/wrong") if drift == "cmdline" else command,
         cwd=control.main_repo if drift == "cwd" else control.repo,
         start_time_ticks=12345,
     )
@@ -420,9 +506,7 @@ def test_inactive_accepts_stale_files_but_rejects_live_or_occupied_endpoint(
     with pytest.raises(ValueError, match="active"):
         aim_scratch.assert_aim_scratch_inactive(
             control,
-            process_enumerator=lambda: (
-                ProcessSnapshot(321, command, control.repo, 12345),
-            ),
+            process_enumerator=lambda: (ProcessSnapshot(321, command, control.repo, 12345),),
             health_probe=lambda _host, _port: True,
         )
     metadata = json.loads(control.metadata_file.read_text())
@@ -431,9 +515,7 @@ def test_inactive_accepts_stale_files_but_rejects_live_or_occupied_endpoint(
     with pytest.raises(ValueError, match="active"):
         aim_scratch.assert_aim_scratch_inactive(
             control,
-            process_enumerator=lambda: (
-                ProcessSnapshot(321, command, control.repo, 12345),
-            ),
+            process_enumerator=lambda: (ProcessSnapshot(321, command, control.repo, 12345),),
             health_probe=lambda _host, _port: False,
         )
     control.metadata_file.unlink()
@@ -663,9 +745,7 @@ def test_inactive_scans_all_processes_without_metadata_or_endpoint_health(
     with pytest.raises(ValueError, match="active"):
         aim_scratch.assert_aim_scratch_inactive(
             control,
-            process_enumerator=lambda: (
-                ProcessSnapshot(777, command, control.repo, 12345),
-            ),
+            process_enumerator=lambda: (ProcessSnapshot(777, command, control.repo, 12345),),
             health_probe=lambda _host, _port: False,
         )
 
@@ -752,9 +832,7 @@ def test_stop_fails_closed_without_pidfd_support_and_source_has_no_os_kill(
             control,
             pidfd_open=lambda _pid: (_ for _ in ()).throw(NotImplementedError()),
         )
-    source = (
-        Path(__file__).parents[1] / "src" / "trainer_infra" / "aim_scratch.py"
-    ).read_text()
+    source = (Path(__file__).parents[1] / "src" / "trainer_infra" / "aim_scratch.py").read_text()
     assert "os.kill" not in source
 
 
@@ -776,9 +854,7 @@ def test_stop_rejects_replaced_metadata_and_does_not_unlink_new_file(
     with pytest.raises(RuntimeError, match="evidence changed"):
         aim_scratch.stop_aim_scratch(
             control,
-            inspect_process=lambda _pid: ProcessSnapshot(
-                321, command, control.repo, 12345
-            ),
+            inspect_process=lambda _pid: ProcessSnapshot(321, command, control.repo, 12345),
             health_probe=health,
             pidfd_open=lambda _pid: 91,
             pidfd_send_signal=lambda _fd, _value: None,

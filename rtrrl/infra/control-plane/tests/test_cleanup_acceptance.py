@@ -783,6 +783,47 @@ def test_snapshot_close_failure_still_removes_temp_and_releases_all_locks(
     os.close(directory_fd)
 
 
+def test_cleanup_body_error_remains_primary_with_all_close_failures_as_notes(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    module = _load(monkeypatch)
+    source = _snapshot_source(tmp_path)
+    opened: list[Path] = []
+    _fake_aim_modules(
+        monkeypatch,
+        opened,
+        close_error=RuntimeError("repo close failure"),
+    )
+    gateway = module.TrustedAimRepoGateway(source)
+    primary = ValueError("primary body failure")
+
+    class FailingExit:
+        def __init__(self, wrapped: Any) -> None:
+            self.wrapped = wrapped
+
+        def __exit__(self, *args: Any) -> None:
+            self.wrapped.__exit__(*args)
+            raise RuntimeError("temp exit failure")
+
+    with pytest.raises(ValueError, match="primary body") as captured:
+        with gateway.cleanup_operation(_snapshot_control(source)):
+            with gateway.open_read_only():
+                temporary = opened[0]
+                gateway._snapshot_context = FailingExit(gateway._snapshot_context)
+                raise primary
+
+    assert captured.value is primary
+    notes = "\n".join(captured.value.__notes__)
+    assert "repo close failure" in notes
+    assert "temp exit failure" in notes
+    assert not temporary.exists()
+    directory_fd = aim_scratch.open_trusted_directory(source)
+    lock_fd = aim_scratch.open_facility_lock(directory_fd)
+    os.close(lock_fd)
+    os.close(directory_fd)
+
+
 @pytest.mark.parametrize(
     "failure",
     [
@@ -810,6 +851,7 @@ def test_snapshot_rejects_unsafe_or_changed_tree_and_fail_cleans_temp(
     elif failure == "source-special":
         os.mkfifo(source / ".aim" / "fifo")
     else:
+
         def changed_copytree(src: Path, dst: Path) -> Path:
             result = real_copytree(
                 src,
