@@ -1269,10 +1269,10 @@ Profiles are `c7am` and `g6x`; both digest-bound catalogs expose
 
 - [ ] **Step 2: Stop and request paid-job authorization**
 
-The user's latest decision authorizes exactly three paid jobs: two `c7am` and
-one `g6x`, each native attempt one. CPU child counts are `2,1`; GPU child count
-is `1`. This authorization does not itself submit jobs. Do not run
-`trainerctl run` as part of this plan update.
+Request authorization for exactly three paid jobs: two `c7am` and one `g6x`,
+each native attempt one. CPU child counts are `2,1`; the GPU child count is
+`1`. Agreement on this reduced acceptance shape is not itself authorization
+to submit paid jobs. Do not run `trainerctl run` before the separate approval.
 
 - [ ] **Step 3: Run once in the foreground after authorization**
 
