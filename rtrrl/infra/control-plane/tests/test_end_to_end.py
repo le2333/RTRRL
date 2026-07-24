@@ -5,8 +5,10 @@ from dataclasses import dataclass
 import hashlib
 import importlib.util
 import json
+import math
 import os
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any
 
 import optuna
@@ -272,8 +274,10 @@ class FakeBatch:
         self.store = store
         self.mode = mode
         self.submitted: list[Any] = []
+        self.pending: dict[str, tuple[Any, str]] = {}
         self.statuses: dict[str, JobQuery] = {}
         self.query_calls: list[tuple[str, ...]] = []
+        self.events: list[tuple[str, str | tuple[str, ...]]] = []
         self.submit_attempts = 0
         self.resubmit_calls = 0
         self.cancel_calls = 0
@@ -291,6 +295,13 @@ class FakeBatch:
             raise RuntimeError("second Batch submit failed")
         job_id = f"batch-{self.submit_attempts}"
         uri = f"{self.prefix}jobs/{bundle.job_id}/bundle.json"
+        self.submitted.append(bundle)
+        self.pending[job_id] = (bundle, uri)
+        self.events.append(("submit", job_id))
+        return SubmittedJob(job_id=job_id, bundle_id=bundle.job_id)
+
+    def _execute(self, job_id: str) -> JobQuery:
+        _, uri = self.pending[job_id]
         environment = {
             "PATH": os.pathsep.join(
                 (
@@ -340,12 +351,16 @@ class FakeBatch:
             status=status,
             status_reason=failed_reason,
         )
-        self.submitted.append(bundle)
-        return SubmittedJob(job_id=job_id, bundle_id=bundle.job_id)
+        return self.statuses[job_id]
 
     def query(self, job_ids: list[str]) -> tuple[JobQuery, ...]:
-        self.query_calls.append(tuple(job_ids))
-        return tuple(self.statuses[job_id] for job_id in job_ids)
+        requested = tuple(job_ids)
+        self.query_calls.append(requested)
+        self.events.append(("query", requested))
+        return tuple(
+            self.statuses[job_id] if job_id in self.statuses else self._execute(job_id)
+            for job_id in job_ids
+        )
 
     def resubmit(self, *args: Any, **kwargs: Any) -> None:
         del args, kwargs
@@ -358,6 +373,30 @@ class FakeBatch:
     def retry(self, *args: Any, **kwargs: Any) -> None:
         del args, kwargs
         self.retry_calls += 1
+
+
+def test_fake_batch_submit_defers_worker_until_query(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls: list[str] = []
+    monkeypatch.setattr(
+        worker,
+        "execute_bundle",
+        lambda uri, store: calls.append(uri) or 0,
+    )
+    batch = FakeBatch("s3://bucket/experiments/test/", FakeStore(str(tmp_path)))
+    submitted = batch.submit(
+        SimpleNamespace(job_id="bundle-1"),
+        SimpleNamespace(),
+        SimpleNamespace(),
+    )
+
+    assert calls == []
+    assert batch.query([submitted.job_id]) == (
+        JobQuery(job_id=submitted.job_id, status="SUCCEEDED"),
+    )
+    assert calls == ["s3://bucket/experiments/test/jobs/bundle-1/bundle.json"]
 
 
 @dataclass
@@ -568,6 +607,17 @@ def test_real_facility_lifecycle_mixes_groups_and_preserves_artifact_identity(
     assert report.completed_runs == 10
     assert len(report.submitted_job_ids) == 6
     assert [len(call) for call in batch.query_calls] == [2, 2, 2]
+    assert batch.events == [
+        ("submit", "batch-1"),
+        ("submit", "batch-2"),
+        ("query", ("batch-1", "batch-2")),
+        ("submit", "batch-3"),
+        ("submit", "batch-4"),
+        ("query", ("batch-3", "batch-4")),
+        ("submit", "batch-5"),
+        ("submit", "batch-6"),
+        ("query", ("batch-5", "batch-6")),
+    ]
 
     bundles = batch.submitted
     assert [len(bundle.runs) for bundle in bundles] == [2, 2, 2, 2, 1, 1]
@@ -577,6 +627,19 @@ def test_real_facility_lifecycle_mixes_groups_and_preserves_artifact_identity(
     }
     assert sum(bundle.resource_profile == "c7am" for bundle in bundles) == 3
     assert sum(bundle.resource_profile == "g6x" for bundle in bundles) == 3
+    for group, profile, digest in (
+        ("cpu", "c7am", CPU_IMAGE_DIGEST),
+        ("gpu", "g6x", GPU_IMAGE_DIGEST),
+    ):
+        group_bundles = [
+            bundle
+            for bundle in bundles
+            if bundle.runs[0].run_context["group"] == group
+        ]
+        assert [
+            (bundle.resource_profile, bundle.image_digest, len(bundle.runs))
+            for bundle in group_bundles
+        ] == [(profile, digest, 2), (profile, digest, 2), (profile, digest, 1)]
     assert [
         sum(run.run_context["group"] == group for bundle in bundles for run in bundle.runs)
         for group in ("cpu", "gpu")
@@ -670,12 +733,29 @@ def test_real_facility_lifecycle_mixes_groups_and_preserves_artifact_identity(
         for trial in study.trials
         if trial.state != TrialState.PRUNED
     } == {TrialState.COMPLETE}
-    assert all(
-        trial.value is not None
-        for study in harness.studies
-        for trial in study.trials
-        if trial.state == TrialState.COMPLETE
-    )
+    studies = {
+        study.study_name.rsplit(":", 1)[1]: study for study in harness.studies
+    }
+    for bundle in bundles:
+        for run in bundle.runs:
+            run_id = run.run_id
+            aim_record = aim.records[aim._hash(run_id)]
+            aim_objective = float(aim_record["objective"])
+            spool_events = EventSpool(
+                aim.temporary / f"{aim._hash(run_id)}.jsonl"
+            ).events
+            finalized = next(
+                event
+                for event in spool_events
+                if event.kind == "final" and event.data["finalized"]
+            )
+            spool_objective = float(finalized.metric_value)
+            trial = studies[run.run_context["group"]].trials[
+                run.run_context["trial_number"]
+            ]
+            assert trial.state == TrialState.COMPLETE
+            assert math.isfinite(spool_objective)
+            assert spool_objective == aim_objective == trial.value
     persisted_report = store.get_json(
         "s3://bucket/experiments/task6-exp-001/report.json"
     )

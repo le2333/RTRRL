@@ -1,15 +1,20 @@
 from __future__ import annotations
 
 from dataclasses import replace
+import json
+import os
 import sys
 from pathlib import Path
+import subprocess
 from types import MappingProxyType
 
 import pytest
 import yaml
 
+from trainer_infra.controller import _estimated_jobs
 from trainer_infra.execution import build_run_context
 from trainer_infra.image_catalog import load_catalog_index
+from trainer_infra.loaders import load_experiment
 from trainer_infra.materialize import materialize_run
 from trainer_infra.models import (
     ExecutionSpec,
@@ -25,9 +30,43 @@ from test_materialize import FakeTrial, make_group
 
 REPOSITORY_ROOT = Path(__file__).parents[4]
 MOCK_TRAINER_ROOT = REPOSITORY_ROOT / "rtrrl" / "infra" / "mock-trainer"
-sys.path.insert(0, str(MOCK_TRAINER_ROOT / "src"))
+SMOKE_EXPERIMENT = (
+    REPOSITORY_ROOT
+    / "rtrrl"
+    / "infra"
+    / "control-plane"
+    / "examples"
+    / "experiment-smoke.yaml"
+)
 
-from brax_ppo_acceptance.config import AcceptanceConfig  # noqa: E402
+
+def _load_acceptance(path: Path) -> dict[str, object]:
+    environment = dict(os.environ)
+    environment["PYTHONPATH"] = str(MOCK_TRAINER_ROOT / "src")
+    result = subprocess.run(
+        [
+            str(MOCK_TRAINER_ROOT / ".venv" / "bin" / "python"),
+            "-c",
+            (
+                "import json, sys;"
+                "from brax_ppo_acceptance.config import AcceptanceConfig;"
+                "config = AcceptanceConfig.load(sys.argv[1], environ={});"
+                "print(json.dumps({"
+                "'environment_name': config.environment_name,"
+                "'learning_rate': config.learning_rate,"
+                "'num_timesteps': config.num_timesteps,"
+                "'failure_mode': config.failure_mode"
+                "}, sort_keys=True))"
+            ),
+            str(path),
+        ],
+        cwd=REPOSITORY_ROOT,
+        env=environment,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    return json.loads(result.stdout)
 
 
 def _spec(image: str) -> ExperimentSpec:
@@ -77,7 +116,7 @@ def test_descriptor_resolve_materialize_loads_exact_nested_concrete_yaml(tmp_pat
     path = tmp_path / "concrete.yaml"
     path.write_text(concrete.config_yaml)
     payload = yaml.safe_load(concrete.config_yaml)
-    acceptance = AcceptanceConfig.load(path, environ={})
+    acceptance = _load_acceptance(path)
 
     assert payload["protocol_version"] == "1"
     assert payload["environment"] == {
@@ -93,9 +132,9 @@ def test_descriptor_resolve_materialize_loads_exact_nested_concrete_yaml(tmp_pat
         },
         "runtime": {"seed": 0},
     }
-    assert acceptance.learning_rate == 0.0004
-    assert acceptance.num_timesteps == 128
-    assert acceptance.failure_mode == "none"
+    assert acceptance["learning_rate"] == 0.0004
+    assert acceptance["num_timesteps"] == 128
+    assert acceptance["failure_mode"] == "none"
     assert concrete.final_parameters == {
         "episode_length": 32,
         "failure_mode": "none",
@@ -114,6 +153,67 @@ def test_descriptor_resolve_materialize_loads_exact_nested_concrete_yaml(tmp_pat
     assert context.script == "brax_ppo_acceptance"
     assert context.metadata == {"purpose": "acceptance-contract"}
     assert context.final_parameters["learning_rate"] == 0.0004
+
+
+def test_committed_smoke_resolves_real_acceptance_contract_and_materializes(
+    tmp_path: Path,
+) -> None:
+    spec = load_experiment(SMOKE_EXPERIMENT)
+    catalog = load_catalog_index(MOCK_TRAINER_ROOT / "scripts" / "index.yaml")
+    resolved = resolve_experiment(
+        spec,
+        {
+            spec.defaults.image: catalog,
+            str(spec.groups["gpu"].image): catalog,
+        },
+    )
+
+    assert [group.name for group in resolved.groups] == ["cpu", "gpu"]
+    assert all(group.hpo.total_trials == 5 for group in resolved.groups)
+    assert all(group.hpo.configs_per_batch == 2 for group in resolved.groups)
+    assert all(group.execution.runs_per_job == 2 for group in resolved.groups)
+    assert [_estimated_jobs(group) for group in resolved.groups] == [3, 3]
+    assert all(group.script == "brax_ppo_acceptance" for group in resolved.groups)
+    assert [group.resources.profile for group in resolved.groups] == ["c7am", "g6x"]
+    assert [group.image for group in resolved.groups] == [
+        (
+            "007122174918.dkr.ecr.eu-north-1.amazonaws.com/rtrrl:"
+            "infra-acceptance-brax-ppo-cpu-20260723"
+        ),
+        (
+            "007122174918.dkr.ecr.eu-north-1.amazonaws.com/rtrrl:"
+            "infra-acceptance-brax-ppo-gpu-20260723"
+        ),
+    ]
+    assert all(group.environment.name == "inverted_pendulum" for group in resolved.groups)
+    assert all(group.environment.options == {"backend": "generalized"} for group in resolved.groups)
+    expected_values = (0.0002, 0.0003, 0.0004, 0.0005, 0.0006)
+    assert all(
+        group.searchable_parameters()["learning_rate"].values == expected_values
+        for group in resolved.groups
+    )
+
+    group = replace(resolved.groups[0], study_key="smoke-1:cpu")
+    concrete = materialize_run(
+        group,
+        FakeTrial(0),
+        {"learning_rate": 0.0002},
+        run_number=1,
+    )
+    path = tmp_path / "smoke-concrete.yaml"
+    path.write_text(concrete.config_yaml, encoding="utf-8")
+    acceptance = _load_acceptance(path)
+    assert acceptance["environment_name"] == "inverted_pendulum"
+    assert acceptance["learning_rate"] == 0.0002
+    assert acceptance["num_timesteps"] == 128
+
+
+def test_acceptance_contract_import_does_not_pollute_interpreter() -> None:
+    assert str(MOCK_TRAINER_ROOT / "src") not in sys.path
+    assert not any(
+        name == "brax_ppo_acceptance" or name.startswith("brax_ppo_acceptance.")
+        for name in sys.modules
+    )
 
 
 def test_materialize_rejects_parameter_path_prefix_conflicts():
