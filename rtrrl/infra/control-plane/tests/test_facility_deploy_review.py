@@ -4,6 +4,7 @@ import base64
 import importlib.util
 import json
 from pathlib import Path
+import subprocess
 from types import SimpleNamespace
 from typing import Any
 
@@ -16,6 +17,7 @@ from trainer_infra.image_catalog import encode_catalog_file
 SCRIPT = Path(__file__).parents[1] / "scripts" / "deploy_facility.py"
 CONTROL = Path(__file__).parents[1] / "config" / "facility.yaml"
 ROOT = Path(__file__).parents[4]
+LEGACY_FACILITY_COMMIT = "fd195c494ff4ac3b34dff066a6ccb1efb024b16b"
 
 
 def _load():
@@ -263,10 +265,24 @@ def test_push_uses_temporary_docker_config_and_verifies_digest_catalog() -> None
     assert not any(command[1] == "image" and "inspect" in command for command in commands)
 
 
-def test_image_verification_decodes_label_and_checks_runtime_contract() -> None:
+def test_image_verification_decodes_label_and_checks_runtime_contract(
+    tmp_path: Path,
+) -> None:
     deploy = _load()
     control = load_facility_control(CONTROL)
-    encoded = encode_catalog_file(ROOT / "memo" / "infra" / "scripts" / "index.yaml")
+    scripts = tmp_path / "scripts"
+    scripts.mkdir()
+    for name in ("index.yaml", "memo_stream_ac.yaml", "memo_rtrrl.yaml"):
+        content = subprocess.check_output(
+            [
+                "git",
+                "show",
+                f"{LEGACY_FACILITY_COMMIT}:memo/infra/scripts/{name}",
+            ],
+            cwd=ROOT,
+        )
+        (scripts / name).write_bytes(content)
+    encoded = encode_catalog_file(scripts / "index.yaml")
     commands: list[list[str]] = []
 
     def run_capture(

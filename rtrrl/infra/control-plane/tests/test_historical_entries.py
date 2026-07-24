@@ -140,19 +140,14 @@ def test_manifest_exactly_matches_task6_baseline_selection() -> None:
     )
 
 
-def test_every_manifest_entry_exists_with_unchanged_git_blob_identity() -> None:
+def test_every_manifest_entry_remains_addressable_by_git_blob_identity() -> None:
     entries = _manifest()["entries"]
     paths = [entry["path"] for entry in entries]
     assert paths == sorted(set(paths))
 
     for entry in entries:
-        path = REPOSITORY_ROOT / entry["path"]
-        assert path.is_file(), entry["path"]
         assert entry["mode"] in {"100644", "100755"}
-        assert bool(path.stat().st_mode & 0o111) == (entry["mode"] == "100755"), entry[
-            "path"
-        ]
-        assert _git_blob_sha(path.read_bytes()) == entry["blob"], entry["path"]
+        assert _git_blob_sha(_blob(entry["blob"])) == entry["blob"], entry["path"]
 
 
 def test_manifest_workflows_descriptors_and_hpo_specs_still_parse() -> None:
@@ -165,7 +160,7 @@ def test_manifest_workflows_descriptors_and_hpo_specs_still_parse() -> None:
             and "/specs/" in path.as_posix()
             and path.suffix in {".yaml", ".yml"}
         ):
-            value = yaml.safe_load((REPOSITORY_ROOT / path).read_text())
+            value = yaml.safe_load(_blob(entry["blob"]))
             assert isinstance(value, dict), path
 
 

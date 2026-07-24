@@ -10,7 +10,7 @@ from typing import Any, Literal
 from uuid import uuid4
 
 from optuna.trial import TrialState
-from pydantic import ConfigDict
+from pydantic import ConfigDict, field_validator
 
 from trainer_infra.aws_profiles import profile
 from trainer_infra.execution import (
@@ -28,8 +28,11 @@ from trainer_infra.models import (
     DiscreteSearch,
     ExperimentSpec,
     JsonScalar,
+    JsonValue,
     ResolvedExperiment,
     ResolvedGroup,
+    _require_json_value,
+    freeze_json,
     thaw_json,
 )
 from trainer_infra.resolve import resolve_experiment
@@ -67,9 +70,23 @@ class ExperimentReport(ContractModel):
     status: Literal["succeeded", "failed"]
     experiment_id: str
     experiment_name: str
+    experiment_metadata: Mapping[str, JsonValue]
     submitted_job_ids: tuple[str, ...]
     completed_runs: int
     error: str | None = None
+
+    @field_validator("experiment_metadata", mode="before")
+    @classmethod
+    def require_strict_json_metadata(cls, value: Any) -> Any:
+        _require_json_value(value, "experiment_metadata")
+        return value
+
+    def model_post_init(self, __context: Any) -> None:
+        object.__setattr__(
+            self,
+            "experiment_metadata",
+            freeze_json(dict(self.experiment_metadata)),
+        )
 
     def to_json(self) -> str:
         return canonical_json(self.model_dump(mode="json"))
@@ -748,6 +765,7 @@ class ExperimentController:
                 status="succeeded",
                 experiment_id=experiment_id,
                 experiment_name=resolved.name,
+                experiment_metadata=thaw_json(resolved.metadata),
                 submitted_job_ids=tuple(submitted_ids),
                 completed_runs=completed_runs,
             )
@@ -756,6 +774,7 @@ class ExperimentController:
                 status="failed",
                 experiment_id=experiment_id,
                 experiment_name=resolved.name,
+                experiment_metadata=thaw_json(resolved.metadata),
                 submitted_job_ids=tuple(submitted_ids),
                 completed_runs=completed_runs,
                 error=f"{type(error).__name__}: {error}",

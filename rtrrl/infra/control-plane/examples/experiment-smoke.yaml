@@ -1,12 +1,13 @@
 experiment:
-  name: memo-facility-smoke
-  description: Small foreground facility experiment
-  metadata:
-    purpose: smoke
+  name: infra-brax-ppo-acceptance
+  description: Infrastructure-owned CPU and GPU facility acceptance
+  metadata: {purpose: infra-acceptance}
 defaults:
-  image: 123456789012.dkr.ecr.eu-north-1.amazonaws.com/memo:approved
-  resources:
-    profile: c7am
+  image: 007122174918.dkr.ecr.eu-north-1.amazonaws.com/rtrrl:infra-acceptance-brax-ppo-cpu-20260723
+  environment: {name: inverted_pendulum, options: {backend: generalized}}
+  training_budget: {env_steps: 128}
+  logging: {aim_every_env_steps: 1, rerun_every_episodes: 1}
+  resources: {profile: c7am}
   hpo:
     total_trials: 5
     configs_per_batch: 2
@@ -14,51 +15,14 @@ defaults:
   execution:
     runs_per_job: 2
     aim_result_timeout_seconds: 600
-  parameters:
-    seed:
-      values: [7]
 groups:
-  stream:
-    script: memo_stream_ac
-    environment:
-      name: memory_chain
-      options:
-        length: 16
-        max_episode_steps: 16
-    training_budget:
-      env_steps: 10000
-    logging:
-      aim_every_env_steps: 1000
-      rerun_every_episodes: 10
+  cpu:
+    script: brax_ppo_acceptance
     parameters:
-      agent_type:
-        values: [rtu_rtrl]
-      hidden_dim:
-        values: [64, 128, 192]
-      gamma:
-        values: [0.95, 0.97, 0.98, 0.99, 1.0]
-  rtrrl:
-    script: memo_rtrrl
-    resources:
-      profile: g6x
-    environment:
-      name: hopper
-      options:
-        env_name: hopper
-        mode: F
-        backend: spring
-        max_episode_steps: 1000
-        normalize_obs: true
-        normalize_reward: true
-    training_budget:
-      env_steps: 10000
-    logging:
-      aim_every_env_steps: 1000
-      rerun_every_episodes: 5
+      learning_rate: {values: [0.0002, 0.0003, 0.0004, 0.0005, 0.0006]}
+  gpu:
+    script: brax_ppo_acceptance
+    image: 007122174918.dkr.ecr.eu-north-1.amazonaws.com/rtrrl:infra-acceptance-brax-ppo-gpu-20260723
+    resources: {profile: g6x}
     parameters:
-      rtrrl_topology:
-        values: [shared]
-      hidden_dim:
-        values: [16, 32, 64]
-      gamma:
-        values: [0.95, 0.97, 0.98, 0.99, 1.0]
+      learning_rate: {values: [0.0002, 0.0003, 0.0004, 0.0005, 0.0006]}

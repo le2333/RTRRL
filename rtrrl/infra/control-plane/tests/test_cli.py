@@ -42,6 +42,7 @@ class Controller:
             status="succeeded",
             experiment_id="fresh",
             experiment_name="test",
+            experiment_metadata={},
             submitted_job_ids=("aws-1",),
             completed_runs=1,
         )
@@ -96,6 +97,7 @@ def test_experiment_error_prints_complete_structured_failure(
         status="failed",
         experiment_id="fresh",
         experiment_name="test",
+        experiment_metadata={},
         submitted_job_ids=("aws-1", "aws-2"),
         completed_runs=1,
         error="RuntimeError: Batch failed",

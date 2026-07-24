@@ -21,6 +21,7 @@ import yaml
 from trainer_infra.adapters.aws_batch import SubmittedJob, ValidatedJobDefinition
 from trainer_infra.controller import (
     ExperimentController,
+    ExperimentReport,
     ExperimentRunError,
     SamplingExhaustedError,
 )
@@ -43,7 +44,13 @@ def write_experiment(path: Path) -> None:
     path.write_text(
         yaml.safe_dump(
             {
-                "experiment": {"name": "automatic"},
+                "experiment": {
+                    "name": "automatic",
+                    "metadata": {
+                        "purpose": "controller-test",
+                        "nested": {"owners": ["infra"]},
+                    },
+                },
                 "defaults": {
                     "image": IMAGE_TAG,
                     "resources": {"profile": "g6x"},
@@ -396,6 +403,12 @@ def test_two_groups_run_automatic_two_two_one_with_controller_only_tell(
 
     assert report.status == "succeeded"
     assert report.experiment_id == "fresh-1"
+    assert report.experiment_metadata == {
+        "purpose": "controller-test",
+        "nested": {"owners": ["infra"]},
+    }
+    with pytest.raises(TypeError, match="frozen JSON"):
+        report.experiment_metadata["nested"]["owners"].append("memo")  # type: ignore[index,union-attr]
     assert len(batches[0].submitted) == 5
     assert all(
         {run.run_context["group"] for run in bundle.runs} == {"first", "second"}
@@ -417,6 +430,11 @@ def test_two_groups_run_automatic_two_two_one_with_controller_only_tell(
         "s3://bucket/experiments/fresh-1/state/final.json",
         "s3://bucket/experiments/fresh-1/report.json",
     ]
+    persisted = stores[0].values["s3://bucket/experiments/fresh-1/report.json"]
+    assert persisted["experiment_metadata"] == {
+        "purpose": "controller-test",
+        "nested": {"owners": ["infra"]},
+    }
 
 
 def test_each_run_invocation_generates_one_fresh_experiment_id(tmp_path: Path) -> None:
@@ -451,6 +469,10 @@ def test_failure_boundaries_stop_future_batches_and_keep_submitted_ids(
         controller.run(experiment)
 
     assert raised.value.report.status == "failed"
+    assert raised.value.report.experiment_metadata == {
+        "purpose": "controller-test",
+        "nested": {"owners": ["infra"]},
+    }
     assert raised.value.report.submitted_job_ids == ("aws-1", "aws-2")
     assert len(batches[0].submitted) == 2
     assert [
@@ -467,6 +489,23 @@ def test_failure_boundaries_stop_future_batches_and_keep_submitted_ids(
         "s3://bucket/experiments/fresh-1/state/final.json",
         "s3://bucket/experiments/fresh-1/report.json",
     ]
+    persisted = stores[0].values["s3://bucket/experiments/fresh-1/report.json"]
+    assert persisted["experiment_metadata"] == {
+        "purpose": "controller-test",
+        "nested": {"owners": ["infra"]},
+    }
+
+
+def test_experiment_report_metadata_rejects_non_json_values() -> None:
+    with pytest.raises((TypeError, ValueError), match="JSON|json"):
+        ExperimentReport(
+            status="succeeded",
+            experiment_id="experiment-1",
+            experiment_name="strict-json",
+            experiment_metadata={"invalid": float("nan")},
+            submitted_job_ids=(),
+            completed_runs=0,
+        )
 
 
 def test_failed_concurrent_round_retains_every_submitted_id(tmp_path: Path) -> None:

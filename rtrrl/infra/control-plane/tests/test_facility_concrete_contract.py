@@ -8,141 +8,100 @@ from types import MappingProxyType
 import pytest
 import yaml
 
-from trainer_infra.materialize import materialize_run
 from trainer_infra.execution import build_run_context
+from trainer_infra.image_catalog import load_catalog_index
+from trainer_infra.materialize import materialize_run
 from trainer_infra.models import (
-    DescriptorDefaults,
-    EnvironmentSpec,
     ExecutionSpec,
     ExperimentDefaults,
     ExperimentIdentity,
     ExperimentSpec,
-    FieldDescriptor,
     GroupSpec,
     HpoSpec,
-    LoggingSpec,
-    ObjectiveSpec,
     ResourcesSpec,
-    ScriptCatalog,
-    ScriptDescriptor,
-    TrainingBudgetSpec,
 )
 from trainer_infra.resolve import resolve_experiment
 from test_materialize import FakeTrial, make_group
 
 REPOSITORY_ROOT = Path(__file__).parents[4]
-MEMO_ROOT = REPOSITORY_ROOT / "memo"
-sys.path.insert(0, str(MEMO_ROOT))
-sys.path.insert(0, str(MEMO_ROOT / "experiments"))
+MOCK_TRAINER_ROOT = REPOSITORY_ROOT / "rtrrl" / "infra" / "mock-trainer"
+sys.path.insert(0, str(MOCK_TRAINER_ROOT / "src"))
 
-from base.facility import FacilityInput  # noqa: E402
-
-
-def _descriptor() -> ScriptDescriptor:
-    return ScriptDescriptor(
-        name="memo_stream_ac",
-        argv=("python", "experiments/memo_stream_ac/run.py", "--config", "{config_path}"),
-        sdk_protocol_version="1",
-        defaults=DescriptorDefaults(
-            environment=EnvironmentSpec(
-                name="memory_chain",
-                options={
-                    "length": 8,
-                    "max_episode_steps": 8,
-                    "nested": {"observe": ["query"]},
-                },
-            ),
-            training_budget=TrainingBudgetSpec(env_steps=24),
-            logging=LoggingSpec(
-                aim_every_env_steps=6,
-                rerun_every_episodes=2,
-            ),
-        ),
-        objective=ObjectiveSpec(
-            metric="eval/rewards",
-            direction="maximize",
-            reduction="last",
-        ),
-        environments=("memory_chain",),
-        fields={
-            "agent_type": FieldDescriptor(
-                path="algorithm.agent_type",
-                type="str",
-                default="rtu_rtrl",
-                choices=("rtu_rtrl",),
-            ),
-            "hidden_dim": FieldDescriptor(
-                path="network.hidden_dim",
-                type="int",
-                default=32,
-                searchable=True,
-                default_search={"values": [32, 64]},
-            ),
-            "seed": FieldDescriptor(
-                path="runtime.seed",
-                type="int",
-                default=7,
-            ),
-        },
-    )
+from brax_ppo_acceptance.config import AcceptanceConfig  # noqa: E402
 
 
 def _spec(image: str) -> ExperimentSpec:
     return ExperimentSpec(
-        experiment=ExperimentIdentity(name="facility-contract"),
+        experiment=ExperimentIdentity(
+            name="facility-contract",
+            metadata={"purpose": "acceptance-contract"},
+        ),
         defaults=ExperimentDefaults(
             image=image,
+            environment={
+                "name": "inverted_pendulum",
+                "options": {"backend": "generalized"},
+            },
+            training_budget={"env_steps": 128},
+            logging={
+                "aim_every_env_steps": 1,
+                "rerun_every_episodes": 1,
+            },
             resources=ResourcesSpec(profile="c7am"),
             hpo=HpoSpec(total_trials=1, configs_per_batch=1),
             execution=ExecutionSpec(runs_per_job=1),
         ),
         groups={
-            "stream": GroupSpec(
-                script="memo_stream_ac",
-                parameters={"hidden_dim": {"values": [64]}},
+            "cpu": GroupSpec(
+                script="brax_ppo_acceptance",
+                parameters={"learning_rate": {"values": [0.0004]}},
             )
         },
     )
 
 
 def test_descriptor_resolve_materialize_loads_exact_nested_concrete_yaml(tmp_path):
-    image = "repo/memo@sha256:" + "a" * 64
+    image = "repo/acceptance@sha256:" + "a" * 64
     resolved = resolve_experiment(
         _spec(image),
-        {
-            image: ScriptCatalog(
-                protocol_version="1",
-                scripts={"memo_stream_ac": _descriptor()},
-            )
-        },
+        {image: load_catalog_index(MOCK_TRAINER_ROOT / "scripts" / "index.yaml")},
     ).groups[0]
-    resolved = replace(resolved, study_key="exp-1:stream")
+    resolved = replace(resolved, study_key="exp-1:cpu")
 
     concrete = materialize_run(
         resolved,
         FakeTrial(3),
-        {},
+        {"learning_rate": 0.0004},
         run_number=1,
     )
     path = tmp_path / "concrete.yaml"
     path.write_text(concrete.config_yaml)
     payload = yaml.safe_load(concrete.config_yaml)
-    facility = FacilityInput.load(path)
+    acceptance = AcceptanceConfig.load(path, environ={})
 
     assert payload["protocol_version"] == "1"
-    assert payload["environment"]["options"]["nested"] == {
-        "observe": ["query"]
+    assert payload["environment"] == {
+        "name": "inverted_pendulum",
+        "options": {"backend": "generalized"},
     }
     assert payload["parameters"] == {
-        "algorithm": {"agent_type": "rtu_rtrl"},
-        "network": {"hidden_dim": 64},
-        "runtime": {"seed": 7},
+        "algorithm": {
+            "episode_length": 32,
+            "failure_mode": "none",
+            "learning_rate": 0.0004,
+            "num_envs": 4,
+        },
+        "runtime": {"seed": 0},
     }
-    assert facility.parameters["network"]["hidden_dim"] == 64
+    assert acceptance.learning_rate == 0.0004
+    assert acceptance.num_timesteps == 128
+    assert acceptance.failure_mode == "none"
     assert concrete.final_parameters == {
-        "agent_type": "rtu_rtrl",
-        "hidden_dim": 64,
-        "seed": 7,
+        "episode_length": 32,
+        "failure_mode": "none",
+        "learning_rate": 0.0004,
+        "num_envs": 4,
+        "seed": 0,
     }
     context = build_run_context(
         "facility",
@@ -151,8 +110,10 @@ def test_descriptor_resolve_materialize_loads_exact_nested_concrete_yaml(tmp_pat
         concrete,
         tmp_path / "artifacts",
     )
-    assert context.seed == 7
-    assert context.final_parameters["seed"] == 7
+    assert context.seed == 0
+    assert context.script == "brax_ppo_acceptance"
+    assert context.metadata == {"purpose": "acceptance-contract"}
+    assert context.final_parameters["learning_rate"] == 0.0004
 
 
 def test_materialize_rejects_parameter_path_prefix_conflicts():

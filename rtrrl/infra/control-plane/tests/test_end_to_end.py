@@ -7,7 +7,6 @@ import importlib.util
 import json
 import os
 from pathlib import Path
-import sys
 from typing import Any
 
 import optuna
@@ -31,178 +30,23 @@ from training_sdk.spool import EventSpool
 
 
 REPOSITORY_ROOT = Path(__file__).parents[4]
-MEMO_ROOT = REPOSITORY_ROOT / "memo"
 WORKER_PATH = REPOSITORY_ROOT / "rtrrl" / "infra" / "worker" / "worker.py"
-IMAGE_TAG = "123456789012.dkr.ecr.eu-north-1.amazonaws.com/memo:task6"
-IMAGE_DIGEST = (
-    "123456789012.dkr.ecr.eu-north-1.amazonaws.com/memo@sha256:" + "a" * 64
+MOCK_TRAINER_ROOT = REPOSITORY_ROOT / "rtrrl" / "infra" / "mock-trainer"
+CPU_IMAGE_TAG = "123456789012.dkr.ecr.eu-north-1.amazonaws.com/acceptance:cpu"
+GPU_IMAGE_TAG = "123456789012.dkr.ecr.eu-north-1.amazonaws.com/acceptance:gpu"
+CPU_IMAGE_DIGEST = (
+    "123456789012.dkr.ecr.eu-north-1.amazonaws.com/acceptance@sha256:" + "a" * 64
 )
-CONFIG_DIGEST = "sha256:" + "b" * 64
+GPU_IMAGE_DIGEST = (
+    "123456789012.dkr.ecr.eu-north-1.amazonaws.com/acceptance@sha256:" + "b" * 64
+)
+CPU_CONFIG_DIGEST = "sha256:" + "c" * 64
+GPU_CONFIG_DIGEST = "sha256:" + "d" * 64
 
 WORKER_SPEC = importlib.util.spec_from_file_location("task6_trainer_worker", WORKER_PATH)
 assert WORKER_SPEC is not None and WORKER_SPEC.loader is not None
 worker = importlib.util.module_from_spec(WORKER_SPEC)
 WORKER_SPEC.loader.exec_module(worker)
-
-
-FIXTURE_SOURCE = r"""
-from __future__ import annotations
-
-import argparse
-from dataclasses import dataclass
-from pathlib import Path
-import sys
-import types
-
-memo_root = Path("__MEMO_ROOT__")
-experiments = memo_root / "experiments"
-for item in (memo_root, experiments):
-    if str(item) not in sys.path:
-        sys.path.insert(0, str(item))
-
-from base.facility import FacilityInput, build_rtrrl_config, build_stream_ac_config
-from training_sdk import Episode, bootstrap_from_environment
-from training_sdk.spool import AimUnavailable
-
-
-@dataclass
-class StreamConfig:
-    experiment: str = "task6_stream"
-    agent_type: str = "rtu_rtrl"
-    seed: int = 0
-    hidden_dim: int = 32
-    encoder_dim: int = 32
-    gamma: float = 0.99
-    trace_lambda: float = 0.9
-    actor_lr: float = 1.0
-    critic_lr: float = 1.0
-    entropy_coefficient: float = 0.01
-    num_envs: int = 16
-    num_epochs: int = 1
-    chain_length: int = 16
-    num_bits: int = 1
-    env_name: str = "hopper"
-    mode: str = "F"
-    backend: str = "spring"
-    max_episode_steps: int = 16
-    total_timesteps: int = 800
-    patience: int = 0
-    require_full_budget: bool = False
-
-
-@dataclass
-class RtrrlConfig:
-    experiment: str = "task6_rtrrl"
-    rtrrl_topology: str = "shared"
-    seed: int = 0
-    backbone: str = "lru"
-    hidden_dim: int = 32
-    gamma: float = 0.95
-    lambda_pi: float = 0.97
-    lambda_v: float = 0.9
-    lambda_rnn: float = 0.945
-    td_lr: float = 0.00003
-    rnn_lr: float = 0.000002
-    eta_pi: float = 0.38
-    eta_f: float = 0.5
-    entropy_rate: float = 0.00003
-    num_envs: int = 1
-    num_epochs: int = 1
-    env_name: str = "hopper"
-    mode: str = "F"
-    backend: str = "spring"
-    max_episode_steps: int = 1000
-    normalize_obs: bool = True
-    normalize_reward: bool = True
-    total_timesteps: int = 800
-    patience: int = 0
-    require_full_budget: bool = False
-
-
-def install_launcher_fixtures():
-    fixtures = {
-        "stream_ac_memorychain.run": ("StreamACMemoryChainConfig", StreamConfig),
-        "stream_ac_kmemorychain.run": ("StreamACKMemoryChainConfig", StreamConfig),
-        "stream_ac_mujoco_masked.run": ("StreamACMujocoMaskedConfig", StreamConfig),
-        "rtrrl_hopper.run": ("RTRRLHopperConfig", RtrrlConfig),
-    }
-    for module_name, (class_name, config_type) in fixtures.items():
-        package_name, _ = module_name.rsplit(".", 1)
-        sys.modules.setdefault(package_name, types.ModuleType(package_name))
-        module = types.ModuleType(module_name)
-        setattr(module, class_name, config_type)
-        sys.modules[module_name] = module
-
-
-class OfflineAim:
-    def start(self, context):
-        self.context = context
-
-    def send(self, event):
-        raise AimUnavailable("Task 6 fake Aim is offline in the worker")
-
-    def fail(self, metadata):
-        del metadata
-
-    def close(self):
-        pass
-
-
-def main():
-    parser = argparse.ArgumentParser()
-    parser.add_argument("--launcher", required=True)
-    parser.add_argument("--config", required=True, type=Path)
-    args = parser.parse_args()
-
-    install_launcher_fixtures()
-    value = FacilityInput.load(args.config)
-    if args.launcher == "memo_stream_ac":
-        config = build_stream_ac_config(value)
-    elif args.launcher == "memo_rtrrl":
-        config = build_rtrrl_config(value)
-    else:
-        raise ValueError(args.launcher)
-
-    run = bootstrap_from_environment(
-        aim_factory=lambda context, environ: OfflineAim(),
-    )
-    assert run is not None
-    if __import__("os").environ.get("TASK6_CHILD_NONZERO") == "1":
-        run.fail(RuntimeError("fixture child failed"))
-        return 7
-
-    run.log_metrics(4, {"train/loss": 0.25})
-    run.log_episode_summary(
-        env_steps=4,
-        episode_return=2.5,
-        episode_length=1,
-    )
-    run.log_episode(
-        Episode(
-            number=1,
-            phase="eval",
-            start_env_steps=4,
-            end_env_steps=4,
-            observations=((0.0,), (1.0,)),
-            actions=((0.5,),),
-            rewards=(2.5,),
-            terminals=(True,),
-            truncations=(False,),
-        )
-    )
-    checkpoint = run.context.artifact_directory / "fixture-checkpoint.bin"
-    checkpoint.write_text(
-        f"{args.launcher}:{config.hidden_dim}:{run.context.run_id}",
-        encoding="utf-8",
-    )
-    run.register_checkpoint(checkpoint)
-    run.finish({"eval/rewards": float(config.hidden_dim)})
-    return 0
-
-
-if __name__ == "__main__":
-    raise SystemExit(main())
-"""
 
 
 class FakeEcr:
@@ -212,11 +56,21 @@ class FakeEcr:
 
     def resolve_tag(self, reference: str) -> str:
         self.calls.append(("resolve_tag", reference))
-        return IMAGE_DIGEST
+        return {
+            CPU_IMAGE_TAG: CPU_IMAGE_DIGEST,
+            GPU_IMAGE_TAG: GPU_IMAGE_DIGEST,
+        }[reference]
 
     def get_manifest(self, reference: str) -> Mapping[str, Any]:
         self.calls.append(("get_manifest", reference))
-        return {"config": {"digest": CONFIG_DIGEST}}
+        return {
+            "config": {
+                "digest": {
+                    CPU_IMAGE_DIGEST: CPU_CONFIG_DIGEST,
+                    GPU_IMAGE_DIGEST: GPU_CONFIG_DIGEST,
+                }[reference]
+            }
+        }
 
     def get_config_blob(self, repository: str, digest: str) -> Mapping[str, Any]:
         self.calls.append(("get_config_blob", repository, digest))
@@ -386,16 +240,24 @@ class FakeAim:
 
 class FakePreflight:
     def validate(self, resolved: Any) -> dict[str, ValidatedJobDefinition]:
-        assert {group.resources.profile for group in resolved.groups} == {"c7am"}
+        assert {group.resources.profile for group in resolved.groups} == {"c7am", "g6x"}
         return {
             "c7am": ValidatedJobDefinition(
                 arn=(
                     "arn:aws:batch:eu-north-1:123456789012:job-definition/"
                     f"trainer-c7am-{'a' * 64}:1"
                 ),
-                image_digest=IMAGE_DIGEST,
+                image_digest=CPU_IMAGE_DIGEST,
                 resource_profile="c7am",
-            )
+            ),
+            "g6x": ValidatedJobDefinition(
+                arn=(
+                    "arn:aws:batch:eu-north-1:123456789012:job-definition/"
+                    f"trainer-g6x-{'b' * 64}:1"
+                ),
+                image_digest=GPU_IMAGE_DIGEST,
+                resource_profile="g6x",
+            ),
         }
 
 
@@ -404,12 +266,10 @@ class FakeBatch:
         self,
         prefix: str,
         store: FakeStore,
-        fixture: Path,
         mode: str = "ok",
     ) -> None:
         self.prefix = prefix
         self.store = store
-        self.fixture = fixture
         self.mode = mode
         self.submitted: list[Any] = []
         self.statuses: dict[str, JobQuery] = {}
@@ -431,16 +291,25 @@ class FakeBatch:
             raise RuntimeError("second Batch submit failed")
         job_id = f"batch-{self.submit_attempts}"
         uri = f"{self.prefix}jobs/{bundle.job_id}/bundle.json"
-        previous = os.environ.get("TASK6_CHILD_NONZERO")
-        previous_pythonpath = os.environ.get("PYTHONPATH")
-        sdk_source = str(REPOSITORY_ROOT / "training-sdk" / "src")
-        os.environ["PYTHONPATH"] = (
-            sdk_source
-            if previous_pythonpath is None
-            else f"{sdk_source}{os.pathsep}{previous_pythonpath}"
-        )
-        if self.mode == "child-nonzero":
-            os.environ["TASK6_CHILD_NONZERO"] = "1"
+        environment = {
+            "PATH": os.pathsep.join(
+                (
+                    str(MOCK_TRAINER_ROOT / ".venv" / "bin"),
+                    os.environ["PATH"],
+                )
+            ),
+            "PYTHONPATH": os.pathsep.join(
+                (
+                    str(REPOSITORY_ROOT / "training-sdk" / "src"),
+                    str(MOCK_TRAINER_ROOT / "src"),
+                )
+            ),
+            "JAX_PLATFORM_NAME": "cpu",
+            "BRAX_ACCEPTANCE_TEST_MODE": "1",
+            "BRAX_ACCEPTANCE_E2E_FAST": "1",
+        }
+        previous = {name: os.environ.get(name) for name in environment}
+        os.environ.update(environment)
         try:
             try:
                 returncode = worker.execute_bundle(uri, self.store)
@@ -451,14 +320,11 @@ class FakeBatch:
                 returncode = 1
                 failed_reason = f"{type(error).__name__}: {error}"
         finally:
-            if previous is None:
-                os.environ.pop("TASK6_CHILD_NONZERO", None)
-            else:
-                os.environ["TASK6_CHILD_NONZERO"] = previous
-            if previous_pythonpath is None:
-                os.environ.pop("PYTHONPATH", None)
-            else:
-                os.environ["PYTHONPATH"] = previous_pythonpath
+            for name, value in previous.items():
+                if value is None:
+                    os.environ.pop(name, None)
+                else:
+                    os.environ[name] = value
         if self.mode == "batch-failed":
             returncode = 1
             failed_reason = "injected Batch FAILED"
@@ -505,34 +371,49 @@ class Harness:
     studies: list[optuna.Study]
 
 
-def _catalog(fixture: Path) -> ScriptCatalog:
-    catalog = load_catalog_index(MEMO_ROOT / "infra" / "scripts" / "index.yaml")
-    scripts = {}
-    for name, descriptor in catalog.scripts.items():
-        scripts[name] = descriptor.model_copy(
-            update={
-                "argv": (
-                    sys.executable,
-                    str(fixture),
-                    "--launcher",
-                    name,
-                    "--config",
-                    "{config_path}",
+def _catalog(*, allow_injected_failure: bool) -> ScriptCatalog:
+    catalog = load_catalog_index(MOCK_TRAINER_ROOT / "scripts" / "index.yaml")
+    if not allow_injected_failure:
+        return catalog
+    descriptor = catalog.scripts["brax_ppo_acceptance"]
+    fields = dict(descriptor.fields)
+    fields["failure_mode"] = fields["failure_mode"].model_copy(
+        update={
+            "choices": (
+                "none",
+                "before_training",
+                "after_training",
+                "after_checkpoint",
+            )
+        }
+    )
+    return catalog.model_copy(
+        update={
+            "scripts": {
+                "brax_ppo_acceptance": descriptor.model_copy(
+                    update={"fields": fields}
                 )
             }
-        )
-    return catalog.model_copy(update={"scripts": scripts})
+        }
+    )
 
 
-def _write_experiment(path: Path) -> None:
+def _write_experiment(path: Path, *, failure_mode: str = "none") -> None:
     path.write_text(
         yaml.safe_dump(
             {
-                "experiment": {"name": "task6-complete-facility"},
+                "experiment": {
+                    "name": "infra-brax-ppo-acceptance",
+                    "metadata": {"purpose": "infra-acceptance"},
+                },
                 "defaults": {
-                    "image": IMAGE_TAG,
+                    "image": CPU_IMAGE_TAG,
+                    "environment": {
+                        "name": "inverted_pendulum",
+                        "options": {"backend": "generalized"},
+                    },
                     "resources": {"profile": "c7am"},
-                    "training_budget": {"env_steps": 800},
+                    "training_budget": {"env_steps": 128},
                     "logging": {
                         "aim_every_env_steps": 1,
                         "rerun_every_episodes": 1,
@@ -546,21 +427,25 @@ def _write_experiment(path: Path) -> None:
                         "runs_per_job": 2,
                         "aim_result_timeout_seconds": 1,
                     },
-                    "parameters": {
-                        "seed": {"values": [11]},
-                    },
+                    "parameters": {"failure_mode": {"values": [failure_mode]}},
                 },
                 "groups": {
-                    "stream": {
-                        "script": "memo_stream_ac",
+                    "cpu": {
+                        "script": "brax_ppo_acceptance",
                         "parameters": {
-                            "hidden_dim": {"values": [64, 96, 128, 160, 192]}
+                            "learning_rate": {
+                                "values": [0.0002, 0.0003, 0.0004, 0.0005, 0.0006]
+                            }
                         },
                     },
-                    "hopper": {
-                        "script": "memo_rtrrl",
+                    "gpu": {
+                        "script": "brax_ppo_acceptance",
+                        "image": GPU_IMAGE_TAG,
+                        "resources": {"profile": "g6x"},
                         "parameters": {
-                            "hidden_dim": {"values": [16, 24, 32, 48, 64]}
+                            "learning_rate": {
+                                "values": [0.0002, 0.0003, 0.0004, 0.0005, 0.0006]
+                            }
                         },
                     },
                 },
@@ -572,12 +457,7 @@ def _write_experiment(path: Path) -> None:
 
 
 def _make_harness(tmp_path: Path, mode: str = "ok") -> Harness:
-    fixture = tmp_path / "task6_launcher_fixture.py"
-    fixture.write_text(
-        FIXTURE_SOURCE.replace("__MEMO_ROOT__", str(MEMO_ROOT)),
-        encoding="utf-8",
-    )
-    ecr = FakeEcr(_catalog(fixture))
+    ecr = FakeEcr(_catalog(allow_injected_failure=mode == "child-nonzero"))
     catalog_reader = EcrCatalogReader(ecr)
     stores: list[FakeStore] = []
     batches: list[FakeBatch] = []
@@ -603,7 +483,6 @@ def _make_harness(tmp_path: Path, mode: str = "ok") -> Harness:
         batch = FakeBatch(
             prefix,
             store,
-            fixture,
             mode if mode in {
                 "batch-failed",
                 "batch-timeout",
@@ -657,10 +536,13 @@ def _make_harness(tmp_path: Path, mode: str = "ok") -> Harness:
     )
 
     experiment = tmp_path / "experiment.yaml"
-    _write_experiment(experiment)
+    _write_experiment(
+        experiment,
+        failure_mode="before_training" if mode == "child-nonzero" else "none",
+    )
     # Resolve/validate creates neither store nor mutable runtime adapter.
     validation = controller.validate(experiment)
-    assert validation.experiment_name == "task6-complete-facility"
+    assert validation.experiment_name == "infra-brax-ppo-acceptance"
     assert stores == batches == studies == []
     return Harness(controller, experiment, stores, batches, aims, ecr, studies)
 
@@ -681,44 +563,68 @@ def test_real_facility_lifecycle_mixes_groups_and_preserves_artifact_identity(
     aim = harness.aims[0]
     assert report.status == "succeeded"
     assert report.experiment_id == "task6-exp-001"
-    assert report.experiment_name == "task6-complete-facility"
+    assert report.experiment_name == "infra-brax-ppo-acceptance"
+    assert report.experiment_metadata == {"purpose": "infra-acceptance"}
     assert report.completed_runs == 10
-    assert len(report.submitted_job_ids) == 5
-    assert [len(call) for call in batch.query_calls] == [2, 2, 1]
+    assert len(report.submitted_job_ids) == 6
+    assert [len(call) for call in batch.query_calls] == [2, 2, 2]
 
     bundles = batch.submitted
-    assert len(bundles) == 5
-    assert all(
-        {run.run_context["group"] for run in bundle.runs} == {"stream", "hopper"}
-        for bundle in bundles
-    )
+    assert [len(bundle.runs) for bundle in bundles] == [2, 2, 2, 2, 1, 1]
+    assert {run.run_context["group"] for bundle in bundles for run in bundle.runs} == {
+        "cpu",
+        "gpu",
+    }
+    assert sum(bundle.resource_profile == "c7am" for bundle in bundles) == 3
+    assert sum(bundle.resource_profile == "g6x" for bundle in bundles) == 3
     assert [
         sum(run.run_context["group"] == group for bundle in bundles for run in bundle.runs)
-        for group in ("stream", "hopper")
+        for group in ("cpu", "gpu")
     ] == [5, 5]
     assert {
         run.run_context["run_number"]
         for bundle in bundles
         for run in bundle.runs
-        if run.run_context["group"] == "stream"
+        if run.run_context["group"] == "cpu"
     } == {1, 2, 3, 4, 5}
 
     for bundle in bundles:
-        assert bundle.image_digest == IMAGE_DIGEST
-        assert bundle.resource_profile == "c7am"
+        expected_image, expected_profile = {
+            "cpu": (CPU_IMAGE_DIGEST, "c7am"),
+            "gpu": (GPU_IMAGE_DIGEST, "g6x"),
+        }[bundle.runs[0].run_context["group"]]
+        assert bundle.image_digest == expected_image
+        assert bundle.resource_profile == expected_profile
+        assert {run.run_context["group"] for run in bundle.runs} == {
+            bundle.runs[0].run_context["group"]
+        }
         for run in bundle.runs:
             context = run.run_context
             config = yaml.safe_load(run.config_yaml)
             assert run.attempt == 0
-            assert run.image_digest == IMAGE_DIGEST
-            assert run.resource_profile == "c7am"
-            assert context["experiment_name"] == "task6-complete-facility"
+            assert run.image_digest == expected_image
+            assert run.resource_profile == expected_profile
+            assert context["experiment_name"] == "infra-brax-ppo-acceptance"
             assert context["experiment_id"] == "task6-exp-001"
             assert context["run_id"] == run.run_id
-            assert context["image_digest"] == IMAGE_DIGEST
-            assert context["resource_profile"] == "c7am"
+            assert context["script"] == "brax_ppo_acceptance"
+            assert context["metadata"] == {"purpose": "infra-acceptance"}
+            assert context["image_digest"] == expected_image
+            assert context["resource_profile"] == expected_profile
             assert config["protocol_version"] == "1"
-            assert config["parameters"]["runtime"]["seed"] == 11
+            assert config["environment"] == {
+                "name": "inverted_pendulum",
+                "options": {"backend": "generalized"},
+            }
+            assert config["parameters"]["runtime"]["seed"] == 0
+            assert config["parameters"]["algorithm"]["failure_mode"] == "none"
+            assert config["parameters"]["algorithm"]["learning_rate"] in {
+                0.0002,
+                0.0003,
+                0.0004,
+                0.0005,
+                0.0006,
+            }
 
     expected_marker_order = [
         "s3://bucket/"
@@ -741,12 +647,12 @@ def test_real_facility_lifecycle_mixes_groups_and_preserves_artifact_identity(
             assert all(uri.startswith(run_root) for uri in artifacts)
             assert sum(uri == f"{run_root}aim-buffer/events.jsonl" for uri in artifacts) == 1
             assert sum(
-                uri == f"{run_root}checkpoints/fixture-checkpoint.bin"
+                uri == f"{run_root}checkpoints/ppo-params.npz"
                 for uri in artifacts
             ) == 1
             assert sum(
                 uri.startswith(f"{run_root}rerun/")
-                and uri.endswith("/episode-000001.rrd")
+                and uri.endswith("/episode-000002.rrd")
                 for uri in artifacts
             ) == 1
             for uri in artifacts:
@@ -764,29 +670,35 @@ def test_real_facility_lifecycle_mixes_groups_and_preserves_artifact_identity(
         for trial in study.trials
         if trial.state != TrialState.PRUNED
     } == {TrialState.COMPLETE}
-    assert sorted(
-        trial.value
+    assert all(
+        trial.value is not None
         for study in harness.studies
         for trial in study.trials
         if trial.state == TrialState.COMPLETE
-    ) == [16.0, 24.0, 32.0, 48.0, 64.0, 64.0, 96.0, 128.0, 160.0, 192.0]
+    )
+    persisted_report = store.get_json(
+        "s3://bucket/experiments/task6-exp-001/report.json"
+    )
+    assert persisted_report["experiment_name"] == "infra-brax-ppo-acceptance"
+    assert persisted_report["experiment_metadata"] == {"purpose": "infra-acceptance"}
     assert batch.resubmit_calls == batch.cancel_calls == batch.retry_calls == 0
-    assert harness.ecr.calls == [
-        ("resolve_tag", IMAGE_TAG),
-        ("get_manifest", IMAGE_DIGEST),
+    one_resolution = [
+        ("resolve_tag", CPU_IMAGE_TAG),
+        ("get_manifest", CPU_IMAGE_DIGEST),
         (
             "get_config_blob",
-            IMAGE_DIGEST.split("@")[0],
-            CONFIG_DIGEST,
+            CPU_IMAGE_DIGEST.split("@")[0],
+            CPU_CONFIG_DIGEST,
         ),
-        ("resolve_tag", IMAGE_TAG),
-        ("get_manifest", IMAGE_DIGEST),
+        ("resolve_tag", GPU_IMAGE_TAG),
+        ("get_manifest", GPU_IMAGE_DIGEST),
         (
             "get_config_blob",
-            IMAGE_DIGEST.split("@")[0],
-            CONFIG_DIGEST,
+            GPU_IMAGE_DIGEST.split("@")[0],
+            GPU_CONFIG_DIGEST,
         ),
     ]
+    assert harness.ecr.calls == one_resolution * 2
 
 
 @pytest.mark.parametrize(
@@ -814,6 +726,8 @@ def test_every_runtime_failure_stops_future_rounds_without_retry(
     batch = harness.batches[0]
     report = raised.value.report
     assert report.status == "failed"
+    assert report.experiment_name == "infra-brax-ppo-acceptance"
+    assert report.experiment_metadata == {"purpose": "infra-acceptance"}
     assert len(batch.submitted) == 2
     assert report.submitted_job_ids == ("batch-1", "batch-2")
     assert batch.resubmit_calls == batch.cancel_calls == batch.retry_calls == 0
@@ -826,6 +740,11 @@ def test_every_runtime_failure_stops_future_rounds_without_retry(
         for study in harness.studies
         for trial in study.trials
     )
+    persisted = harness.stores[0].get_json(
+        "s3://bucket/experiments/task6-exp-001/report.json"
+    )
+    assert persisted["experiment_name"] == "infra-brax-ppo-acceptance"
+    assert persisted["experiment_metadata"] == {"purpose": "infra-acceptance"}
 
 
 @pytest.mark.parametrize(
@@ -866,6 +785,8 @@ def test_submission_failures_preserve_accepted_ids_and_fail_all_pending_trials(
     assert isinstance(raised.value.__cause__, cause_type)
     assert cause_match in str(raised.value.__cause__)
     assert raised.value.report.submitted_job_ids == submitted_ids
+    assert raised.value.report.experiment_name == "infra-brax-ppo-acceptance"
+    assert raised.value.report.experiment_metadata == {"purpose": "infra-acceptance"}
     assert batch.submit_attempts == submit_attempts
     assert len(batch.submitted) == len(submitted_ids)
     assert batch.resubmit_calls == batch.cancel_calls == batch.retry_calls == 0
@@ -901,8 +822,10 @@ def test_persistence_failures_are_one_shot_and_keep_all_submitted_ids(
     batch = harness.batches[0]
     store = harness.stores[0]
     assert raised.value.report.submitted_job_ids == tuple(
-        f"batch-{index}" for index in range(1, 6)
+        f"batch-{index}" for index in range(1, 7)
     )
+    assert raised.value.report.experiment_name == "infra-brax-ppo-acceptance"
+    assert raised.value.report.experiment_metadata == {"purpose": "infra-acceptance"}
     assert tuple(type(error) for error in raised.value.persistence_errors) == error_types
     assert sum(uri.endswith("state/final.json") for uri in store.put_json_calls) == 1
     assert sum(uri.endswith("report.json") for uri in store.put_json_calls) == 1
@@ -916,16 +839,24 @@ def test_finite_spaces_exit_before_nominal_budget_without_extra_submission(
     experiment = harness.experiment
     payload = yaml.safe_load(experiment.read_text())
     payload["defaults"]["hpo"]["total_trials"] = 8
-    payload["groups"]["stream"]["parameters"]["hidden_dim"]["values"] = [64, 96, 128]
-    payload["groups"]["hopper"]["parameters"]["hidden_dim"]["values"] = [16, 24, 32]
+    payload["groups"]["cpu"]["parameters"]["learning_rate"]["values"] = [
+        0.0002,
+        0.0003,
+        0.0004,
+    ]
+    payload["groups"]["gpu"]["parameters"]["learning_rate"]["values"] = [
+        0.0002,
+        0.0003,
+        0.0004,
+    ]
     experiment.write_text(yaml.safe_dump(payload), encoding="utf-8")
 
     report = _run(harness)
 
     batch = harness.batches[0]
     assert report.completed_runs == 6
-    assert len(batch.submitted) == 3
-    assert [len(call) for call in batch.query_calls] == [2, 1]
+    assert len(batch.submitted) == 4
+    assert [len(call) for call in batch.query_calls] == [2, 2]
     assert all(
         trial.state != TrialState.RUNNING
         for study in harness.studies

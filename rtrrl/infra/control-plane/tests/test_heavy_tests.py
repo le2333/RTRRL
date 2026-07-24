@@ -936,9 +936,23 @@ class FakeLogs:
 IMAGE = "007122174918.dkr.ecr.eu-north-1.amazonaws.com/rtrrl@sha256:" + "a" * 64
 
 
-def test_one_job_per_exact_test_file() -> None:
+def _repository_with_heavy_test_fixtures(tmp_path: Path) -> Path:
+    root = tmp_path / "repository"
+    tests = root / "memo" / "tests" / "online_ac"
+    tests.mkdir(parents=True)
+    for name in ("test_eval_trace.py", "test_jit_contract.py"):
+        (tests / name).write_text("def test_placeholder(): pass\n", encoding="utf-8")
+    return root
+
+
+def test_one_job_per_exact_test_file(tmp_path: Path) -> None:
     batch = FakeJobBatch()
-    runner = HeavyTestRunner(batch, FakeLogs({}), sleep=lambda _: None)
+    runner = HeavyTestRunner(
+        batch,
+        FakeLogs({}),
+        repository_root=_repository_with_heavy_test_fixtures(tmp_path),
+        sleep=lambda _: None,
+    )
 
     jobs = runner.submit(
         profile="c7ax",
@@ -1120,7 +1134,7 @@ def test_rejects_image_without_exact_digest(image: str) -> None:
         )
 
 
-def test_partial_submission_error_retains_every_successful_job_id() -> None:
+def test_partial_submission_error_retains_every_successful_job_id(tmp_path: Path) -> None:
     class FailSecondSubmitBatch(FakeJobBatch):
         def submit_job(self, **kwargs: object) -> dict[str, str]:
             if self.submit_job_calls:
@@ -1128,7 +1142,12 @@ def test_partial_submission_error_retains_every_successful_job_id() -> None:
             return super().submit_job(**kwargs)
 
     batch = FailSecondSubmitBatch()
-    runner = HeavyTestRunner(batch, FakeLogs({}), sleep=lambda _: None)
+    runner = HeavyTestRunner(
+        batch,
+        FakeLogs({}),
+        repository_root=_repository_with_heavy_test_fixtures(tmp_path),
+        sleep=lambda _: None,
+    )
 
     with pytest.raises(PartialSubmissionError) as raised:
         runner.submit(
@@ -1145,9 +1164,14 @@ def test_partial_submission_error_retains_every_successful_job_id() -> None:
     assert "second submit rejected" in raised.value.cause
 
 
-def test_reuses_only_exact_digest_bound_job_definition() -> None:
+def test_reuses_only_exact_digest_bound_job_definition(tmp_path: Path) -> None:
     batch = FakeJobBatch()
-    runner = HeavyTestRunner(batch, FakeLogs({}), sleep=lambda _: None)
+    runner = HeavyTestRunner(
+        batch,
+        FakeLogs({}),
+        repository_root=_repository_with_heavy_test_fixtures(tmp_path),
+        sleep=lambda _: None,
+    )
 
     first = runner.submit(
         profile="c7ax",
@@ -1176,9 +1200,15 @@ def test_reuses_only_exact_digest_bound_job_definition() -> None:
     assert first[0].job_definition_revision == 1
 
 
-def test_job_definition_search_follows_all_pages() -> None:
+def test_job_definition_search_follows_all_pages(tmp_path: Path) -> None:
     batch = FakeJobBatch()
-    seed_runner = HeavyTestRunner(batch, FakeLogs({}), sleep=lambda _: None)
+    repository_root = _repository_with_heavy_test_fixtures(tmp_path)
+    seed_runner = HeavyTestRunner(
+        batch,
+        FakeLogs({}),
+        repository_root=repository_root,
+        sleep=lambda _: None,
+    )
     seed_runner.submit(
         profile="c7ax",
         image=IMAGE,
@@ -1196,7 +1226,12 @@ def test_job_definition_search_follows_all_pages() -> None:
         return {"jobDefinitions": [deepcopy(existing)]}
 
     batch.describe_job_definitions = paginated_describe  # type: ignore[method-assign]
-    runner = HeavyTestRunner(batch, FakeLogs({}), sleep=lambda _: None)
+    runner = HeavyTestRunner(
+        batch,
+        FakeLogs({}),
+        repository_root=repository_root,
+        sleep=lambda _: None,
+    )
 
     submitted = runner.submit(
         profile="c7ax",
@@ -1209,13 +1244,18 @@ def test_job_definition_search_follows_all_pages() -> None:
     assert batch.register_job_definition_calls == []
 
 
-def test_registration_is_requeried_and_must_match() -> None:
+def test_registration_is_requeried_and_must_match(tmp_path: Path) -> None:
     class InvisibleRegistrationBatch(FakeJobBatch):
         def describe_job_definitions(self, **kwargs: object) -> dict[str, object]:
             return {"jobDefinitions": []}
 
     batch = InvisibleRegistrationBatch()
-    runner = HeavyTestRunner(batch, FakeLogs({}), sleep=lambda _: None)
+    runner = HeavyTestRunner(
+        batch,
+        FakeLogs({}),
+        repository_root=_repository_with_heavy_test_fixtures(tmp_path),
+        sleep=lambda _: None,
+    )
 
     with pytest.raises(RuntimeError, match="registered.*exact"):
         runner.submit(
@@ -1230,12 +1270,14 @@ def test_registration_is_requeried_and_must_match() -> None:
 
 def test_local_process_lock_prevents_duplicate_registration(tmp_path: Path) -> None:
     batch = FakeJobBatch()
+    repository_root = _repository_with_heavy_test_fixtures(tmp_path)
 
     def submit_once() -> tuple[SubmittedTestJob, ...]:
         return HeavyTestRunner(
             batch,
             FakeLogs({}),
             definition_lock_dir=tmp_path / "locks",
+            repository_root=repository_root,
             sleep=lambda _: None,
         ).submit(
             profile="c7ax",
@@ -1251,9 +1293,14 @@ def test_local_process_lock_prevents_duplicate_registration(tmp_path: Path) -> N
     assert list((tmp_path / "locks").glob("trainer-heavy-test-*.lock"))
 
 
-def test_gpu_job_probes_jax_and_l4_before_pytest() -> None:
+def test_gpu_job_probes_jax_and_l4_before_pytest(tmp_path: Path) -> None:
     batch = FakeJobBatch()
-    runner = HeavyTestRunner(batch, FakeLogs({}), sleep=lambda _: None)
+    runner = HeavyTestRunner(
+        batch,
+        FakeLogs({}),
+        repository_root=_repository_with_heavy_test_fixtures(tmp_path),
+        sleep=lambda _: None,
+    )
 
     job = runner.submit(
         profile="g6x",
