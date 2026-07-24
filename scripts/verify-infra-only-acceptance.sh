@@ -3,52 +3,51 @@ set -euo pipefail
 
 ROOT="$(git rev-parse --show-toplevel)"
 cd "$ROOT"
-
-TIME_BIN="${VERIFY_TIME_BIN:-/usr/bin/time}"
-TIMEOUT_BIN="${VERIFY_TIMEOUT_BIN:-timeout}"
+export UV_OFFLINE=1
 
 run() {
   local seconds="$1"
   shift
-  "$TIME_BIN" -v "$TIMEOUT_BIN" --signal=TERM --kill-after=30s "${seconds}s" "$@"
+  /usr/bin/time -v /usr/bin/timeout \
+    --signal=TERM --kill-after=30s "${seconds}s" "$@"
 }
 
 run 120 scripts/check-infra-merge-boundary.sh
 
 run 300 env -u PYTHONPATH -u BRAX_ACCEPTANCE_TEST_MODE \
   -u BRAX_ACCEPTANCE_E2E_FAST -u CUDA_VISIBLE_DEVICES \
-  uv lock --project training-sdk --check
+  uv lock --offline --project training-sdk --check
 run 600 env -u PYTHONPATH -u BRAX_ACCEPTANCE_TEST_MODE \
   -u BRAX_ACCEPTANCE_E2E_FAST -u CUDA_VISIBLE_DEVICES \
-  uv run --directory training-sdk pytest -q
+  uv run --offline --directory training-sdk pytest -q
 run 300 env -u PYTHONPATH -u BRAX_ACCEPTANCE_TEST_MODE \
   -u BRAX_ACCEPTANCE_E2E_FAST -u CUDA_VISIBLE_DEVICES \
-  uv run --directory training-sdk ruff check src tests
+  uv run --offline --directory training-sdk ruff check src tests
 
 run 300 env -u PYTHONPATH -u BRAX_ACCEPTANCE_TEST_MODE \
   -u BRAX_ACCEPTANCE_E2E_FAST -u CUDA_VISIBLE_DEVICES \
-  uv lock --project rtrrl/infra/mock-trainer --check
+  uv lock --offline --project rtrrl/infra/mock-trainer --check
 run 1200 env -u PYTHONPATH -u BRAX_ACCEPTANCE_TEST_MODE \
   -u BRAX_ACCEPTANCE_E2E_FAST -u CUDA_VISIBLE_DEVICES \
   JAX_PLATFORM_NAME=cpu JAX_PLATFORMS=cpu \
   XLA_PYTHON_CLIENT_PREALLOCATE=false OMP_NUM_THREADS=1 \
-  uv run --directory rtrrl/infra/mock-trainer \
+  uv run --offline --directory rtrrl/infra/mock-trainer \
   --with-editable ../control-plane pytest -q
 run 300 env -u PYTHONPATH -u BRAX_ACCEPTANCE_TEST_MODE \
   -u BRAX_ACCEPTANCE_E2E_FAST -u CUDA_VISIBLE_DEVICES \
-  uv run --directory rtrrl/infra/mock-trainer ruff check src tests
+  uv run --offline --directory rtrrl/infra/mock-trainer ruff check src tests
 
 run 300 env -u PYTHONPATH -u BRAX_ACCEPTANCE_TEST_MODE \
   -u BRAX_ACCEPTANCE_E2E_FAST -u CUDA_VISIBLE_DEVICES \
-  uv lock --project rtrrl/infra/control-plane --check
+  uv lock --offline --project rtrrl/infra/control-plane --check
 run 7200 env -u PYTHONPATH -u BRAX_ACCEPTANCE_TEST_MODE \
   -u BRAX_ACCEPTANCE_E2E_FAST -u CUDA_VISIBLE_DEVICES \
   JAX_PLATFORM_NAME=cpu JAX_PLATFORMS=cpu \
   XLA_PYTHON_CLIENT_PREALLOCATE=false OMP_NUM_THREADS=1 \
-  uv run --directory rtrrl/infra/control-plane pytest -q
+  uv run --offline --directory rtrrl/infra/control-plane pytest -q
 run 300 env -u PYTHONPATH -u BRAX_ACCEPTANCE_TEST_MODE \
   -u BRAX_ACCEPTANCE_E2E_FAST -u CUDA_VISIBLE_DEVICES \
-  uv run --directory rtrrl/infra/control-plane ruff check src tests scripts
+  uv run --offline --directory rtrrl/infra/control-plane ruff check src tests scripts
 
 if run 120 rg -n \
   '^[[:space:]]*(from[[:space:]]+(memo|trainer_infra)([.]|[[:space:]])|import[[:space:]]+(memo|trainer_infra)([.]|[[:space:],]|$))' \

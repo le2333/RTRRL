@@ -2,13 +2,28 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
+import re
 import shlex
 import stat
 import subprocess
 
+import pytest
+
 
 ROOT = Path(__file__).parents[1]
 SCRIPT = ROOT / "scripts" / "verify-infra-only-acceptance.sh"
+FORBIDDEN_EXECUTABLES = {
+    "aws",
+    "curl",
+    "docker",
+    "gh",
+    "oras",
+    "podman",
+    "scp",
+    "skopeo",
+    "ssh",
+    "wget",
+}
 
 
 @dataclass(frozen=True)
@@ -81,6 +96,176 @@ def _source_and_steps() -> tuple[str, tuple[GateStep, ...]]:
     return source, _gate_steps(source)
 
 
+def _shell_tokens(line: str) -> tuple[str, ...]:
+    lexer = shlex.shlex(
+        line,
+        posix=True,
+        punctuation_chars=";&|(){}",
+    )
+    lexer.commenters = "#"
+    lexer.whitespace_split = True
+    return tuple(lexer)
+
+
+def _command_substitutions(source: str) -> tuple[str, ...]:
+    substitutions: list[str] = []
+
+    def scan(text: str) -> None:
+        index = 0
+        quote: str | None = None
+        while index < len(text):
+            char = text[index]
+            if quote == "'":
+                if char == "'":
+                    quote = None
+                index += 1
+                continue
+            if char == "\\":
+                index += 2
+                continue
+            if (
+                quote is None
+                and char == "#"
+                and (
+                    index == 0
+                    or text[index - 1].isspace()
+                    or text[index - 1] in ";&|(){}"
+                )
+            ):
+                newline = text.find("\n", index)
+                if newline == -1:
+                    return
+                index = newline + 1
+                continue
+            if char == '"':
+                quote = None if quote == '"' else '"'
+                index += 1
+                continue
+            if quote is None and char == "'":
+                quote = "'"
+                index += 1
+                continue
+            if char == "$" and index + 1 < len(text) and text[index + 1] == "(":
+                start = index + 2
+                cursor = start
+                depth = 1
+                inner_quote: str | None = None
+                while cursor < len(text):
+                    inner = text[cursor]
+                    if inner_quote == "'":
+                        if inner == "'":
+                            inner_quote = None
+                        cursor += 1
+                        continue
+                    if inner == "\\":
+                        cursor += 2
+                        continue
+                    if inner == '"':
+                        inner_quote = None if inner_quote == '"' else '"'
+                        cursor += 1
+                        continue
+                    if inner_quote is None and inner == "'":
+                        inner_quote = "'"
+                        cursor += 1
+                        continue
+                    if inner == "(":
+                        depth += 1
+                    elif inner == ")":
+                        depth -= 1
+                        if depth == 0:
+                            break
+                    cursor += 1
+                assert depth == 0, "unterminated command substitution"
+                body = text[start:cursor]
+                substitutions.append(body)
+                scan(body)
+                index = cursor + 1
+                continue
+            if char == "`":
+                cursor = index + 1
+                while cursor < len(text):
+                    if text[cursor] == "\\":
+                        cursor += 2
+                        continue
+                    if text[cursor] == "`":
+                        break
+                    cursor += 1
+                assert cursor < len(text), "unterminated backtick substitution"
+                body = text[index + 1 : cursor]
+                substitutions.append(body)
+                scan(body)
+                index = cursor + 1
+                continue
+            index += 1
+
+    scan(source)
+    return tuple(substitutions)
+
+
+def _direct_shell_executables(source: str) -> tuple[str, ...]:
+    executables: list[str] = []
+    command_openers = {"if", "elif", "while", "until", "then", "else", "do", "{"}
+    command_prefixes = {"!", "command", "builtin", "exec", "nohup"}
+    separators = {";", "&&", "||", "|", "&"}
+    assignment = re.compile(r"[A-Za-z_][A-Za-z0-9_]*=")
+
+    for line in _logical_lines(source):
+        tokens = list(_shell_tokens(line))
+        if len(tokens) >= 2 and tokens[0].isidentifier() and "(" in tokens[1]:
+            while tokens and "{" not in tokens[0]:
+                tokens.pop(0)
+            if tokens:
+                tokens.pop(0)
+
+        expect_command = True
+        index = 0
+        while index < len(tokens):
+            token = tokens[index]
+            if token in separators or any(character in token for character in ";&|"):
+                expect_command = True
+                index += 1
+                continue
+            if token in command_openers:
+                expect_command = True
+                index += 1
+                continue
+            if token in {"fi", "done", "esac", "}"}:
+                expect_command = False
+                index += 1
+                continue
+            if not expect_command:
+                index += 1
+                continue
+            if assignment.match(token):
+                index += 1
+                continue
+            if token in command_prefixes:
+                index += 1
+                continue
+            executables.append(token)
+            expect_command = False
+            index += 1
+
+    for substitution in _command_substitutions(source):
+        executables.extend(_direct_shell_executables(substitution))
+    return tuple(executables)
+
+
+def _assert_no_forbidden_shell_executables(source: str) -> None:
+    direct = _direct_shell_executables(source)
+    wrapped = tuple(
+        step.command[0]
+        for step in _gate_steps(source)
+        if step.command
+    )
+    forbidden = sorted(
+        executable
+        for executable in (*direct, *wrapped)
+        if Path(executable).name in FORBIDDEN_EXECUTABLES
+    )
+    assert forbidden == [], f"forbidden shell executables: {forbidden}"
+
+
 def test_gate_is_executable_fail_fast_rooted_and_valid_bash() -> None:
     source, _ = _source_and_steps()
 
@@ -88,10 +273,11 @@ def test_gate_is_executable_fail_fast_rooted_and_valid_bash() -> None:
     assert SCRIPT.stat().st_mode & stat.S_IXUSR
     assert 'ROOT="$(git rev-parse --show-toplevel)"' in source
     assert 'cd "$ROOT"' in source
-    assert 'TIME_BIN="${VERIFY_TIME_BIN:-/usr/bin/time}"' in source
-    assert 'TIMEOUT_BIN="${VERIFY_TIMEOUT_BIN:-timeout}"' in source
-    assert '"$TIME_BIN" -v "$TIMEOUT_BIN"' in source
+    assert "VERIFY_TIME_BIN" not in source
+    assert "VERIFY_TIMEOUT_BIN" not in source
+    assert "/usr/bin/time -v /usr/bin/timeout" in source
     assert "--kill-after=30s" in source
+    assert "export UV_OFFLINE=1" in source
     subprocess.run(["bash", "-n", str(SCRIPT)], check=True)
 
 
@@ -100,13 +286,24 @@ def test_gate_parses_to_the_complete_required_command_order() -> None:
 
     assert [step.command for step in steps] == [
         ("scripts/check-infra-merge-boundary.sh",),
-        ("uv", "lock", "--project", "training-sdk", "--check"),
-        ("uv", "run", "--directory", "training-sdk", "pytest", "-q"),
-        ("uv", "run", "--directory", "training-sdk", "ruff", "check", "src", "tests"),
-        ("uv", "lock", "--project", "rtrrl/infra/mock-trainer", "--check"),
+        ("uv", "lock", "--offline", "--project", "training-sdk", "--check"),
+        ("uv", "run", "--offline", "--directory", "training-sdk", "pytest", "-q"),
         (
             "uv",
             "run",
+            "--offline",
+            "--directory",
+            "training-sdk",
+            "ruff",
+            "check",
+            "src",
+            "tests",
+        ),
+        ("uv", "lock", "--offline", "--project", "rtrrl/infra/mock-trainer", "--check"),
+        (
+            "uv",
+            "run",
+            "--offline",
             "--directory",
             "rtrrl/infra/mock-trainer",
             "--with-editable",
@@ -117,6 +314,7 @@ def test_gate_parses_to_the_complete_required_command_order() -> None:
         (
             "uv",
             "run",
+            "--offline",
             "--directory",
             "rtrrl/infra/mock-trainer",
             "ruff",
@@ -124,11 +322,27 @@ def test_gate_parses_to_the_complete_required_command_order() -> None:
             "src",
             "tests",
         ),
-        ("uv", "lock", "--project", "rtrrl/infra/control-plane", "--check"),
-        ("uv", "run", "--directory", "rtrrl/infra/control-plane", "pytest", "-q"),
+        (
+            "uv",
+            "lock",
+            "--offline",
+            "--project",
+            "rtrrl/infra/control-plane",
+            "--check",
+        ),
         (
             "uv",
             "run",
+            "--offline",
+            "--directory",
+            "rtrrl/infra/control-plane",
+            "pytest",
+            "-q",
+        ),
+        (
+            "uv",
+            "run",
+            "--offline",
             "--directory",
             "rtrrl/infra/control-plane",
             "ruff",
@@ -161,19 +375,28 @@ def test_gate_parses_to_the_complete_required_command_order() -> None:
         ("scripts/check-infra-merge-boundary.sh",),
     ]
     assert all(step.timeout > 0 for step in steps)
+    assert all(
+        step.command[2] == "--offline"
+        for step in steps
+        if step.command[:2] in {("uv", "lock"), ("uv", "run")}
+    )
 
 
 def test_full_suites_are_isolated_cpu_runs_without_filters_or_duplicate_micro_ppo() -> None:
     _, steps = _source_and_steps()
     pytest_steps = [step for step in steps if "pytest" in step.command]
+    pytest_directories = [
+        step.command[step.command.index("--directory") + 1]
+        for step in pytest_steps
+    ]
 
-    assert [step.command[3] for step in pytest_steps] == [
+    assert pytest_directories == [
         "training-sdk",
         "rtrrl/infra/mock-trainer",
         "rtrrl/infra/control-plane",
     ]
     assert all(step.command[-2:] == ("pytest", "-q") for step in pytest_steps)
-    assert sum(step.command[3] == "rtrrl/infra/mock-trainer" for step in pytest_steps) == 1
+    assert pytest_directories.count("rtrrl/infra/mock-trainer") == 1
 
     isolated = {
         "PYTHONPATH",
@@ -189,13 +412,15 @@ def test_full_suites_are_isolated_cpu_runs_without_filters_or_duplicate_micro_pp
     mock_step = next(
         step
         for step in pytest_steps
-        if step.command[3] == "rtrrl/infra/mock-trainer"
+        if step.command[step.command.index("--directory") + 1]
+        == "rtrrl/infra/mock-trainer"
     )
     assert not any(value.startswith("PYTHONPATH=") for value in mock_step.environment)
     control_plane_step = next(
         step
         for step in pytest_steps
-        if step.command[3] == "rtrrl/infra/control-plane"
+        if step.command[step.command.index("--directory") + 1]
+        == "rtrrl/infra/control-plane"
     )
     assert control_plane_step.timeout >= 7200
 
@@ -207,11 +432,10 @@ def test_full_suites_are_isolated_cpu_runs_without_filters_or_duplicate_micro_pp
 
 
 def test_gate_has_only_local_commands_and_precisely_scoped_forbidden_scans() -> None:
-    _, steps = _source_and_steps()
-    executables = {step.command[0] for step in steps}
+    source, steps = _source_and_steps()
     scans = [step.command for step in steps if step.command[0] == "rg"]
 
-    assert executables.isdisjoint({"docker", "gh", "aws"})
+    _assert_no_forbidden_shell_executables(source)
     assert len(scans) == 2
     assert all(
         not any(
@@ -222,3 +446,40 @@ def test_gate_has_only_local_commands_and_precisely_scoped_forbidden_scans() -> 
         for scan in scans
     )
     assert all("historical" not in target for scan in scans for target in scan[3:])
+
+
+@pytest.mark.parametrize("executable", sorted(FORBIDDEN_EXECUTABLES))
+def test_forbidden_scanner_rejects_executable_inserted_in_run_function(
+    executable: str,
+) -> None:
+    source = SCRIPT.read_text(encoding="utf-8")
+    mutated = source.replace(
+        '  local seconds="$1"',
+        f'  {executable} --version\n  local seconds="$1"',
+        1,
+    )
+
+    with pytest.raises(AssertionError, match=executable):
+        _assert_no_forbidden_shell_executables(mutated)
+
+
+@pytest.mark.parametrize("executable", sorted(FORBIDDEN_EXECUTABLES))
+def test_forbidden_scanner_rejects_bare_external_executable(
+    executable: str,
+) -> None:
+    source = SCRIPT.read_text(encoding="utf-8")
+    mutated = f"{source}\n{executable} --version\n"
+
+    with pytest.raises(AssertionError, match=executable):
+        _assert_no_forbidden_shell_executables(mutated)
+
+
+def test_forbidden_scanner_ignores_comments_and_quoted_argument_data() -> None:
+    source = SCRIPT.read_text(encoding="utf-8")
+    safe = (
+        f"{source}\n"
+        "# docker gh aws curl wget $(podman) `skopeo`\n"
+        "printf '%s\\n' 'podman skopeo oras ssh scp $(curl) `wget`'\n"
+    )
+
+    _assert_no_forbidden_shell_executables(safe)
