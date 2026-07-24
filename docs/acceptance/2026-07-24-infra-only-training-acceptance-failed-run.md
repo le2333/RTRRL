@@ -97,7 +97,33 @@ payload is:
 ## Offline regression evidence
 
 An independent direct call to Aim 3.28.0, without using `AimReader`, confirmed
-the upstream mismatch on a temporary repository:
+the upstream mismatch on a temporary repository. From the repository root:
+
+```bash
+cd rtrrl/infra/control-plane
+uv run --offline python - <<'PY'
+from tempfile import TemporaryDirectory
+
+from aim import Run
+
+with TemporaryDirectory() as repo:
+    writer = Run(repo=repo)
+    run_hash = writer.hash
+    writer["probe"] = True
+    writer.close()
+
+    reader = Run(repo=repo, run_hash=run_hash, read_only=True)
+    print(
+        {
+            "aim_read_only": reader.read_only,
+            "has_sequence_infos": hasattr(reader._tracker, "sequence_infos"),
+        }
+    )
+    reader.close()
+PY
+```
+
+It exited one with:
 
 ```text
 {'aim_read_only': True, 'has_sequence_infos': False}
@@ -108,6 +134,7 @@ That reproducer exited one at `aim/sdk/run.py:720`. The focused real-repository
 regression then passed with the compatibility fix:
 
 ```bash
+cd rtrrl/infra/control-plane
 uv run --offline pytest \
   tests/test_aim_reader.py::test_reader_safely_closes_real_read_only_aim_run -q
 ```
