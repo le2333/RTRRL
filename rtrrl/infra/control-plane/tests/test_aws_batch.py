@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from copy import deepcopy
 from typing import Any
 
 import pytest
@@ -357,6 +358,240 @@ def make_preflight_contract() -> AwsBatchPreflightContract:
             for name in PROFILES
         },
     )
+
+
+def validate_log_configurations(
+    *,
+    actual: object,
+    expected: object,
+) -> tuple[ValidatedJobDefinition, ...]:
+    client = FakePreflightBatch()
+    original = client.describe_job_definitions
+
+    def with_log_configuration(**kwargs: Any) -> dict[str, Any]:
+        response = original(**kwargs)
+        response["jobDefinitions"][0]["containerProperties"]["logConfiguration"] = actual
+        return response
+
+    client.describe_job_definitions = with_log_configuration  # type: ignore[method-assign]
+    contract = make_preflight_contract()
+    contract = contract.model_copy(
+        update={
+            "job_definitions": {
+                name: definition_expectation.model_copy(
+                    update={"log_configuration": expected}
+                )
+                for name, definition_expectation in contract.job_definitions.items()
+            }
+        }
+    )
+    return AwsBatchPreflight(client).validate(contract)
+
+
+@pytest.mark.parametrize(
+    "invalid",
+    [
+        {"logDriver": 7, "options": {}, "secretOptions": []},
+        {"logDriver": "awslogs", "options": [], "secretOptions": []},
+        {
+            "logDriver": "awslogs",
+            "options": {},
+            "secretOptions": [{"name": "", "valueFrom": "arn:secret"}],
+        },
+    ],
+)
+def test_preflight_rejects_identical_invalid_log_configurations(invalid: object) -> None:
+    with pytest.raises(ValueError, match="logConfiguration"):
+        validate_log_configurations(actual=invalid, expected=invalid)
+
+
+_VALID_NONEMPTY_LOG_CONFIGURATION = {
+    "logDriver": "awslogs",
+    "options": {
+        "awslogs-group": "/trainer/jobs",
+        "awslogs-region": "eu-north-1",
+    },
+    "secretOptions": [
+        {"name": "token-a", "valueFrom": "arn:secret:a"},
+        {"name": "token-b", "valueFrom": "arn:secret:b"},
+    ],
+}
+
+_INVALID_LOG_CONFIGURATIONS = [
+    ["not", "a", "mapping"],
+    {"options": {}, "secretOptions": []},
+    {"logDriver": 7, "options": {}, "secretOptions": []},
+    {"logDriver": "json-file", "options": {}, "secretOptions": []},
+    {"logDriver": "awslogs", "options": [], "secretOptions": []},
+    {"logDriver": "awslogs", "options": {7: "value"}, "secretOptions": []},
+    {"logDriver": "awslogs", "options": {"key": 7}, "secretOptions": []},
+    {"logDriver": "awslogs", "options": {}, "secretOptions": ()},
+    {"logDriver": "awslogs", "options": {}, "secretOptions": ["not-a-mapping"]},
+    {
+        "logDriver": "awslogs",
+        "options": {},
+        "secretOptions": [{"valueFrom": "arn:secret"}],
+    },
+    {
+        "logDriver": "awslogs",
+        "options": {},
+        "secretOptions": [{"name": "token"}],
+    },
+    {
+        "logDriver": "awslogs",
+        "options": {},
+        "secretOptions": [{"name": "token", "valueFrom": "arn:secret", "extra": "value"}],
+    },
+    {
+        "logDriver": "awslogs",
+        "options": {},
+        "secretOptions": [{"name": 7, "valueFrom": "arn:secret"}],
+    },
+    {
+        "logDriver": "awslogs",
+        "options": {},
+        "secretOptions": [{"name": "token", "valueFrom": 7}],
+    },
+    {
+        "logDriver": "awslogs",
+        "options": {},
+        "secretOptions": [{"name": "", "valueFrom": "arn:secret"}],
+    },
+    {
+        "logDriver": "awslogs",
+        "options": {},
+        "secretOptions": [{"name": "token", "valueFrom": ""}],
+    },
+    {
+        "logDriver": "awslogs",
+        "options": {},
+        "secretOptions": [
+            {"name": "token", "valueFrom": "arn:secret:a"},
+            {"name": "token", "valueFrom": "arn:secret:b"},
+        ],
+    },
+    {
+        "logDriver": "awslogs",
+        "options": {},
+        "secretOptions": [
+            {"name": "token", "valueFrom": "arn:secret"},
+            {"name": "token", "valueFrom": "arn:secret"},
+        ],
+    },
+    {
+        "logDriver": "awslogs",
+        "options": {},
+        "secretOptions": [],
+        "unknown": "value",
+    },
+]
+
+
+@pytest.mark.parametrize("side", ["actual", "expected"])
+@pytest.mark.parametrize(
+    "invalid",
+    _INVALID_LOG_CONFIGURATIONS,
+    ids=[
+        "non-mapping",
+        "driver-missing",
+        "driver-non-string",
+        "driver-not-awslogs",
+        "options-non-mapping",
+        "options-non-string-key",
+        "options-non-string-value",
+        "secrets-non-list",
+        "secret-non-mapping",
+        "secret-name-missing",
+        "secret-value-from-missing",
+        "secret-extra-key",
+        "secret-name-non-string",
+        "secret-value-from-non-string",
+        "secret-name-empty",
+        "secret-value-from-empty",
+        "secret-name-duplicate",
+        "secret-pair-duplicate",
+        "unknown-top-level-key",
+    ],
+)
+def test_preflight_strictly_validates_each_log_configuration_side(
+    side: str,
+    invalid: object,
+) -> None:
+    configurations = {
+        "actual": _VALID_NONEMPTY_LOG_CONFIGURATION,
+        "expected": _VALID_NONEMPTY_LOG_CONFIGURATION,
+    }
+    configurations[side] = invalid
+
+    with pytest.raises(ValueError, match="logConfiguration"):
+        validate_log_configurations(**configurations)
+
+
+def test_preflight_accepts_equal_nonempty_log_configurations() -> None:
+    actual = deepcopy(_VALID_NONEMPTY_LOG_CONFIGURATION)
+    expected = deepcopy(_VALID_NONEMPTY_LOG_CONFIGURATION)
+
+    assert len(validate_log_configurations(actual=actual, expected=expected)) == 4
+
+
+def test_preflight_accepts_equivalent_reordered_log_configurations() -> None:
+    actual = {
+        "secretOptions": list(reversed(_VALID_NONEMPTY_LOG_CONFIGURATION["secretOptions"])),
+        "options": {
+            "awslogs-region": "eu-north-1",
+            "awslogs-group": "/trainer/jobs",
+        },
+        "logDriver": "awslogs",
+    }
+
+    assert (
+        len(
+            validate_log_configurations(
+                actual=actual,
+                expected=_VALID_NONEMPTY_LOG_CONFIGURATION,
+            )
+        )
+        == 4
+    )
+
+
+@pytest.mark.parametrize(
+    "actual",
+    [
+        {
+            **_VALID_NONEMPTY_LOG_CONFIGURATION,
+            "options": {
+                **_VALID_NONEMPTY_LOG_CONFIGURATION["options"],
+                "awslogs-region": "us-east-1",
+            },
+        },
+        {
+            **_VALID_NONEMPTY_LOG_CONFIGURATION,
+            "secretOptions": [
+                {"name": "token-a", "valueFrom": "arn:secret:different"},
+                {"name": "token-b", "valueFrom": "arn:secret:b"},
+            ],
+        },
+    ],
+)
+def test_preflight_rejects_different_valid_log_configurations(actual: object) -> None:
+    with pytest.raises(ValueError, match="logConfiguration.*expected contract"):
+        validate_log_configurations(
+            actual=actual,
+            expected=_VALID_NONEMPTY_LOG_CONFIGURATION,
+        )
+
+
+def test_preflight_does_not_mutate_log_configuration_inputs() -> None:
+    actual = deepcopy(_VALID_NONEMPTY_LOG_CONFIGURATION)
+    expected = deepcopy(_VALID_NONEMPTY_LOG_CONFIGURATION)
+    actual_before = deepcopy(actual)
+    expected_before = deepcopy(expected)
+
+    validate_log_configurations(actual=actual, expected=expected)
+
+    assert actual == actual_before
+    assert expected == expected_before
 
 
 def test_preflight_accepts_aws_canonical_empty_log_configuration_defaults() -> None:

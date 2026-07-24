@@ -90,17 +90,58 @@ def _one(items: object, *, context: str) -> Mapping[str, Any]:
     return items[0]
 
 
-def _normalize_log_configuration(value: object) -> dict[str, Any]:
+def _normalize_log_configuration(
+    value: object,
+) -> tuple[str, tuple[tuple[str, str], ...], tuple[tuple[str, str], ...]]:
     if not isinstance(value, Mapping):
         raise ValueError("logConfiguration must be a mapping")
     known_keys = {"logDriver", "options", "secretOptions"}
     if "logDriver" not in value or set(value) - known_keys:
         raise ValueError("logConfiguration does not match the known AWS schema")
-    return {
-        "logDriver": value["logDriver"],
-        "options": value.get("options", {}),
-        "secretOptions": value.get("secretOptions", []),
-    }
+    log_driver = value["logDriver"]
+    if not isinstance(log_driver, str) or log_driver != "awslogs":
+        raise ValueError("logConfiguration logDriver must be exactly 'awslogs'")
+
+    options = value.get("options", {})
+    if not isinstance(options, Mapping):
+        raise ValueError("logConfiguration options must be a mapping")
+    normalized_options: list[tuple[str, str]] = []
+    for key, option_value in options.items():
+        if not isinstance(key, str) or not isinstance(option_value, str):
+            raise ValueError("logConfiguration options must map strings to strings")
+        normalized_options.append((key, option_value))
+
+    secret_options = value.get("secretOptions", [])
+    if not isinstance(secret_options, list):
+        raise ValueError("logConfiguration secretOptions must be a list")
+    normalized_secrets: list[tuple[str, str]] = []
+    secret_names: set[str] = set()
+    for secret in secret_options:
+        if not isinstance(secret, Mapping) or set(secret) != {"name", "valueFrom"}:
+            raise ValueError(
+                "logConfiguration secretOptions entries must contain exactly name and valueFrom"
+            )
+        name = secret["name"]
+        value_from = secret["valueFrom"]
+        if (
+            not isinstance(name, str)
+            or not name
+            or not isinstance(value_from, str)
+            or not value_from
+        ):
+            raise ValueError(
+                "logConfiguration secretOptions name and valueFrom must be nonempty strings"
+            )
+        if name in secret_names:
+            raise ValueError("logConfiguration secretOptions names must be unique")
+        secret_names.add(name)
+        normalized_secrets.append((name, value_from))
+
+    return (
+        log_driver,
+        tuple(sorted(normalized_options)),
+        tuple(sorted(normalized_secrets)),
+    )
 
 
 class AwsBatchPreflight:
@@ -173,9 +214,23 @@ class AwsBatchPreflight:
                 raise ValueError(
                     f"job definition {arn!r} {field} does not match expected contract"
                 )
-        if _normalize_log_configuration(
-            container.get("logConfiguration")
-        ) != _normalize_log_configuration(expected.log_configuration):
+        try:
+            actual_log_configuration = _normalize_log_configuration(
+                container.get("logConfiguration")
+            )
+        except ValueError as error:
+            raise ValueError(
+                f"job definition {arn!r} actual logConfiguration schema error: {error}"
+            ) from error
+        try:
+            expected_log_configuration = _normalize_log_configuration(
+                expected.log_configuration
+            )
+        except ValueError as error:
+            raise ValueError(
+                f"job definition {arn!r} expected logConfiguration schema error: {error}"
+            ) from error
+        if actual_log_configuration != expected_log_configuration:
             raise ValueError(
                 f"job definition {arn!r} logConfiguration does not match expected contract"
             )
