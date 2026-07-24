@@ -4,17 +4,26 @@ from copy import deepcopy
 import importlib.util
 import json
 from pathlib import Path
-from types import SimpleNamespace
 from typing import Any
 
 import pytest
 
 from trainer_infra.aws_profiles import PROFILES
 from trainer_infra.facility_control import load_facility_control
+from trainer_infra.image_catalog import ResolvedImage, load_catalog_index
 
 
 SCRIPTS = Path(__file__).parents[1] / "scripts"
 CONTROL = Path(__file__).parents[1] / "config" / "facility.yaml"
+CATALOG = Path(__file__).parents[2] / "mock-trainer" / "scripts" / "index.yaml"
+
+
+class EuNorthMeta:
+    region_name = "eu-north-1"
+
+
+class GlobalMeta:
+    region_name = "aws-global"
 
 
 def _load(name: str):
@@ -45,7 +54,7 @@ class FakeSts:
 
 
 class FakeBatch:
-    meta = SimpleNamespace(region_name="eu-north-1")
+    meta = EuNorthMeta()
 
     def __init__(self, preflight: Any) -> None:
         self.preflight = preflight
@@ -123,7 +132,7 @@ class FakeBatch:
 
 
 class FakeS3:
-    meta = SimpleNamespace(region_name="eu-north-1")
+    meta = EuNorthMeta()
 
     def __init__(self) -> None:
         self.calls: list[tuple[str, dict[str, Any]]] = []
@@ -142,7 +151,7 @@ class FakeS3:
 
 
 class FakeEcr:
-    meta = SimpleNamespace(region_name="eu-north-1")
+    meta = EuNorthMeta()
 
     def __init__(self) -> None:
         self.calls: list[tuple[str, dict[str, Any]]] = []
@@ -179,7 +188,7 @@ class FakeEcr:
 
 
 class FakeIam:
-    meta = SimpleNamespace(region_name="aws-global")
+    meta = GlobalMeta()
 
     def __init__(self) -> None:
         self.calls: list[tuple[str, dict[str, Any]]] = []
@@ -416,19 +425,29 @@ def test_register_is_explicit_digest_bound_and_single_attempt(
     batch = RegisterBatch()
     sts = FakeSts()
     ecr = object()
+    catalog = load_catalog_index(CATALOG)
 
     class Reader:
         def __init__(self, client: object, **_kwargs: Any) -> None:
             assert client is ecr
 
         def resolve_and_fetch(self, reference: str) -> Any:
-            return SimpleNamespace(reference=reference, catalog=SimpleNamespace())
+            repository, digest = reference.rsplit("@", 1)
+            return ResolvedImage(
+                reference=reference,
+                repository=repository,
+                digest=digest,
+                catalog=catalog,
+            )
+
+    class RegistrationSession:
+        region_name = "eu-north-1"
+
+        def client(self, name: str) -> Any:
+            return {"sts": sts, "ecr": ecr, "batch": batch}[name]
 
     monkeypatch.setattr(deploy, "BotoEcrCatalogReader", Reader)
-    session = SimpleNamespace(
-        region_name="eu-north-1",
-        client=lambda name: {"sts": sts, "ecr": ecr, "batch": batch}[name],
-    )
+    session = RegistrationSession()
     cpu = "007122174918.dkr.ecr.eu-north-1.amazonaws.com/rtrrl@sha256:" + "a" * 64
     gpu = "007122174918.dkr.ecr.eu-north-1.amazonaws.com/rtrrl@sha256:" + "b" * 64
     config = deploy.DeployRequest(
@@ -475,6 +494,13 @@ def test_legacy_build_and_push_flags_fail_closed(deploy: Any) -> None:
 
 def test_register_requires_digest_inputs(deploy: Any) -> None:
     control = load_facility_control(CONTROL)
+
+    class IdentityOnlySession:
+        region_name = "eu-north-1"
+
+        def client(self, _name: str) -> FakeSts:
+            return FakeSts()
+
     with pytest.raises(ValueError, match="digest"):
         deploy.deploy(
             deploy.DeployRequest(
@@ -482,8 +508,5 @@ def test_register_requires_digest_inputs(deploy: Any) -> None:
                 confirm_account="007122174918",
             ),
             control=control,
-            session=SimpleNamespace(
-                region_name="eu-north-1",
-                client=lambda _name: FakeSts(),
-            ),
+            session=IdentityOnlySession(),
         )

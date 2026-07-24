@@ -12,6 +12,12 @@ import boto3
 from trainer_infra.aws_profiles import PROFILES
 from trainer_infra.ecr import BotoEcrCatalogReader
 from trainer_infra.facility_control import FacilityControl, load_facility_control
+from trainer_infra.image_catalog import load_catalog_index
+from trainer_infra.models import ScriptCatalog
+
+
+ROOT = Path(__file__).resolve().parents[4]
+EXPECTED_CATALOG = ROOT / "rtrrl" / "infra" / "mock-trainer" / "scripts" / "index.yaml"
 
 
 class DeployRequest:
@@ -67,6 +73,27 @@ def _verify_digest_catalogs(
     control: FacilityControl,
     images: dict[str, tuple[str, str]],
 ) -> None:
+    expected = load_catalog_index(EXPECTED_CATALOG)
+    if expected.protocol_version != "1" or set(expected.scripts) != {
+        "brax_ppo_acceptance"
+    }:
+        raise ValueError("local expected catalog identity is invalid")
+    descriptor = expected.scripts["brax_ppo_acceptance"]
+    if (
+        descriptor.sdk_protocol_version != "1"
+        or descriptor.objective.metric != "eval/episode_return"
+        or descriptor.environments != ("inverted_pendulum",)
+        or set(descriptor.fields)
+        != {
+            "seed",
+            "learning_rate",
+            "num_envs",
+            "episode_length",
+            "failure_mode",
+        }
+    ):
+        raise ValueError("local expected catalog contract is invalid")
+    expected_bytes = _catalog_bytes(expected)
     reader = BotoEcrCatalogReader(
         session.client("ecr"),
         account_id=control.account_id,
@@ -74,8 +101,20 @@ def _verify_digest_catalogs(
     )
     for image, _digest_hex in images.values():
         verified = reader.resolve_and_fetch(image)
-        if verified.reference != image or verified.catalog is None:
-            raise ValueError(f"ECR digest verification failed for {image}")
+        actual = verified.catalog
+        if (
+            verified.reference != image
+            or verified.repository != f"{_registry(control)}/{control.ecr_repository}"
+            or verified.digest != image.rsplit("@", 1)[1]
+            or type(actual) is not type(expected)
+            or actual != expected
+            or _catalog_bytes(actual) != expected_bytes
+        ):
+            raise ValueError(f"ECR digest catalog verification failed for {image}")
+
+
+def _catalog_bytes(catalog: ScriptCatalog) -> bytes:
+    return catalog.model_dump_json(exclude_none=True).encode("utf-8")
 
 
 def _resource_requirements(vcpus: int, memory: int, gpus: int) -> list[dict[str, str]]:
@@ -162,6 +201,8 @@ def deploy(
         "cpu": _validated_digest(config.cpu_digest, "CPU", control),
         "gpu": _validated_digest(config.gpu_digest, "GPU", control),
     }
+    if images["cpu"][1] == images["gpu"][1]:
+        raise ValueError("CPU and GPU image digests must be distinct")
     _verify_digest_catalogs(active_session, control, images)
     definitions = _register_definitions(active_session, control, images=images)
     return {

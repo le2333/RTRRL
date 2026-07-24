@@ -2,15 +2,24 @@ from __future__ import annotations
 
 import argparse
 import json
-from collections.abc import Mapping
+import shutil
+from collections.abc import Callable, Mapping
 from pathlib import Path
 import sys
+import tempfile
 from typing import Any, NamedTuple
 import uuid
 
 import boto3
 
 from trainer_infra.facility_control import FacilityControl, load_facility_control
+
+
+# Audited constants for this test acceptance facility only. Control data cannot
+# authorize a different local repository.
+ACCEPTANCE_AIM_SCRATCH = Path("/home/ubuntu/trainer/task7-aim-scratch")
+ACCEPTANCE_MAIN_REPO = Path("/home/ubuntu/trainer/streaming-rtrrl")
+_DELETE_BATCH_SIZE = 1000
 
 
 class CleanupRequest(NamedTuple):
@@ -33,6 +42,9 @@ class _Snapshot(NamedTuple):
     s3_keys: tuple[str, ...]
 
 
+RepoFactory = Callable[..., Any]
+
+
 def canonical_json(report: CleanupReport) -> str:
     return json.dumps(report._asdict(), separators=(",", ":"), sort_keys=True)
 
@@ -47,27 +59,77 @@ def _canonical_experiment_id(value: str) -> str:
     return value
 
 
-def _repo_path(repo: Any) -> Path:
-    path = getattr(repo, "path", None)
-    if not isinstance(path, (str, Path)):
-        raise ValueError("Aim repository does not expose an exact path")
-    resolved = Path(path).resolve()
-    return resolved.parent if resolved.name == ".aim" else resolved
+def _paths_overlap(first: Path, second: Path) -> bool:
+    return (
+        first == second
+        or first in second.parents
+        or second in first.parents
+    )
 
 
-def _validate_aim_repo(control: FacilityControl, aim_repo: Any) -> None:
-    configured = control.aim.repo.resolve()
-    main = control.aim.main_repo.resolve()
-    if configured == main or _repo_path(aim_repo) == main:
-        raise ValueError("main Aim repository is forbidden")
-    if _repo_path(aim_repo) != configured:
-        raise ValueError("Aim repository does not match facility control")
+def _has_dot_aim_ancestor(path: Path) -> bool:
+    return any(parent.name == ".aim" for parent in (path, *path.parents))
+
+
+def _validate_control_aim_paths(control: FacilityControl) -> Path:
+    scratch = Path(control.aim.repo)
+    main = Path(control.aim.main_repo)
+    if scratch != ACCEPTANCE_AIM_SCRATCH or main != ACCEPTANCE_MAIN_REPO:
+        raise ValueError("Aim paths must match the audited acceptance-only constants")
+
+    resolved_scratch = scratch.resolve()
+    resolved_main = main.resolve()
+    lexical_overlap = _paths_overlap(scratch, main)
+    resolved_overlap = _paths_overlap(resolved_scratch, resolved_main)
+    dot_aim_overlap = (
+        _has_dot_aim_ancestor(scratch)
+        or _has_dot_aim_ancestor(main)
+        or _has_dot_aim_ancestor(resolved_scratch)
+        or _has_dot_aim_ancestor(resolved_main)
+        or _paths_overlap(resolved_scratch / ".aim", resolved_main / ".aim")
+    )
+    if lexical_overlap or resolved_overlap or dot_aim_overlap:
+        raise ValueError("Aim scratch and main repository paths overlap")
+    return scratch
+
+
+def _default_repo_factory(path: str, *, read_only: bool, init: bool) -> Any:
+    from aim import Repo
+    from aim.sdk.repo import RepoStatus
+
+    if init:
+        raise ValueError("acceptance cleanup never initializes an Aim repository")
+    if Repo.check_repo_status(path) is not RepoStatus.UPDATED:
+        raise ValueError("Aim repository must already be updated before cleanup")
+    try:
+        return Repo(path, read_only=read_only, init=False)
+    except NotImplementedError:
+        if not read_only:
+            return Repo(path, init=False)
+
+        temporary = tempfile.TemporaryDirectory(prefix="acceptance-aim-readonly-")
+        mirror_root = Path(temporary.name) / "repo"
+        mirror_root.mkdir()
+        shutil.copytree(Path(path) / ".aim", mirror_root / ".aim", symlinks=True)
+        mirror = Repo(str(mirror_root), init=False)
+        mirror.read_only = True
+
+        class ReadOnlyAcceptanceRepo:
+            def iter_runs(self) -> Any:
+                return mirror.iter_runs()
+
+            def close(self) -> None:
+                mirror.close()
+                temporary.cleanup()
+
+        return ReadOnlyAcceptanceRepo()
 
 
 def _list_s3_keys(s3: Any, control: FacilityControl, experiment_id: str) -> tuple[str, ...]:
     key_prefix = f"{control.prefix}/{experiment_id}/"
     keys: list[str] = []
     continuation: str | None = None
+    seen_tokens: set[str] = set()
     while True:
         arguments: dict[str, Any] = {
             "Bucket": control.bucket,
@@ -86,6 +148,9 @@ def _list_s3_keys(s3: Any, control: FacilityControl, experiment_id: str) -> tupl
         token = response.get("NextContinuationToken")
         if not isinstance(token, str) or not token:
             raise ValueError("truncated S3 listing has no continuation token")
+        if token in seen_tokens:
+            raise ValueError("S3 listing repeated a continuation token")
+        seen_tokens.add(token)
         continuation = token
     if len(keys) != len(set(keys)):
         raise ValueError("S3 listing returned duplicate keys")
@@ -97,14 +162,14 @@ def _validate_report(
     control: FacilityControl,
     experiment_id: str,
     keys: tuple[str, ...],
-) -> None:
+) -> str:
     report_key = f"{control.prefix}/{experiment_id}/report.json"
     if report_key not in keys:
         raise ValueError("canonical report.json is missing")
     try:
         body = s3.get_object(Bucket=control.bucket, Key=report_key)["Body"].read()
         report = json.loads(body)
-    except (KeyError, TypeError, ValueError, json.JSONDecodeError) as error:
+    except (KeyError, TypeError, ValueError) as error:
         raise ValueError("canonical report.json is unreadable") from error
     if not isinstance(report, Mapping):
         raise ValueError("canonical report.json must be an object")
@@ -115,15 +180,14 @@ def _validate_report(
         or metadata.get("purpose") != "infra-acceptance"
     ):
         raise ValueError("canonical report.json metadata does not prove acceptance ownership")
+    return report_key
 
 
-def _list_aim_hashes(aim_repo: Any, experiment_id: str) -> tuple[str, ...]:
+def _list_aim_hashes(repo: Any, experiment_id: str) -> tuple[str, ...]:
     hashes: list[str] = []
-    for run in aim_repo.iter_runs():
+    for run in repo.iter_runs():
         context = run.get("context", None)
-        if not isinstance(context, Mapping):
-            continue
-        if context.get("experiment_id") != experiment_id:
+        if not isinstance(context, Mapping) or context.get("experiment_id") != experiment_id:
             continue
         run_hash = getattr(run, "hash", None)
         if not isinstance(run_hash, str) or not run_hash:
@@ -134,11 +198,24 @@ def _list_aim_hashes(aim_repo: Any, experiment_id: str) -> tuple[str, ...]:
     return tuple(sorted(hashes))
 
 
+def _read_aim_hashes(
+    repo_factory: RepoFactory,
+    repo_path: Path,
+    experiment_id: str,
+) -> tuple[str, ...]:
+    repo = repo_factory(str(repo_path), read_only=True, init=False)
+    try:
+        return _list_aim_hashes(repo, experiment_id)
+    finally:
+        repo.close()
+
+
 def _snapshot(
     *,
     control: FacilityControl,
     s3: Any,
-    aim_repo: Any,
+    repo_factory: RepoFactory,
+    repo_path: Path,
     experiment_id: str,
     validate_report: bool,
 ) -> _Snapshot:
@@ -146,9 +223,44 @@ def _snapshot(
     if validate_report:
         _validate_report(s3, control, experiment_id, s3_keys)
     return _Snapshot(
-        aim_run_hashes=_list_aim_hashes(aim_repo, experiment_id),
+        aim_run_hashes=_read_aim_hashes(repo_factory, repo_path, experiment_id),
         s3_keys=s3_keys,
     )
+
+
+def _delete_s3_keys(s3: Any, control: FacilityControl, keys: tuple[str, ...]) -> None:
+    for offset in range(0, len(keys), _DELETE_BATCH_SIZE):
+        batch = keys[offset : offset + _DELETE_BATCH_SIZE]
+        response = s3.delete_objects(
+            Bucket=control.bucket,
+            Delete={"Objects": [{"Key": key} for key in batch], "Quiet": False},
+        )
+        status = response.get("ResponseMetadata", {}).get("HTTPStatusCode")
+        errors = response.get("Errors", [])
+        deleted = response.get("Deleted", [])
+        deleted_keys = {
+            item.get("Key") for item in deleted if isinstance(item, Mapping)
+        }
+        if status != 200 or errors or deleted_keys != set(batch):
+            raise RuntimeError(
+                f"S3 deletion failed for exact batch: status={status!r}, errors={errors!r}"
+            )
+
+
+def _delete_aim_hashes(
+    repo_factory: RepoFactory,
+    repo_path: Path,
+    hashes: tuple[str, ...],
+) -> None:
+    if not hashes:
+        return
+    repo = repo_factory(str(repo_path), read_only=False, init=False)
+    try:
+        for run_hash in hashes:
+            if repo.delete_run(run_hash) is not True:
+                raise RuntimeError(f"Aim refused exact run deletion: {run_hash}")
+    finally:
+        repo.close()
 
 
 def cleanup(
@@ -156,20 +268,19 @@ def cleanup(
     *,
     control: FacilityControl,
     s3: Any,
-    aim_repo: Any,
+    repo_factory: RepoFactory = _default_repo_factory,
 ) -> CleanupReport:
     experiment_id = _canonical_experiment_id(request.experiment_id)
-    expected_prefix = (
-        f"s3://{control.bucket}/{control.prefix}/{experiment_id}/"
-    )
-    _validate_aim_repo(control, aim_repo)
+    repo_path = _validate_control_aim_paths(control)
+    expected_prefix = f"s3://{control.bucket}/{control.prefix}/{experiment_id}/"
     if request.execute and request.confirm_prefix != expected_prefix:
         raise ValueError(f"execute requires confirm_prefix {expected_prefix}")
 
     planned = _snapshot(
         control=control,
         s3=s3,
-        aim_repo=aim_repo,
+        repo_factory=repo_factory,
+        repo_path=repo_path,
         experiment_id=experiment_id,
         validate_report=True,
     )
@@ -186,28 +297,29 @@ def cleanup(
     confirmed = _snapshot(
         control=control,
         s3=s3,
-        aim_repo=aim_repo,
+        repo_factory=repo_factory,
+        repo_path=repo_path,
         experiment_id=experiment_id,
         validate_report=True,
     )
     if confirmed != planned:
         raise RuntimeError("cleanup target set changed after confirmation")
 
-    for key in confirmed.s3_keys:
-        s3.delete_object(Bucket=control.bucket, Key=key)
-    for run_hash in confirmed.aim_run_hashes:
-        if aim_repo.delete_run(run_hash) is not True:
-            raise RuntimeError(f"Aim refused exact run deletion: {run_hash}")
+    report_key = _validate_report(s3, control, experiment_id, confirmed.s3_keys)
+    nonreport_keys = tuple(key for key in confirmed.s3_keys if key != report_key)
+    _delete_s3_keys(s3, control, nonreport_keys)
+    _delete_aim_hashes(repo_factory, repo_path, confirmed.aim_run_hashes)
 
-    remaining = _snapshot(
-        control=control,
-        s3=s3,
-        aim_repo=aim_repo,
-        experiment_id=experiment_id,
-        validate_report=False,
-    )
-    if remaining.s3_keys or remaining.aim_run_hashes:
-        raise RuntimeError("cleanup postverification found remaining targets")
+    remaining_keys = _list_s3_keys(s3, control, experiment_id)
+    _validate_report(s3, control, experiment_id, remaining_keys)
+    remaining_nonreport = tuple(key for key in remaining_keys if key != report_key)
+    remaining_hashes = _read_aim_hashes(repo_factory, repo_path, experiment_id)
+    if remaining_nonreport or remaining_hashes:
+        raise RuntimeError("cleanup postverification found remaining non-sentinel targets")
+
+    _delete_s3_keys(s3, control, (report_key,))
+    if _list_s3_keys(s3, control, experiment_id):
+        raise RuntimeError("cleanup postverification found remaining S3 targets")
     return CleanupReport(
         aim_run_hashes=confirmed.aim_run_hashes,
         expected_prefix=expected_prefix,
@@ -230,8 +342,6 @@ def _parser() -> argparse.ArgumentParser:
 
 
 def main(argv: list[str] | None = None) -> int:
-    from aim import Repo
-
     arguments = _parser().parse_args(argv)
     control = load_facility_control(arguments.control)
     request = CleanupRequest(
@@ -244,7 +354,6 @@ def main(argv: list[str] | None = None) -> int:
         request,
         control=control,
         s3=session.client("s3"),
-        aim_repo=Repo(str(control.aim.repo)),
     )
     print(canonical_json(report))
     return 0
