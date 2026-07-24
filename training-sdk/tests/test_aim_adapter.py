@@ -652,6 +652,10 @@ def test_real_aim_adapter_resumes_stable_run_identity(tmp_path):
     assert backend.experiment == context.experiment_name
     assert backend.name == context.run_name
     assert backend.values["hparams"] == context.hparams
+    assert backend.values["context"] == {
+        "experiment_id": context.experiment_id,
+        "run_id": context.run_id,
+    }
     assert backend.tracked == [
         ("eval/reward", 4.0, 12, {"sdk_stream": "metrics"}, 12)
     ]

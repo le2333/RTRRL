@@ -155,6 +155,17 @@ def test_each_job_rebuilds_and_runs_actual_label_bound_runtime_contracts(
     assert "--config" not in verify
 
 
+@pytest.mark.parametrize("job_name", ["build", "push"])
+def test_gpu_pre_push_check_loads_plugin_without_creating_a_device(job_name: str) -> None:
+    verify = _step(_job(_workflow(), job_name), "verify")["run"]
+    gpu_branch = verify.split("\nelse\n", 1)[1].split("\nfi", 1)[0]
+
+    assert "import jax" in gpu_branch
+    assert 'find_spec("jax_cuda12_plugin") is not None' in gpu_branch
+    assert "jax.devices(" not in gpu_branch
+    assert "jax.default_backend(" not in gpu_branch
+
+
 def test_push_path_confirms_account_before_oidc_and_only_pushes_fixed_test_tag() -> None:
     job = _job(_workflow(), "push")
     steps = job["steps"]

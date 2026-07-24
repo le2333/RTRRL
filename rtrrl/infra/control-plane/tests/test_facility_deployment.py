@@ -270,7 +270,10 @@ def test_read_only_preflight_reports_stable_complete_json(
         10,
     ]
     assert report["s3"]["prefix"] == "experiments/"
-    assert report["ecr"]["images"]["memorax-rtrl-facility-cpu"]["status"] == "visible"
+    assert (
+        report["ecr"]["images"]["infra-acceptance-brax-ppo-cpu-20260723"]["status"]
+        == "visible"
+    )
     assert report["iam"]["status"] == "allowed"
     assert report["aim"]["isolated"] is True
     assert json.loads(preflight.stable_json(report)) == report
@@ -349,15 +352,7 @@ def test_preflight_rejects_wrong_account_and_nonisolated_aim(
     assert report["aim"]["status"] == "failed"
 
 
-def test_deploy_default_is_dry_run_and_has_no_submit_or_cleanup(
-    deploy: Any, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    subprocess_calls: list[list[str]] = []
-    monkeypatch.setattr(
-        deploy.subprocess,
-        "run",
-        lambda command, **_kwargs: subprocess_calls.append(command),
-    )
+def test_deploy_default_is_dry_run_and_has_no_local_or_aws_writes(deploy: Any) -> None:
     session_calls: list[str] = []
 
     class NoAws:
@@ -372,10 +367,29 @@ def test_deploy_default_is_dry_run_and_has_no_submit_or_cleanup(
     )
 
     assert plan["mode"] == "dry-run"
-    assert plan["requested"] == {"build": False, "push": False, "register": False}
-    assert subprocess_calls == []
+    assert plan["requested"] == {"register": False}
+    assert plan["planned_images"] == [
+        (
+            "007122174918.dkr.ecr.eu-north-1.amazonaws.com/rtrrl:"
+            "infra-acceptance-brax-ppo-cpu-20260723"
+        ),
+        (
+            "007122174918.dkr.ecr.eu-north-1.amazonaws.com/rtrrl:"
+            "infra-acceptance-brax-ppo-gpu-20260723"
+        ),
+    ]
     assert session_calls == []
     source = (SCRIPTS / "deploy_facility.py").read_text()
+    for forbidden in (
+        "subprocess",
+        '"docker"',
+        "--build",
+        "--push",
+        "get_authorization_token",
+        "put_image",
+        "PutImage",
+    ):
+        assert forbidden not in source
     assert "submit_job(" not in source
     assert "terminate_job(" not in source
     assert "delete_" not in source
@@ -396,12 +410,24 @@ class RegisterBatch:
         }
 
 
-def test_register_is_explicit_digest_bound_and_single_attempt(deploy: Any) -> None:
+def test_register_is_explicit_digest_bound_and_single_attempt(
+    deploy: Any, monkeypatch: pytest.MonkeyPatch
+) -> None:
     batch = RegisterBatch()
     sts = FakeSts()
+    ecr = object()
+
+    class Reader:
+        def __init__(self, client: object, **_kwargs: Any) -> None:
+            assert client is ecr
+
+        def resolve_and_fetch(self, reference: str) -> Any:
+            return SimpleNamespace(reference=reference, catalog=SimpleNamespace())
+
+    monkeypatch.setattr(deploy, "BotoEcrCatalogReader", Reader)
     session = SimpleNamespace(
         region_name="eu-north-1",
-        client=lambda name: sts if name == "sts" else batch,
+        client=lambda name: {"sts": sts, "ecr": ecr, "batch": batch}[name],
     )
     cpu = "007122174918.dkr.ecr.eu-north-1.amazonaws.com/rtrrl@sha256:" + "a" * 64
     gpu = "007122174918.dkr.ecr.eu-north-1.amazonaws.com/rtrrl@sha256:" + "b" * 64
@@ -439,14 +465,16 @@ def test_register_is_explicit_digest_bound_and_single_attempt(deploy: Any) -> No
     )
 
 
-def test_push_and_register_require_their_own_explicit_inputs(deploy: Any) -> None:
+def test_legacy_build_and_push_flags_fail_closed(deploy: Any) -> None:
+    parser = deploy._parser()
+    with pytest.raises(SystemExit):
+        parser.parse_args(["--control", str(CONTROL), "--build"])
+    with pytest.raises(SystemExit):
+        parser.parse_args(["--control", str(CONTROL), "--push"])
+
+
+def test_register_requires_digest_inputs(deploy: Any) -> None:
     control = load_facility_control(CONTROL)
-    with pytest.raises(ValueError, match="confirm-account"):
-        deploy.deploy(
-            deploy.DeployRequest(push=True),
-            control=control,
-            session=SimpleNamespace(),
-        )
     with pytest.raises(ValueError, match="digest"):
         deploy.deploy(
             deploy.DeployRequest(

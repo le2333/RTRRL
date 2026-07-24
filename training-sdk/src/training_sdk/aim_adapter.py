@@ -62,6 +62,10 @@ class AimAdapter:
             self._run = run
             run.name = context.run_name
             run["hparams"] = context.hparams
+            run["context"] = {
+                "experiment_id": context.experiment_id,
+                "run_id": context.run_id,
+            }
         except self._availability_errors as exc:
             raise AimUnavailable("Aim is temporarily unavailable") from exc
 

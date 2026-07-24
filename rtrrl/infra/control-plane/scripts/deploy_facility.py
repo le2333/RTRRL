@@ -1,14 +1,10 @@
 from __future__ import annotations
 
 import argparse
-import base64
 import json
-import os
 from pathlib import Path
 import re
-import subprocess
 import sys
-import tempfile
 from typing import Any
 
 import boto3
@@ -16,30 +12,17 @@ import boto3
 from trainer_infra.aws_profiles import PROFILES
 from trainer_infra.ecr import BotoEcrCatalogReader
 from trainer_infra.facility_control import FacilityControl, load_facility_control
-from trainer_infra.image_catalog import LABEL, decode_catalog, encode_catalog_file
-
-
-ROOT = Path(__file__).resolve().parents[4]
-DOCKERFILES = {
-    "cpu": ROOT / "memo" / "infra" / "docker" / "Dockerfile.facility",
-    "gpu": ROOT / "memo" / "infra" / "docker" / "Dockerfile.facility.gpu",
-}
-_PUSH_DIGEST = re.compile(r"(?:^|\s)digest:\s*(sha256:[0-9a-f]{64})(?:\s|$)")
 
 
 class DeployRequest:
     def __init__(
         self,
         *,
-        build: bool = False,
-        push: bool = False,
         register: bool = False,
         confirm_account: str | None = None,
         cpu_digest: str | None = None,
         gpu_digest: str | None = None,
     ) -> None:
-        self.build = build
-        self.push = push
         self.register = register
         self.confirm_account = confirm_account
         self.cpu_digest = cpu_digest
@@ -57,153 +40,6 @@ def _registry(control: FacilityControl) -> str:
 def _tagged_image(control: FacilityControl, kind: str) -> str:
     tag = control.cpu_image_tag if kind == "cpu" else control.gpu_image_tag
     return f"{_registry(control)}/{control.ecr_repository}:{tag}"
-
-
-def _run_capture(
-    command: list[str],
-    *,
-    input_text: str | None = None,
-    env: dict[str, str] | None = None,
-) -> str:
-    result = subprocess.run(
-        command,
-        check=True,
-        input=input_text,
-        text=True,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.STDOUT,
-        env=env,
-    )
-    return result.stdout
-
-
-def _verify_image(
-    kind: str,
-    image: str,
-    *,
-    run_capture: Any = _run_capture,
-) -> None:
-    labels_raw = run_capture(
-        ["docker", "image", "inspect", "--format", "{{json .Config.Labels}}", image]
-    )
-    labels = json.loads(labels_raw)
-    catalog_label = labels.get(LABEL)
-    if not isinstance(catalog_label, str) or not catalog_label:
-        raise ValueError(f"{image} is missing catalog label {LABEL}")
-    catalog = decode_catalog(catalog_label)
-    if set(catalog.scripts) != {"memo_stream_ac", "memo_rtrrl"}:
-        raise ValueError(f"{image} has an unexpected facility catalog")
-    runtime_check = r"""
-import importlib
-import importlib.util
-import json
-from pathlib import Path
-
-importlib.import_module("training_sdk")
-importlib.import_module("experiments.memo_stream_ac.run")
-importlib.import_module("experiments.memo_rtrrl.run")
-has_cuda_plugin = importlib.util.find_spec("jax_cuda12_plugin") is not None
-print(json.dumps({
-    "jax_variant": "gpu" if has_cuda_plugin else "cpu",
-    "launchers": True,
-    "training_sdk": True,
-    "worker": Path("/opt/trainer/worker.py").is_file(),
-}))
-"""
-    result = json.loads(
-        run_capture(
-            [
-                "docker",
-                "run",
-                "--rm",
-                "--entrypoint",
-                "/opt/venv/bin/python",
-                image,
-                "-c",
-                runtime_check,
-            ]
-        )
-    )
-    expected = {
-        "jax_variant": kind,
-        "launchers": True,
-        "training_sdk": True,
-        "worker": True,
-    }
-    if result != expected:
-        raise ValueError(f"{image} runtime contract mismatch: {result!r}")
-
-
-def _build_images(control: FacilityControl) -> list[str]:
-    catalog = encode_catalog_file(ROOT / "memo" / "infra" / "scripts" / "index.yaml")
-    images = []
-    for kind in ("cpu", "gpu"):
-        image = _tagged_image(control, kind)
-        _run_capture(
-            [
-                "docker",
-                "build",
-                "--platform",
-                "linux/amd64",
-                "--build-arg",
-                f"TRAINER_SCRIPT_CATALOG={catalog}",
-                "--tag",
-                image,
-                "--file",
-                str(DOCKERFILES[kind]),
-                str(ROOT),
-            ]
-        )
-        _verify_image(kind, image)
-        images.append(image)
-    return images
-
-
-def _push_images(
-    session: Any,
-    control: FacilityControl,
-    *,
-    run_capture: Any = _run_capture,
-    reader_factory: Any = BotoEcrCatalogReader,
-) -> dict[str, str]:
-    ecr = session.client("ecr")
-    authorization = ecr.get_authorization_token()["authorizationData"][0]
-    user_password = base64.b64decode(authorization["authorizationToken"]).decode()
-    username, password = user_password.split(":", 1)
-    resolved: dict[str, str] = {}
-    with tempfile.TemporaryDirectory(prefix="trainer-docker-config-") as temporary:
-        environment = {**os.environ, "DOCKER_CONFIG": temporary}
-        run_capture(
-            [
-                "docker",
-                "login",
-                "--username",
-                username,
-                "--password-stdin",
-                _registry(control),
-            ],
-            input_text=password,
-            env=environment,
-        )
-        reader = reader_factory(
-            ecr,
-            account_id=control.account_id,
-            region=control.region,
-        )
-        for kind in ("cpu", "gpu"):
-            tagged = _tagged_image(control, kind)
-            output = run_capture(["docker", "push", tagged], env=environment)
-            matches = _PUSH_DIGEST.findall(output)
-            if len(set(matches)) != 1:
-                raise ValueError(f"docker push returned no unique digest for {tagged}")
-            reference = (
-                f"{_registry(control)}/{control.ecr_repository}@{matches[0]}"
-            )
-            verified = reader.resolve_and_fetch(reference)
-            if verified.reference != reference or verified.catalog is None:
-                raise ValueError(f"ECR digest verification failed for {reference}")
-            resolved[kind] = reference
-    return resolved
 
 
 def _validated_digest(
@@ -226,6 +62,22 @@ def _validated_digest(
     return image, match.group(1)
 
 
+def _verify_digest_catalogs(
+    session: Any,
+    control: FacilityControl,
+    images: dict[str, tuple[str, str]],
+) -> None:
+    reader = BotoEcrCatalogReader(
+        session.client("ecr"),
+        account_id=control.account_id,
+        region=control.region,
+    )
+    for image, _digest_hex in images.values():
+        verified = reader.resolve_and_fetch(image)
+        if verified.reference != image or verified.catalog is None:
+            raise ValueError(f"ECR digest verification failed for {image}")
+
+
 def _resource_requirements(vcpus: int, memory: int, gpus: int) -> list[dict[str, str]]:
     result = [
         {"type": "VCPU", "value": str(vcpus)},
@@ -240,12 +92,8 @@ def _register_definitions(
     session: Any,
     control: FacilityControl,
     *,
-    cpu_digest: str | None,
-    gpu_digest: str | None,
+    images: dict[str, tuple[str, str]],
 ) -> list[str]:
-    cpu_image, cpu_hex = _validated_digest(cpu_digest, "CPU", control)
-    gpu_image, gpu_hex = _validated_digest(gpu_digest, "GPU", control)
-    images = {"cpu": (cpu_image, cpu_hex), "gpu": (gpu_image, gpu_hex)}
     batch = session.client("batch")
     arns = []
     for name, profile in PROFILES.items():
@@ -285,12 +133,8 @@ def deploy(
     control: FacilityControl,
     session: Any | None = None,
 ) -> dict[str, Any]:
-    requested = {
-        "build": config.build,
-        "push": config.push,
-        "register": config.register,
-    }
-    if not any(requested.values()):
+    requested = {"register": config.register}
+    if not config.register:
         return {
             "mode": "dry-run",
             "planned_images": [
@@ -303,41 +147,25 @@ def deploy(
             "submission_supported": False,
         }
 
-    active_session = session
-    if config.push or config.register:
-        if config.confirm_account != control.account_id:
-            raise ValueError(
-                f"mutating phases require --confirm-account {control.account_id}"
-            )
-        if active_session is None:
-            active_session = boto3.Session(region_name=control.region)
-        identity = active_session.client("sts").get_caller_identity()
-        if identity.get("Account") != control.account_id:
-            raise ValueError("AWS account does not match facility control")
-        if active_session.region_name != control.region:
-            raise ValueError("AWS region does not match facility control")
-
-    built: list[str] = []
-    digests = {"cpu": config.cpu_digest, "gpu": config.gpu_digest}
-    if config.build:
-        built = _build_images(control)
-    if config.push:
-        assert active_session is not None
-        for kind in ("cpu", "gpu"):
-            _verify_image(kind, _tagged_image(control, kind))
-        digests.update(_push_images(active_session, control))
-    definitions: list[str] = []
-    if config.register:
-        assert active_session is not None
-        definitions = _register_definitions(
-            active_session,
-            control,
-            cpu_digest=digests["cpu"],
-            gpu_digest=digests["gpu"],
+    if config.confirm_account != control.account_id:
+        raise ValueError(
+            f"mutating phases require --confirm-account {control.account_id}"
         )
+    active_session = session or boto3.Session(region_name=control.region)
+    identity = active_session.client("sts").get_caller_identity()
+    if identity.get("Account") != control.account_id:
+        raise ValueError("AWS account does not match facility control")
+    if active_session.region_name != control.region:
+        raise ValueError("AWS region does not match facility control")
+
+    images = {
+        "cpu": _validated_digest(config.cpu_digest, "CPU", control),
+        "gpu": _validated_digest(config.gpu_digest, "GPU", control),
+    }
+    _verify_digest_catalogs(active_session, control, images)
+    definitions = _register_definitions(active_session, control, images=images)
     return {
-        "built": built,
-        "digests": digests,
+        "digests": {kind: image for kind, (image, _digest) in images.items()},
         "job_definitions": definitions,
         "mode": "execute",
         "requested": requested,
@@ -349,12 +177,9 @@ def deploy(
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         description=(
-            "Explicit facility image/job-definition deployment. With no phase flags, "
-            "prints a dry-run plan."
+            "Plan fixed facility images or explicitly register digest-bound definitions."
         )
     )
-    parser.add_argument("--build", action="store_true")
-    parser.add_argument("--push", action="store_true")
     parser.add_argument("--register", action="store_true")
     parser.add_argument("--control", required=True, type=Path)
     parser.add_argument("--confirm-account")
@@ -366,8 +191,6 @@ def _parser() -> argparse.ArgumentParser:
 def main(argv: list[str] | None = None) -> int:
     arguments = _parser().parse_args(argv)
     config = DeployRequest(
-        build=arguments.build,
-        push=arguments.push,
         register=arguments.register,
         confirm_account=arguments.confirm_account,
         cpu_digest=arguments.cpu_digest,

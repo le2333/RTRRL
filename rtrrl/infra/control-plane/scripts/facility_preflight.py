@@ -20,23 +20,17 @@ from trainer_infra.facility_control import FacilityControl, load_facility_contro
 
 
 REQUIRED_ACTIONS = (
+    "batch:DescribeComputeEnvironments",
+    "batch:DescribeJobQueues",
     "batch:DescribeJobs",
-    "batch:RegisterJobDefinition",
-    "batch:SubmitJob",
     "ecr:BatchCheckLayerAvailability",
     "ecr:BatchGetImage",
-    "ecr:CompleteLayerUpload",
-    "ecr:GetAuthorizationToken",
+    "ecr:DescribeRepositories",
     "ecr:GetDownloadUrlForLayer",
-    "ecr:InitiateLayerUpload",
-    "ecr:PutImage",
-    "ecr:UploadLayerPart",
-    "iam:PassRole",
     "logs:DescribeLogStreams",
     "logs:GetLogEvents",
     "s3:GetObject",
     "s3:ListBucket",
-    "s3:PutObject",
 )
 CANONICAL_REPORT = Path("/tmp/complete-facility-task7-phase-a-preflight.json")
 

@@ -41,8 +41,8 @@ class FacilityControl(BaseModel):
     bucket: Literal["rtrrl-artifacts-007122174918"]
     prefix: Literal["experiments"]
     ecr_repository: Literal["rtrrl"]
-    cpu_image_tag: Literal["memorax-rtrl-facility-cpu"]
-    gpu_image_tag: Literal["memorax-rtrl-facility-gpu"]
+    cpu_image_tag: Literal["infra-acceptance-brax-ppo-cpu-20260723"]
+    gpu_image_tag: Literal["infra-acceptance-brax-ppo-gpu-20260723"]
     subnets: tuple[str, ...]
     security_group_ids: tuple[str, ...]
     instance_role: Literal[

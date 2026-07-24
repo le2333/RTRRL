@@ -13,6 +13,7 @@ from trainer_infra.facility_control import load_facility_control
 
 SCRIPT = Path(__file__).parents[1] / "scripts" / "facility_preflight.py"
 CONTROL = Path(__file__).parents[1] / "config" / "facility.yaml"
+DEPLOY = Path(__file__).parents[1] / "scripts" / "deploy_facility.py"
 
 
 def _load():
@@ -138,3 +139,28 @@ def test_preflight_writes_only_canonical_report_atomically(tmp_path: Path) -> No
     assert written == destination
     assert destination.read_text() == '{"schema_version":1,"status":"pass"}\n'
     assert list(tmp_path.glob("*.tmp")) == []
+
+
+def test_preflight_is_generic_single_script_and_aws_read_only() -> None:
+    preflight = SCRIPT.read_text(encoding="utf-8")
+    deploy = DEPLOY.read_text(encoding="utf-8")
+    control = load_facility_control(CONTROL)
+
+    assert control.cpu_image_tag == "infra-acceptance-brax-ppo-cpu-20260723"
+    assert control.gpu_image_tag == "infra-acceptance-brax-ppo-gpu-20260723"
+    assert "memo/" not in preflight
+    assert "memo_" not in preflight
+    assert "memo/" not in deploy
+    assert "memo_" not in deploy
+    for forbidden_action in (
+        "batch:RegisterJobDefinition",
+        "batch:SubmitJob",
+        "ecr:CompleteLayerUpload",
+        "ecr:GetAuthorizationToken",
+        "ecr:InitiateLayerUpload",
+        "ecr:PutImage",
+        "ecr:UploadLayerPart",
+        "iam:PassRole",
+        "s3:PutObject",
+    ):
+        assert forbidden_action not in preflight

@@ -384,6 +384,53 @@ def test_normal_path_calls_real_brax_entry_point_with_fixed_micro_parameters(
     assert "device_put_replicated" not in jax.__dict__
 
 
+def test_launcher_device_contract_is_mandatory_and_profile_bound() -> None:
+    source = Path(launcher.__file__).read_text(encoding="utf-8")
+    descriptor = (
+        Path(launcher.__file__).parents[2] / "scripts" / "brax_ppo_acceptance.yaml"
+    ).read_text(encoding="utf-8")
+
+    assert 'jax.default_backend() == "gpu"' in source
+    assert 'any("NVIDIA L4" in device.device_kind for device in devices)' in source
+    assert "jax.jit(lambda x: x @ x)(jnp.eye(64)).block_until_ready()" in source
+    assert 'jax.default_backend() == "cpu"' in source
+    assert "device_check" not in descriptor
+    assert "skip" not in descriptor
+
+
+def test_logical_gpu_fast_mode_requires_both_test_gates_to_skip_only_hardware(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls: list[str] = []
+
+    class Result:
+        def block_until_ready(self) -> None:
+            calls.append("matmul")
+
+    monkeypatch.setattr(launcher.jax, "default_backend", lambda: "cpu")
+    monkeypatch.setattr(
+        launcher.jax,
+        "jit",
+        lambda function: lambda value: Result(),
+    )
+    monkeypatch.setattr(launcher.jnp, "eye", lambda _size: object())
+
+    launcher._verify_device_contract(
+        "g6x",
+        environ={
+            "BRAX_ACCEPTANCE_TEST_MODE": "1",
+            "BRAX_ACCEPTANCE_E2E_FAST": "1",
+        },
+    )
+    assert calls == ["matmul"]
+
+    with pytest.raises(AssertionError, match="gpu"):
+        launcher._verify_device_contract(
+            "g6x",
+            environ={"BRAX_ACCEPTANCE_TEST_MODE": "1"},
+        )
+
+
 @pytest.mark.parametrize(
     ("failure_mode", "checkpoint_expected", "rerun_expected"),
     [

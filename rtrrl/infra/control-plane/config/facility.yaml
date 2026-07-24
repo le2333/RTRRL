@@ -3,8 +3,8 @@ region: eu-north-1
 bucket: rtrrl-artifacts-007122174918
 prefix: experiments
 ecr_repository: rtrrl
-cpu_image_tag: memorax-rtrl-facility-cpu
-gpu_image_tag: memorax-rtrl-facility-gpu
+cpu_image_tag: infra-acceptance-brax-ppo-cpu-20260723
+gpu_image_tag: infra-acceptance-brax-ppo-gpu-20260723
 subnets:
   - subnet-08127d1c5d4de6ac2
   - subnet-0b8c68ea0a9784758

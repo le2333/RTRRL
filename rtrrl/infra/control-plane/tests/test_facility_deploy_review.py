@@ -1,23 +1,17 @@
 from __future__ import annotations
 
-import base64
 import importlib.util
-import json
 from pathlib import Path
-import subprocess
 from types import SimpleNamespace
 from typing import Any
 
 import pytest
 
 from trainer_infra.facility_control import load_facility_control
-from trainer_infra.image_catalog import encode_catalog_file
 
 
 SCRIPT = Path(__file__).parents[1] / "scripts" / "deploy_facility.py"
 CONTROL = Path(__file__).parents[1] / "config" / "facility.yaml"
-ROOT = Path(__file__).parents[4]
-LEGACY_FACILITY_COMMIT = "fd195c494ff4ac3b34dff066a6ccb1efb024b16b"
 
 
 def _load():
@@ -51,12 +45,11 @@ class Session:
         raise AssertionError(f"unexpected client before identity gate: {name}")
 
 
-@pytest.mark.parametrize("phase", ["push", "register"])
-def test_mutating_phase_requires_exact_account_confirmation(phase: str) -> None:
+def test_registration_requires_exact_account_confirmation() -> None:
     deploy = _load()
     control = load_facility_control(CONTROL)
     session = Session()
-    request = deploy.DeployRequest(**{phase: True})
+    request = deploy.DeployRequest(register=True)
 
     with pytest.raises(ValueError, match="--confirm-account 007122174918"):
         deploy.deploy(request, control=control, session=session)
@@ -78,8 +71,10 @@ def test_identity_gate_precedes_all_mutation(
     control = load_facility_control(CONTROL)
     session = Session(account, region)
     request = deploy.DeployRequest(
-        push=True,
+        register=True,
         confirm_account="007122174918",
+        cpu_digest="invalid",
+        gpu_digest="invalid",
     )
 
     with pytest.raises(ValueError, match=message):
@@ -88,68 +83,9 @@ def test_identity_gate_precedes_all_mutation(
     assert session.requested == ["sts"]
 
 
-def test_local_build_is_independent_and_push_does_not_require_build(
+def test_registration_verifies_digests_read_only_then_uses_fixed_resources(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    deploy = _load()
-    control = load_facility_control(CONTROL)
-    built: list[str] = []
-    monkeypatch.setattr(
-        deploy,
-        "_build_images",
-        lambda _control: built.append("build") or ["cpu", "gpu"],
-    )
-
-    report = deploy.deploy(
-        deploy.DeployRequest(build=True),
-        control=control,
-        session=Session(account="wrong", region="wrong"),
-    )
-
-    assert report["built"] == ["cpu", "gpu"]
-    assert built == ["build"]
-
-
-def test_push_reverifies_both_local_tags_before_login_or_push(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    deploy = _load()
-    control = load_facility_control(CONTROL)
-    session = Session()
-    verified: list[tuple[str, str]] = []
-    push_calls: list[object] = []
-
-    def reject_gpu(kind: str, image: str) -> None:
-        verified.append((kind, image))
-        if kind == "gpu":
-            raise ValueError("gpu image verification failed")
-
-    monkeypatch.setattr(deploy, "_verify_image", reject_gpu)
-    monkeypatch.setattr(
-        deploy,
-        "_push_images",
-        lambda *_args, **_kwargs: push_calls.append(object()),
-    )
-
-    with pytest.raises(ValueError, match="gpu image verification failed"):
-        deploy.deploy(
-            deploy.DeployRequest(
-                push=True,
-                confirm_account="007122174918",
-            ),
-            control=control,
-            session=session,
-        )
-
-    assert verified == [
-        ("cpu", deploy._tagged_image(control, "cpu")),
-        ("gpu", deploy._tagged_image(control, "gpu")),
-    ]
-    assert session.requested == ["sts"]
-    assert push_calls == []
-
-
-def test_registration_uses_only_fixed_control_roles_and_profile_resources() -> None:
     deploy = _load()
     control = load_facility_control(CONTROL)
     calls: list[dict[str, Any]] = []
@@ -165,9 +101,21 @@ def test_registration_uses_only_fixed_control_roles_and_profile_resources() -> N
         )
     )
     sts = Sts()
+    ecr = object()
+    verified: list[str] = []
+
+    class Reader:
+        def __init__(self, client: object, **_kwargs: Any) -> None:
+            assert client is ecr
+
+        def resolve_and_fetch(self, reference: str) -> Any:
+            verified.append(reference)
+            return SimpleNamespace(reference=reference, catalog=SimpleNamespace())
+
+    monkeypatch.setattr(deploy, "BotoEcrCatalogReader", Reader)
     session = SimpleNamespace(
         region_name="eu-north-1",
-        client=lambda name: sts if name == "sts" else batch,
+        client=lambda name: {"sts": sts, "ecr": ecr, "batch": batch}[name],
     )
     cpu = (
         "007122174918.dkr.ecr.eu-north-1.amazonaws.com/rtrrl@sha256:"
@@ -190,6 +138,7 @@ def test_registration_uses_only_fixed_control_roles_and_profile_resources() -> N
     )
 
     assert len(calls) == 4
+    assert verified == [cpu, gpu]
     assert {
         call["containerProperties"]["jobRoleArn"] for call in calls
     } == {control.job_role_arn}
@@ -208,111 +157,3 @@ def test_registration_uses_only_fixed_control_roles_and_profile_resources() -> N
             {"type": "GPU", "value": "1"},
         ],
     ]
-
-
-def test_push_uses_temporary_docker_config_and_verifies_digest_catalog() -> None:
-    deploy = _load()
-    control = load_facility_control(CONTROL)
-    token = base64.b64encode(b"AWS:secret").decode()
-    ecr = SimpleNamespace(
-        get_authorization_token=lambda: {
-            "authorizationData": [{"authorizationToken": token}]
-        }
-    )
-    session = SimpleNamespace(client=lambda name: ecr)
-    docker_configs: list[str] = []
-    commands: list[list[str]] = []
-    digest_by_tag = {
-        control.cpu_image_tag: "a" * 64,
-        control.gpu_image_tag: "b" * 64,
-    }
-
-    def run_capture(
-        command: list[str],
-        *,
-        input_text: str | None = None,
-        env: dict[str, str] | None = None,
-    ) -> str:
-        del input_text
-        commands.append(command)
-        assert env is not None
-        docker_config = env["DOCKER_CONFIG"]
-        assert Path(docker_config).is_dir()
-        docker_configs.append(docker_config)
-        if command[1] == "push":
-            tag = command[2].rsplit(":", 1)[1]
-            return f"latest: digest: sha256:{digest_by_tag[tag]} size: 1234\n"
-        return ""
-
-    verified: list[str] = []
-
-    class Reader:
-        def resolve_and_fetch(self, reference: str) -> Any:
-            assert "@sha256:" in reference
-            verified.append(reference)
-            return SimpleNamespace(reference=reference, catalog=SimpleNamespace())
-
-    result = deploy._push_images(
-        session,
-        control,
-        run_capture=run_capture,
-        reader_factory=lambda _client, **_kwargs: Reader(),
-    )
-
-    assert set(result) == {"cpu", "gpu"}
-    assert verified == [result["cpu"], result["gpu"]]
-    assert all(not Path(path).exists() for path in docker_configs)
-    assert not any(command[1] == "image" and "inspect" in command for command in commands)
-
-
-def test_image_verification_decodes_label_and_checks_runtime_contract(
-    tmp_path: Path,
-) -> None:
-    deploy = _load()
-    control = load_facility_control(CONTROL)
-    scripts = tmp_path / "scripts"
-    scripts.mkdir()
-    for name in ("index.yaml", "memo_stream_ac.yaml", "memo_rtrrl.yaml"):
-        content = subprocess.check_output(
-            [
-                "git",
-                "show",
-                f"{LEGACY_FACILITY_COMMIT}:memo/infra/scripts/{name}",
-            ],
-            cwd=ROOT,
-        )
-        (scripts / name).write_bytes(content)
-    encoded = encode_catalog_file(scripts / "index.yaml")
-    commands: list[list[str]] = []
-
-    def run_capture(
-        command: list[str],
-        *,
-        input_text: str | None = None,
-        env: dict[str, str] | None = None,
-    ) -> str:
-        del input_text, env
-        commands.append(command)
-        if command[1:3] == ["image", "inspect"]:
-            return json.dumps({"org.rtrrl.trainer.scripts.v1": encoded})
-        if command[1] == "run":
-            return json.dumps(
-                {
-                    "jax_variant": "cpu",
-                    "launchers": True,
-                    "training_sdk": True,
-                    "worker": True,
-                }
-            )
-        raise AssertionError(command)
-
-    deploy._verify_image(
-        "cpu",
-        (
-            "007122174918.dkr.ecr.eu-north-1.amazonaws.com/rtrrl:"
-            + control.cpu_image_tag
-        ),
-        run_capture=run_capture,
-    )
-
-    assert [command[1] for command in commands] == ["image", "run"]
