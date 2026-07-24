@@ -135,6 +135,8 @@ def test_launch_writes_pid_and_reproducible_runtime_metadata(tmp_path: Path) -> 
     }
     assert calls[0]["cwd"] == control.repo
     assert calls[0]["start_new_session"] is True
+    assert len(calls[0]["pass_fds"]) == 1
+    assert (control.repo / ".trainer-aim-scratch.lock").is_file()
 
 
 def test_launch_resumes_valid_recorded_process_without_duplicate(
@@ -157,6 +159,26 @@ def test_launch_resumes_valid_recorded_process_without_duplicate(
 
     assert result == {"pid": 321, "status": "resumed"}
     assert popen_calls == []
+
+
+def test_launch_rejects_exclusive_cleanup_lock_without_starting(
+    tmp_path: Path,
+) -> None:
+    control = _control(tmp_path)
+    directory_fd = aim_scratch.open_trusted_directory(control.repo)
+    lock_fd = aim_scratch.open_facility_lock(directory_fd, exclusive=True)
+    starts: list[object] = []
+    try:
+        with pytest.raises(ValueError, match="lock"):
+            launch_aim_scratch(
+                control,
+                aim_executable="/venv/bin/aim",
+                popen=lambda *_args, **_kwargs: starts.append(object()),
+            )
+    finally:
+        os.close(lock_fd)
+        os.close(directory_fd)
+    assert starts == []
 
 
 def test_preflight_validates_metadata_pid_cmdline_cwd_port_and_repo(
@@ -321,13 +343,14 @@ def test_stop_validates_exact_identity_then_terms_only_recorded_process(
         control,
         inspect_process=inspect,
         health_probe=lambda _host, _port: next(health),
-        send_signal=lambda pid, value: signals.append((pid, value)),
-        monotonic=iter([0.0, 0.1]).__next__,
-        sleep=lambda _seconds: None,
+        pidfd_open=lambda _pid: 91,
+        pidfd_send_signal=lambda fd, value: signals.append((fd, value)),
+        wait_pidfd=lambda _fd, _timeout: True,
+        close_fd=lambda _fd: None,
     )
 
     assert report == {"pid": 321, "status": "stopped"}
-    assert signals == [(321, signal.SIGTERM)]
+    assert signals == [(91, signal.SIGTERM)]
     assert not control.metadata_file.exists()
     assert not control.pid_file.exists()
     assert unrelated.read_text() == "keep"
@@ -360,7 +383,10 @@ def test_stop_rejects_wrong_identity_without_signaling(
             control,
             inspect_process=lambda _pid: snapshot,
             health_probe=lambda _host, _port: True,
-            send_signal=lambda pid, value: signals.append((pid, value)),
+            pidfd_open=lambda _pid: 91,
+            pidfd_send_signal=lambda fd, value: signals.append((fd, value)),
+            wait_pidfd=lambda _fd, _timeout: True,
+            close_fd=lambda _fd: None,
         )
     assert signals == []
     assert control.metadata_file.exists()
@@ -378,13 +404,15 @@ def test_stop_rejects_stale_pid_and_pid_reuse_without_other_signal(
             control,
             inspect_process=lambda _pid: (_ for _ in ()).throw(FileNotFoundError()),
             health_probe=lambda _host, _port: False,
-            send_signal=lambda pid, value: signals.append((pid, value)),
+            pidfd_open=lambda _pid: 91,
+            pidfd_send_signal=lambda fd, value: signals.append((fd, value)),
+            wait_pidfd=lambda _fd, _timeout: True,
+            close_fd=lambda _fd: None,
         )
     assert signals == []
 
     inspections = iter(
         [
-            ProcessSnapshot(321, command, control.repo, 12345),
             ProcessSnapshot(321, command, control.repo, 12345),
             ProcessSnapshot(321, command, control.repo, 99999),
         ]
@@ -394,11 +422,12 @@ def test_stop_rejects_stale_pid_and_pid_reuse_without_other_signal(
             control,
             inspect_process=lambda _pid: next(inspections),
             health_probe=lambda _host, _port: True,
-            send_signal=lambda pid, value: signals.append((pid, value)),
-            monotonic=iter([0.0, 0.1]).__next__,
-            sleep=lambda _seconds: None,
+            pidfd_open=lambda _pid: 91,
+            pidfd_send_signal=lambda fd, value: signals.append((fd, value)),
+            wait_pidfd=lambda _fd, _timeout: True,
+            close_fd=lambda _fd: None,
         )
-    assert signals == [(321, signal.SIGTERM)]
+    assert signals == []
     assert control.metadata_file.exists()
     assert control.pid_file.exists()
 
@@ -407,8 +436,6 @@ def test_stop_timeout_never_sigkills_or_removes_evidence(tmp_path: Path) -> None
     control = _control(tmp_path)
     command = _recorded(control)
     signals: list[tuple[int, int]] = []
-    times = iter([0.0, 0.1, 2.0])
-
     with pytest.raises(TimeoutError, match="SIGTERM"):
         aim_scratch.stop_aim_scratch(
             control,
@@ -419,12 +446,13 @@ def test_stop_timeout_never_sigkills_or_removes_evidence(tmp_path: Path) -> None
                 12345,
             ),
             health_probe=lambda _host, _port: True,
-            send_signal=lambda pid, value: signals.append((pid, value)),
+            pidfd_open=lambda _pid: 91,
+            pidfd_send_signal=lambda fd, value: signals.append((fd, value)),
+            wait_pidfd=lambda _fd, _timeout: False,
+            close_fd=lambda _fd: None,
             timeout=1.0,
-            monotonic=times.__next__,
-            sleep=lambda _seconds: None,
         )
-    assert signals == [(321, signal.SIGTERM)]
+    assert signals == [(91, signal.SIGTERM)]
     assert signal.SIGKILL not in [value for _pid, value in signals]
     assert control.metadata_file.exists()
     assert control.pid_file.exists()
@@ -446,7 +474,10 @@ def test_stop_rechecks_generation_immediately_before_signal(tmp_path: Path) -> N
             control,
             inspect_process=lambda _pid: next(inspections),
             health_probe=lambda _host, _port: True,
-            send_signal=lambda pid, value: signals.append((pid, value)),
+            pidfd_open=lambda _pid: 91,
+            pidfd_send_signal=lambda fd, value: signals.append((fd, value)),
+            wait_pidfd=lambda _fd, _timeout: True,
+            close_fd=lambda _fd: None,
         )
     assert signals == []
     assert control.metadata_file.exists()
@@ -528,3 +559,70 @@ def test_validate_fails_closed_when_generation_metadata_is_missing(
             ),
             health_probe=lambda _host, _port: True,
         )
+
+
+def test_stop_uses_exact_pidfd_and_never_pid_signal(tmp_path: Path) -> None:
+    control = _control(tmp_path)
+    command = _recorded(control)
+    sent: list[tuple[int, int]] = []
+    closed: list[int] = []
+
+    result = aim_scratch.stop_aim_scratch(
+        control,
+        inspect_process=lambda _pid: ProcessSnapshot(
+            321,
+            command,
+            control.repo,
+            12345,
+        ),
+        health_probe=lambda _host, _port, values=iter([True, False]): next(values),
+        pidfd_open=lambda pid: 91 if pid == 321 else -1,
+        pidfd_send_signal=lambda fd, value: sent.append((fd, value)),
+        wait_pidfd=lambda fd, timeout: fd == 91 and timeout == 10.0,
+        close_fd=lambda fd: closed.append(fd),
+    )
+
+    assert result == {"pid": 321, "status": "stopped"}
+    assert sent == [(91, signal.SIGTERM)]
+    assert closed == [91]
+
+
+def test_stop_pidfd_generation_reuse_before_signal_never_signals(
+    tmp_path: Path,
+) -> None:
+    control = _control(tmp_path)
+    command = _recorded(control)
+    snapshots = iter(
+        [
+            ProcessSnapshot(321, command, control.repo, 99999),
+        ]
+    )
+    sent: list[tuple[int, int]] = []
+
+    with pytest.raises(ValueError, match="start_time_ticks"):
+        aim_scratch.stop_aim_scratch(
+            control,
+            inspect_process=lambda _pid: next(snapshots),
+            health_probe=lambda _host, _port: True,
+            pidfd_open=lambda _pid: 91,
+            pidfd_send_signal=lambda fd, value: sent.append((fd, value)),
+            wait_pidfd=lambda _fd, _timeout: True,
+            close_fd=lambda _fd: None,
+        )
+    assert sent == []
+
+
+def test_stop_fails_closed_without_pidfd_support_and_source_has_no_os_kill(
+    tmp_path: Path,
+) -> None:
+    control = _control(tmp_path)
+    _recorded(control)
+    with pytest.raises(RuntimeError, match="pidfd"):
+        aim_scratch.stop_aim_scratch(
+            control,
+            pidfd_open=lambda _pid: (_ for _ in ()).throw(NotImplementedError()),
+        )
+    source = (
+        Path(__file__).parents[1] / "src" / "trainer_infra" / "aim_scratch.py"
+    ).read_text()
+    assert "os.kill" not in source

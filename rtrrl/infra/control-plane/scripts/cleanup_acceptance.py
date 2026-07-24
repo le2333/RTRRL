@@ -17,8 +17,16 @@ import uuid
 
 import boto3
 
-from trainer_infra.aim_scratch import assert_aim_scratch_inactive
-from trainer_infra.facility_control import FacilityControl, load_facility_control
+from trainer_infra.aim_scratch import (
+    assert_aim_scratch_inactive,
+    open_facility_lock,
+    open_trusted_directory,
+)
+from trainer_infra.facility_control import (
+    AimScratchControl,
+    FacilityControl,
+    load_facility_control,
+)
 
 
 ACCEPTANCE_AIM_SCRATCH = Path("/home/ubuntu/trainer/task7-aim-scratch")
@@ -75,6 +83,8 @@ class AimRepoGateway(Protocol):
     def open_read_only(self) -> Any: ...
 
     def open_write_delete(self) -> Any: ...
+
+    def cleanup_operation(self, control: AimScratchControl) -> Any: ...
 
 
 class _TreeEntry(NamedTuple):
@@ -239,10 +249,22 @@ def _copy_aim_tree(source: Path, destination: Path) -> Path:
 
 
 @contextmanager
-def _verified_aim_snapshot(source_repo: Path) -> Iterator[Path]:
+def _verified_aim_snapshot(
+    source_repo: Path,
+    *,
+    disk_usage: Any = shutil.disk_usage,
+) -> Iterator[Path]:
     source_aim = source_repo / ".aim"
     before = _source_tree_fingerprint(source_aim)
+    source_size = sum(
+        entry.size for entry in before if entry.entry_type == "file"
+    )
     with tempfile.TemporaryDirectory(prefix="acceptance-aim-snapshot-") as temporary:
+        required = 3 * source_size + 512 * 1024 * 1024
+        if disk_usage(temporary).free < required:
+            raise ValueError(
+                f"insufficient temporary snapshot capacity: require {required} bytes"
+            )
         temporary_repo = Path(temporary) / "repo"
         temporary_repo.mkdir()
         copied_aim = temporary_repo / ".aim"
@@ -257,8 +279,57 @@ def _verified_aim_snapshot(source_repo: Path) -> Iterator[Path]:
 
 
 class TrustedAimRepoGateway:
-    def __init__(self, path: Path) -> None:
+    def __init__(self, path: Path, *, disk_usage: Any = shutil.disk_usage) -> None:
         self.path = path
+        self._disk_usage = disk_usage
+        self._control: AimScratchControl | None = None
+        self._directory_fd: int | None = None
+        self._lock_fd: int | None = None
+        self._snapshot_context: Any = None
+        self._snapshot_repo: Any = None
+
+    def _source_path(self) -> Path:
+        if self._directory_fd is None:
+            raise RuntimeError("Aim gateway is outside an exclusive cleanup operation")
+        return Path("/proc/self/fd") / str(self._directory_fd)
+
+    def _assert_inactive(self) -> None:
+        if self._control is None:
+            raise RuntimeError("Aim gateway has no active facility control")
+        secured = self._control.model_copy(update={"repo": self._source_path()})
+        assert_aim_scratch_inactive(secured)
+
+    def _close_snapshot(self) -> None:
+        if self._snapshot_repo is not None:
+            self._snapshot_repo.close()
+            self._snapshot_repo = None
+        if self._snapshot_context is not None:
+            self._snapshot_context.__exit__(None, None, None)
+            self._snapshot_context = None
+
+    @contextmanager
+    def cleanup_operation(self, control: AimScratchControl) -> Iterator[None]:
+        if self._directory_fd is not None:
+            raise RuntimeError("Aim cleanup operation is already active")
+        directory_fd = open_trusted_directory(self.path)
+        try:
+            lock_fd = open_facility_lock(directory_fd, exclusive=True)
+        except BaseException:
+            os.close(directory_fd)
+            raise
+        self._control = control
+        self._directory_fd = directory_fd
+        self._lock_fd = lock_fd
+        try:
+            self._assert_inactive()
+            yield
+        finally:
+            self._close_snapshot()
+            self._control = None
+            self._directory_fd = None
+            self._lock_fd = None
+            os.close(lock_fd)
+            os.close(directory_fd)
 
     @staticmethod
     def _require_updated(path: Path) -> None:
@@ -275,26 +346,36 @@ class TrustedAimRepoGateway:
         from aim import Repo
         from aim.sdk.repo import RepoStatus
 
-        _require_lexical_directory(self.path)
-        with _verified_aim_snapshot(self.path) as snapshot:
-            # Aim 3.28 raises NotImplementedError for any explicit read_only
-            # value. The verified temporary copy is intentionally writable.
-            repo = Repo(str(snapshot), init=False)
+        self._assert_inactive()
+        if self._snapshot_repo is None:
+            snapshot_context = _verified_aim_snapshot(
+                self._source_path(),
+                disk_usage=self._disk_usage,
+            )
+            snapshot = snapshot_context.__enter__()
             try:
+                repo = Repo(str(snapshot), init=False)
                 if Repo.check_repo_status(str(snapshot)) is not RepoStatus.UPDATED:
+                    repo.close()
                     raise RuntimeError("temporary Aim snapshot could not be upgraded")
-                yield repo
-            finally:
-                repo.close()
+            except BaseException:
+                snapshot_context.__exit__(*sys.exc_info())
+                raise
+            self._snapshot_context = snapshot_context
+            self._snapshot_repo = repo
+        yield self._snapshot_repo
 
     @contextmanager
     def open_write_delete(self) -> Iterator[AimDeleteSession]:
         from aim import Repo
 
-        _require_lexical_directory(self.path)
-        self._require_updated(self.path)
-        repo = Repo(str(self.path), init=False)
+        self._close_snapshot()
+        self._assert_inactive()
+        source = self._source_path()
+        self._require_updated(source)
+        repo = Repo(str(source), init=False)
         try:
+            self._assert_inactive()
             yield repo
         finally:
             repo.close()
@@ -509,9 +590,38 @@ def _load_authorized_manifest(request: CleanupRequest) -> CleanupReport:
     if not _SHA256.fullmatch(request.confirm_manifest_sha256):
         raise ValueError("execute requires a lowercase SHA-256")
     try:
-        payload = request.manifest.read_bytes()
+        lexical_stat = request.manifest.lstat()
     except OSError as error:
         raise ValueError("cleanup manifest cannot be read") from error
+    if not stat.S_ISREG(lexical_stat.st_mode):
+        raise ValueError("cleanup manifest must be a regular file, not a symlink")
+    if lexical_stat.st_uid != os.getuid():
+        raise ValueError("cleanup manifest must be owned by the current uid")
+    if stat.S_IMODE(lexical_stat.st_mode) & 0o077:
+        raise ValueError("cleanup manifest mode must not grant group or other access")
+    try:
+        manifest_fd = os.open(
+            request.manifest,
+            os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0),
+        )
+        try:
+            opened_stat = os.fstat(manifest_fd)
+            if (
+                opened_stat.st_dev != lexical_stat.st_dev
+                or opened_stat.st_ino != lexical_stat.st_ino
+                or not stat.S_ISREG(opened_stat.st_mode)
+                or opened_stat.st_uid != os.getuid()
+                or stat.S_IMODE(opened_stat.st_mode) & 0o077
+            ):
+                raise ValueError("cleanup manifest identity or mode changed while opening")
+            chunks = []
+            while chunk := os.read(manifest_fd, 1024 * 1024):
+                chunks.append(chunk)
+            payload = b"".join(chunks)
+        finally:
+            os.close(manifest_fd)
+    except OSError as error:
+        raise ValueError("cleanup manifest cannot be safely opened") from error
     actual_sha = hashlib.sha256(payload).hexdigest()
     if actual_sha != request.confirm_manifest_sha256:
         raise ValueError("cleanup manifest SHA-256 does not match exact file bytes")
@@ -562,7 +672,7 @@ def _validate_live_subset(
         raise ValueError("live Aim set contains a new target")
 
 
-def cleanup(
+def _cleanup_locked(
     request: CleanupRequest,
     *,
     control: FacilityControl,
@@ -642,6 +752,25 @@ def cleanup(
     if final_keys or final_hashes:
         raise RuntimeError("cleanup final verification found remaining targets")
     return authorized._replace(writes_performed=True)
+
+
+def cleanup(
+    request: CleanupRequest,
+    *,
+    control: FacilityControl,
+    s3: Any,
+    aim_repo: AimRepoGateway,
+) -> CleanupReport:
+    _canonical_experiment_id(request.experiment_id)
+    _validate_aim_boundary(control, aim_repo)
+    with aim_repo.cleanup_operation(control.aim):
+        assert_aim_scratch_inactive(control.aim)
+        return _cleanup_locked(
+            request,
+            control=control,
+            s3=s3,
+            aim_repo=aim_repo,
+        )
 
 
 def _parser() -> argparse.ArgumentParser:

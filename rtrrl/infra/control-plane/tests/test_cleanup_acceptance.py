@@ -10,12 +10,12 @@ from pathlib import Path
 import shutil
 import sys
 from typing import Any
-from types import ModuleType
+from types import ModuleType, SimpleNamespace
 import uuid
 
 import pytest
 
-from trainer_infra.facility_control import load_facility_control
+from trainer_infra.facility_control import AimScratchControl, load_facility_control
 
 
 SCRIPT = Path(__file__).parents[1] / "scripts" / "cleanup_acceptance.py"
@@ -85,6 +85,14 @@ class FakeAimGateway:
         self.deleted: list[str] = []
         self.fail_hash_once: str | None = None
         self.inject_after_delete: str | None = None
+
+    @contextmanager
+    def cleanup_operation(self, _control: Any):
+        self.calls.append("operation")
+        try:
+            yield
+        finally:
+            self.calls.append("operation-close")
 
     @contextmanager
     def open_read_only(self):
@@ -180,6 +188,7 @@ def _save_manifest(
     path = tmp_path / "cleanup-manifest.json"
     payload = (module.canonical_json(report) + "\n").encode()
     path.write_bytes(payload)
+    path.chmod(0o600)
     return path, hashlib.sha256(payload).hexdigest()
 
 
@@ -239,7 +248,12 @@ def test_dry_run_emits_complete_canonical_recovery_manifest(
         "purpose": "infra-acceptance",
     }
     assert report.writes_performed is False
-    assert gateway.calls == ["read", "read-close"]
+    assert gateway.calls == [
+        "operation",
+        "read",
+        "read-close",
+        "operation-close",
+    ]
     rendered = module.canonical_json(report)
     assert rendered == json.dumps(json.loads(rendered), separators=(",", ":"), sort_keys=True)
 
@@ -263,7 +277,7 @@ def test_cleanup_refuses_active_scratch_before_enumeration(
             s3=FakeS3(),
             aim_repo=gateway,
         )
-    assert gateway.calls == []
+    assert gateway.calls == ["operation", "operation-close"]
 
 
 def test_execute_requires_exact_manifest_path_hash_and_prefix(
@@ -295,6 +309,35 @@ def test_execute_requires_exact_manifest_path_hash_and_prefix(
         )
 
 
+def test_execute_rejects_manifest_symlink_or_group_readable_mode(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    module = _load(monkeypatch)
+    control = load_facility_control(CONTROL)
+    s3 = FakeS3()
+    gateway = _gateway(control)
+    manifest, digest, _report = _manifest(module, monkeypatch, tmp_path, s3, gateway)
+    manifest.chmod(0o644)
+    with pytest.raises(ValueError, match="mode"):
+        module.cleanup(
+            _execute_request(module, manifest, digest),
+            control=control,
+            s3=s3,
+            aim_repo=gateway,
+        )
+    manifest.chmod(0o600)
+    link = tmp_path / "manifest-link"
+    link.symlink_to(manifest)
+    with pytest.raises(ValueError, match="regular|symlink"):
+        module.cleanup(
+            _execute_request(module, link, digest),
+            control=control,
+            s3=s3,
+            aim_repo=gateway,
+        )
+
+
 def test_execute_deletes_in_order_and_finally_verifies_both_empty(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
@@ -317,7 +360,7 @@ def test_execute_deletes_in_order_and_finally_verifies_both_empty(
     assert s3.keys == set()
     assert set(gateway.runs) == {"other"}
     assert gateway.calls.count("write") == 1
-    assert gateway.calls[-2:] == ["read", "read-close"]
+    assert gateway.calls[-3:] == ["read", "read-close", "operation-close"]
 
 
 @pytest.mark.parametrize("new_target", ["s3", "aim"])
@@ -494,6 +537,7 @@ def test_public_cleanup_uses_gateway_not_repo_factory(
 def _fake_aim_modules(
     monkeypatch: pytest.MonkeyPatch,
     opened: list[Path],
+    closed: list[Path] | None = None,
 ) -> None:
     updated = object()
 
@@ -511,13 +555,15 @@ def _fake_aim_modules(
         ) -> None:
             assert read_only is None
             assert init is False
-            opened.append(Path(path))
+            self.path = Path(path)
+            opened.append(self.path)
 
         def iter_runs(self):
             return iter(())
 
         def close(self) -> None:
-            return None
+            if closed is not None:
+                closed.append(self.path)
 
     aim = ModuleType("aim")
     aim.Repo = Repo  # type: ignore[attr-defined]
@@ -540,6 +586,18 @@ def _snapshot_source(tmp_path: Path) -> Path:
     return source
 
 
+def _snapshot_control(source: Path) -> AimScratchControl:
+    return AimScratchControl(
+        repo=source,
+        main_repo=source.parent / "main",
+        host="127.0.0.1",
+        port=53801,
+        metadata_file=source / "aim-server-53801.json",
+        pid_file=source / "aim-server-53801.pid",
+        log_file=source / "aim-server-53801.log",
+    )
+
+
 def test_trusted_gateway_opens_only_verified_temp_snapshot_and_cleans_it(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
@@ -551,15 +609,143 @@ def test_trusted_gateway_opens_only_verified_temp_snapshot_and_cleans_it(
     _fake_aim_modules(monkeypatch, opened)
 
     gateway = module.TrustedAimRepoGateway(source)
-    with gateway.open_read_only() as repo:
-        assert list(repo.iter_runs()) == []
-        assert opened[0] != source
-        assert opened[0].parent != source
-        assert (opened[0] / ".aim" / "data" / "value").read_bytes() == b"stable"
-        temporary = opened[0]
+    with gateway.cleanup_operation(_snapshot_control(source)):
+        with gateway.open_read_only() as repo:
+            assert list(repo.iter_runs()) == []
+            assert opened[0] != source
+            assert opened[0].parent != source
+            assert (opened[0] / ".aim" / "data" / "value").read_bytes() == b"stable"
+            temporary = opened[0]
 
     assert not temporary.exists()
     assert module._source_tree_fingerprint(source / ".aim") == before
+
+
+def test_snapshot_capacity_preflight_fails_before_copy_or_open(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    module = _load(monkeypatch)
+    source = _snapshot_source(tmp_path)
+    opened: list[Path] = []
+    _fake_aim_modules(monkeypatch, opened)
+    copies: list[object] = []
+    monkeypatch.setattr(
+        module,
+        "_copy_aim_tree",
+        lambda *_args: copies.append(object()),
+    )
+    gateway = module.TrustedAimRepoGateway(
+        source,
+        disk_usage=lambda _path: SimpleNamespace(free=1),
+    )
+    with pytest.raises(ValueError, match="capacity"):
+        with gateway.cleanup_operation(_snapshot_control(source)):
+            with gateway.open_read_only():
+                raise AssertionError("insufficient snapshot must not open")
+    assert copies == []
+    assert opened == []
+
+
+def test_writable_repo_closes_without_delete_when_manual_server_starts_after_open(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    module = _load(monkeypatch)
+    source = _snapshot_source(tmp_path)
+    opened: list[Path] = []
+    closed: list[Path] = []
+    _fake_aim_modules(monkeypatch, opened, closed)
+    checks = 0
+
+    def check(_control: Any) -> dict[str, str]:
+        nonlocal checks
+        checks += 1
+        if checks == 3:
+            raise ValueError("manual Aim server is active")
+        return {"status": "inactive"}
+
+    monkeypatch.setattr(module, "assert_aim_scratch_inactive", check)
+    gateway = module.TrustedAimRepoGateway(source)
+    with gateway.cleanup_operation(_snapshot_control(source)):
+        with pytest.raises(ValueError, match="active"):
+            with gateway.open_write_delete():
+                raise AssertionError("active server must block deletion")
+
+    assert checks == 3
+    assert opened == closed
+    assert opened[0].as_posix().startswith("/proc/self/fd/")
+
+
+def test_cleanup_operation_rejects_shared_launcher_lock(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    import trainer_infra.aim_scratch as aim_scratch
+
+    module = _load(monkeypatch)
+    source = _snapshot_source(tmp_path)
+    directory_fd = aim_scratch.open_trusted_directory(source)
+    lock_fd = aim_scratch.open_facility_lock(directory_fd, exclusive=False)
+    try:
+        gateway = module.TrustedAimRepoGateway(source)
+        with pytest.raises(ValueError, match="lock"):
+            with gateway.cleanup_operation(_snapshot_control(source)):
+                raise AssertionError("exclusive cleanup lock must not be acquired")
+    finally:
+        os.close(lock_fd)
+        os.close(directory_fd)
+
+
+def test_gateway_keeps_original_dirfd_when_lexical_path_is_replaced(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    module = _load(monkeypatch)
+    source = _snapshot_source(tmp_path)
+    opened: list[Path] = []
+    _fake_aim_modules(monkeypatch, opened)
+    gateway = module.TrustedAimRepoGateway(source)
+
+    with gateway.cleanup_operation(_snapshot_control(source)):
+        moved = tmp_path / "original"
+        source.rename(moved)
+        replacement = _snapshot_source(tmp_path)
+        (replacement / ".aim" / "data" / "value").write_bytes(b"replacement")
+        with gateway.open_read_only():
+            temporary = opened[0]
+            assert (temporary / ".aim" / "data" / "value").read_bytes() == b"stable"
+
+
+def test_gateway_reuses_stable_snapshot_until_write_then_refreshes(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    module = _load(monkeypatch)
+    source = _snapshot_source(tmp_path)
+    opened: list[Path] = []
+    _fake_aim_modules(monkeypatch, opened)
+    copies = 0
+    original_copy = module._copy_aim_tree
+
+    def recording_copy(src: Path, dst: Path) -> Path:
+        nonlocal copies
+        copies += 1
+        return original_copy(src, dst)
+
+    monkeypatch.setattr(module, "_copy_aim_tree", recording_copy)
+    gateway = module.TrustedAimRepoGateway(source)
+    with gateway.cleanup_operation(_snapshot_control(source)):
+        with gateway.open_read_only():
+            pass
+        with gateway.open_read_only():
+            pass
+        assert copies == 1
+        with gateway.open_write_delete():
+            pass
+        with gateway.open_read_only():
+            pass
+        assert copies == 2
 
 
 @pytest.mark.parametrize(
@@ -608,8 +794,10 @@ def test_snapshot_rejects_unsafe_or_changed_tree_and_fail_cleans_temp(
         monkeypatch.setattr(module, "_copy_aim_tree", changed_copytree)
 
     with pytest.raises(ValueError, match="symlink|special|changed|mismatch"):
-        with module.TrustedAimRepoGateway(source).open_read_only():
-            raise AssertionError("unsafe snapshot must never open")
+        gateway = module.TrustedAimRepoGateway(source)
+        with gateway.cleanup_operation(_snapshot_control(source)):
+            with gateway.open_read_only():
+                raise AssertionError("unsafe snapshot must never open")
     assert opened == []
     assert all(not path.exists() for path in copied)
 
@@ -629,9 +817,12 @@ def test_real_aim_328_snapshot_lists_runs_without_source_change(tmp_path: Path) 
     run_hash = run.hash
     run.close()
     before = module._source_tree_fingerprint(source / ".aim")
+    module.assert_aim_scratch_inactive = lambda _control: {"status": "inactive"}
 
-    with module.TrustedAimRepoGateway(source).open_read_only() as repo:
-        assert run_hash in {item.hash for item in repo.iter_runs()}
+    gateway = module.TrustedAimRepoGateway(source)
+    with gateway.cleanup_operation(_snapshot_control(source)):
+        with gateway.open_read_only() as repo:
+            assert run_hash in {item.hash for item in repo.iter_runs()}
 
     assert module._source_tree_fingerprint(source / ".aim") == before
 
