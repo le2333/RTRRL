@@ -8,6 +8,7 @@ import statistics
 import subprocess
 import sys
 import time
+import traceback
 from collections.abc import Sequence
 from pathlib import Path
 
@@ -95,7 +96,9 @@ def _execute(
     environment["TRAINER_SCRATCH"] = str(scratch)
     heartbeat = scratch / METRICS_FILENAME
 
-    process = subprocess.Popen(list(entry.command), env=environment)
+    process = subprocess.Popen(
+        list(entry.command), env=environment, start_new_session=True
+    )
     watcher = _Heartbeat(heartbeat, startup_seconds, stall_factor, minimum_stall_seconds)
     while True:
         code = process.poll()
@@ -138,10 +141,8 @@ class _Heartbeat:
             self._last_seen = now
 
     def limit(self) -> float:
-        if self._last_mtime is None:
-            return self._startup
         if not self._intervals:
-            return self._minimum
+            return self._startup
         return max(statistics.median(self._intervals) * self._factor, self._minimum)
 
     def silence(self) -> float:
@@ -153,11 +154,21 @@ class _Heartbeat:
 
 
 def _kill(process: subprocess.Popen[bytes]) -> None:
-    process.send_signal(signal.SIGTERM)
+    try:
+        pgid = os.getpgid(process.pid)
+    except ProcessLookupError:
+        return
+    try:
+        os.killpg(pgid, signal.SIGTERM)
+    except ProcessLookupError:
+        return
     try:
         process.wait(timeout=TERMINATE_GRACE_SECONDS)
     except subprocess.TimeoutExpired:
-        process.kill()
+        try:
+            os.killpg(pgid, signal.SIGKILL)
+        except ProcessLookupError:
+            pass
         process.wait()
 
 
@@ -174,6 +185,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         )
     except Exception as error:  # noqa: BLE001 - the exit code is the only signal
         print(f"worker failed: {error}", file=sys.stderr)
+        traceback.print_exc()
         return 1
     return 0
 

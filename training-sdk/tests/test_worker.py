@@ -1,11 +1,13 @@
 import json
+import os
 import sys
+import time
 from pathlib import Path
 
 import pytest
 
 from training_sdk import objects
-from training_sdk.worker import WorkerError, run_manifest
+from training_sdk.worker import WorkerError, _Heartbeat, run_manifest
 from tests.test_reporter import make_config
 
 CHILD = """
@@ -15,6 +17,15 @@ scratch = os.environ["TRAINER_SCRATCH"]
 mode = os.environ.get("CHILD_MODE", "ok")
 if mode == "crash":
     sys.exit(3)
+if mode == "grandchild":
+    import subprocess
+    proc = subprocess.Popen(["sleep", "600"])
+    with open(os.environ["GRANDCHILD_PID_FILE"], "w") as handle:
+        handle.write(str(proc.pid))
+    with open(os.path.join(scratch, "metrics.jsonl"), "a") as handle:
+        handle.write(json.dumps({"step": 0, "metrics": {"episode_return": 2.0}}) + "\\n")
+        handle.flush()
+    time.sleep(600)
 with open(os.path.join(scratch, "metrics.jsonl"), "a") as handle:
     for step in (0, 4):
         handle.write(json.dumps({"step": step, "metrics": {"episode_return": 2.0}}) + "\\n")
@@ -134,6 +145,64 @@ def test_slow_healthy_run_is_not_killed(
     )
     payload = json.loads(objects.get_bytes(f"{s3_base}/trials/t0/score.json"))
     assert payload["value"] == 2.0
+
+
+def test_heartbeat_limit_holds_startup_grace_after_first_report(
+    tmp_path: Path,
+) -> None:
+    metrics = tmp_path / "metrics.jsonl"
+    metrics.write_text('{"step": 0}\n', encoding="utf-8")
+    watcher = _Heartbeat(metrics, startup_seconds=900, stall_factor=10, minimum=60.0)
+    watcher._poll()
+    assert watcher.limit() == 900
+
+
+def test_heartbeat_limit_uses_observed_interval_after_second_report(
+    tmp_path: Path,
+) -> None:
+    metrics = tmp_path / "metrics.jsonl"
+    metrics.write_text('{"step": 0}\n', encoding="utf-8")
+    watcher = _Heartbeat(metrics, startup_seconds=900, stall_factor=10, minimum=60.0)
+    watcher._poll()
+    time.sleep(0.2)
+    metrics.write_text('{"step": 0}\n{"step": 1}\n', encoding="utf-8")
+    watcher._poll()
+    assert watcher.limit() == 60.0
+
+
+def _is_sleep_process(pid: int) -> bool:
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    try:
+        cmdline = Path(f"/proc/{pid}/cmdline").read_bytes().replace(b"\0", b" ").decode()
+    except OSError:
+        return False
+    return "sleep" in cmdline and "600" in cmdline
+
+
+def test_kill_terminates_grandchild_processes(
+    s3_base: str,
+    tmp_path: Path,
+    catalog: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    pid_file = tmp_path / "grandchild.pid"
+    monkeypatch.setenv("CHILD_MODE", "grandchild")
+    monkeypatch.setenv("GRANDCHILD_PID_FILE", str(pid_file))
+    manifest = write_manifest(s3_base, [publish(s3_base, 0)])
+    with pytest.raises(WorkerError, match="stalled"):
+        run_manifest(
+            manifest,
+            tmp_path,
+            startup_seconds=30,
+            stall_factor=1,
+            poll_seconds=0.05,
+            minimum_stall_seconds=1.0,
+        )
+    grandchild_pid = int(pid_file.read_text(encoding="utf-8"))
+    assert not _is_sleep_process(grandchild_pid)
 
 
 def test_catalog_contract_mismatch(
