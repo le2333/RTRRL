@@ -11,6 +11,7 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, PositiveFloat
 import yaml
+from training_sdk.contract import Catalog
 
 from trainer_infra.adapters.aws_batch import (
     AwsBatchAdapter,
@@ -22,7 +23,10 @@ from trainer_infra.adapters.s3 import S3ObjectStore
 from trainer_infra.aim_reader import AimReader
 from trainer_infra.controller import ExperimentController, ExperimentRunError
 from trainer_infra.ecr import BotoEcrCatalogReader
+from trainer_infra.experiment import load_experiment
 from trainer_infra.identities import canonical_json
+from trainer_infra.preflight import PreflightError, check_offline, format_space
+from trainer_infra.space import SpaceError
 
 
 class ControlConfig(BaseModel):
@@ -168,6 +172,18 @@ class _Parser(argparse.ArgumentParser):
         raise ValueError(message)
 
 
+def validate_command(experiment_path: Path, catalog_path: Path) -> int:
+    experiment = load_experiment(experiment_path)
+    catalog = Catalog.model_validate(json.loads(catalog_path.read_text(encoding="utf-8")))
+    try:
+        space = check_offline(experiment, catalog)
+    except (PreflightError, SpaceError) as error:
+        print(f"preflight failed: {error}", file=sys.stderr)
+        return 1
+    print(format_space(space))
+    return 0
+
+
 def _parser() -> argparse.ArgumentParser:
     parser = _Parser(prog="trainerctl")
     parser.add_argument(
@@ -176,9 +192,11 @@ def _parser() -> argparse.ArgumentParser:
         default=Path(os.environ.get("TRAINER_CONTROL_CONFIG", "config/control.yaml")),
     )
     subparsers = parser.add_subparsers(dest="command", required=True)
-    for command in ("validate", "run"):
-        child = subparsers.add_parser(command)
-        child.add_argument("experiment", type=Path)
+    validate = subparsers.add_parser("validate", help="check an experiment file")
+    validate.add_argument("experiment", type=Path)
+    validate.add_argument("--catalog", type=Path)
+    run = subparsers.add_parser("run")
+    run.add_argument("experiment", type=Path)
     return parser
 
 
@@ -191,6 +209,9 @@ def main(
     except ValueError as error:
         print(f"trainerctl: error: {error}", file=sys.stderr)
         return 2
+
+    if args.command == "validate" and args.catalog is not None:
+        return validate_command(args.experiment, args.catalog)
 
     try:
         controller = controller_factory(args.control)
