@@ -69,14 +69,25 @@ def test_window_excludes_rows_outside_bounds(tmp_path: Path) -> None:
     assert compute_score(path, spec(reduce="mean")) == 1.5
 
 
-def test_median_min_max_reduce_differently(tmp_path: Path) -> None:
+REDUCE_MODE_DISCRIMINATION_ROWS = [(10, 1.0), (12, 2.0), (15, 7.0), (20, 3.0)]
+
+
+@pytest.mark.parametrize(
+    ("reduce", "expected"),
+    [
+        ("mean", 3.25),
+        ("median", 2.5),
+        ("min", 1.0),
+        ("max", 7.0),
+        ("last", 3.0),
+    ],
+)
+def test_each_reduce_mode_returns_distinct_value(
+    tmp_path: Path, reduce: str, expected: float
+) -> None:
     path = tmp_path / "metrics.jsonl"
-    write_metrics(path, [(10, 1.0), (15, 10.0), (20, 2.0)])
-    assert compute_score(path, spec(reduce="median")) == 2.0
-    assert compute_score(path, spec(reduce="min")) == 1.0
-    assert compute_score(path, spec(reduce="max")) == 10.0
-    assert compute_score(path, spec(reduce="mean")) == pytest.approx(13 / 3)
-    assert compute_score(path, spec(reduce="last")) == 2.0
+    write_metrics(path, REDUCE_MODE_DISCRIMINATION_ROWS)
+    assert compute_score(path, spec(reduce=reduce)) == expected
 
 
 def test_non_finite_worst_orders_below_maximize_baseline(tmp_path: Path) -> None:
