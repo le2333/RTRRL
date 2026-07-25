@@ -10,7 +10,7 @@ EXAMPLE = Path("examples/experiment-acceptance.yaml")
 def write_experiment(tmp_path: Path, s3_base: str, aim_uri: str) -> Path:
     content = EXAMPLE.read_text(encoding="utf-8")
     content = content.replace(
-        "storage: s3://rtrrl-training-data", f"storage: {s3_base}"
+        "storage: s3://rtrrl-artifacts-007122174918/trainer", f"storage: {s3_base}"
     )
     content = content.replace("aim: aim://172.31.62.192:53801", f"aim: {aim_uri}")
     path = tmp_path / "experiment.yaml"

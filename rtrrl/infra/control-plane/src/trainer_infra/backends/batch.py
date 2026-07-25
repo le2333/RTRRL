@@ -5,7 +5,7 @@ from collections.abc import Sequence
 
 from trainer_infra.backends.base import JobResult
 from trainer_infra.launch import Launch
-from trainer_infra.queues import JOB_LOG_GROUP
+from trainer_infra.queues import JOB_LOG_GROUP, REGION
 
 TERMINAL = {"SUCCEEDED", "FAILED"}
 
@@ -28,6 +28,11 @@ class BatchBackend:
                 "environment": [
                     {"name": "TRAINER_MANIFEST", "value": manifest_uri},
                     {"name": "TRAINER_WORKSPACE", "value": "/tmp/trainer"},
+                    # Batch tells the container who it is but not where it is, and
+                    # boto3 does not ask the instance. Without this the worker's
+                    # first S3 call raises NoRegionError, on a host being paid for.
+                    {"name": "AWS_REGION", "value": REGION},
+                    {"name": "AWS_DEFAULT_REGION", "value": REGION},
                     {
                         "name": "TRAINER_STARTUP_SECONDS",
                         "value": str(compute.startup_minutes * 60),

@@ -4,7 +4,7 @@ description: Infrastructure-owned CPU acceptance sweep
 
 image: 007122174918.dkr.ecr.eu-north-1.amazonaws.com/rtrrl:infra-acceptance-brax-ppo-cpu-20260725
 entry: brax_ppo_acceptance
-storage: s3://rtrrl-training-data
+storage: s3://rtrrl-artifacts-007122174918/trainer
 
 compute:
   instance_type: c7a.medium

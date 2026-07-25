@@ -296,7 +296,7 @@ def test_missing_s3_bucket_is_rejected() -> None:
         {"Error": {"Code": "404", "Message": "Not Found"}},
         "HeadBucket",
     )
-    with pytest.raises(PreflightError, match=r"S3 bucket 'rtrrl-training-data' is not reachable"):
+    with pytest.raises(PreflightError, match=r"S3 bucket 'rtrrl-artifacts-007122174918' is not reachable"):
         check(s3=FakeS3(head_bucket_error=error))
 
 
@@ -305,7 +305,7 @@ def test_forbidden_s3_bucket_is_rejected() -> None:
         {"Error": {"Code": "403", "Message": "Forbidden"}},
         "HeadBucket",
     )
-    with pytest.raises(PreflightError, match=r"S3 bucket 'rtrrl-training-data' is not reachable"):
+    with pytest.raises(PreflightError, match=r"S3 bucket 'rtrrl-artifacts-007122174918' is not reachable"):
         check(s3=FakeS3(head_bucket_error=error))
 
 

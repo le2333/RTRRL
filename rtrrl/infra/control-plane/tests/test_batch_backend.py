@@ -5,6 +5,7 @@ from pathlib import Path
 from botocore.session import get_session
 
 from trainer_infra.backends.batch import BatchBackend
+from trainer_infra.queues import REGION
 
 RECORDED = json.loads(Path("tests/data/batch-describe-jobs.json").read_text())
 DESCRIBE_JOBS_OUTPUT = (
@@ -126,6 +127,24 @@ def test_submit_passes_manifest_and_timeout(launch_for_batch) -> None:
     assert environment["TRAINER_STALL_FACTOR"] == "10"
     assert request["timeout"]["attemptDurationSeconds"] == 60 * 60
     assert request["jobQueue"] == "run-cpu-c7am-queue"
+
+
+def test_submit_tells_the_container_which_region_it_is_in(launch_for_batch) -> None:
+    """Batch says who the container is but not where, and boto3 will not guess.
+
+    Every S3 call the worker makes — starting with reading its own manifest — needs
+    a region, and an unset one raises NoRegionError on a host already being billed.
+    """
+    batch = FakeBatch(["SUCCEEDED"])
+    backend = BatchBackend(batch, FakeLogs(), poll_seconds=0)
+    backend.submit(launch_for_batch, "s3://bucket/manifest.json", "round-000-job-0")
+    environment = {
+        item["name"]: item["value"]
+        for item in batch.submitted[0]["containerOverrides"]["environment"]
+    }
+
+    assert environment["AWS_REGION"] == REGION
+    assert environment["AWS_DEFAULT_REGION"] == REGION
 
 
 def test_wait_polls_until_every_job_is_terminal(launch_for_batch) -> None:

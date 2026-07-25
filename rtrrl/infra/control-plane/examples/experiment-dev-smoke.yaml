@@ -4,7 +4,7 @@ description: One trial on the dev CPU queue, to prove the image runs on Batch
 
 image: 007122174918.dkr.ecr.eu-north-1.amazonaws.com/rtrrl@sha256:d84ccca3d066ed070bd39840aebb0b04dc23d97dcaac544d2fcbca28d73dd9d9
 entry: brax_ppo_acceptance
-storage: s3://rtrrl-training-data
+storage: s3://rtrrl-artifacts-007122174918/trainer
 
 compute:
   instance_type: c7a.medium

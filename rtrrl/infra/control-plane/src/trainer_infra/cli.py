@@ -17,6 +17,7 @@ from trainer_infra.experiment import load_experiment
 from trainer_infra.launch import create_launch
 from trainer_infra.loop import LaunchFailed, run_launch
 from trainer_infra.preflight import LaunchPlan, PreflightError, check_aws, check_offline, format_space
+from trainer_infra.queues import REGION
 from trainer_infra.space import SpaceError
 
 
@@ -31,9 +32,16 @@ def _read_ecr_url(url: str) -> bytes:
 
 
 def _batch_session_factory() -> Any:
+    """Talk to the region the queues are in, whatever the environment says.
+
+    The queues, job definitions and ECR repository all live in one region, named by
+    `trainer_infra.queues`. Taking the region from the environment instead would
+    fail when nothing sets it, and — worse — quietly address a different region when
+    something sets it to one.
+    """
     import boto3
 
-    return boto3.Session()
+    return boto3.Session(region_name=REGION)
 
 
 def _warn_dev_queues(tier: str) -> None:
