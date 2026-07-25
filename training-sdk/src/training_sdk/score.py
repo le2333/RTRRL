@@ -31,15 +31,16 @@ def compute_score(metrics_path: Path, spec: ScoreConfig) -> float:
         )
     selected.sort()
     values = [value for _, value in selected]
-    reduced = {
-        "mean": lambda: statistics.fmean(values),
-        "median": lambda: statistics.median(values),
-        "min": lambda: min(values),
-        "max": lambda: max(values),
-        "last": lambda: values[-1],
-    }[spec.reduce]()
-    if math.isfinite(reduced):
-        return float(reduced)
-    if spec.non_finite == "worst":
-        return -WORST_MAGNITUDE if spec.direction == "maximize" else WORST_MAGNITUDE
-    return float(spec.non_finite)
+    if not all(math.isfinite(value) for value in values):
+        if spec.non_finite == "worst":
+            return -WORST_MAGNITUDE if spec.direction == "maximize" else WORST_MAGNITUDE
+        return float(spec.non_finite)
+    return float(
+        {
+            "mean": lambda: statistics.fmean(values),
+            "median": lambda: statistics.median(values),
+            "min": lambda: min(values),
+            "max": lambda: max(values),
+            "last": lambda: values[-1],
+        }[spec.reduce]()
+    )

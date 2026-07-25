@@ -116,3 +116,62 @@ def test_empty_window_when_metric_missing_from_rows(tmp_path: Path) -> None:
     )
     with pytest.raises(ScoreError, match="episode_return.*10.*20"):
         compute_score(path, spec())
+
+
+def test_mixed_finite_and_inf_median_substitutes_worst(tmp_path: Path) -> None:
+    path = tmp_path / "metrics.jsonl"
+    write_metrics(path, [(10, 10.0), (15, 20.0), (20, math.inf)])
+    assert compute_score(path, spec(reduce="median")) == -WORST_MAGNITUDE
+
+
+def test_mixed_finite_and_inf_min_substitutes_worst(tmp_path: Path) -> None:
+    path = tmp_path / "metrics.jsonl"
+    write_metrics(path, [(10, 10.0), (15, 20.0), (20, math.inf)])
+    assert compute_score(path, spec(reduce="min")) == -WORST_MAGNITUDE
+
+
+def test_nan_position_in_window_does_not_affect_score(tmp_path: Path) -> None:
+    start_nan = tmp_path / "start_nan.jsonl"
+    middle_nan = tmp_path / "middle_nan.jsonl"
+    write_metrics(start_nan, [(10, math.nan), (15, 10.0), (20, 20.0)])
+    write_metrics(middle_nan, [(10, 10.0), (15, math.nan), (20, 20.0)])
+    score_config = spec(reduce="median")
+    assert compute_score(start_nan, score_config) == compute_score(
+        middle_nan, score_config
+    )
+    assert compute_score(start_nan, score_config) == -WORST_MAGNITUDE
+
+
+def test_mixed_window_worst_orders_below_maximize_baseline(tmp_path: Path) -> None:
+    path = tmp_path / "metrics.jsonl"
+    write_metrics(path, [(10, 10.0), (15, 20.0), (20, math.inf)])
+    worst = compute_score(path, spec(direction="maximize", reduce="min"))
+    write_metrics(path, [(10, 0.0), (15, 1.0)])
+    baseline = compute_score(path, spec(direction="maximize", reduce="mean"))
+    assert worst < baseline
+
+
+def test_mixed_window_worst_orders_above_minimize_baseline(tmp_path: Path) -> None:
+    path = tmp_path / "metrics.jsonl"
+    write_metrics(path, [(10, 10.0), (15, 20.0), (20, math.inf)])
+    worst = compute_score(path, spec(direction="minimize", reduce="min"))
+    write_metrics(path, [(10, 100.0), (15, 50.0)])
+    baseline = compute_score(path, spec(direction="minimize", reduce="mean"))
+    assert worst > baseline
+
+
+def test_mixed_window_explicit_non_finite_substitute(tmp_path: Path) -> None:
+    path = tmp_path / "metrics.jsonl"
+    write_metrics(path, [(10, 10.0), (15, 20.0), (20, math.inf)])
+    assert compute_score(path, spec(reduce="median", non_finite=-7.5)) == -7.5
+
+
+def test_json_mixed_window_non_finite_tokens_substitute_worst(tmp_path: Path) -> None:
+    path = tmp_path / "metrics.jsonl"
+    path.write_text(
+        '{"step": 10, "metrics": {"episode_return": 10.0}}\n'
+        '{"step": 15, "metrics": {"episode_return": NaN}}\n'
+        '{"step": 20, "metrics": {"episode_return": 20.0}}\n',
+        encoding="utf-8",
+    )
+    assert compute_score(path, spec(reduce="min")) == -WORST_MAGNITUDE
