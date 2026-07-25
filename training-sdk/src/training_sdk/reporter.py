@@ -65,5 +65,9 @@ class Reporter:
 
 def build_default_sinks(config: RunConfig, scratch: Path) -> tuple[Sink, ...]:
     from training_sdk.sinks.aim import AimSink
+    from training_sdk.sinks.rerun import RerunSink
 
-    return (AimSink(config, repo=config.logging.aim),)
+    sinks: list[Sink] = [AimSink(config, repo=config.logging.aim)]
+    if config.logging.rerun_s3 and config.logging.rerun_every_episodes:
+        sinks.append(RerunSink(config, scratch))
+    return tuple(sinks)

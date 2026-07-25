@@ -17,7 +17,7 @@ trainer-image-catalog = "trainer_infra.image_catalog:main"
 trainer-heavy-test = "trainer_infra.heavy_test_cli:main"
 
 [dependency-groups]
-dev = ["pytest>=8,<9", "ruff>=0.9,<1"]
+dev = ["pytest>=8,<9", "ruff>=0.9,<1", "training-sdk[testing]"]
 
 [tool.uv]
 package = true
