@@ -42,7 +42,7 @@ def distributions(space: dict[str, SpaceEntry]) -> dict[str, BaseDistribution]:
             )
         elif isinstance(spec, FloatSpec):
             built[key] = FloatDistribution(low=spec.low, high=spec.high, log=spec.log)
-        else:  # pragma: no cover - the union is closed
+        else:  # the union is closed
             raise SpaceError(f"unsupported space entry for {key}")
     return built
 
