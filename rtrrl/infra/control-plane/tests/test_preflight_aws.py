@@ -7,7 +7,7 @@ from botocore.exceptions import ClientError
 from training_sdk.contract import Catalog
 
 from trainer_infra.experiment import load_experiment
-from trainer_infra.images import CATALOG_LABEL, encode_catalog
+from trainer_infra.images import CATALOG_LABEL, encode_catalog, resolve_image
 from trainer_infra.preflight import PreflightError, check_aws, check_offline
 from tests.helpers import EXAMPLE
 from tests.test_preflight_offline import CATALOG
@@ -52,8 +52,22 @@ class FakeEcr:
         self.account_id = account_id
 
     def describe_images(self, **kwargs: object) -> dict:
-        _require_registry_id(kwargs, method="describe_images", account_id=self.account_id)
-        return {"imageDetails": [{"imageDigest": self.digest}]}
+        """Refuse, exactly as the control plane's instance role does.
+
+        That role is granted BatchGetImage and GetDownloadUrlForLayer but not
+        DescribeImages, so calling this in production fails with AccessDenied
+        after preflight has already been reported as passing.
+        """
+        del kwargs
+        raise ClientError(
+            {
+                "Error": {
+                    "Code": "AccessDeniedException",
+                    "Message": "not authorized to perform: ecr:DescribeImages",
+                }
+            },
+            "DescribeImages",
+        )
 
     def batch_get_image(self, **kwargs: object) -> dict:
         _require_registry_id(kwargs, method="batch_get_image", account_id=self.account_id)
@@ -153,6 +167,35 @@ def test_plan_carries_digest_queue_and_job_definition() -> None:
     assert plan.digest == DIGEST
     assert plan.queue == "run-cpu-c7am-queue"
     assert plan.job_definition == DEFINITION
+
+
+def test_a_tagged_image_resolves_to_its_digest() -> None:
+    """The example experiment names a tag, so this is the production path.
+
+    It must resolve using BatchGetImage alone. The fake's DescribeImages refuses
+    the way the real instance role does, so reaching for it fails here instead of
+    after preflight has told the operator everything was fine.
+    """
+    resolved = resolve_image(
+        "007122174918.dkr.ecr.eu-north-1.amazonaws.com/rtrrl:some-tag",
+        FakeEcr(),
+        read_url,
+    )
+
+    assert resolved.digest == DIGEST
+    assert resolved.reference == (
+        f"007122174918.dkr.ecr.eu-north-1.amazonaws.com/rtrrl@{DIGEST}"
+    )
+    assert resolved.repository == "007122174918.dkr.ecr.eu-north-1.amazonaws.com/rtrrl"
+
+
+def test_a_digest_image_resolves_to_the_same_reference() -> None:
+    reference = f"007122174918.dkr.ecr.eu-north-1.amazonaws.com/rtrrl@{DIGEST}"
+
+    resolved = resolve_image(reference, FakeEcr(), read_url)
+
+    assert resolved.reference == reference
+    assert resolved.digest == DIGEST
 
 
 def test_dev_tier_selects_the_dev_queue() -> None:

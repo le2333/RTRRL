@@ -102,35 +102,54 @@ def _one_image(response: dict[str, Any], *, context: str) -> dict[str, Any]:
     return images[0]
 
 
+def _digest_and_manifest(
+    ecr_client: Any,
+    *,
+    registry_id: str,
+    repository: str,
+    image_id: dict[str, str],
+    reference: str,
+) -> tuple[str, str | bytes]:
+    """Resolve a tag or digest to the image's digest and manifest in one call.
+
+    `describe_images` would also turn a tag into a digest, but `batch_get_image`
+    returns the digest alongside the manifest this needs anyway. Asking twice
+    would mean requiring `ecr:DescribeImages` for nothing — a permission the
+    control plane's instance role is not granted.
+    """
+    image = _one_image(
+        ecr_client.batch_get_image(
+            registryId=registry_id,
+            repositoryName=repository,
+            imageIds=[image_id],
+            acceptedMediaTypes=_MANIFEST_TYPES,
+        ),
+        context=f"image {reference!r}",
+    )
+    returned_id = image.get("imageId")
+    digest = returned_id.get("imageDigest") if isinstance(returned_id, dict) else None
+    if not isinstance(digest, str) or _DIGEST.fullmatch(digest) is None:
+        raise PreflightError(f"image {reference!r}: ECR response is missing image digest")
+    requested = image_id.get("imageDigest")
+    if requested is not None and digest != requested:
+        raise PreflightError(
+            f"image {reference!r}: ECR response digest does not match requested digest"
+        )
+    manifest_raw = image.get("imageManifest")
+    if not isinstance(manifest_raw, (str, bytes)):
+        raise PreflightError(f"image {reference!r}: ECR response is missing manifest")
+    return digest, manifest_raw
+
+
 def _fetch_catalog(
     ecr_client: Any,
     *,
     registry_id: str,
     repository: str,
-    digest: str,
+    manifest_raw: str | bytes,
     reference: str,
     read_url: Callable[[str], bytes],
 ) -> Catalog:
-    manifest_image = _one_image(
-        ecr_client.batch_get_image(
-            registryId=registry_id,
-            repositoryName=repository,
-            imageIds=[{"imageDigest": digest}],
-            acceptedMediaTypes=_MANIFEST_TYPES,
-        ),
-        context=f"image {reference!r}",
-    )
-    returned_id = manifest_image.get("imageId")
-    returned_digest = (
-        returned_id.get("imageDigest") if isinstance(returned_id, dict) else None
-    )
-    if returned_digest != digest:
-        raise PreflightError(
-            f"image {reference!r}: ECR response digest does not match requested digest"
-        )
-    manifest_raw = manifest_image.get("imageManifest")
-    if not isinstance(manifest_raw, (str, bytes)):
-        raise PreflightError(f"image {reference!r}: ECR response is missing manifest")
     try:
         manifest = json.loads(manifest_raw)
         config_digest = manifest["config"]["digest"]
@@ -171,32 +190,32 @@ def resolve_image(
     read_url: Callable[[str], bytes],
 ) -> ResolvedImage:
     if "@" in reference:
-        canonical_reference, full_repository, digest = _parse_digest_reference(reference)
+        canonical_reference, full_repository, requested_digest = _parse_digest_reference(reference)
         registry_id = _registry_account(reference)
         repository = full_repository.split("/", 1)[1]
+        image_id = {"imageDigest": requested_digest}
     else:
         registry, repository, tag = _repository_and_tag(reference)
         registry_id = _registry_account(reference)
-        response = ecr_client.describe_images(
-            registryId=registry_id,
-            repositoryName=repository,
-            imageIds=[{"imageTag": tag}],
-        )
-        details = response.get("imageDetails", [])
-        if not isinstance(details, list) or not details:
-            raise PreflightError(f"image {reference!r}: no image found in ECR")
-        digest_value = details[0].get("imageDigest")
-        if not isinstance(digest_value, str) or _DIGEST.fullmatch(digest_value) is None:
-            raise PreflightError(f"image {reference!r}: ECR response is missing image digest")
-        digest = digest_value
-        canonical_reference = f"{registry}/{repository}@{digest}"
         full_repository = f"{registry}/{repository}"
+        canonical_reference = reference
+        image_id = {"imageTag": tag}
+
+    digest, manifest_raw = _digest_and_manifest(
+        ecr_client,
+        registry_id=registry_id,
+        repository=repository,
+        image_id=image_id,
+        reference=canonical_reference,
+    )
+    if "imageTag" in image_id:
+        canonical_reference = f"{full_repository}@{digest}"
 
     catalog = _fetch_catalog(
         ecr_client,
         registry_id=registry_id,
         repository=repository,
-        digest=digest,
+        manifest_raw=manifest_raw,
         reference=canonical_reference,
         read_url=read_url,
     )
