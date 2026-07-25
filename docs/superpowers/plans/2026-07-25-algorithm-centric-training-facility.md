@@ -3895,9 +3895,17 @@ git commit -m "feat(control-plane): resolve images and validate AWS precondition
 - `submit` sends `containerOverrides.environment` with `TRAINER_MANIFEST`,
   `TRAINER_WORKSPACE`, `TRAINER_STARTUP_SECONDS`, `TRAINER_STALL_FACTOR`, and
   `timeout.attemptDurationSeconds` from `compute.timeout_minutes`.
-- The recorded fixture must be a real `describe_jobs` response captured from the
-  2026-07-24 acceptance run, with account-specific values replaced but the shape
-  untouched.
+- The fixture carries the real identifiers from the 2026-07-24 acceptance run —
+  the `run-cpu-c7am-queue` and `run-gpu-queue` queues, the digest-bound job
+  definition names, `SUCCEEDED` with exit code zero — but that run recorded
+  `describe_jobs` through a `--query` projection, so the full envelope was never
+  saved and cannot honestly be presented as captured. Instead the fixture's shape
+  is checked against botocore's own Batch service model, which is the same schema
+  boto3 validates real responses against: a test walks every key in the fixture
+  and asserts the operation's output shape declares it. That converts an
+  unverifiable claim about provenance into a property the suite enforces, and it
+  catches a fabricated field name, which is the failure that would otherwise
+  surface during a paid run.
 
 - [ ] **Step 1: Write the failing test**
 
