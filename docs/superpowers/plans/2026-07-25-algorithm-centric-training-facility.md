@@ -3613,10 +3613,17 @@ proposed.
     `encode_catalog(catalog: Catalog) -> str`, `decode_catalog(value: str) -> Catalog`
     (base64 of gzip of the canonical JSON, matching the existing v1 encoding).
   - `resolve_image(reference: str, ecr_client, read_url: Callable[[str], bytes]) -> ResolvedImage`
-    with `digest: str` and `catalog: Catalog`. It calls `describe_images` for the
-    digest, `batch_get_image` for the manifest, `get_download_url_for_layer` for
-    the config blob, and `read_url` to fetch it, exactly as the existing
-    `ecr.BotoEcrCatalogReader` does for the v1 label.
+    with `digest: str` and `catalog: Catalog`. It calls `batch_get_image` for the
+    digest *and* the manifest, `get_download_url_for_layer` for the config blob,
+    and `read_url` to fetch it.
+
+    A tag and a digest go down the same path because `batch_get_image` accepts
+    either and returns the digest beside the manifest. Resolving the tag with
+    `describe_images` first — as this originally did, and as v1's
+    `ecr.BotoEcrCatalogReader` does — would require `ecr:DescribeImages`, which
+    the control plane's instance role is **not** granted. Since the example
+    experiment names a tag, every batch preflight would have failed with
+    AccessDenied on the first attempt that cost money.
   - `check_offline` additionally calls `study.check_sampler(experiment.hpo.sampler,
     distributions(space))`, so a sampler the space cannot be searched with is
     caught by `trainerctl validate` rather than at the first `study.ask`. The
@@ -3695,11 +3702,19 @@ class FakeEcr:
         self.digest = digest
 
     def describe_images(self, **kwargs: object) -> dict:
-        return {"imageDetails": [{"imageDigest": self.digest}]}
+        # Refuses, as the real instance role does; see resolve_image above.
+        raise ClientError(
+            {"Error": {"Code": "AccessDeniedException", "Message": "not authorized"}},
+            "DescribeImages",
+        )
 
     def batch_get_image(self, **kwargs: object) -> dict:
         manifest = json.dumps({"config": {"digest": "sha256:config"}})
-        return {"images": [{"imageManifest": manifest}]}
+        return {
+            "images": [
+                {"imageId": {"imageDigest": self.digest}, "imageManifest": manifest}
+            ]
+        }
 
     def get_download_url_for_layer(self, **kwargs: object) -> dict:
         return {"downloadUrl": "https://example.invalid/config"}
@@ -4259,31 +4274,52 @@ def test_reported_step_matches_the_environment_step_budget(tmp_path, monkeypatch
 Implement that test by running the trainer with `total_steps=8` against a
 temporary Aim repository and asserting the metrics file's largest step equals 8.
 
-- [ ] **Step 2: Run the tests to verify they fail**
+- [x] **Step 2: Run the tests to verify they fail**
 
-Run: `cd rtrrl/infra/mock-trainer && uv run pytest tests/test_catalog.py -v`
-Expected: FAIL with `FileNotFoundError: catalog.json`
+Run in GitHub Actions, as every suite is. Expected: FAIL with
+`FileNotFoundError: catalog.json`
 
-- [ ] **Step 3: Implement**
+- [x] **Step 3: Implement**
 
 Write `scripts/build_catalog.py`, generate `catalog.json`, convert the trainer to
 `Reporter.from_env()`, and update both Dockerfiles and the workflow.
 
-- [ ] **Step 4: Run the tests to verify they pass**
+- [x] **Step 4: Run the tests to verify they pass**
 
-Run: `cd rtrrl/infra/mock-trainer && uv run pytest -q`
-Expected: PASS
+Green in Actions on `de5db7e` for all three suites: `training-sdk`,
+`control-plane`, `mock-trainer`.
+
+Three defects surfaced only once the suites ran on a clean machine, all of them
+cases where a local pass depended on this box:
+
+- `source_hash` covered `__pycache__`, so the value differed between a developer's
+  checkout and the image built from it — the one thing it must never do.
+- Two `control-plane` CLI tests reached the Aim server that happens to run here.
+  They now bind their own socket.
+- The `mock-trainer` S3 tests used ambient credentials instead of `moto`.
 
 - [ ] **Step 5: Build and push both images**
 
 The development machine cannot build images; the workflow is the only builder.
 
 ```bash
-gh workflow run build-infra-acceptance-image.yml -f push=true
+gh workflow run build-infra-acceptance-image.yml -f push=true -f confirm_account=<account>
 gh run watch
 ```
 
 Expected: both CPU and GPU builds succeed. Record both digests from the output.
+
+Two things were wrong here and are fixed on `de5db7e`, but neither is proven until
+this step runs:
+
+- The workflow called `scripts/build_catalog.py` from the repository root, where
+  it does not exist, so **it has failed on every run since the catalog was
+  introduced**. The images in ECR predate the catalog label entirely. Preflight
+  requires that label, so this step is not optional bookkeeping — nothing usable
+  is published yet.
+- Its runtime checks still expected the v1 worker at `/opt/trainer/worker.py`.
+  They now run the image's own command untouched and require it to refuse by name
+  without a manifest.
 
 - [ ] **Step 6: Register job definitions for the new digests**
 

@@ -1,6 +1,7 @@
 import fnmatch
 import json
 import os
+import re
 import shlex
 from pathlib import Path, PurePosixPath
 
@@ -328,3 +329,37 @@ def test_dockerignore_actual_root_context_contains_only_required_inputs() -> Non
             "/artifacts/",
         )
     )
+
+
+WORKFLOW = ROOT / ".github" / "workflows" / "build-infra-acceptance-image.yml"
+
+
+def test_workflow_invokes_paths_that_exist() -> None:
+    """The builder's own file references must resolve from the repository root.
+
+    The catalog step named `scripts/build_catalog.py`, which exists only under
+    `rtrrl/infra/mock-trainer/`. Every build failed on it for six consecutive runs
+    without anything noticing, because no test looked at the workflow at all.
+    """
+    contents = WORKFLOW.read_text(encoding="utf-8")
+
+    references = re.findall(r"(?:python |sys\.path\.insert\(0, \")([\w./-]+)", contents)
+    scripts = [
+        reference
+        for reference in references
+        if "build_catalog" in reference or reference.endswith("/scripts")
+    ]
+
+    assert scripts, "the workflow no longer names the catalog script"
+    for reference in scripts:
+        assert (ROOT / reference).exists(), f"{reference} does not exist"
+
+
+def test_workflow_checks_the_command_the_dockerfiles_declare() -> None:
+    """Both sides must name the same entry point, or the check proves nothing."""
+    contents = WORKFLOW.read_text(encoding="utf-8")
+    cpu = (DOCKER_DIR / "Dockerfile.cpu").read_text(encoding="utf-8")
+
+    declared = shlex.split(cpu.rsplit("CMD ", 1)[1].strip().strip("[]").replace(",", " "))
+    assert f"test \"$CMD\" = '{' '.join(declared)}'" in contents
+    assert "/opt/trainer/worker.py" not in contents
