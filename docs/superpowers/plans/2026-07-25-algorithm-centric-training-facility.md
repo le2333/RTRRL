@@ -3442,12 +3442,17 @@ def run_launch(
             plans = publish_round(
                 launch, round_index, configs, jobs=experiment.hpo.parallel_jobs
             )
-            submitted = [
-                backend.submit(
-                    launch, plan.manifest_uri, f"round-{round_index:03d}-job-{index}"
+            # Record each id as it is created rather than assigning the whole
+            # list at the end: a Ctrl-C or an AWS error partway through would
+            # otherwise leave already-running jobs invisible to the handler
+            # below, and they would bill until their own timeout.
+            submitted = []
+            for index, plan in enumerate(plans):
+                submitted.append(
+                    backend.submit(
+                        launch, plan.manifest_uri, f"round-{round_index:03d}-job-{index}"
+                    )
                 )
-                for index, plan in enumerate(plans)
-            ]
             results = backend.wait(submitted)
             failed = [result for result in results if not result.succeeded]
             if failed:
