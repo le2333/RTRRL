@@ -2,7 +2,7 @@ experiment: infra-acceptance
 name: brax-ppo-smoke
 description: Infrastructure-owned CPU acceptance sweep
 
-image: 007122174918.dkr.ecr.eu-north-1.amazonaws.com/rtrrl:infra-acceptance-brax-ppo-cpu
+image: 007122174918.dkr.ecr.eu-north-1.amazonaws.com/rtrrl:infra-acceptance-brax-ppo-cpu-20260725
 entry: brax_ppo_acceptance
 storage: s3://rtrrl-training-data
 

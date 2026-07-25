@@ -39,11 +39,11 @@ jobs:
           - variant: cpu
             dockerfile: rtrrl/infra/mock-trainer/docker/Dockerfile.cpu
             local_tag: infra-acceptance:cpu
-            ecr_tag: infra-acceptance-brax-ppo-cpu-20260723
+            ecr_tag: infra-acceptance-brax-ppo-cpu-20260725
           - variant: gpu
             dockerfile: rtrrl/infra/mock-trainer/docker/Dockerfile.gpu
             local_tag: infra-acceptance:gpu
-            ecr_tag: infra-acceptance-brax-ppo-gpu-20260723
+            ecr_tag: infra-acceptance-brax-ppo-gpu-20260725
     steps:
       - name: Check out source
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
@@ -215,11 +215,11 @@ jobs:
           - variant: cpu
             dockerfile: rtrrl/infra/mock-trainer/docker/Dockerfile.cpu
             local_tag: infra-acceptance:cpu
-            ecr_tag: infra-acceptance-brax-ppo-cpu-20260723
+            ecr_tag: infra-acceptance-brax-ppo-cpu-20260725
           - variant: gpu
             dockerfile: rtrrl/infra/mock-trainer/docker/Dockerfile.gpu
             local_tag: infra-acceptance:gpu
-            ecr_tag: infra-acceptance-brax-ppo-gpu-20260723
+            ecr_tag: infra-acceptance-brax-ppo-gpu-20260725
     steps:
       - name: Check out source
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
