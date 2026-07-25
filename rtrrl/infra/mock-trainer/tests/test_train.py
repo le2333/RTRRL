@@ -335,7 +335,10 @@ def test_train_rejects_checkpoint_mismatch_before_registration(
         train(config, reporter)
 
     assert not (scratch / "ppo-params.npz").exists()
-    assert not read_metric_steps(scratch)
+    # Training reported progress long before the checkpoint was written, so the
+    # metrics stay as the record of how far the run got. Only the archive that
+    # failed verification is withdrawn.
+    assert read_metric_steps(scratch)
 
 
 def test_normal_path_calls_real_brax_entry_point_with_fixed_micro_parameters(

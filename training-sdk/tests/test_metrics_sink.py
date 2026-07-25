@@ -27,6 +27,21 @@ def test_report_flushes_before_close(tmp_path: Path) -> None:
     sink.close()
 
 
+def test_the_file_appears_only_with_the_first_report(tmp_path: Path) -> None:
+    path = tmp_path / "nested" / "metrics.jsonl"
+    sink = MetricsSink(path)
+    assert not path.exists()
+    sink.report(1, {"m": 1.0})
+    assert path.exists()
+    sink.close()
+
+
+def test_close_without_a_report_leaves_no_file(tmp_path: Path) -> None:
+    path = tmp_path / "metrics.jsonl"
+    MetricsSink(path).close()
+    assert not path.exists()
+
+
 def test_report_updates_modification_time(tmp_path: Path) -> None:
     path = tmp_path / "metrics.jsonl"
     sink = MetricsSink(path)

@@ -19,10 +19,19 @@ CATALOG_PATH = PACKAGE_ROOT / "catalog.json"
 ENTRY_NAME = "brax_ppo_acceptance"
 
 
-def source_hash() -> str:
+def source_hash(root: Path = SOURCE_ROOT) -> str:
+    """Identify the trainer's sources, and nothing else.
+
+    Only `.py` files count. Bytecode caches sit beside the modules and come and
+    go with whoever imported the package last, so hashing every file would give
+    a developer's checkout and the image built from it different answers — the
+    one thing this value must never do, since it is what tells the control plane
+    the algorithm changed.
+    """
     digest = hashlib.sha256()
-    for path in sorted(item for item in SOURCE_ROOT.rglob("*") if item.is_file()):
-        relative = path.relative_to(SOURCE_ROOT).as_posix()
+    sources = sorted(path for path in root.rglob("*.py") if "__pycache__" not in path.parts)
+    for path in sources:
+        relative = path.relative_to(root).as_posix()
         digest.update(relative.encode("utf-8"))
         digest.update(path.read_bytes())
     return f"sha256:{digest.hexdigest()}"

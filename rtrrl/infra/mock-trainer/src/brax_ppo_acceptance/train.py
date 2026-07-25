@@ -459,7 +459,14 @@ def train(config: AcceptanceConfig, reporter: Reporter) -> TrainingResult:
 
     checkpoint = reporter.scratch / "ppo-params.npz"
     _write_checkpoint(checkpoint, params)
-    _verify_checkpoint_round_trip(params, checkpoint)
+    try:
+        _verify_checkpoint_round_trip(params, checkpoint)
+    except BaseException:
+        # An archive that fails its own round-trip must not outlive the check.
+        # Left on disk it is indistinguishable from a good one, and whatever
+        # collects artifacts would publish it as a restorable checkpoint.
+        checkpoint.unlink(missing_ok=True)
+        raise
     _inject_failure(config, "after_checkpoint")
 
     devices = jax.devices()
