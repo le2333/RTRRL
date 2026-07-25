@@ -58,20 +58,23 @@ def run_launch(
                 for index, plan in enumerate(plans)
             ]
             results = backend.wait(submitted)
-            owner = {
-                trial_number: result
-                for plan, result in zip(plans, results, strict=True)
-                for trial_number in plan.trials
-            }
-            submitted = []
             failed = [result for result in results if not result.succeeded]
             if failed:
+                # wait returned early, so siblings may still be burning instance time.
+                backend.terminate(submitted)
+                submitted = []
                 for result in failed:
                     printer(f"job {result.name} failed: {result.reason}")
                     printer(backend.log_tail(result, LOG_TAIL_LINES))
                 raise LaunchFailed(
                     f"round {round_index} had {len(failed)} failed job(s)"
                 )
+            owner = {
+                trial_number: result
+                for plan, result in zip(plans, results, strict=True)
+                for trial_number in plan.trials
+            }
+            submitted = []
             for trial, config in zip(trials, configs, strict=True):
                 value = _read_score(config.score.s3)
                 tell_value(study, trial, value)

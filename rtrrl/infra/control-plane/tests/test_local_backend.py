@@ -39,14 +39,20 @@ def write_catalog(tmp_path: Path, body: str) -> Path:
     return catalog
 
 
+def publish_manifest_for_trial(s3_base: str, tmp_path: Path, trial: int) -> str:
+    launch = create_launch(make_plan(s3_base), tmp_path / "archive", EXAMPLE, WHEN)
+    config = build_run_config(
+        launch, trial, {"total_steps": 1, "learning_rate": 1e-4}
+    )
+    objects.put_bytes(config_uri(launch, trial), config.model_dump_json().encode())
+    manifest = f"{launch.prefix}/rounds/round-000/job-{trial}.json"
+    objects.put_bytes(manifest, json.dumps({"runs": [config_uri(launch, trial)]}).encode())
+    return manifest
+
+
 def publish_sleeping_manifest(s3_base: str, tmp_path: Path) -> str:
     """A manifest the worker can actually start, whose child never finishes."""
-    launch = create_launch(make_plan(s3_base), tmp_path / "archive", EXAMPLE, WHEN)
-    config = build_run_config(launch, 0, {"total_steps": 1, "learning_rate": 1e-4})
-    objects.put_bytes(config_uri(launch, 0), config.model_dump_json().encode())
-    manifest = f"{launch.prefix}/rounds/round-000/job-0.json"
-    objects.put_bytes(manifest, json.dumps({"runs": [config_uri(launch, 0)]}).encode())
-    return manifest
+    return publish_manifest_for_trial(s3_base, tmp_path, 0)
 
 
 def _is_sleep_process(pid: int) -> bool:
@@ -145,3 +151,51 @@ time.sleep(600)
     assert results[0].succeeded is False
     grandchild_pid = int(pid_file.read_text(encoding="utf-8"))
     assert not _is_sleep_process(grandchild_pid)
+
+
+LONG_SLEEP_SECONDS = 600
+WAIT_FAILFAST_BUDGET_SECONDS = 10.0
+
+
+def test_wait_returns_early_when_a_sibling_fails(tmp_path: Path, s3_base: str) -> None:
+    pid_file = tmp_path / "long-job.pid"
+    mixed_child = f"""
+import json, os, subprocess, sys, time
+from pathlib import Path
+config = json.loads(open(os.environ["TRAINER_RUN_CONFIG"]).read())
+if config["trial"] == 0:
+    sys.exit(7)
+proc = subprocess.Popen(["sleep", "{LONG_SLEEP_SECONDS}"])
+Path("{pid_file}").write_text(str(proc.pid))
+time.sleep({LONG_SLEEP_SECONDS})
+"""
+    backend = LocalBackend(tmp_path, write_catalog(tmp_path, mixed_child))
+    fail_id = backend.submit_raw(
+        publish_manifest_for_trial(s3_base, tmp_path / "fail", 0), "job-fail"
+    )
+    long_id = backend.submit_raw(
+        publish_manifest_for_trial(s3_base, tmp_path / "long", 1), "job-long"
+    )
+
+    def long_sleep_is_running() -> bool:
+        if not pid_file.exists():
+            return False
+        return _is_sleep_process(int(pid_file.read_text(encoding="utf-8")))
+
+    _wait_until(long_sleep_is_running)
+
+    started = time.monotonic()
+    results = backend.wait([fail_id, long_id])
+    elapsed = time.monotonic() - started
+
+    assert elapsed < WAIT_FAILFAST_BUDGET_SECONDS
+    assert any(not result.succeeded for result in results)
+    failed = [result for result in results if not result.succeeded]
+    assert len(failed) == 1
+    assert failed[0].name == "job-fail"
+    assert not failed[0].succeeded
+    assert "exit code 7" in backend.log_tail(failed[0], 50)
+    assert long_sleep_is_running()
+
+    backend.terminate([fail_id, long_id])
+    assert not long_sleep_is_running()

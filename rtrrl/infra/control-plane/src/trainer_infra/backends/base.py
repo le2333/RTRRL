@@ -18,6 +18,17 @@ class JobResult:
 
 class Backend(Protocol):
     def submit(self, launch: Launch, manifest_uri: str, name: str) -> str: ...
-    def wait(self, job_ids: Sequence[str]) -> list[JobResult]: ...
-    def terminate(self, job_ids: Sequence[str]) -> None: ...
+
+    def wait(self, job_ids: Sequence[str]) -> list[JobResult]:
+        """Block until every job finishes or any job fails, whichever comes first.
+
+        On early return after a failure, the result list covers only jobs that
+        reached a terminal state and may be shorter than ``job_ids``.
+        """
+        ...
+
+    def terminate(self, job_ids: Sequence[str]) -> None:
+        """Stop running jobs; must tolerate ids that have already finished."""
+        ...
+
     def log_tail(self, result: JobResult, lines: int) -> str: ...

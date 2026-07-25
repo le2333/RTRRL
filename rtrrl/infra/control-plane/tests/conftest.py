@@ -78,6 +78,26 @@ def failing_catalog(tmp_path: Path) -> Path:
     return _catalog(tmp_path, [sys.executable, str(child)])
 
 
+@pytest.fixture
+def failing_with_long_sibling_catalog(tmp_path: Path) -> Path:
+    pid_file = tmp_path / "long-sibling.pid"
+    child = tmp_path / "mixed.py"
+    child.write_text(
+        f"""
+import json, os, subprocess, sys, time
+from pathlib import Path
+config = json.loads(open(os.environ["TRAINER_RUN_CONFIG"]).read())
+if config["trial"] == 0:
+    sys.exit(7)
+proc = subprocess.Popen(["sleep", "600"])
+Path("{pid_file}").write_text(str(proc.pid))
+time.sleep(600)
+""",
+        encoding="utf-8",
+    )
+    return _catalog(tmp_path, [sys.executable, str(child)])
+
+
 def _catalog(tmp_path: Path, command: list[str]) -> Path:
     path = tmp_path / "catalog.json"
     path.write_text(

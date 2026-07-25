@@ -89,19 +89,27 @@ class LocalBackend:
         self._logs[job_id] = log_path
         return job_id
 
+    def _result(self, job_id: str) -> JobResult:
+        code = self._processes[job_id].returncode
+        return JobResult(
+            job_id=job_id,
+            name=self._names[job_id],
+            succeeded=code == 0,
+            log_stream=str(self._logs[job_id]),
+            reason=None if code == 0 else f"exit code {code}",
+        )
+
     def wait(self, job_ids: Sequence[str]) -> list[JobResult]:
-        while any(self._processes[job_id].poll() is None for job_id in job_ids):
+        while True:
+            done = [
+                job_id for job_id in job_ids if self._processes[job_id].poll() is not None
+            ]
+            results = [self._result(job_id) for job_id in done]
+            if len(done) == len(job_ids) or any(
+                not result.succeeded for result in results
+            ):
+                return results
             time.sleep(0.2)
-        return [
-            JobResult(
-                job_id=job_id,
-                name=self._names[job_id],
-                succeeded=(returncode := self._processes[job_id].returncode) == 0,
-                log_stream=str(self._logs[job_id]),
-                reason=None if returncode == 0 else f"exit code {returncode}",
-            )
-            for job_id in job_ids
-        ]
 
     def terminate(self, job_ids: Sequence[str]) -> None:
         """Best-effort kill: descendants are read once, so a fork after that scan may survive."""
@@ -111,6 +119,10 @@ class LocalBackend:
                 continue
             for pid in [*reversed(_descendant_pids(process.pid)), process.pid]:
                 _sigkill_pid(pid)
+        for job_id in job_ids:
+            process = self._processes.get(job_id)
+            if process is not None and process.poll() is None:
+                process.wait(timeout=30)
 
     def log_tail(self, result: JobResult, lines: int) -> str:
         if result.log_stream is None:

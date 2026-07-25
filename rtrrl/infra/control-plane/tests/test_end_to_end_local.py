@@ -1,5 +1,7 @@
 import dataclasses
 import json
+import os
+import time
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -66,17 +68,37 @@ def test_two_round_study_completes_and_reports(
     }
 
 
+def _is_sleep_process(pid: int) -> bool:
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    try:
+        cmdline = Path(f"/proc/{pid}/cmdline").read_bytes().replace(b"\0", b" ").decode()
+    except OSError:
+        return False
+    return "sleep" in cmdline and "600" in cmdline
+
+
 def test_failing_run_stops_the_launch_and_prints_the_log(
-    s3_base: str, tmp_path: Path, aim_endpoint: AimServer, failing_catalog: Path
+    s3_base: str,
+    tmp_path: Path,
+    aim_endpoint: AimServer,
+    failing_with_long_sibling_catalog: Path,
 ) -> None:
     launch = create_launch(
         plan_using(s3_base, aim_endpoint), tmp_path / "archive", EXAMPLE, datetime.now(UTC)
     )
-    backend = LocalBackend(tmp_path / "jobs", failing_catalog)
+    backend = LocalBackend(tmp_path / "jobs", failing_with_long_sibling_catalog)
     printed: list[str] = []
+    pid_file = tmp_path / "long-sibling.pid"
+    started = time.monotonic()
 
     with pytest.raises(LaunchFailed):
         run_launch(launch, backend, printer=printed.append)
+
+    elapsed = time.monotonic() - started
+    assert elapsed < 15.0
 
     assert any("worker failed" in line for line in printed)
     archived = json.loads((launch.archive / "report.json").read_text())
@@ -84,3 +106,5 @@ def test_failing_run_stops_the_launch_and_prints_the_log(
     assert archived["trials"] == []
     assert archived["failure"] is not None
     assert not objects.exists(f"{launch.prefix}/rounds/round-001/job-0.json")
+    if pid_file.exists():
+        assert not _is_sleep_process(int(pid_file.read_text(encoding="utf-8")))
