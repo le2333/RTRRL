@@ -2,15 +2,20 @@ from pathlib import Path
 
 import optuna
 import pytest
-from optuna.distributions import CategoricalDistribution, FloatDistribution
+from optuna.distributions import CategoricalDistribution, FloatDistribution, IntDistribution
 
-from trainer_infra.study import ask_round, create_study, tell_value
+from trainer_infra.study import ask_round, check_sampler, create_study, tell_value
 
 optuna.logging.set_verbosity(optuna.logging.WARNING)
 
 DISTRIBUTIONS = {
     "total_steps": CategoricalDistribution(choices=[128]),
     "learning_rate": FloatDistribution(low=1e-4, high=1e-3, log=True),
+}
+
+GRID_DISTRIBUTIONS = {
+    "total_steps": CategoricalDistribution(choices=[128, 256]),
+    "learning_rate": CategoricalDistribution(choices=[1e-4, 1e-3]),
 }
 
 
@@ -21,6 +26,7 @@ def make(tmp_path: Path) -> optuna.Study:
         sampler="tpe",
         direction="maximize",
         user_attrs={"launch_id": "20260725-000000", "digest": "sha256:0"},
+        space=DISTRIBUTIONS,
     )
 
 
@@ -46,9 +52,17 @@ def test_told_values_persist_in_the_sqlite_file(tmp_path: Path) -> None:
 
 
 def test_unknown_sampler_is_rejected(tmp_path: Path) -> None:
-    with pytest.raises(ValueError, match="sampler"):
-        create_study("s", tmp_path / "s.db", sampler="cma", direction="maximize",
-                     user_attrs={})
+    with pytest.raises(ValueError, match="unsupported sampler 'cma'"):
+        create_study(
+            "s",
+            tmp_path / "s.db",
+            sampler="cma",
+            direction="maximize",
+            user_attrs={},
+            space=DISTRIBUTIONS,
+        )
+    with pytest.raises(ValueError, match="tpe, random, grid"):
+        check_sampler("cma", DISTRIBUTIONS)
 
 
 def test_ask_round_samples_distinct_values_and_matches_study_numbers(
@@ -60,6 +74,7 @@ def test_ask_round_samples_distinct_values_and_matches_study_numbers(
         sampler="random",
         direction="maximize",
         user_attrs={},
+        space=DISTRIBUTIONS,
     )
     trials = ask_round(study, DISTRIBUTIONS, 3)
     learning_rates = [trial.params["learning_rate"] for trial in trials]
@@ -84,6 +99,7 @@ def test_user_attrs_survive_sqlite_round_trip(tmp_path: Path) -> None:
         sampler="tpe",
         direction="maximize",
         user_attrs=attrs,
+        space=DISTRIBUTIONS,
     )
     reopened = optuna.load_study(
         study_name="sweep-attrs",
@@ -93,12 +109,42 @@ def test_user_attrs_survive_sqlite_round_trip(tmp_path: Path) -> None:
         assert reopened.user_attrs[key] == value
 
 
-def test_grid_sampler_requires_search_space(tmp_path: Path) -> None:
-    with pytest.raises(ValueError, match="grid sampler requires the search space"):
+def test_grid_sampler_with_fixed_lists_can_ask_for_a_trial(tmp_path: Path) -> None:
+    study = create_study(
+        "sweep-grid",
+        tmp_path / "grid.db",
+        sampler="grid",
+        direction="maximize",
+        user_attrs={},
+        space=GRID_DISTRIBUTIONS,
+    )
+    trials = ask_round(study, GRID_DISTRIBUTIONS, 1)
+    assert len(trials) == 1
+    assert trials[0].params["total_steps"] in (128, 256)
+    assert trials[0].params["learning_rate"] in (1e-4, 1e-3)
+
+
+def test_grid_sampler_rejects_continuous_parameters() -> None:
+    space = {
+        "learning_rate": FloatDistribution(low=1e-4, high=1e-3, log=True),
+        "seed": IntDistribution(low=0, high=1000),
+    }
+    with pytest.raises(ValueError, match="learning_rate") as error:
+        check_sampler("grid", space)
+    message = str(error.value)
+    assert "seed" in message
+    assert "learning_rate" in message
+
+
+def test_grid_sampler_rejects_continuous_parameters_at_study_creation(
+    tmp_path: Path,
+) -> None:
+    with pytest.raises(ValueError, match="learning_rate"):
         create_study(
             "s",
             tmp_path / "grid.db",
             sampler="grid",
             direction="maximize",
             user_attrs={},
+            space=DISTRIBUTIONS,
         )

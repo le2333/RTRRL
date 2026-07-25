@@ -6,7 +6,8 @@ from training_sdk.contract import CONTRACT_VERSION, Catalog, ChoiceSpec, EntryDe
 from training_sdk.contract import SpaceEntry
 
 from trainer_infra.experiment import Experiment
-from trainer_infra.space import minimum_total_steps, resolve_space
+from trainer_infra.space import distributions, minimum_total_steps, resolve_space
+from trainer_infra.study import check_sampler
 
 
 class PreflightError(ValueError):
@@ -43,6 +44,7 @@ def check_offline(experiment: Experiment, catalog: Catalog) -> dict[str, SpaceEn
             f"{experiment.score.metric!r}; it reports: {reported}"
         )
     space = resolve_space(entry, experiment.space)
+    check_sampler(experiment.hpo.sampler, distributions(space))
     budget = minimum_total_steps(space)
     if experiment.score.window_steps[1] > budget:
         raise PreflightError(

@@ -223,3 +223,18 @@ def test_validate_catalog_rejects_unknown_space_override(
     assert captured.out == ""
     assert "rogue" in captured.err
     assert "does not accept" in captured.err
+
+
+def test_validate_catalog_rejects_grid_sampler_with_continuous_space(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    modified(tmp_path, "sampler: tpe", "sampler: grid")
+    catalog_path = write_catalog(tmp_path)
+
+    code = main(["validate", str(tmp_path / "experiment.yaml"), "--catalog", str(catalog_path)])
+
+    captured = capsys.readouterr()
+    assert code == 1
+    assert captured.out == ""
+    assert "grid sampler" in captured.err
+    assert "learning_rate" in captured.err

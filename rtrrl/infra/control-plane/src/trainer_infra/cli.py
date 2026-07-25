@@ -177,7 +177,7 @@ def validate_command(experiment_path: Path, catalog_path: Path) -> int:
     catalog = Catalog.model_validate(json.loads(catalog_path.read_text(encoding="utf-8")))
     try:
         space = check_offline(experiment, catalog)
-    except (PreflightError, SpaceError) as error:
+    except (PreflightError, SpaceError, ValueError) as error:
         print(f"preflight failed: {error}", file=sys.stderr)
         return 1
     print(format_space(space))
