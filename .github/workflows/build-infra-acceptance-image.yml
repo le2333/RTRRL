@@ -57,12 +57,12 @@ jobs:
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f
 
-      - name: Encode production catalog
+      - name: Build production catalog
         id: catalog
         shell: bash
         run: |
           set -euo pipefail
-          CATALOG="$(uv run --project rtrrl/infra/control-plane trainer-image-catalog rtrrl/infra/mock-trainer/scripts/index.yaml)"
+          CATALOG="$(uv run --project rtrrl/infra/mock-trainer python scripts/build_catalog.py --print-label)"
           echo "value=$CATALOG" >> "$GITHUB_OUTPUT"
 
       - name: Build local image
@@ -76,7 +76,7 @@ jobs:
           push: false
           tags: ${{ matrix.local_tag }}
           build-args: |
-            TRAINER_SCRIPT_CATALOG=${{ steps.catalog.outputs.value }}
+            TRAINER_CATALOG_V2=${{ steps.catalog.outputs.value }}
 
       - name: Verify actual label, paths, and runtime
         id: verify
@@ -87,27 +87,27 @@ jobs:
           VARIANT: ${{ matrix.variant }}
         run: |
           set -euo pipefail
-          ACTUAL_LABEL="$(docker image inspect --format '{{ index .Config.Labels "org.rtrrl.trainer.scripts.v1" }}' "$IMAGE")"
-          ACTUAL_LABEL="$ACTUAL_LABEL" uv run --project rtrrl/infra/control-plane python - <<'PY'
+          ACTUAL_LABEL="$(docker image inspect --format '{{ index .Config.Labels "org.rtrrl.trainer.catalog.v2" }}' "$IMAGE")"
+          ACTUAL_LABEL="$ACTUAL_LABEL" uv run --project rtrrl/infra/mock-trainer python - <<'PY'
+          import json
           import os
           from pathlib import Path
 
-          from trainer_infra.image_catalog import decode_catalog, load_catalog_index
+          from scripts.build_catalog import decode_catalog, encode_label, write_catalog
 
           actual_bytes = os.environ["ACTUAL_LABEL"].encode("ascii")
           expected_bytes = os.environ["EXPECTED_LABEL"].encode("ascii")
           assert actual_bytes == expected_bytes
           actual_catalog = decode_catalog(os.environ["ACTUAL_LABEL"])
-          source_catalog = load_catalog_index(
-              Path("rtrrl/infra/mock-trainer/scripts/index.yaml")
-          )
-          assert actual_catalog == source_catalog
+          source_catalog = json.loads(Path("rtrrl/infra/mock-trainer/catalog.json").read_text())
+          assert actual_catalog.model_dump(mode="json") == source_catalog
+          write_catalog()
+          assert encode_label(actual_catalog) == os.environ["ACTUAL_LABEL"]
           PY
 
           docker run --rm "$IMAGE" sh -eu -c '
             test -f /opt/trainer/worker.py &&
-            test -f /opt/trainer/scripts/index.yaml &&
-            test -f /opt/trainer/scripts/brax_ppo_acceptance.yaml &&
+            test -f /opt/trainer/catalog.json &&
             test -d /opt/acceptance
           '
           docker run --rm "$IMAGE" python /opt/trainer/worker.py --help >/dev/null
@@ -145,7 +145,7 @@ jobs:
           VARIANT: ${{ matrix.variant }}
         run: |
           set -euo pipefail
-          ACTUAL_LABEL="$(docker image inspect --format '{{ index .Config.Labels "org.rtrrl.trainer.scripts.v1" }}' "$IMAGE")"
+          ACTUAL_LABEL="$(docker image inspect --format '{{ index .Config.Labels "org.rtrrl.trainer.catalog.v2" }}' "$IMAGE")"
           IMAGE_ID="$(docker image inspect --format '{{ .Id }}' "$IMAGE")"
           IMAGE_SIZE="$(docker image inspect --format '{{ .Size }}' "$IMAGE")"
           export ACTUAL_LABEL IMAGE_ID IMAGE_SIZE
@@ -222,12 +222,12 @@ jobs:
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f
 
-      - name: Encode production catalog
+      - name: Build production catalog
         id: catalog
         shell: bash
         run: |
           set -euo pipefail
-          CATALOG="$(uv run --project rtrrl/infra/control-plane trainer-image-catalog rtrrl/infra/mock-trainer/scripts/index.yaml)"
+          CATALOG="$(uv run --project rtrrl/infra/mock-trainer python scripts/build_catalog.py --print-label)"
           echo "value=$CATALOG" >> "$GITHUB_OUTPUT"
 
       - name: Rebuild local image
@@ -241,7 +241,7 @@ jobs:
           push: false
           tags: ${{ matrix.local_tag }}
           build-args: |
-            TRAINER_SCRIPT_CATALOG=${{ steps.catalog.outputs.value }}
+            TRAINER_CATALOG_V2=${{ steps.catalog.outputs.value }}
 
       - name: Verify actual label, paths, and runtime
         id: verify
@@ -252,27 +252,27 @@ jobs:
           VARIANT: ${{ matrix.variant }}
         run: |
           set -euo pipefail
-          ACTUAL_LABEL="$(docker image inspect --format '{{ index .Config.Labels "org.rtrrl.trainer.scripts.v1" }}' "$IMAGE")"
-          ACTUAL_LABEL="$ACTUAL_LABEL" uv run --project rtrrl/infra/control-plane python - <<'PY'
+          ACTUAL_LABEL="$(docker image inspect --format '{{ index .Config.Labels "org.rtrrl.trainer.catalog.v2" }}' "$IMAGE")"
+          ACTUAL_LABEL="$ACTUAL_LABEL" uv run --project rtrrl/infra/mock-trainer python - <<'PY'
+          import json
           import os
           from pathlib import Path
 
-          from trainer_infra.image_catalog import decode_catalog, load_catalog_index
+          from scripts.build_catalog import decode_catalog, encode_label, write_catalog
 
           actual_bytes = os.environ["ACTUAL_LABEL"].encode("ascii")
           expected_bytes = os.environ["EXPECTED_LABEL"].encode("ascii")
           assert actual_bytes == expected_bytes
           actual_catalog = decode_catalog(os.environ["ACTUAL_LABEL"])
-          source_catalog = load_catalog_index(
-              Path("rtrrl/infra/mock-trainer/scripts/index.yaml")
-          )
-          assert actual_catalog == source_catalog
+          source_catalog = json.loads(Path("rtrrl/infra/mock-trainer/catalog.json").read_text())
+          assert actual_catalog.model_dump(mode="json") == source_catalog
+          write_catalog()
+          assert encode_label(actual_catalog) == os.environ["ACTUAL_LABEL"]
           PY
 
           docker run --rm "$IMAGE" sh -eu -c '
             test -f /opt/trainer/worker.py &&
-            test -f /opt/trainer/scripts/index.yaml &&
-            test -f /opt/trainer/scripts/brax_ppo_acceptance.yaml &&
+            test -f /opt/trainer/catalog.json &&
             test -d /opt/acceptance
           '
           docker run --rm "$IMAGE" python /opt/trainer/worker.py --help >/dev/null
@@ -377,7 +377,7 @@ jobs:
           VARIANT: ${{ matrix.variant }}
         run: |
           set -euo pipefail
-          ACTUAL_LABEL="$(docker image inspect --format '{{ index .Config.Labels "org.rtrrl.trainer.scripts.v1" }}' "$IMAGE")"
+          ACTUAL_LABEL="$(docker image inspect --format '{{ index .Config.Labels "org.rtrrl.trainer.catalog.v2" }}' "$IMAGE")"
           IMAGE_ID="$(docker image inspect --format '{{ .Id }}' "$IMAGE")"
           IMAGE_SIZE="$(docker image inspect --format '{{ .Size }}' "$IMAGE")"
           export ACTUAL_LABEL IMAGE_ID IMAGE_SIZE

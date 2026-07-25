@@ -1,28 +1,34 @@
 from __future__ import annotations
 
-import argparse
 import json
 import os
-from collections.abc import Mapping, Sequence
-from pathlib import Path
+from collections.abc import Sequence
 
 import jax
 import jax.numpy as jnp
-from training_sdk import bootstrap_from_environment
+
+from training_sdk.reporter import Reporter
 
 from brax_ppo_acceptance.config import AcceptanceConfig
 from brax_ppo_acceptance.train import train
 
 
+def _infer_profile() -> str:
+    if jax.default_backend() == "gpu":
+        return "g6x"
+    return "cpu"
+
+
 def _verify_device_contract(
     resource_profile: str,
     *,
-    environ: Mapping[str, str] = os.environ,
+    environ: dict[str, str] | None = None,
 ) -> None:
     devices = jax.devices()
+    env = environ if environ is not None else os.environ
     test_only_hardware_skip = (
-        environ.get("BRAX_ACCEPTANCE_TEST_MODE") == "1"
-        and environ.get("BRAX_ACCEPTANCE_E2E_FAST") == "1"
+        env.get("BRAX_ACCEPTANCE_TEST_MODE") == "1"
+        and env.get("BRAX_ACCEPTANCE_E2E_FAST") == "1"
     )
     if resource_profile == "g6x":
         if not test_only_hardware_skip:
@@ -36,23 +42,15 @@ def _verify_device_contract(
 
 
 def main(argv: Sequence[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(description="Run the Brax PPO acceptance trainer")
-    parser.add_argument("--config", required=True, type=Path)
-    arguments = parser.parse_args(argv)
-    config = AcceptanceConfig.load(arguments.config)
+    import argparse
 
-    run = bootstrap_from_environment()
-    if run is None:
-        raise RuntimeError("TRAINER_RUN_CONTEXT_PATH is required")
-    try:
-        _verify_device_contract(run.context.resource_profile)
-        result = train(config, run)
-        run.finish(
-            {
-                "eval/episode_return": result.objective,
-                "runtime/device_count": len(jax.devices()),
-            }
-        )
+    parser = argparse.ArgumentParser(description="Run the Brax PPO acceptance trainer")
+    parser.parse_args(argv)
+
+    with Reporter.from_env() as reporter:
+        config = AcceptanceConfig.from_params(reporter.config.params)
+        _verify_device_contract(_infer_profile())
+        result = train(config, reporter)
         print(
             json.dumps(
                 {
@@ -63,9 +61,6 @@ def main(argv: Sequence[str] | None = None) -> int:
                 sort_keys=True,
             )
         )
-    except BaseException as error:
-        run.fail(error)
-        raise
     return 0
 
 

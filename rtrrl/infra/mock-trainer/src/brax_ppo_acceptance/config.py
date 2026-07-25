@@ -88,6 +88,95 @@ class AcceptanceConfig:
         raise TypeError("AcceptanceConfig instances must be created with AcceptanceConfig.load()")
 
     @classmethod
+    def from_params(
+        cls,
+        params: Mapping[str, Any],
+        *,
+        environ: Mapping[str, str] = os.environ,
+    ) -> AcceptanceConfig:
+        if not isinstance(params, Mapping):
+            raise TypeError("params must be a mapping")
+        if not all(type(key) is str for key in params):
+            raise ValueError("params keys must be strings")
+
+        environment = {
+            "name": params["env"],
+            "options": {"backend": params["backend"]},
+        }
+        logging = {"aim_every_env_steps": 1, "rerun_every_episodes": 1}
+        algorithm = {
+            "learning_rate": params["learning_rate"],
+            "num_envs": params.get("num_envs", 4),
+            "episode_length": params.get("episode_length", 32),
+            "failure_mode": params.get("failure_mode", "none"),
+        }
+        parameters = {
+            "runtime": {"seed": params["seed"]},
+            "algorithm": algorithm,
+        }
+        training_budget = {"env_steps": params["total_steps"]}
+
+        _exact_keys(
+            {"environment": environment, "logging": logging, "parameters": parameters, "training_budget": training_budget},
+            {"environment", "logging", "parameters", "training_budget"},
+            "params",
+        )
+        _exact_keys(environment, {"name", "options"}, "environment")
+        if environment["name"] != "inverted_pendulum":
+            raise ValueError("environment.name must be exactly 'inverted_pendulum'")
+        options = _mapping(environment["options"], "environment.options")
+        _exact_keys(options, {"backend"}, "environment.options")
+        if options["backend"] != "generalized":
+            raise ValueError("environment.options.backend must be exactly 'generalized'")
+        _exact_keys(logging, {"aim_every_env_steps", "rerun_every_episodes"}, "logging")
+        _integer(logging["aim_every_env_steps"], "logging.aim_every_env_steps", positive=True)
+        _integer(logging["rerun_every_episodes"], "logging.rerun_every_episodes", positive=True)
+        _exact_keys(parameters, {"runtime", "algorithm"}, "parameters")
+        runtime = _mapping(parameters["runtime"], "parameters.runtime")
+        _exact_keys(runtime, {"seed"}, "parameters.runtime")
+        _integer(runtime["seed"], "parameters.runtime.seed", positive=False)
+        algorithm_mapping = _mapping(parameters["algorithm"], "parameters.algorithm")
+        _exact_keys(
+            algorithm_mapping,
+            {"learning_rate", "num_envs", "episode_length", "failure_mode"},
+            "parameters.algorithm",
+        )
+        learning_rate = _finite_number(
+            algorithm_mapping["learning_rate"], "parameters.algorithm.learning_rate"
+        )
+        if learning_rate <= 0:
+            raise ValueError("parameters.algorithm.learning_rate must be positive")
+        _integer(algorithm_mapping["num_envs"], "parameters.algorithm.num_envs", positive=True)
+        _integer(
+            algorithm_mapping["episode_length"],
+            "parameters.algorithm.episode_length",
+            positive=True,
+        )
+        failure_mode = algorithm_mapping["failure_mode"]
+        if type(failure_mode) is not str or failure_mode not in _FAILURE_MODES:
+            raise ValueError(
+                f"parameters.algorithm.failure_mode must be one of {sorted(_FAILURE_MODES)}"
+            )
+        budget = _mapping(training_budget, "training_budget")
+        _exact_keys(budget, {"env_steps"}, "training_budget")
+        _integer(budget["env_steps"], "training_budget.env_steps", positive=True)
+
+        test_mode = _enabled(environ, "BRAX_ACCEPTANCE_TEST_MODE")
+        fast_mode = _enabled(environ, "BRAX_ACCEPTANCE_E2E_FAST")
+        if failure_mode != "none" and not test_mode:
+            raise ValueError("non-none failure_mode requires BRAX_ACCEPTANCE_TEST_MODE=1")
+        if fast_mode and not test_mode:
+            raise ValueError("BRAX_ACCEPTANCE_E2E_FAST=1 requires BRAX_ACCEPTANCE_TEST_MODE=1")
+
+        return cls._create(
+            environment=environment,
+            logging=logging,
+            parameters=parameters,
+            training_budget=training_budget,
+            fast_mode=fast_mode,
+        )
+
+    @classmethod
     def load(
         cls,
         path: str | Path,

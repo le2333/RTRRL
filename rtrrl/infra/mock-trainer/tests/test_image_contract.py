@@ -58,12 +58,12 @@ RECORDED_MANIFEST_INDEXES = {
 ROOT_CONTEXT_SOURCES = {
     "training-sdk",
     "rtrrl/infra/mock-trainer",
+    "rtrrl/infra/mock-trainer/catalog.json",
     "rtrrl/infra/worker/worker.py",
-    "rtrrl/infra/mock-trainer/scripts",
 }
 EXPECTED_PATHS = {
     "/opt/trainer/worker.py",
-    "/opt/trainer/scripts",
+    "/opt/trainer/catalog.json",
     "/opt/acceptance",
 }
 
@@ -194,12 +194,13 @@ def test_dockerfile_inputs_match_recorded_amd64_registry_manifests(filename: str
         assert recorded["mediaType"] == "application/vnd.oci.image.index.v1+json"
         assert digest == _amd64_digest(recorded)
 
-    assert 'ARG TRAINER_SCRIPT_CATALOG' in contents
-    guard = 'RUN test -n "${TRAINER_SCRIPT_CATALOG}"'
-    label = 'LABEL org.rtrrl.trainer.scripts.v1="${TRAINER_SCRIPT_CATALOG}"'
+    assert 'ARG TRAINER_CATALOG_V2' in contents
+    guard = 'RUN test -n "${TRAINER_CATALOG_V2}"'
+    label = 'LABEL org.rtrrl.trainer.catalog.v2="${TRAINER_CATALOG_V2}"'
     assert guard in contents
     assert label in contents
     assert contents.index(guard) < contents.index(label)
+    assert "COPY rtrrl/infra/mock-trainer/catalog.json /opt/trainer/catalog.json" in contents
 
 
 @pytest.mark.parametrize("filename", DOCKERFILES)

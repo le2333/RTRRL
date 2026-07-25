@@ -10,10 +10,12 @@ import jax
 import jax.numpy as jnp
 import numpy as np
 import pytest
-import training_sdk
 import yaml
 from brax import envs
 from brax.envs.base import State
+from training_sdk.contract import RunConfig
+from training_sdk.episode import Episode
+from training_sdk.reporter import METRICS_FILENAME, Reporter
 
 import brax_ppo_acceptance.__main__ as launcher
 import brax_ppo_acceptance.train as train_module
@@ -40,56 +42,129 @@ VALID: dict[str, Any] = {
 }
 
 
-class RecordingAim:
-    def __init__(self, *, close_error: BaseException | None = None) -> None:
-        self.started = 0
-        self.events: list[training_sdk.MetricEvent] = []
-        self.failures: list[dict[str, str]] = []
-        self.closed = 0
-        self.close_error = close_error
+def default_params(**overrides: Any) -> dict[str, Any]:
+    params = {
+        "env": "inverted_pendulum",
+        "backend": "generalized",
+        "total_steps": 128,
+        "seed": 7,
+        "learning_rate": 0.0003,
+        "num_envs": 4,
+        "episode_length": 32,
+        "failure_mode": "none",
+    }
+    params.update(overrides)
+    return params
 
-    def start(self, context: training_sdk.RunContext) -> None:
-        del context
-        self.started += 1
 
-    def send(self, event: training_sdk.MetricEvent) -> None:
-        self.events.append(event)
-
-    def fail(self, metadata: dict[str, str]) -> None:
-        self.failures.append(metadata)
-
-    def close(self) -> None:
-        self.closed += 1
-        if self.close_error is not None:
-            raise self.close_error
+def test_environ(*, fast: bool = True) -> dict[str, str]:
+    environ = {"BRAX_ACCEPTANCE_TEST_MODE": "1"}
+    if fast:
+        environ["BRAX_ACCEPTANCE_E2E_FAST"] = "1"
+    return environ
 
 
 class RecordingRerun:
     def __init__(self) -> None:
-        self.episodes: list[training_sdk.Episode] = []
+        self.episodes: list[Episode] = []
         self.closed = 0
 
-    def log_episode(self, episode: training_sdk.Episode) -> Path | None:
+    def report(self, step: int, metrics: dict[str, float]) -> None:
+        del step, metrics
+
+    def log_episode(self, episode: Episode) -> None:
         self.episodes.append(episode)
-        return None
 
     def close(self) -> None:
         self.closed += 1
 
 
-class CountingRun(training_sdk.TrainingRun):
-    def __init__(self, *args: Any, **kwargs: Any) -> None:
-        super().__init__(*args, **kwargs)
-        self.fail_calls: list[BaseException] = []
-        self.finish_calls = 0
+class FailingCloseSink(RecordingRerun):
+    def __init__(self, message: str) -> None:
+        super().__init__()
+        self._message = message
 
-    def fail(self, error: BaseException) -> None:
-        self.fail_calls.append(error)
-        super().fail(error)
+    def close(self) -> None:
+        raise RuntimeError(self._message)
 
-    def finish(self, final_metrics: dict[str, int | float]) -> None:
-        self.finish_calls += 1
-        super().finish(final_metrics)
+
+def make_run_config(
+    tmp_path: Path,
+    params: dict[str, Any],
+    *,
+    include_rerun: bool = True,
+) -> RunConfig:
+    trial_prefix = f"s3://bucket/trials/t{params.get('trial', 0)}"
+    return RunConfig.model_validate(
+        {
+            "contract": 2,
+            "run_id": "run-1",
+            "experiment": "brax-acceptance",
+            "name": "acceptance",
+            "launch_id": "20260725-000000",
+            "trial": 0,
+            "entry": "brax_ppo_acceptance",
+            "digest": "registry.example/trainer@sha256:" + "a" * 64,
+            "source_hash": "sha256:test",
+            "params": params,
+            "logging": {
+                "aim": str(tmp_path / "aim"),
+                "every_steps": 1,
+                "rerun_s3": f"{trial_prefix}/episodes/" if include_rerun else None,
+                "rerun_every_episodes": 1 if include_rerun else None,
+            },
+            "score": {
+                "metric": "episode_return",
+                "window_steps": [0, int(params["total_steps"])],
+                "reduce": "mean",
+                "direction": "maximize",
+                "non_finite": "worst",
+                "s3": f"{trial_prefix}/score.json",
+            },
+        }
+    )
+
+
+def make_reporter(
+    tmp_path: Path,
+    *,
+    failure_mode: str = "none",
+    fast: bool = True,
+    rerun: RecordingRerun | None = None,
+    extra_sinks: list[Any] | None = None,
+) -> tuple[Reporter, AcceptanceConfig, RecordingRerun, Path]:
+    params = default_params(failure_mode=failure_mode)
+    scratch = tmp_path / "scratch"
+    scratch.mkdir()
+    rerun_sink = rerun or RecordingRerun()
+    config = make_run_config(tmp_path, params)
+    reporter = Reporter(config, scratch, sinks=[rerun_sink, *(extra_sinks or [])])
+    acceptance = AcceptanceConfig.from_params(params, environ=test_environ(fast=fast))
+    return reporter, acceptance, rerun_sink, scratch
+
+
+def write_run_env(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    *,
+    failure_mode: str = "none",
+    fast: bool = True,
+    params_overrides: dict[str, Any] | None = None,
+) -> tuple[Path, Path]:
+    params = default_params(failure_mode=failure_mode, **(params_overrides or {}))
+    scratch = tmp_path / "scratch"
+    scratch.mkdir()
+    config_path = tmp_path / "run-config.json"
+    config_path.write_text(
+        json.dumps(make_run_config(tmp_path, params).model_dump(mode="json")),
+        encoding="utf-8",
+    )
+    environ = test_environ(fast=fast)
+    monkeypatch.setenv("TRAINER_RUN_CONFIG", str(config_path))
+    monkeypatch.setenv("TRAINER_SCRATCH", str(scratch))
+    for key, value in environ.items():
+        monkeypatch.setenv(key, value)
+    return config_path, scratch
 
 
 def write_config(
@@ -102,80 +177,16 @@ def write_config(
     payload["parameters"]["algorithm"]["failure_mode"] = failure_mode
     path = tmp_path / "config.yaml"
     path.write_text(yaml.safe_dump(payload), encoding="utf-8")
-    environ = {"BRAX_ACCEPTANCE_TEST_MODE": "1"}
-    if fast:
-        environ["BRAX_ACCEPTANCE_E2E_FAST"] = "1"
-    return path, environ
+    return path, test_environ(fast=fast)
 
 
-def make_run(
-    tmp_path: Path,
-    *,
-    aim: RecordingAim | None = None,
-) -> tuple[CountingRun, RecordingAim, RecordingRerun, training_sdk.MemorySpool]:
-    context = training_sdk.RunContext(
-        experiment_name="brax-acceptance",
-        experiment_id="experiment-1",
-        group="cpu",
-        script="brax_ppo_acceptance",
-        run_id="run-1",
-        run_number=1,
-        trial_number=1,
-        seed=7,
-        metadata={},
-        environment={"name": "inverted_pendulum", "options": {"backend": "generalized"}},
-        training_budget={"env_steps": 128},
-        fixed_parameters={},
-        sampled_parameters={},
-        final_parameters={},
-        image_digest="sha256:test",
-        resource_profile="cpu",
-        artifact_directory=tmp_path / "artifacts",
-        logging={"aim_every_env_steps": 1, "rerun_every_episodes": 1},
-        objective={"metric": "eval/episode_return"},
-    )
-    recording_aim = aim or RecordingAim()
-    rerun = RecordingRerun()
-    spool = training_sdk.MemorySpool()
-    run = CountingRun(context, recording_aim, rerun, spool)
-    return run, recording_aim, rerun, spool
-
-
-def write_run_context(tmp_path: Path) -> Path:
-    path = tmp_path / "run-context.json"
-    path.write_text(
-        json.dumps(
-            {
-                "experiment_name": "brax-acceptance",
-                "experiment_id": "experiment-1",
-                "group": "cpu",
-                "script": "brax_ppo_acceptance",
-                "run_id": "bootstrap-run-1",
-                "run_number": 1,
-                "trial_number": 1,
-                "seed": 7,
-                "metadata": {},
-                "environment": {
-                    "name": "inverted_pendulum",
-                    "options": {"backend": "generalized"},
-                },
-                "training_budget": {"env_steps": 128},
-                "fixed_parameters": {},
-                "sampled_parameters": {},
-                "final_parameters": {},
-                "image_digest": "sha256:test",
-                "resource_profile": "cpu",
-                "artifact_directory": str(tmp_path / "bootstrap-artifacts"),
-                "logging": {
-                    "aim_every_env_steps": 1,
-                    "rerun_every_episodes": 1,
-                },
-                "objective": {"metric": "eval/episode_return"},
-            }
-        ),
-        encoding="utf-8",
-    )
-    return path
+def read_metric_steps(scratch: Path) -> list[int]:
+    metrics_path = scratch / METRICS_FILENAME
+    return [
+        json.loads(line)["step"]
+        for line in metrics_path.read_text(encoding="utf-8").splitlines()
+        if line.strip()
+    ]
 
 
 def zero_policy(observation: jax.Array, key: jax.Array) -> tuple[jax.Array, dict[str, Any]]:
@@ -251,30 +262,18 @@ def test_rollout_splits_reset_and_action_random_streams() -> None:
 
 
 def test_fast_train_retains_rollout_sdk_and_checkpoint_lifecycle(tmp_path: Path) -> None:
-    config_path, environ = write_config(tmp_path)
-    config = AcceptanceConfig.load(config_path, environ=environ)
-    run, _, rerun, spool = make_run(tmp_path)
-    run.start()
+    reporter, config, rerun, scratch = make_reporter(tmp_path)
 
-    result = train(config, run)
-    run.finish(
-        {
-            "eval/episode_return": result.objective,
-            "runtime/device_count": len(jax.devices()),
-        }
-    )
+    with reporter:
+        result = train(config, reporter)
 
     assert math.isfinite(result.objective)
     assert result.platform == "cpu"
     assert result.checkpoint.name == "ppo-params.npz"
     assert result.checkpoint.exists()
-    copied = run.context.artifact_directory / "checkpoints" / result.checkpoint.name
-    assert copied.is_file()
-    assert copied.read_bytes() == result.checkpoint.read_bytes()
-    assert [event.stream for event in spool.events].count("episode_summary") >= 1
-    finals = [event for event in spool.events if event.kind == "final"]
-    assert finals[-1].data["objective_metric"] == "eval/episode_return"
-    assert finals[-1].data["finalized"] is True
+    assert result.checkpoint == scratch / "ppo-params.npz"
+    assert read_metric_steps(scratch), "trainer must write metric steps"
+    assert max(read_metric_steps(scratch)) == config.num_timesteps
     assert len(rerun.episodes) == 1
     episode = rerun.episodes[0]
     assert episode.number == 2
@@ -325,31 +324,27 @@ def test_train_rejects_checkpoint_mismatch_before_registration(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
-    config_path, environ = write_config(tmp_path)
-    config = AcceptanceConfig.load(config_path, environ=environ)
-    run, _, _, spool = make_run(tmp_path)
-    run.start()
+    reporter, config, _, scratch = make_reporter(tmp_path)
     monkeypatch.setattr(
         train_module,
         "restore_checkpoint",
         lambda path: (jnp.ones((2,), dtype=jnp.float32),),
     )
 
-    with pytest.raises(ValueError, match="checkpoint round-trip"):
-        train(config, run)
+    with reporter, pytest.raises(ValueError, match="checkpoint round-trip"):
+        train(config, reporter)
 
-    assert not (run.context.artifact_directory / "checkpoints" / "ppo-params.npz").exists()
-    assert not any(event.kind == "final" for event in spool.events)
+    assert not (scratch / "ppo-params.npz").exists()
+    assert not read_metric_steps(scratch)
 
 
 def test_normal_path_calls_real_brax_entry_point_with_fixed_micro_parameters(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
-    config_path, _ = write_config(tmp_path, fast=False)
-    config = AcceptanceConfig.load(config_path, environ={})
-    run, _, rerun, _ = make_run(tmp_path)
-    run.start()
+    config_path, environ = write_config(tmp_path, fast=False)
+    config = AcceptanceConfig.load(config_path, environ=environ)
+    reporter, _, rerun, _ = make_reporter(tmp_path, fast=False)
     observed: dict[str, Any] = {}
 
     def recording_ppo_train(**kwargs: Any) -> tuple[Any, Any, dict[str, Any]]:
@@ -364,7 +359,8 @@ def test_normal_path_calls_real_brax_entry_point_with_fixed_micro_parameters(
 
     monkeypatch.setattr(train_module.ppo_train, "train", recording_ppo_train)
 
-    result = train(config, run)
+    with reporter:
+        result = train(config, reporter)
 
     assert math.isfinite(result.objective)
     assert len(rerun.episodes) == 1
@@ -446,110 +442,93 @@ def test_launcher_fails_once_and_preserves_pre_failure_artifacts(
     checkpoint_expected: bool,
     rerun_expected: bool,
 ) -> None:
-    config_path, environ = write_config(tmp_path, failure_mode=failure_mode)
-    monkeypatch.setenv("BRAX_ACCEPTANCE_TEST_MODE", environ["BRAX_ACCEPTANCE_TEST_MODE"])
-    monkeypatch.setenv("BRAX_ACCEPTANCE_E2E_FAST", environ["BRAX_ACCEPTANCE_E2E_FAST"])
-    run, aim, rerun, spool = make_run(tmp_path)
-    run.start()
-    monkeypatch.setattr(launcher, "bootstrap_from_environment", lambda: run)
+    _, scratch = write_run_env(tmp_path, monkeypatch, failure_mode=failure_mode)
 
-    with pytest.raises(RuntimeError, match=f"injected failure: {failure_mode}") as raised:
-        launcher.main(["--config", str(config_path)])
+    with pytest.raises(RuntimeError, match=f"injected failure: {failure_mode}"):
+        launcher.main([])
 
-    assert run.fail_calls == [raised.value]
-    assert len(aim.failures) == 1
-    assert not any(
-        event.kind == "final" and event.data["finalized"] for event in spool.events
-    )
-    checkpoint = run.context.artifact_directory / "checkpoints" / "ppo-params.npz"
+    checkpoint = scratch / "ppo-params.npz"
     assert checkpoint.exists() is checkpoint_expected
-    assert bool(rerun.episodes) is rerun_expected
+    metrics_path = scratch / METRICS_FILENAME
+    if failure_mode == "before_training":
+        assert not metrics_path.exists()
+    else:
+        assert metrics_path.exists()
 
 
 def test_finalization_failure_is_rethrown_without_double_terminal(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
-    config_path, environ = write_config(tmp_path)
-    monkeypatch.setenv("BRAX_ACCEPTANCE_TEST_MODE", environ["BRAX_ACCEPTANCE_TEST_MODE"])
-    monkeypatch.setenv("BRAX_ACCEPTANCE_E2E_FAST", environ["BRAX_ACCEPTANCE_E2E_FAST"])
-    close_error = KeyboardInterrupt("close interrupted")
-    run, aim, _, spool = make_run(tmp_path, aim=RecordingAim(close_error=close_error))
-    run.start()
-    monkeypatch.setattr(launcher, "bootstrap_from_environment", lambda: run)
+    write_run_env(tmp_path, monkeypatch)
+    scratch = tmp_path / "scratch"
+    config = RunConfig.model_validate(
+        json.loads((tmp_path / "run-config.json").read_text(encoding="utf-8"))
+    )
+    failing = FailingCloseSink("close interrupted")
+    reporter = Reporter(config, scratch, sinks=[failing])
 
-    with pytest.raises(KeyboardInterrupt, match="close interrupted") as raised:
-        launcher.main(["--config", str(config_path)])
+    def fake_from_env() -> Reporter:
+        return reporter
 
-    assert run.finish_calls == 1
-    assert run.fail_calls == [raised.value]
-    assert aim.failures == []
-    finalized = [
-        event
-        for event in spool.events
-        if event.kind == "final" and event.data["finalized"]
-    ]
-    assert len(finalized) == 1
+    monkeypatch.setattr(launcher.Reporter, "from_env", classmethod(lambda cls: reporter))
+
+    with pytest.raises(RuntimeError, match="close interrupted"):
+        launcher.main([])
+
+    assert read_metric_steps(scratch)
 
 
-def test_successful_launcher_uses_real_bootstrap_and_starts_exactly_once(
+def test_successful_launcher_uses_reporter_from_env_and_prints_runtime_summary(
     capsys: pytest.CaptureFixture[str],
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
-    config_path, environ = write_config(tmp_path)
-    monkeypatch.setenv("BRAX_ACCEPTANCE_TEST_MODE", environ["BRAX_ACCEPTANCE_TEST_MODE"])
-    monkeypatch.setenv("BRAX_ACCEPTANCE_E2E_FAST", environ["BRAX_ACCEPTANCE_E2E_FAST"])
-    context_path = write_run_context(tmp_path)
-    aim = RecordingAim()
-    rerun = RecordingRerun()
-    checkpoint = tmp_path / "ppo-params.npz"
-    checkpoint.write_bytes(b"test")
-    result = train_module.TrainingResult(
-        objective=1.25,
-        checkpoint=checkpoint,
-        platform="cpu",
-        device_kind="cpu",
-    )
-    def bootstrap() -> training_sdk.TrainingRun | None:
-        return training_sdk.bootstrap_from_environment(
-            {"TRAINER_RUN_CONTEXT_PATH": str(context_path)},
-            aim_factory=lambda context, environ: aim,
-            rerun_factory=lambda context: rerun,
-        )
+    _, scratch = write_run_env(tmp_path, monkeypatch)
 
-    training_sdk.set_current_run(None)
-    monkeypatch.setattr(launcher, "bootstrap_from_environment", bootstrap)
-    monkeypatch.setattr(launcher, "train", lambda config, sdk_run: result)
-
-    try:
-        assert launcher.main(["--config", str(config_path)]) == 0
-        run = training_sdk.current_run()
-    finally:
-        training_sdk.set_current_run(None)
+    assert launcher.main([]) == 0
 
     output = capsys.readouterr().out
     assert '"platform": "cpu"' in output
     assert '"device_platforms": ["cpu"]' in output
-    assert aim.started == 1
-    assert aim.failures == []
-    spool = run.spool
-    finalized = [
-        event
-        for event in spool.events
-        if event.kind == "final" and event.data["finalized"]
-    ]
-    assert len(finalized) == 1
+    assert max(read_metric_steps(scratch)) == 128
 
 
 def test_cli_requires_sdk_context(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
-    config_path, environ = write_config(tmp_path)
-    monkeypatch.setenv("BRAX_ACCEPTANCE_TEST_MODE", environ["BRAX_ACCEPTANCE_TEST_MODE"])
-    monkeypatch.setenv("BRAX_ACCEPTANCE_E2E_FAST", environ["BRAX_ACCEPTANCE_E2E_FAST"])
-    monkeypatch.setattr(launcher, "bootstrap_from_environment", lambda: None)
+    monkeypatch.delenv("TRAINER_RUN_CONFIG", raising=False)
+    monkeypatch.delenv("TRAINER_SCRATCH", raising=False)
 
-    with pytest.raises(RuntimeError, match="TRAINER_RUN_CONTEXT_PATH is required"):
-        launcher.main(["--config", str(config_path)])
+    with pytest.raises(KeyError, match="TRAINER_RUN_CONFIG"):
+        launcher.main([])
+
+
+def test_reported_step_matches_the_environment_step_budget(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The score window is expressed in total_steps units, so the reported step
+    must be the environment step count, not an iteration index."""
+    from aim import Repo
+
+    aim_repo = tmp_path / "aim"
+    Repo.from_path(str(aim_repo), init=True)
+    write_run_env(
+        tmp_path,
+        monkeypatch,
+        params_overrides={"total_steps": 8},
+    )
+    monkeypatch.setenv("TRAINER_RUN_CONFIG", str(tmp_path / "run-config.json"))
+    config_path = tmp_path / "run-config.json"
+    config_data = json.loads(config_path.read_text(encoding="utf-8"))
+    config_data["logging"]["aim"] = str(aim_repo)
+    config_path.write_text(json.dumps(config_data), encoding="utf-8")
+
+    assert launcher.main([]) == 0
+
+    scratch = tmp_path / "scratch"
+    steps = read_metric_steps(scratch)
+    assert steps, "trainer must report at least one metric step"
+    assert max(steps) == 8

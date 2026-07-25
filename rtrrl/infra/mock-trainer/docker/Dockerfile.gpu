@@ -11,13 +11,13 @@ RUN uv sync --frozen --no-dev --no-editable --extra cuda12 && uv cache clean
 
 FROM python:3.12.11-slim-bookworm@sha256:c00fc7b44d844b6da22861ec24af43968a5200eac4ec607b4725d585165d6b49 AS runtime
 
-ARG TRAINER_SCRIPT_CATALOG
-RUN test -n "${TRAINER_SCRIPT_CATALOG}"
-LABEL org.rtrrl.trainer.scripts.v1="${TRAINER_SCRIPT_CATALOG}"
+ARG TRAINER_CATALOG_V2
+RUN test -n "${TRAINER_CATALOG_V2}"
+LABEL org.rtrrl.trainer.catalog.v2="${TRAINER_CATALOG_V2}"
 COPY --from=builder /opt/venv /opt/venv
 COPY rtrrl/infra/mock-trainer /opt/acceptance
+COPY rtrrl/infra/mock-trainer/catalog.json /opt/trainer/catalog.json
 COPY rtrrl/infra/worker/worker.py /opt/trainer/worker.py
-COPY rtrrl/infra/mock-trainer/scripts /opt/trainer/scripts
 ENV PATH="/opt/venv/bin:${PATH}" \
     PYTHONUNBUFFERED=1
 CMD ["python", "/opt/trainer/worker.py", "--help"]

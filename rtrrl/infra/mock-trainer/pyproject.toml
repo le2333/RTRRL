@@ -30,7 +30,7 @@ training-sdk = { path = "../../../training-sdk" }
 packages = ["src/brax_ppo_acceptance"]
 
 [tool.pytest.ini_options]
-pythonpath = ["src"]
+pythonpath = ["src", "."]
 
 [tool.ruff]
 line-length = 100

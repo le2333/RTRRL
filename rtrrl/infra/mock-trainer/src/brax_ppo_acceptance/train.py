@@ -15,11 +15,12 @@ import jax
 import jax.numpy as jnp
 import numpy as np
 import orbax.checkpoint as ocp
-import training_sdk
 from brax import envs
 from brax.training import types as brax_types
 from brax.training.acme import running_statistics
 from brax.training.agents.ppo import train as ppo_train
+from training_sdk import Episode
+from training_sdk.reporter import Reporter
 
 from brax_ppo_acceptance.config import AcceptanceConfig
 
@@ -44,7 +45,7 @@ def rollout_episode(
     seed: int,
     episode_length: int,
     phase: Literal["train", "eval"],
-) -> tuple[training_sdk.Episode, float]:
+) -> tuple[Episode, float]:
     """Roll out one complete episode, crossing to NumPy only at the host boundary."""
     reset = jax.jit(environment.reset)
     step = jax.jit(environment.step)
@@ -77,7 +78,7 @@ def rollout_episode(
         if terminal:
             break
 
-    episode = training_sdk.Episode(
+    episode = Episode(
         number=1 if phase == "train" else 2,
         phase=phase,
         start_env_steps=0,
@@ -371,8 +372,8 @@ def _brax_jax_compatibility() -> Iterator[None]:
         jax.__dict__.pop("device_put_replicated")
 
 
-def train(config: AcceptanceConfig, run: training_sdk.TrainingRun) -> TrainingResult:
-    """Run PPO acceptance and publish non-terminal SDK observability artifacts."""
+def train(config: AcceptanceConfig, reporter: Reporter) -> TrainingResult:
+    """Run PPO acceptance and report contract v2 metrics."""
     _inject_failure(config, "before_training")
     environment = envs.get_environment(
         env_name=config.environment_name,
@@ -380,7 +381,19 @@ def train(config: AcceptanceConfig, run: training_sdk.TrainingRun) -> TrainingRe
     )
 
     if config.fast_mode:
-        _exercise_selected_device(environment, config.seed)
+        batch = 4
+        env_steps = 0
+        while env_steps < config.num_timesteps:
+            step_batch = min(batch, config.num_timesteps - env_steps)
+            env_steps += step_batch
+            _exercise_selected_device(environment, config.seed + env_steps)
+            reporter.report(
+                env_steps,
+                {
+                    "episode_return": 0.0,
+                    "episode_length": float(step_batch),
+                },
+            )
         policy = _zero_policy(environment)
         params: Any = (jnp.zeros((1,)),)
     else:
@@ -415,15 +428,12 @@ def train(config: AcceptanceConfig, run: training_sdk.TrainingRun) -> TrainingRe
         episode_length=config.episode_length,
         phase="train",
     )
-    train_episode = dataclasses.replace(
-        train_episode,
-        start_env_steps=0,
-        end_env_steps=config.num_timesteps,
-    )
-    run.log_episode_summary(
-        env_steps=config.num_timesteps,
-        episode_return=train_return,
-        episode_length=len(train_episode.actions),
+    reporter.report(
+        config.num_timesteps,
+        {
+            "episode_return": train_return,
+            "episode_length": float(len(train_episode.actions)),
+        },
     )
 
     eval_episode, objective = rollout_episode(
@@ -438,12 +448,18 @@ def train(config: AcceptanceConfig, run: training_sdk.TrainingRun) -> TrainingRe
         start_env_steps=config.num_timesteps,
         end_env_steps=config.num_timesteps,
     )
-    run.log_episode(eval_episode)
+    reporter.log_episode(eval_episode)
+    reporter.report(
+        config.num_timesteps,
+        {
+            "episode_return": objective,
+            "episode_length": float(len(eval_episode.actions)),
+        },
+    )
 
-    checkpoint = run.context.artifact_directory / "ppo-params.npz"
+    checkpoint = reporter.scratch / "ppo-params.npz"
     _write_checkpoint(checkpoint, params)
     _verify_checkpoint_round_trip(params, checkpoint)
-    run.register_checkpoint(checkpoint)
     _inject_failure(config, "after_checkpoint")
 
     devices = jax.devices()
