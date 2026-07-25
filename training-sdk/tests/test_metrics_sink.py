@@ -1,0 +1,27 @@
+import json
+from pathlib import Path
+
+from training_sdk.sinks.metrics import MetricsSink
+
+
+def test_report_appends_one_line(tmp_path: Path) -> None:
+    path = tmp_path / "metrics.jsonl"
+    sink = MetricsSink(path)
+    sink.report(10, {"episode_return": 1.5})
+    sink.report(20, {"episode_return": 2.5, "episode_length": 7})
+    sink.close()
+    lines = [json.loads(line) for line in path.read_text().splitlines()]
+    assert lines == [
+        {"step": 10, "metrics": {"episode_return": 1.5}},
+        {"step": 20, "metrics": {"episode_return": 2.5, "episode_length": 7.0}},
+    ]
+
+
+def test_report_updates_modification_time(tmp_path: Path) -> None:
+    path = tmp_path / "metrics.jsonl"
+    sink = MetricsSink(path)
+    sink.report(1, {"m": 1.0})
+    first = path.stat().st_mtime_ns
+    sink.report(2, {"m": 2.0})
+    assert path.stat().st_mtime_ns >= first
+    sink.close()
