@@ -5,8 +5,11 @@ from training_sdk.contract import (
     CONTRACT_VERSION,
     Catalog,
     ChoiceSpec,
+    EntryDescriptor,
     FloatSpec,
+    IntSpec,
     RunConfig,
+    ScoreConfig,
 )
 
 
@@ -14,7 +17,7 @@ def test_contract_version_is_two() -> None:
     assert CONTRACT_VERSION == 2
 
 
-def test_catalog_parses_float_and_choice_entries() -> None:
+def test_catalog_parses_float_int_and_choice_entries() -> None:
     catalog = Catalog.model_validate(
         {
             "contract": 2,
@@ -31,6 +34,12 @@ def test_catalog_parses_float_and_choice_entries() -> None:
                             "high": 1e-2,
                             "log": True,
                         },
+                        "batch_size": {
+                            "type": "int",
+                            "low": 256,
+                            "high": 8192,
+                            "step": 256,
+                        },
                     },
                 }
             },
@@ -41,6 +50,66 @@ def test_catalog_parses_float_and_choice_entries() -> None:
     assert entry.space["total_steps"].choices == (128,)
     assert isinstance(entry.space["learning_rate"], FloatSpec)
     assert entry.space["learning_rate"].log is True
+    assert isinstance(entry.space["batch_size"], IntSpec)
+    assert entry.space["batch_size"].step == 256
+
+
+def test_float_spec_rejects_low_greater_than_high() -> None:
+    with pytest.raises(ValidationError, match="float low must not exceed high"):
+        FloatSpec.model_validate({"type": "float", "low": 2.0, "high": 1.0})
+
+
+def test_int_spec_rejects_low_greater_than_high() -> None:
+    with pytest.raises(ValidationError, match="int low must not exceed high"):
+        IntSpec.model_validate({"type": "int", "low": 10, "high": 5})
+
+
+def test_int_spec_rejects_non_positive_step() -> None:
+    with pytest.raises(ValidationError, match="int step must be positive"):
+        IntSpec.model_validate({"type": "int", "low": 1, "high": 10, "step": 0})
+
+
+def test_choice_spec_rejects_empty_list() -> None:
+    with pytest.raises(ValidationError, match="choice list must not be empty"):
+        ChoiceSpec.model_validate([])
+
+
+def test_entry_descriptor_rejects_empty_command() -> None:
+    with pytest.raises(ValidationError, match="command must not be empty"):
+        EntryDescriptor.model_validate(
+            {
+                "command": [],
+                "source_hash": "sha256:0",
+                "metrics": ["m"],
+                "space": {},
+            }
+        )
+
+
+def test_entry_descriptor_rejects_empty_metrics() -> None:
+    with pytest.raises(ValidationError, match="metrics must not be empty"):
+        EntryDescriptor.model_validate(
+            {
+                "command": ["run"],
+                "source_hash": "sha256:0",
+                "metrics": [],
+                "space": {},
+            }
+        )
+
+
+def test_score_config_rejects_descending_window_steps() -> None:
+    with pytest.raises(ValidationError, match="window_steps must be ordered"):
+        ScoreConfig.model_validate(
+            {
+                "metric": "episode_return",
+                "window_steps": [128, 0],
+                "reduce": "mean",
+                "direction": "maximize",
+                "non_finite": "worst",
+                "s3": "s3://bucket/score.json",
+            }
+        )
 
 
 def test_choice_spec_rejects_non_scalar_choices() -> None:
