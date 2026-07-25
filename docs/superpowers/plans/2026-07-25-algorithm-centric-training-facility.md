@@ -386,10 +386,19 @@ class RunConfig(_Frozen):
     launch_id: str
     trial: int
     entry: str
+    digest: str
+    source_hash: str
     params: dict[str, Scalar]
     logging: LoggingConfig
     score: ScoreConfig
 ```
+
+`digest` and `source_hash` travel with every run configuration because the Aim
+sink writes them onto the run: an archived run that cannot be traced back to the
+image it ran in and the algorithm source it ran is not usable as a record. The
+control plane knows both at launch time — the digest from image resolution, the
+source hash from the catalog entry — so they are filled in once by
+`build_run_config` and never derived inside the container.
 
 `ChoiceSpec` must be listed last in the union so that a mapping with `type` is
 never coerced into a choice list.
@@ -1393,13 +1402,16 @@ class AimSink:
         self._run["launch_id"] = config.launch_id
         self._run["trial"] = config.trial
         self._run["entry"] = config.entry
+        self._run["digest"] = config.digest
+        self._run["source_hash"] = config.source_hash
         self._run["params"] = dict(config.params)
-
-    def set_image(self, digest: str, source_hash: str) -> None:
-        self._run["image_digest"] = digest
-        self._run["source_hash"] = source_hash
+        self._every = config.logging.every_steps
+        self._last: int | None = None
 
     def report(self, step: int, metrics: Mapping[str, float]) -> None:
+        if self._last is not None and step - self._last < self._every:
+            return
+        self._last = step
         for name, value in metrics.items():
             self._run.track(float(value), name=str(name), step=int(step))
 
@@ -1410,8 +1422,14 @@ class AimSink:
         self._run.close()
 ```
 
-`image_digest` and `source_hash` are set from the run configuration once Task 11
-adds them; until then `set_image` is unused.
+`every_steps` throttles Aim only. The first report always reaches Aim, and after
+that a report is forwarded once at least `every_steps` steps have passed since the
+last one that was. The comparison is against the elapsed step count rather than
+`step % every_steps`, because an algorithm reporting at 1024-step intervals with
+`every_steps: 1000` would otherwise never match and the run would appear empty.
+
+The metrics file is never throttled: the worker reads it to compute the trial's
+score and watches its modification time as a heartbeat, so it needs every report.
 
 - [ ] **Step 4: Run the test to verify it passes**
 
@@ -2493,6 +2511,8 @@ def test_run_config_uses_trial_params_verbatim(s3_base: str, tmp_path: Path) -> 
     config = build_run_config(launch, 7, {"total_steps": 128, "learning_rate": 0.0003})
     assert config.run_id == "brax-ppo-smoke-20260725-051400-t7"
     assert config.params == {"total_steps": 128, "learning_rate": 0.0003}
+    assert config.digest == "sha256:" + "a" * 64
+    assert config.source_hash == "sha256:0"
     assert config.score.s3 == f"{launch.prefix}/trials/t7/score.json"
     assert config.logging.rerun_s3 == f"{launch.prefix}/trials/t7/episodes/"
     assert config_uri(launch, 7) == f"{launch.prefix}/trials/t7/config.json"
@@ -2633,6 +2653,8 @@ def build_run_config(
         launch_id=launch.launch_id,
         trial=trial,
         entry=launch.plan.entry_name,
+        digest=launch.plan.digest,
+        source_hash=launch.plan.entry.source_hash,
         params=dict(params),
         logging=LoggingConfig(
             aim=experiment.logging.aim,
