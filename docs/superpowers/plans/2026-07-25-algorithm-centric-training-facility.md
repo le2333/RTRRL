@@ -4298,7 +4298,7 @@ cases where a local pass depended on this box:
   They now bind their own socket.
 - The `mock-trainer` S3 tests used ambient credentials instead of `moto`.
 
-- [ ] **Step 5: Build and push both images**
+- [x] **Step 5: Build and push both images**
 
 The development machine cannot build images; the workflow is the only builder.
 
@@ -4307,10 +4307,18 @@ gh workflow run build-infra-acceptance-image.yml -f push=true -f confirm_account
 gh run watch
 ```
 
-Expected: both CPU and GPU builds succeed. Record both digests from the output.
+Both variants built, verified and pushed on run 30178762702, the first success
+since the catalog was introduced:
 
-Two things were wrong here and are fixed on `de5db7e`, but neither is proven until
-this step runs:
+- CPU `infra-acceptance-brax-ppo-cpu-20260725`
+  `sha256:d84ccca3d066ed070bd39840aebb0b04dc23d97dcaac544d2fcbca28d73dd9d9`
+- GPU `infra-acceptance-brax-ppo-gpu-20260725`
+  `sha256:5153ca698521cde78f5a61eea46ed4b38898197491633176ca2cef8c263bb9d0`
+
+The pre-catalog `-20260723` pair is left in place rather than replaced under its
+mutable tag, so the two are told apart by name.
+
+Two things were wrong here, both fixed on `de5db7e`:
 
 - The workflow called `scripts/build_catalog.py` from the repository root, where
   it does not exist, so **it has failed on every run since the catalog was
@@ -4321,7 +4329,7 @@ this step runs:
   They now run the image's own command untouched and require it to refuse by name
   without a manifest.
 
-- [ ] **Step 6: Register job definitions for the new digests**
+- [x] **Step 6: Register job definitions for the new digests**
 
 ```bash
 cd rtrrl/infra/control-plane
@@ -4333,11 +4341,10 @@ uv run python scripts/deploy_facility.py --register --confirm-account 0071221749
 
 A full reference is required, not a bare digest and never a tag.
 
-Expected: four active job definitions — `trainer-c7am-<digest>`,
-`trainer-c7al-<digest>`, `trainer-c7ax-<digest>`, `trainer-g6x-<digest>` — and the
-`/trainer/jobs` log group from Task 17.
+Four definitions registered at revision 1, each running
+`python -m training_sdk.worker`, with `/trainer/jobs` kept for 30 days.
 
-- [ ] **Step 7: Smoke the image on the `dev` CPU queue**
+- [x] **Step 7: Smoke the image on the `dev` CPU queue**
 
 This is the first time the worker runs inside the real image, on a real Batch
 host, against real S3 and the real Aim server. Nothing before this proves the
@@ -4366,11 +4373,21 @@ echo "exit=$?"
 
 Do not pipe through `tee`; that hid a non-zero exit on 2026-07-24.
 
-Expected: `exit=0`, one trial with a finite score, `score.json` and at least one
-`.rrd` under the launch prefix in S3, and the run visible in Aim with its digest
-and source hash. If the worker fails, read `/trainer/jobs` for the job's log
-stream — the failure is in the image or the contract, and it must be fixed here
-rather than discovered during the paid run.
+Passed on launch `20260725-234838`: `exit=0`, status `succeeded`, trial 0 scored
+22.0 in 164s. Under the launch prefix S3 holds `experiment.yaml`, `launch.json`,
+`space.json`, `report.json`, the round's job manifest, `trials/t0/config.json`,
+`trials/t0/score.json` and `trials/t0/episodes/episode-000002.rrd`. Aim holds the
+run under experiment `infra-acceptance` with all eight parameters and both
+`episode_return` and `episode_length`, received live over the direct connection.
+
+The first real preflight earned its keep three times over, each fault fatal and
+none of them reachable by any test that mocks AWS:
+
+- `trainerctl` built its boto3 session with no region.
+- The submitted containers were never told the region either, so the worker's first
+  S3 call would have raised `NoRegionError` on a billed host.
+- The examples named `s3://rtrrl-training-data`, a bucket that does not exist; the
+  real one is `rtrrl-artifacts-007122174918`.
 
 - [ ] **Step 8: Commit**
 
