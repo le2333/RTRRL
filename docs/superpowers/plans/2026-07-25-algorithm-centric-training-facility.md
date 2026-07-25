@@ -23,6 +23,20 @@ reads Aim.
 ## Global Constraints
 
 - Python `>=3.12,<3.13`; ruff `line-length = 100`; tests are pytest.
+- **The development machine never builds or runs a container image.** Images are
+  built only by `.github/workflows/build-infra-acceptance-image.yml`, and
+  containers run only as AWS Batch jobs. The machine has 2 cores, 2.2 GiB of
+  usable memory, and under 5 GiB of free disk: a single GPU image does not fit.
+  No task may add a `docker build`, `docker run`, or image pull step.
+- **Anything heavy runs on the `dev-*` Batch queues, not locally.** That is what
+  those queues exist for. Local tests may start real Aim, Rerun, moto, and
+  short-lived worker subprocesses — these are ordinary Python processes with a
+  peak well under 1 GiB — but never a real training framework, a real GPU
+  workload, or a container. If a local test needs more than about 1 GiB or more
+  than a minute, it belongs on `dev-*` instead.
+- `dev-*` queues are for infrastructure development only. Delivered
+  `trainerctl run` workflows use `run-*` queues; selecting `dev-*` requires the
+  explicit `--queues dev` flag added in Task 16.
 - Both packages are managed with uv. Run commands with
   `uv run --project <dir> ...` from the repository root.
 - `CONTRACT_VERSION = 2`, defined once in `training_sdk.contract` and imported
@@ -46,10 +60,10 @@ reads Aim.
 - Old modules are deleted only in Task 19, after the new path works end to end.
 - Several tests import fixtures from sibling test modules (`tests.helpers`,
   `tests.test_reporter`). Neither package has a `tests/__init__.py` today, so
-  Task 1 creates one in each package and sets
-  `[tool.pytest.ini_options] pythonpath = ["src", "."]` in both `pyproject.toml`
-  files. Without this the imports fail with `ModuleNotFoundError: No module
-  named 'tests'`.
+  Task 1 creates one in each package and puts the project root on the test path:
+  `training-sdk` gains `[tool.pytest.ini_options] pythonpath = ["."]`, and the
+  control plane's existing `pythonpath = ["src"]` becomes `["src", "."]`. Without
+  this the imports fail with `ModuleNotFoundError: No module named 'tests'`.
 - Every task ends with a commit.
 
 ---
@@ -114,8 +128,8 @@ catalog file on disk.
 - Create: `training-sdk/src/training_sdk/contract.py`
 - Create: `training-sdk/tests/__init__.py` (empty)
 - Create: `rtrrl/infra/control-plane/tests/__init__.py` (empty)
-- Modify: `training-sdk/pyproject.toml`, `rtrrl/infra/control-plane/pyproject.toml`
-  (`[tool.pytest.ini_options] pythonpath = ["src", "."]`)
+- Modify: `training-sdk/pyproject.toml` (add `[tool.pytest.ini_options] pythonpath = ["."]`)
+- Modify: `rtrrl/infra/control-plane/pyproject.toml` (`pythonpath = ["src"]` becomes `["src", "."]`)
 - Test: `training-sdk/tests/test_contract.py`
 
 **Interfaces:**
@@ -2233,10 +2247,16 @@ git commit -m "feat(sdk): add serial worker with heartbeat and score upload"
 
 ## Phase 3: Control Loop Without AWS
 
-Real Optuna, real Aim server, real S3 server, real worker, real trainer, jobs
-executed as local processes. Ends with `trainerctl run --backend local`
-completing a two-round study, which is the gate that must pass before any paid
-run.
+Real Optuna, real Aim server, real S3 server, real worker, and a trainer stub of
+a few lines, with jobs executed as local processes instead of Batch jobs. Ends
+with `trainerctl run --backend local` completing a two-round study.
+
+This phase is deliberately light: no container, no training framework, nothing
+that exceeds the machine's 2.2 GiB. It is the fast gate that runs on every edit
+and catches contract and lifecycle bugs — the kind that reached a paid run last
+time. It does not prove the code works inside the image; that is what the
+`dev-*` queue smoke test at the end of Task 18 is for, and neither gate
+substitutes for the other.
 
 ### Task 10: Optuna study
 
@@ -3415,8 +3435,11 @@ git commit -m "feat(control-plane): add control loop, report and local end-to-en
 
 ## Phase 4: AWS Batch
 
-Ends with a paid three-job acceptance run, which requires separate authorisation
-at the time it is proposed.
+Two verification points on real infrastructure. Task 18 ends with a single-trial
+smoke on the `dev` CPU queue — the first time the worker runs inside the real
+image, and the task's own acceptance gate. Task 20 is the paid three-job run on
+the `run` queues, which requires separate authorisation at the time it is
+proposed.
 
 ### Task 15: Queue table, image resolution, and AWS preflight
 
@@ -3430,9 +3453,11 @@ at the time it is proposed.
 **Interfaces:**
 - Produces:
   - `QUEUES: dict[str, QueueBinding]` keyed by instance type, where
-    `QueueBinding` has `profile: str`, `queue: str`, `max_vcpus: int`,
-    `vcpus_per_job: int`, and `concurrency` computed as
+    `QueueBinding` has `profile: str`, `run_queue: str`, `dev_queue: str`,
+    `max_vcpus: int`, `vcpus_per_job: int`, and `concurrency` computed as
     `max_vcpus // vcpus_per_job`.
+  - `QueueBinding.queue(tier: str) -> str` returning `run_queue` for `"run"` and
+    `dev_queue` for `"dev"`, raising `PreflightError` for anything else.
   - `binding(instance_type: str) -> QueueBinding` raising `PreflightError`.
   - `job_definition_name(binding: QueueBinding, digest: str) -> str` returning
     `f"trainer-{binding.profile}-{hex}"`, which is the naming scheme
@@ -3447,7 +3472,9 @@ at the time it is proposed.
     digest, `batch_get_image` for the manifest, `get_download_url_for_layer` for
     the config blob, and `read_url` to fetch it, exactly as the existing
     `ecr.BotoEcrCatalogReader` does for the v1 label.
-  - `check_aws(experiment, catalog, space, *, ecr_client, batch_client, s3_client, read_url, connect) -> LaunchPlan`.
+  - `check_aws(experiment, catalog, space, *, ecr_client, batch_client, s3_client, read_url, connect, tier: str = "run") -> LaunchPlan`.
+    The tier selects which queue name is checked and recorded in the plan;
+    everything else is identical, because both tiers share job definitions.
   - `connect(host: str, port: int) -> None` defaults to a TCP connect with a
     five-second timeout and raises `PreflightError` on failure.
 
@@ -3463,10 +3490,16 @@ from trainer_infra.queues import QUEUES, binding, job_definition_name
 DIGEST = "sha256:" + "1" * 64
 
 
-def test_every_instance_type_maps_to_a_run_queue() -> None:
+def test_every_instance_type_maps_to_both_tiers() -> None:
     assert set(QUEUES) == {"c7a.medium", "c7a.large", "c7a.xlarge", "g6.xlarge"}
     for instance_type, entry in QUEUES.items():
-        assert entry.queue.startswith("run-"), instance_type
+        assert entry.queue("run").startswith("run-"), instance_type
+        assert entry.queue("dev").startswith("dev-"), instance_type
+
+
+def test_unknown_queue_tier_is_rejected() -> None:
+    with pytest.raises(PreflightError, match="tier"):
+        binding("c7a.medium").queue("prod")
 
 
 def test_concurrency_follows_compute_environment_capacity() -> None:
@@ -3574,6 +3607,17 @@ def test_plan_carries_digest_queue_and_job_definition() -> None:
     assert plan.job_definition == DEFINITION
 
 
+def test_dev_tier_selects_the_dev_queue() -> None:
+    experiment, catalog, space = plan_arguments()
+    plan = check_aws(
+        experiment, catalog, space,
+        ecr_client=FakeEcr(), batch_client=FakeBatch(queues=("dev-cpu-c7am-queue",)),
+        s3_client=FakeS3(), read_url=read_url, connect=lambda host, port: None,
+        tier="dev",
+    )
+    assert plan.queue == "dev-cpu-c7am-queue"
+
+
 def test_unreachable_aim_endpoint_is_rejected() -> None:
     def refuse(host: str, port: int) -> None:
         raise OSError("connection refused")
@@ -3618,7 +3662,8 @@ from trainer_infra.preflight import PreflightError
 class QueueBinding:
     instance_type: str
     profile: str
-    queue: str
+    run_queue: str
+    dev_queue: str
     max_vcpus: int
     vcpus_per_job: int
     gpus_per_job: int = 0
@@ -3627,12 +3672,27 @@ class QueueBinding:
     def concurrency(self) -> int:
         return self.max_vcpus // self.vcpus_per_job
 
+    def queue(self, tier: str) -> str:
+        if tier == "run":
+            return self.run_queue
+        if tier == "dev":
+            return self.dev_queue
+        raise PreflightError(f"unknown queue tier {tier!r}; use run or dev")
+
 
 QUEUES: dict[str, QueueBinding] = {
-    "c7a.medium": QueueBinding("c7a.medium", "c7am", "run-cpu-c7am-queue", 16, 1),
-    "c7a.large": QueueBinding("c7a.large", "c7al", "run-cpu-c7al-queue", 32, 2),
-    "c7a.xlarge": QueueBinding("c7a.xlarge", "c7ax", "run-cpu-c7ax-queue", 16, 4),
-    "g6.xlarge": QueueBinding("g6.xlarge", "g6x", "run-gpu-queue", 32, 4, 1),
+    "c7a.medium": QueueBinding(
+        "c7a.medium", "c7am", "run-cpu-c7am-queue", "dev-cpu-c7am-queue", 16, 1
+    ),
+    "c7a.large": QueueBinding(
+        "c7a.large", "c7al", "run-cpu-c7al-queue", "dev-cpu-c7al-queue", 32, 2
+    ),
+    "c7a.xlarge": QueueBinding(
+        "c7a.xlarge", "c7ax", "run-cpu-c7ax-queue", "dev-cpu-c7ax-queue", 16, 4
+    ),
+    "g6.xlarge": QueueBinding(
+        "g6.xlarge", "g6x", "run-gpu-queue", "dev-gpu-queue", 32, 4, 1
+    ),
 }
 
 
@@ -3673,7 +3733,7 @@ fully populated `LaunchPlan`.
 - [ ] **Step 5: Run the tests to verify they pass**
 
 Run: `cd rtrrl/infra/control-plane && uv run pytest tests/test_queues.py tests/test_preflight_aws.py -v`
-Expected: PASS, 8 tests
+Expected: PASS, 11 tests
 
 - [ ] **Step 6: Commit**
 
@@ -3903,6 +3963,12 @@ Expected: PASS, 4 tests
 launch, installs a `SIGINT` handler that calls `backend.terminate` on the jobs of
 the current round, and calls `run_launch`.
 
+Add `--queues {run,dev}` defaulting to `run`, passed straight through to
+`check_aws` as `tier`. Its help text reads: "dev queues are for infrastructure
+development only; delivered runs use run queues." Print a one-line warning to
+stderr when `dev` is selected, so a dev-queue launch is never mistaken for a real
+one in a scrollback.
+
 Give `validate` the same `--backend` flag: with `--backend batch` it runs
 `check_offline` followed by `check_aws` and submits nothing; with `--catalog` it
 runs `check_offline` alone against a catalog file. Exactly one of the two must be
@@ -4038,19 +4104,57 @@ Write `scripts/build_catalog.py`, generate `catalog.json`, convert the trainer t
 Run: `cd rtrrl/infra/mock-trainer && uv run pytest -q`
 Expected: PASS
 
-- [ ] **Step 5: Build both images through the workflow with `push=false`**
+- [ ] **Step 5: Build and push both images**
+
+The development machine cannot build images; the workflow is the only builder.
 
 ```bash
-gh workflow run build-infra-acceptance-image.yml -f push=false
+gh workflow run build-infra-acceptance-image.yml -f push=true
 gh run watch
 ```
 
-Expected: both CPU and GPU builds succeed.
+Expected: both CPU and GPU builds succeed. Record both digests from the output.
 
-- [ ] **Step 6: Commit**
+- [ ] **Step 6: Register job definitions for the new digests**
 
 ```bash
-git add rtrrl/infra/mock-trainer .github/workflows/build-infra-acceptance-image.yml
+cd rtrrl/infra/control-plane
+uv run python scripts/deploy_facility.py --cpu-image <cpu-digest> --gpu-image <gpu-digest>
+```
+
+Expected: four active `trainer-<profile>-<digest>` job definitions and the
+`/trainer/jobs` log group from Task 17.
+
+- [ ] **Step 7: Smoke the image on the `dev` CPU queue**
+
+This is the first time the worker runs inside the real image, on a real Batch
+host, against real S3 and the real Aim server. Nothing before this proves the
+container works; the local gate from Task 14 only proves the contract works.
+
+Copy the example to `examples/experiment-dev-smoke.yaml` with `rounds: 1`,
+`trials_per_round: 1`, `parallel_jobs: 1`, `total_steps: [128]`, and the pushed
+CPU image digest. Then:
+
+```bash
+uv run trainerctl validate examples/experiment-dev-smoke.yaml --backend batch --queues dev
+uv run trainerctl run examples/experiment-dev-smoke.yaml --backend batch --queues dev \
+  > /tmp/dev-smoke.out 2> /tmp/dev-smoke.err
+echo "exit=$?"
+```
+
+Do not pipe through `tee`; that hid a non-zero exit on 2026-07-24.
+
+Expected: `exit=0`, one trial with a finite score, `score.json` and at least one
+`.rrd` under the launch prefix in S3, and the run visible in Aim with its digest
+and source hash. If the worker fails, read `/trainer/jobs` for the job's log
+stream — the failure is in the image or the contract, and it must be fixed here
+rather than discovered during the paid run.
+
+- [ ] **Step 8: Commit**
+
+```bash
+git add rtrrl/infra/mock-trainer .github/workflows/build-infra-acceptance-image.yml \
+        rtrrl/infra/control-plane/examples/experiment-dev-smoke.yaml
 git commit -m "feat(acceptance): publish a contract v2 catalog and report env steps"
 ```
 
@@ -4134,23 +4238,24 @@ plan is not authorisation for this task.
 over two rounds, and one GPU job on `g6.xlarge` running a single fixed
 configuration, each run limited to 128 environment steps.
 
-- [ ] **Step 1: Push the images**
-
-```bash
-gh workflow run build-infra-acceptance-image.yml -f push=true
-gh run watch
-```
-
-Record both digests from the workflow output.
-
-- [ ] **Step 2: Register digest-bound job definitions**
+- [ ] **Step 1: Confirm the images and job definitions from Task 18 are current**
 
 ```bash
 cd rtrrl/infra/control-plane
-uv run python scripts/deploy_facility.py --cpu-image <cpu-digest> --gpu-image <gpu-digest>
+git log --oneline -1 -- ../mock-trainer
+aws batch describe-job-definitions --status ACTIVE \
+  --query 'jobDefinitions[].jobDefinitionName' --output text
 ```
 
-Expected: four active job definitions and the `/trainer/jobs` log group.
+Expected: no commit to `mock-trainer` after the Task 18 build, and four active
+`trainer-<profile>-<digest>` definitions whose digests match the images Task 18
+pushed. If `mock-trainer` changed since, rebuild and re-register first — a stale
+digest means the paid run tests code that no longer exists.
+
+- [ ] **Step 2: Confirm the dev smoke passed on this image**
+
+The dev-queue smoke from Task 18 Step 7 must have succeeded on exactly these
+digests. If it did not, stop: the paid run is not the place to find out.
 
 - [ ] **Step 3: Validate before spending**
 
@@ -4158,7 +4263,8 @@ Expected: four active job definitions and the `/trainer/jobs` log group.
 uv run trainerctl validate examples/experiment-acceptance.yaml --backend batch
 ```
 
-Expected: exit 0, the resolved space printed, no job submitted.
+Expected: exit 0, the resolved space printed, no job submitted, and the queue
+shown as a `run-*` queue.
 
 - [ ] **Step 4: Run the CPU study**
 
@@ -4216,9 +4322,12 @@ testing strategy to Tasks 6, 7, 9, 14, and 16; removals to Task 19.
 **Known deviations from the design.** Two, both deliberate. The design describes
 run configuration generation as its own module; Task 11 puts those two functions
 in `launch.py` because they depend on nothing but `Launch`. The design does not
-mention a local execution backend; Task 13 adds one so the whole control loop can
-be exercised without spending money, and it is never selected by a delivered
-command unless `--backend local` is passed explicitly.
+mention a local execution backend; Task 13 adds one because the development
+machine cannot run containers at all, so the only way to exercise the control
+loop during development is as local processes. It is never selected unless
+`--backend local` is passed explicitly, and it does not replace the dev-queue
+smoke in Task 18 — the local gate proves the contract, the dev-queue smoke proves
+the image.
 
 **Contract consistency.** `CONTRACT_VERSION` is defined once in Task 1 and read
 in Tasks 4, 9, 11, 15, and 18. `Sink` has exactly `report`, `log_episode`, and
