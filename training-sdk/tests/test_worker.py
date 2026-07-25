@@ -34,6 +34,14 @@ with open(os.path.join(scratch, "metrics.jsonl"), "a") as handle:
             time.sleep(0.5)
 if mode == "hang":
     time.sleep(600)
+if mode == "pause_after_first":
+    with open(os.path.join(scratch, "metrics.jsonl"), "a") as handle:
+        handle.write(json.dumps({"step": 0, "metrics": {"episode_return": 2.0}}) + "\\n")
+        handle.flush()
+    time.sleep(3)
+    with open(os.path.join(scratch, "metrics.jsonl"), "a") as handle:
+        handle.write(json.dumps({"step": 4, "metrics": {"episode_return": 2.0}}) + "\\n")
+        handle.flush()
 if mode == "empty_metrics":
     open(os.path.join(scratch, "metrics.jsonl"), "w").close()
 """
@@ -128,6 +136,23 @@ def test_stalled_run_is_killed(
             poll_seconds=0.05,
             minimum_stall_seconds=1.0,
         )
+
+
+def test_startup_grace_survives_long_pause_after_first_report(
+    s3_base: str, tmp_path: Path, catalog: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("CHILD_MODE", "pause_after_first")
+    manifest = write_manifest(s3_base, [publish(s3_base, 0)])
+    run_manifest(
+        manifest,
+        tmp_path,
+        startup_seconds=30,
+        stall_factor=10,
+        minimum_stall_seconds=2,
+        poll_seconds=0.2,
+    )
+    payload = json.loads(objects.get_bytes(f"{s3_base}/trials/t0/score.json"))
+    assert payload["value"] == 2.0
 
 
 def test_slow_healthy_run_is_not_killed(

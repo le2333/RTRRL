@@ -45,6 +45,12 @@ def run_manifest(
     poll_seconds: float = 5.0,
     minimum_stall_seconds: float = 60.0,
 ) -> None:
+    """Execute every run in a manifest serially.
+
+    Raises ``WorkerError`` when a run does not complete, or ``ScoreError`` when
+    a run completes but its metrics do not yield a usable score; either stops
+    the manifest at that run.
+    """
     catalog = load_catalog()
     manifest = json.loads(objects.get_bytes(manifest_uri))
     for config_uri in manifest["runs"]:
