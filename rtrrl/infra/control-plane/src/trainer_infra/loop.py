@@ -1,0 +1,123 @@
+from __future__ import annotations
+
+import json
+import time
+from collections.abc import Callable
+
+from training_sdk import objects
+
+from trainer_infra.backends.base import Backend
+from trainer_infra.launch import Launch, build_run_config
+from trainer_infra.packing import publish_round
+from trainer_infra.report import Report, TrialRecord
+from trainer_infra.space import distributions
+from trainer_infra.study import ask_round, create_study, tell_value
+
+LOG_TAIL_LINES = 200
+
+
+class LaunchFailed(RuntimeError):
+    """The launch stopped because something exited abnormally."""
+
+
+def run_launch(
+    launch: Launch, backend: Backend, printer: Callable[[str], None] = print
+) -> Report:
+    experiment = launch.plan.experiment
+    started = time.monotonic()
+    built = distributions(launch.plan.space)
+    study = create_study(
+        name=f"{experiment.name}-{launch.launch_id}",
+        storage_path=launch.archive / "study.db",
+        sampler=experiment.hpo.sampler,
+        direction=experiment.score.direction,
+        user_attrs={
+            "experiment": experiment.experiment,
+            "name": experiment.name,
+            "launch_id": launch.launch_id,
+            "entry": launch.plan.entry_name,
+            "digest": launch.plan.digest,
+            "source_hash": launch.plan.entry.source_hash,
+        },
+        space=built,
+    )
+
+    records: list[TrialRecord] = []
+    submitted: list[str] = []
+    try:
+        for round_index in range(experiment.hpo.rounds):
+            trials = ask_round(study, built, experiment.hpo.trials_per_round)
+            configs = [build_run_config(launch, t.number, t.params) for t in trials]
+            plans = publish_round(
+                launch, round_index, configs, jobs=experiment.hpo.parallel_jobs
+            )
+            submitted = [
+                backend.submit(
+                    launch, plan.manifest_uri, f"round-{round_index:03d}-job-{index}"
+                )
+                for index, plan in enumerate(plans)
+            ]
+            results = backend.wait(submitted)
+            owner = {
+                trial_number: result
+                for plan, result in zip(plans, results, strict=True)
+                for trial_number in plan.trials
+            }
+            submitted = []
+            failed = [result for result in results if not result.succeeded]
+            if failed:
+                for result in failed:
+                    printer(f"job {result.name} failed: {result.reason}")
+                    printer(backend.log_tail(result, LOG_TAIL_LINES))
+                raise LaunchFailed(
+                    f"round {round_index} had {len(failed)} failed job(s)"
+                )
+            for trial, config in zip(trials, configs, strict=True):
+                value = _read_score(config.score.s3)
+                tell_value(study, trial, value)
+                result = owner[trial.number]
+                records.append(
+                    TrialRecord(
+                        trial=trial.number,
+                        params=dict(trial.params),
+                        value=value,
+                        job_id=result.job_id,
+                        log_stream=result.log_stream,
+                    )
+                )
+                printer(f"trial {trial.number}: {trial.params} -> {value}")
+    except LaunchFailed as failure:
+        report = Report(
+            launch_id=launch.launch_id,
+            status="failed",
+            trials=records,
+            elapsed_seconds=time.monotonic() - started,
+            failure=str(failure),
+        )
+        report.write(launch.archive, launch.prefix)
+        raise
+    except BaseException:
+        backend.terminate(submitted)
+        raise
+
+    best = max(
+        (record for record in records if record.value is not None),
+        key=lambda record: record.value
+        if experiment.score.direction == "maximize"
+        else -record.value,
+        default=None,
+    )
+    report = Report(
+        launch_id=launch.launch_id,
+        status="succeeded",
+        trials=records,
+        best=best,
+        elapsed_seconds=time.monotonic() - started,
+    )
+    report.write(launch.archive, launch.prefix)
+    printer(f"best trial {best.trial} scored {best.value}" if best else "no trials")
+    return report
+
+
+def _read_score(uri: str) -> float:
+    return float(json.loads(objects.get_bytes(uri))["value"])

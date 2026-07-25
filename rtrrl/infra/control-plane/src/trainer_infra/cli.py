@@ -4,6 +4,7 @@ import argparse
 from collections.abc import Callable, Sequence
 import json
 import os
+from datetime import UTC, datetime
 from pathlib import Path
 import sys
 import tempfile
@@ -23,9 +24,12 @@ from trainer_infra.adapters.s3 import S3ObjectStore
 from trainer_infra.aim_reader import AimReader
 from trainer_infra.controller import ExperimentController, ExperimentRunError
 from trainer_infra.ecr import BotoEcrCatalogReader
+from trainer_infra.backends.local import LocalBackend
 from trainer_infra.experiment import load_experiment
 from trainer_infra.identities import canonical_json
-from trainer_infra.preflight import PreflightError, check_offline, format_space
+from trainer_infra.launch import create_launch
+from trainer_infra.loop import LaunchFailed, run_launch
+from trainer_infra.preflight import LaunchPlan, PreflightError, check_offline, format_space
 from trainer_infra.space import SpaceError
 
 
@@ -184,6 +188,40 @@ def validate_command(experiment_path: Path, catalog_path: Path) -> int:
     return 0
 
 
+def run_local_command(
+    experiment_path: Path,
+    catalog_path: Path,
+    archive_dir: Path,
+    jobs_dir: Path,
+) -> int:
+    experiment = load_experiment(experiment_path)
+    catalog = Catalog.model_validate(json.loads(catalog_path.read_text(encoding="utf-8")))
+    try:
+        space = check_offline(experiment, catalog)
+    except (PreflightError, SpaceError, ValueError) as error:
+        print(f"preflight failed: {error}", file=sys.stderr)
+        return 1
+    entry = catalog.entries[experiment.entry]
+    plan = LaunchPlan(
+        experiment=experiment,
+        entry_name=experiment.entry,
+        entry=entry,
+        space=space,
+        digest="local",
+        queue="local",
+        job_definition="local",
+    )
+    launch = create_launch(plan, archive_dir, experiment_path, datetime.now(UTC))
+    backend = LocalBackend(jobs_dir, catalog_path)
+    try:
+        report = run_launch(launch, backend)
+    except LaunchFailed as error:
+        print(str(error), file=sys.stderr)
+        return 1
+    print(json.dumps(report.payload(), sort_keys=True, indent=2))
+    return 0
+
+
 def _parser() -> argparse.ArgumentParser:
     parser = _Parser(prog="trainerctl")
     parser.add_argument(
@@ -197,6 +235,10 @@ def _parser() -> argparse.ArgumentParser:
     validate.add_argument("--catalog", type=Path)
     run = subparsers.add_parser("run")
     run.add_argument("experiment", type=Path)
+    run.add_argument("--catalog", type=Path)
+    run.add_argument("--archive-dir", type=Path, default=Path("archive"))
+    run.add_argument("--jobs-dir", type=Path, default=Path("jobs"))
+    run.add_argument("--backend", choices=("local", "batch"))
     return parser
 
 
@@ -212,6 +254,14 @@ def main(
 
     if args.command == "validate" and args.catalog is not None:
         return validate_command(args.experiment, args.catalog)
+
+    if args.command == "run" and args.backend == "local":
+        if args.catalog is None:
+            print("trainerctl: error: --catalog is required for --backend local", file=sys.stderr)
+            return 2
+        return run_local_command(
+            args.experiment, args.catalog, args.archive_dir, args.jobs_dir
+        )
 
     try:
         controller = controller_factory(args.control)
