@@ -22,13 +22,16 @@ class AimSink:
         self._run["launch_id"] = config.launch_id
         self._run["trial"] = config.trial
         self._run["entry"] = config.entry
+        self._run["digest"] = config.digest
+        self._run["source_hash"] = config.source_hash
         self._run["params"] = dict(config.params)
-
-    def set_image(self, digest: str, source_hash: str) -> None:
-        self._run["image_digest"] = digest
-        self._run["source_hash"] = source_hash
+        self._every = config.logging.every_steps
+        self._last: int | None = None
 
     def report(self, step: int, metrics: Mapping[str, float]) -> None:
+        if self._last is not None and step - self._last < self._every:
+            return
+        self._last = step
         for name, value in metrics.items():
             self._run.track(float(value), name=str(name), step=int(step))
 

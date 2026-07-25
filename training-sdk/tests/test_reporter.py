@@ -7,7 +7,7 @@ from training_sdk.contract import RunConfig
 from training_sdk.reporter import METRICS_FILENAME, Reporter
 
 
-def make_config() -> RunConfig:
+def make_config(*, every_steps: int = 1) -> RunConfig:
     return RunConfig.model_validate(
         {
             "contract": 2,
@@ -17,8 +17,10 @@ def make_config() -> RunConfig:
             "launch_id": "20260725-000000",
             "trial": 0,
             "entry": "e",
+            "digest": "registry.example/trainer@sha256:" + "a" * 64,
+            "source_hash": "sha256:smoke",
             "params": {"total_steps": 4},
-            "logging": {"aim": "aim://127.0.0.1:1", "every_steps": 1},
+            "logging": {"aim": "aim://127.0.0.1:1", "every_steps": every_steps},
             "score": {
                 "metric": "episode_return",
                 "window_steps": [0, 4],

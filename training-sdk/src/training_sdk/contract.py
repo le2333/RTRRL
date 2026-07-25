@@ -114,6 +114,8 @@ class RunConfig(_Frozen):
     launch_id: str
     trial: int
     entry: str
+    digest: str
+    source_hash: str
     params: dict[str, Scalar]
     logging: LoggingConfig
     score: ScoreConfig

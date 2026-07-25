@@ -22,3 +22,7 @@ build-backend = "hatchling.build"
 
 [tool.pytest.ini_options]
 pythonpath = ["."]
+filterwarnings = [
+    "ignore:.*declarative_base.*:sqlalchemy.exc.MovedIn20Warning",
+    "ignore:datetime.datetime.utcnow.*:DeprecationWarning",
+]

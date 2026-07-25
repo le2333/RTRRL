@@ -138,6 +138,8 @@ def test_run_config_round_trips() -> None:
         "launch_id": "20260725-051400",
         "trial": 7,
         "entry": "brax_ppo",
+        "digest": "registry.example/trainer@sha256:" + "a" * 64,
+        "source_hash": "sha256:41b0",
         "params": {"total_steps": 128, "learning_rate": 0.0003},
         "logging": {"aim": "aim://127.0.0.1:53801", "every_steps": 1},
         "score": {
@@ -152,3 +154,5 @@ def test_run_config_round_trips() -> None:
     config = RunConfig.model_validate(payload)
     assert RunConfig.model_validate(config.model_dump(mode="json")) == config
     assert config.model_dump(mode="json", exclude_none=True) == payload
+    assert config.digest == "registry.example/trainer@sha256:" + "a" * 64
+    assert config.source_hash == "sha256:41b0"
