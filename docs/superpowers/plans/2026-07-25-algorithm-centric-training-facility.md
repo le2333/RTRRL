@@ -2461,7 +2461,7 @@ def create_study(
     sampler: str,
     direction: str,
     user_attrs: Mapping[str, object],
-    space: Mapping[str, BaseDistribution] | None = None,
+    space: Mapping[str, BaseDistribution],
 ) -> optuna.Study:
     Path(storage_path).parent.mkdir(parents=True, exist_ok=True)
     study = optuna.create_study(
