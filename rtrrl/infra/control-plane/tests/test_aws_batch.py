@@ -16,7 +16,7 @@ from trainer_infra.adapters.aws_batch import (
 )
 from trainer_infra.aws_profiles import PROFILES
 from trainer_infra.execution import JobBundle
-from test_execution import IMAGE, make_run_bundle
+from tests.test_execution import IMAGE, make_run_bundle
 
 
 class FakeBatch:

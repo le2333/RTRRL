@@ -6,8 +6,8 @@ from typing import Any
 
 from botocore.exceptions import ClientError
 
-from test_aws_batch import FakePreflightBatch
-from test_facility_deployment import FakeEcr, FakeS3, FakeSts
+from tests.test_aws_batch import FakePreflightBatch
+from tests.test_facility_deployment import FakeEcr, FakeS3, FakeSts
 from trainer_infra.facility_control import load_facility_control
 
 

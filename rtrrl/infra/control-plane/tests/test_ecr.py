@@ -9,7 +9,7 @@ import pytest
 from trainer_infra.ecr import BotoEcrCatalogReader
 from trainer_infra.image_catalog import LABEL, encode_catalog
 from trainer_infra.models import ScriptCatalog
-from test_image_catalog import catalog_data
+from tests.test_image_catalog import catalog_data
 
 DIGEST = "sha256:" + "a" * 64
 REGISTRY = "123456789012.dkr.ecr.eu-north-1.amazonaws.com"

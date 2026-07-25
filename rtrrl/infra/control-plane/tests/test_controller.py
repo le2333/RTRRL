@@ -33,8 +33,8 @@ from trainer_infra.models import (
     ScriptCatalog,
 )
 from trainer_infra.materialize import materialize_run as real_materialize_run
-from test_materialize import make_group
-from test_resolve import catalog_data
+from tests.test_materialize import make_group
+from tests.test_resolve import catalog_data
 
 IMAGE_TAG = "123456789012.dkr.ecr.eu-north-1.amazonaws.com/memo:latest"
 IMAGE = "123456789012.dkr.ecr.eu-north-1.amazonaws.com/memo@sha256:" + "a" * 64

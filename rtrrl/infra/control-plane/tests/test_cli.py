@@ -6,7 +6,7 @@ from pathlib import Path
 import pytest
 from training_sdk.contract import Catalog
 
-from test_preflight_offline import CATALOG, EXAMPLE, modified, write_catalog
+from tests.test_preflight_offline import CATALOG, EXAMPLE, modified, write_catalog
 from trainer_infra.cli import main
 from trainer_infra.experiment import load_experiment
 from trainer_infra.preflight import check_offline

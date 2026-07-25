@@ -13,7 +13,7 @@ from typing import Any
 import pytest
 
 from training_sdk.execution import JobBundle, RunBundle, canonical_json
-from test_execution import IMAGE, make_run_bundle
+from tests.test_execution import IMAGE, make_run_bundle
 
 WORKER_PATH = Path(__file__).parents[2] / "worker" / "worker.py"
 SPEC = importlib.util.spec_from_file_location("trainer_worker", WORKER_PATH)

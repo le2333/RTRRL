@@ -21,7 +21,7 @@ from trainer_infra.execution import (
 )
 from trainer_infra.identities import canonical_json, canonical_yaml
 from trainer_infra.materialize import materialize_run
-from test_materialize import FakeTrial, make_group
+from tests.test_materialize import FakeTrial, make_group
 
 
 def test_four_formal_aws_profiles_are_exact_and_immutable() -> None:

@@ -26,7 +26,7 @@ from trainer_infra.models import (
     ResourcesSpec,
 )
 from trainer_infra.resolve import resolve_experiment
-from test_materialize import FakeTrial, make_group
+from tests.test_materialize import FakeTrial, make_group
 
 REPOSITORY_ROOT = Path(__file__).parents[4]
 MOCK_TRAINER_ROOT = REPOSITORY_ROOT / "rtrrl" / "infra" / "mock-trainer"
