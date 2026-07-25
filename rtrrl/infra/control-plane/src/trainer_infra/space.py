@@ -6,10 +6,7 @@ from optuna.distributions import (
     FloatDistribution,
     IntDistribution,
 )
-from pydantic import TypeAdapter
 from training_sdk.contract import ChoiceSpec, EntryDescriptor, FloatSpec, IntSpec, SpaceEntry
-
-_SPACE_ENTRY = TypeAdapter(SpaceEntry)
 
 TOTAL_STEPS = "total_steps"
 
@@ -28,10 +25,7 @@ def resolve_space(
             f"experiment declares parameters the entry does not accept: "
             f"{', '.join(unknown)}; entry declares: {declared}"
         )
-    normalized = {
-        key: _SPACE_ENTRY.validate_python(value) for key, value in overrides.items()
-    }
-    resolved = dict(entry.space) | normalized
+    resolved = dict(entry.space) | dict(overrides)
     if TOTAL_STEPS not in resolved:
         raise SpaceError(f"entry must declare the reserved parameter {TOTAL_STEPS}")
     return resolved
@@ -56,7 +50,7 @@ def distributions(space: dict[str, SpaceEntry]) -> dict[str, BaseDistribution]:
 def minimum_total_steps(space: dict[str, SpaceEntry]) -> int:
     spec = space[TOTAL_STEPS]
     if isinstance(spec, ChoiceSpec):
-        values = [value for value in spec.choices if isinstance(value, int)]
+        values = [value for value in spec.choices if type(value) is int]
         if len(values) != len(spec.choices):
             raise SpaceError(f"{TOTAL_STEPS} choices must all be integers")
         return min(values)

@@ -1,6 +1,6 @@
 import optuna
 import pytest
-from training_sdk.contract import EntryDescriptor
+from training_sdk.contract import ChoiceSpec, EntryDescriptor
 
 from trainer_infra.space import (
     SpaceError,
@@ -28,7 +28,7 @@ def test_override_replaces_entry_by_key() -> None:
             "learning_rate": {"type": "float", "low": 1e-6, "high": 1e-2},
         }
     )
-    resolved = resolve_space(entry, {"total_steps": [128]})
+    resolved = resolve_space(entry, {"total_steps": ChoiceSpec.model_validate([128])})
     assert resolved["total_steps"].choices == (128,)
     assert resolved["learning_rate"].high == 1e-2
 
@@ -36,7 +36,7 @@ def test_override_replaces_entry_by_key() -> None:
 def test_unknown_override_key_is_rejected() -> None:
     entry = make_entry({"total_steps": [128]})
     with pytest.raises(SpaceError, match="learnign_rate"):
-        resolve_space(entry, {"learnign_rate": [0.1]})
+        resolve_space(entry, {"learnign_rate": ChoiceSpec.model_validate([0.1])})
 
 
 def test_space_without_total_steps_is_rejected() -> None:
@@ -75,7 +75,7 @@ def test_unknown_override_key_lists_declared_keys() -> None:
         match="experiment declares parameters the entry does not accept: learnign_rate; "
         "entry declares: learning_rate, total_steps",
     ):
-        resolve_space(entry, {"learnign_rate": [0.1]})
+        resolve_space(entry, {"learnign_rate": ChoiceSpec.model_validate([0.1])})
 
 
 def test_total_steps_with_non_integer_choices_is_rejected() -> None:
@@ -95,6 +95,18 @@ def test_total_steps_float_range_is_rejected() -> None:
 
 def test_total_steps_string_choice_is_rejected() -> None:
     entry = make_entry({"total_steps": ["128"]})
+    with pytest.raises(SpaceError, match="total_steps choices must all be integers"):
+        minimum_total_steps(resolve_space(entry, {}))
+
+
+def test_total_steps_boolean_choice_is_rejected() -> None:
+    entry = make_entry({"total_steps": [True]})
+    with pytest.raises(SpaceError, match="total_steps choices must all be integers"):
+        minimum_total_steps(resolve_space(entry, {}))
+
+
+def test_total_steps_float_choice_is_rejected() -> None:
+    entry = make_entry({"total_steps": [128.0]})
     with pytest.raises(SpaceError, match="total_steps choices must all be integers"):
         minimum_total_steps(resolve_space(entry, {}))
 
