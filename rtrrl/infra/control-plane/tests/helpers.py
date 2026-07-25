@@ -7,6 +7,17 @@ from tests.test_preflight_offline import CATALOG
 EXAMPLE = Path("examples/experiment-acceptance.yaml")
 
 
+def write_experiment(tmp_path: Path, s3_base: str, aim_uri: str) -> Path:
+    content = EXAMPLE.read_text(encoding="utf-8")
+    content = content.replace(
+        "storage: s3://rtrrl-training-data", f"storage: {s3_base}"
+    )
+    content = content.replace("aim: aim://127.0.0.1:53801", f"aim: {aim_uri}")
+    path = tmp_path / "experiment.yaml"
+    path.write_text(content, encoding="utf-8")
+    return path
+
+
 def make_plan(s3_base: str, *, rerun_enabled: bool = True) -> LaunchPlan:
     experiment = load_experiment(EXAMPLE)
     updates: dict[str, object] = {"storage": s3_base}

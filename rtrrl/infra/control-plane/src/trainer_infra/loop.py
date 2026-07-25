@@ -89,27 +89,22 @@ def run_launch(
                     )
                 )
                 printer(f"trial {trial.number}: {trial.params} -> {value}")
-    except LaunchFailed as failure:
+    except BaseException as failure:
+        # Every abnormal end leaves the same evidence behind: an unexpected
+        # exception on a paid run is exactly when an archived report matters, and
+        # a Ctrl-C must not leave Batch jobs running.
+        backend.terminate(submitted)
         report = Report(
             launch_id=launch.launch_id,
             status="failed",
             trials=records,
             elapsed_seconds=time.monotonic() - started,
-            failure=str(failure),
+            failure=f"{type(failure).__name__}: {failure}",
         )
         report.write(launch.archive, launch.prefix)
         raise
-    except BaseException:
-        backend.terminate(submitted)
-        raise
 
-    best = max(
-        (record for record in records if record.value is not None),
-        key=lambda record: record.value
-        if experiment.score.direction == "maximize"
-        else -record.value,
-        default=None,
-    )
+    best = select_best(records, maximize=experiment.score.direction == "maximize")
     report = Report(
         launch_id=launch.launch_id,
         status="succeeded",
@@ -122,5 +117,21 @@ def run_launch(
     return report
 
 
+def select_best(
+    records: list[TrialRecord], *, maximize: bool
+) -> TrialRecord | None:
+    return max(
+        (record for record in records if record.value is not None),
+        key=lambda record: record.value if maximize else -record.value,
+        default=None,
+    )
+
+
 def _read_score(uri: str) -> float:
-    return float(json.loads(objects.get_bytes(uri))["value"])
+    # A worker that could not upload its score exits non-zero, so reaching this
+    # with a missing or malformed object means something unmodelled happened;
+    # name the object rather than surfacing a botocore or KeyError trace.
+    try:
+        return float(json.loads(objects.get_bytes(uri))["value"])
+    except Exception as error:
+        raise LaunchFailed(f"could not read the score at {uri}: {error}") from error

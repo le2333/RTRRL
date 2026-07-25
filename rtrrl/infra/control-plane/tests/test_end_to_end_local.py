@@ -104,7 +104,47 @@ def test_failing_run_stops_the_launch_and_prints_the_log(
     archived = json.loads((launch.archive / "report.json").read_text())
     assert archived["status"] == "failed"
     assert archived["trials"] == []
-    assert archived["failure"] is not None
+    assert archived["failure"] == "LaunchFailed: round 0 had 1 failed job(s)"
     assert not objects.exists(f"{launch.prefix}/rounds/round-001/job-0.json")
     if pid_file.exists():
         assert not _is_sleep_process(int(pid_file.read_text(encoding="utf-8")))
+
+
+def test_missing_score_names_the_object_and_writes_failed_report(
+    s3_base: str,
+    tmp_path: Path,
+    aim_endpoint: AimServer,
+    acceptance_catalog: Path,
+) -> None:
+    plan = plan_using(s3_base, aim_endpoint)
+    experiment = plan.experiment.model_copy(
+        update={
+            "hpo": plan.experiment.hpo.model_copy(
+                update={"rounds": 1, "trials_per_round": 1, "parallel_jobs": 1}
+            )
+        }
+    )
+    plan = dataclasses.replace(plan, experiment=experiment)
+    launch = create_launch(plan, tmp_path / "archive", EXAMPLE, datetime.now(UTC))
+    backend = LocalBackend(tmp_path / "jobs", acceptance_catalog)
+    original_wait = backend.wait
+
+    def wait_then_remove_scores(job_ids: list[str]):
+        results = original_wait(job_ids)
+        if all(result.succeeded for result in results):
+            score_uri = f"{launch.prefix}/trials/t0/score.json"
+            bucket, key = objects.split_uri(score_uri)
+            objects.client().delete_object(Bucket=bucket, Key=key)
+        return results
+
+    backend.wait = wait_then_remove_scores  # type: ignore[method-assign]
+
+    with pytest.raises(LaunchFailed, match=r"could not read the score at .+score\.json"):
+        run_launch(launch, backend)
+
+    archived = json.loads((launch.archive / "report.json").read_text())
+    assert archived["status"] == "failed"
+    assert archived["failure"].startswith(
+        "LaunchFailed: could not read the score at "
+    )
+    assert "score.json" in archived["failure"]

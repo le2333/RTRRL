@@ -6,7 +6,9 @@ from pathlib import Path
 import pytest
 from training_sdk.contract import Catalog
 
-from tests.test_preflight_offline import CATALOG, EXAMPLE, modified, write_catalog
+from tests.conftest import AimServer
+from tests.helpers import EXAMPLE, write_experiment
+from tests.test_preflight_offline import CATALOG, modified, write_catalog
 from trainer_infra.cli import main
 from trainer_infra.experiment import load_experiment
 from trainer_infra.preflight import check_offline
@@ -238,3 +240,69 @@ def test_validate_catalog_rejects_grid_sampler_with_continuous_space(
     assert captured.out == ""
     assert "grid sampler" in captured.err
     assert "learning_rate" in captured.err
+
+
+def test_run_local_backend_exits_zero_on_success(
+    s3_base: str,
+    tmp_path: Path,
+    aim_endpoint: AimServer,
+    acceptance_catalog: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    experiment_path = write_experiment(tmp_path, s3_base, aim_endpoint.uri)
+
+    code = main(
+        [
+            "run",
+            str(experiment_path),
+            "--backend",
+            "local",
+            "--catalog",
+            str(acceptance_catalog),
+            "--archive-dir",
+            str(tmp_path / "archive"),
+            "--jobs-dir",
+            str(tmp_path / "jobs"),
+        ]
+    )
+
+    captured = capsys.readouterr()
+    assert code == 0
+    assert captured.err == ""
+    assert '"status": "succeeded"' in captured.out
+    report_path = next((tmp_path / "archive").glob("**/report.json"))
+    payload = json.loads(report_path.read_text())
+    assert payload["status"] == "succeeded"
+    assert len(payload["trials"]) == 4
+
+
+def test_run_local_backend_exits_nonzero_on_failure(
+    s3_base: str,
+    tmp_path: Path,
+    aim_endpoint: AimServer,
+    failing_catalog: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    experiment_path = write_experiment(tmp_path, s3_base, aim_endpoint.uri)
+
+    code = main(
+        [
+            "run",
+            str(experiment_path),
+            "--backend",
+            "local",
+            "--catalog",
+            str(failing_catalog),
+            "--archive-dir",
+            str(tmp_path / "archive"),
+            "--jobs-dir",
+            str(tmp_path / "jobs"),
+        ]
+    )
+
+    captured = capsys.readouterr()
+    assert code == 1
+    assert "round 0 had" in captured.err
+    report_path = next((tmp_path / "archive").glob("**/report.json"))
+    archived = json.loads(report_path.read_text())
+    assert archived["status"] == "failed"
