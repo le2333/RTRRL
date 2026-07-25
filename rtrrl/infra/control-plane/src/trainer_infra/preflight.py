@@ -90,6 +90,51 @@ def _parse_aim_endpoint(aim: str) -> tuple[str, int]:
     return host, port
 
 
+def _describe_catalog_mismatch(image_catalog: Catalog, offline_catalog: Catalog) -> str:
+    parts: list[str] = []
+    if image_catalog.contract != offline_catalog.contract:
+        parts.append(
+            f"contract differs (image {image_catalog.contract}, "
+            f"offline {offline_catalog.contract})"
+        )
+
+    image_entries = set(image_catalog.entries)
+    offline_entries = set(offline_catalog.entries)
+    for name in sorted(image_entries - offline_entries):
+        parts.append(f"entry {name!r} only in image catalog")
+    for name in sorted(offline_entries - image_entries):
+        parts.append(f"entry {name!r} only in offline catalog")
+
+    for name in sorted(image_entries & offline_entries):
+        image_entry = image_catalog.entries[name]
+        offline_entry = offline_catalog.entries[name]
+        if image_entry.source_hash != offline_entry.source_hash:
+            parts.append(
+                f"entry {name!r} source_hash differs "
+                f"(image {image_entry.source_hash!r}, "
+                f"offline {offline_entry.source_hash!r})"
+            )
+        if image_entry.command != offline_entry.command:
+            parts.append(f"entry {name!r} command differs")
+        if image_entry.metrics != offline_entry.metrics:
+            parts.append(f"entry {name!r} metrics differs")
+
+        image_space = image_entry.space
+        offline_space = offline_entry.space
+        for key in sorted(set(image_space) | set(offline_space)):
+            field = f"space.{key}"
+            if key not in image_space:
+                parts.append(f"entry {name!r} {field} only in offline catalog")
+            elif key not in offline_space:
+                parts.append(f"entry {name!r} {field} only in image catalog")
+            elif image_space[key] != offline_space[key]:
+                parts.append(f"entry {name!r} {field} differs")
+
+    if not parts:
+        parts.append("catalogs differ with no detected field changes")
+    return "image catalog does not match the offline-validated catalog: " + "; ".join(parts)
+
+
 def check_aws(
     experiment: Experiment,
     catalog: Catalog,
@@ -107,11 +152,7 @@ def check_aws(
 
     resolved = resolve_image(experiment.image, ecr_client, read_url)
     if resolved.catalog != catalog:
-        raise PreflightError(
-            f"image catalog does not match the offline-validated catalog "
-            f"(image contract={resolved.catalog.contract}, "
-            f"offline contract={catalog.contract})"
-        )
+        raise PreflightError(_describe_catalog_mismatch(resolved.catalog, catalog))
 
     queue_binding = binding(experiment.compute.instance_type)
     queue_name = queue_binding.queue(tier)

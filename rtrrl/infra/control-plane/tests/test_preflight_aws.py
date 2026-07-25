@@ -1,7 +1,9 @@
 import hashlib
 import json
+from pathlib import Path
 
 import pytest
+from botocore.exceptions import ClientError
 from training_sdk.contract import Catalog
 
 from trainer_infra.experiment import load_experiment
@@ -9,6 +11,10 @@ from trainer_infra.images import CATALOG_LABEL, encode_catalog
 from trainer_infra.preflight import PreflightError, check_aws, check_offline
 from tests.helpers import EXAMPLE
 from tests.test_preflight_offline import CATALOG
+
+ECR_BATCH_GET_IMAGE_FIXTURE = (
+    Path(__file__).parent / "data" / "ecr-batch-get-image.json"
+)
 
 DIGEST = "sha256:1111111111111111111111111111111111111111111111111111111111111111"
 ACCOUNT_ID = "007122174918"
@@ -51,15 +57,13 @@ class FakeEcr:
 
     def batch_get_image(self, **kwargs: object) -> dict:
         _require_registry_id(kwargs, method="batch_get_image", account_id=self.account_id)
-        manifest = json.dumps({"config": {"digest": self.config_digest}})
-        return {
-            "images": [
-                {
-                    "imageId": {"imageDigest": self.digest},
-                    "imageManifest": manifest,
-                }
-            ]
-        }
+        fixture = json.loads(ECR_BATCH_GET_IMAGE_FIXTURE.read_text(encoding="utf-8"))
+        response = json.loads(json.dumps(fixture))
+        manifest = json.loads(response["images"][0]["imageManifest"])
+        manifest["config"]["digest"] = self.config_digest
+        response["images"][0]["imageId"]["imageDigest"] = self.digest
+        response["images"][0]["imageManifest"] = json.dumps(manifest)
+        return response
 
     def get_download_url_for_layer(self, **kwargs: object) -> dict:
         _require_registry_id(
@@ -77,13 +81,26 @@ DEFINITION = f"trainer-c7am-{DIGEST.removeprefix('sha256:')}"
 
 
 class FakeBatch:
-    def __init__(self, queues=("run-cpu-c7am-queue",), definitions=(DEFINITION,)) -> None:
+    def __init__(
+        self,
+        queues=("run-cpu-c7am-queue",),
+        definitions=(DEFINITION,),
+        *,
+        queue_state: str = "ENABLED",
+        queue_status: str = "VALID",
+    ) -> None:
         self.queues, self.definitions = queues, definitions
+        self.queue_state = queue_state
+        self.queue_status = queue_status
 
     def describe_job_queues(self, **kwargs: object) -> dict:
         return {
             "jobQueues": [
-                {"jobQueueName": name, "state": "ENABLED", "status": "VALID"}
+                {
+                    "jobQueueName": name,
+                    "state": self.queue_state,
+                    "status": self.queue_status,
+                }
                 for name in self.queues
             ]
         }
@@ -103,7 +120,12 @@ class FakeBatch:
 
 
 class FakeS3:
+    def __init__(self, *, head_bucket_error: ClientError | None = None) -> None:
+        self.head_bucket_error = head_bucket_error
+
     def head_bucket(self, **kwargs: object) -> dict:
+        if self.head_bucket_error is not None:
+            raise self.head_bucket_error
         return {}
 
 
@@ -112,7 +134,7 @@ def plan_arguments():
     return experiment, CATALOG, check_offline(experiment, CATALOG)
 
 
-def check(ecr=None, batch=None, connect=lambda host, port: None):
+def check(ecr=None, batch=None, s3=None, connect=lambda host, port: None):
     experiment, catalog, space = plan_arguments()
     return check_aws(
         experiment,
@@ -120,7 +142,7 @@ def check(ecr=None, batch=None, connect=lambda host, port: None):
         space,
         ecr_client=ecr or FakeEcr(),
         batch_client=batch or FakeBatch(),
-        s3_client=FakeS3(),
+        s3_client=s3 or FakeS3(),
         read_url=read_url,
         connect=connect,
     )
@@ -162,6 +184,40 @@ def test_missing_queue_is_rejected() -> None:
         check(batch=FakeBatch(queues=()))
 
 
+def test_disabled_queue_is_rejected() -> None:
+    with pytest.raises(
+        PreflightError,
+        match=r"queue 'run-cpu-c7am-queue' is not ready \(state='DISABLED'",
+    ):
+        check(batch=FakeBatch(queue_state="DISABLED"))
+
+
+def test_invalid_queue_is_rejected() -> None:
+    with pytest.raises(
+        PreflightError,
+        match=r"queue 'run-cpu-c7am-queue' is not ready .*status='INVALID'",
+    ):
+        check(batch=FakeBatch(queue_status="INVALID"))
+
+
+def test_missing_s3_bucket_is_rejected() -> None:
+    error = ClientError(
+        {"Error": {"Code": "404", "Message": "Not Found"}},
+        "HeadBucket",
+    )
+    with pytest.raises(PreflightError, match=r"S3 bucket 'rtrrl-training-data' is not reachable"):
+        check(s3=FakeS3(head_bucket_error=error))
+
+
+def test_forbidden_s3_bucket_is_rejected() -> None:
+    error = ClientError(
+        {"Error": {"Code": "403", "Message": "Forbidden"}},
+        "HeadBucket",
+    )
+    with pytest.raises(PreflightError, match=r"S3 bucket 'rtrrl-training-data' is not reachable"):
+        check(s3=FakeS3(head_bucket_error=error))
+
+
 def test_image_without_a_registered_job_definition_is_rejected() -> None:
     other = "sha256:" + "2" * 64
     with pytest.raises(PreflightError, match=f"trainer-c7am-{'2' * 64}"):
@@ -177,7 +233,7 @@ def test_image_catalog_disagreeing_with_offline_catalog_is_rejected() -> None:
         return wrong_blob
 
     experiment, catalog, space = plan_arguments()
-    with pytest.raises(PreflightError, match="contract"):
+    with pytest.raises(PreflightError, match=r"contract differs \(image 99, offline 2\)"):
         check_aws(
             experiment,
             catalog,
@@ -188,6 +244,56 @@ def test_image_catalog_disagreeing_with_offline_catalog_is_rejected() -> None:
             read_url=read_wrong,
             connect=lambda host, port: None,
         )
+
+
+def _image_catalog_check(drifted: Catalog) -> None:
+    drifted_blob = _config_blob(drifted)
+
+    def read_drifted(url: str) -> bytes:
+        assert url == "https://example.invalid/config"
+        return drifted_blob
+
+    experiment, catalog, space = plan_arguments()
+    with pytest.raises(PreflightError) as error:
+        check_aws(
+            experiment,
+            catalog,
+            space,
+            ecr_client=FakeEcr(config_blob=drifted_blob),
+            batch_client=FakeBatch(),
+            s3_client=FakeS3(),
+            read_url=read_drifted,
+            connect=lambda host, port: None,
+        )
+    return error.value
+
+
+def test_image_source_hash_drift_is_rejected() -> None:
+    entry = CATALOG.entries["brax_ppo_acceptance"].model_dump() | {
+        "source_hash": "sha256:deadbeef"
+    }
+    drifted = Catalog.model_validate(
+        CATALOG.model_dump() | {"entries": {"brax_ppo_acceptance": entry}}
+    )
+    error = _image_catalog_check(drifted)
+    message = str(error)
+    assert "brax_ppo_acceptance" in message
+    assert "source_hash" in message
+    assert "sha256:deadbeef" in message
+    assert CATALOG.entries["brax_ppo_acceptance"].source_hash in message
+
+
+def test_image_parameter_space_drift_is_rejected() -> None:
+    space = dict(CATALOG.entries["brax_ppo_acceptance"].space)
+    space["total_steps"] = {"type": "int", "low": 1, "high": 50000}
+    entry = CATALOG.entries["brax_ppo_acceptance"].model_dump() | {"space": space}
+    drifted = Catalog.model_validate(
+        CATALOG.model_dump() | {"entries": {"brax_ppo_acceptance": entry}}
+    )
+    error = _image_catalog_check(drifted)
+    message = str(error)
+    assert "brax_ppo_acceptance" in message
+    assert "space.total_steps" in message
 
 
 def test_non_ecr_image_reference_is_rejected() -> None:
