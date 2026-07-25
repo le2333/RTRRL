@@ -9,9 +9,9 @@ from pathlib import Path
 
 import jax
 from aim import Repo
+from training_sdk.reporter import METRICS_FILENAME
 
 from brax_ppo_acceptance.train import restore_checkpoint
-from training_sdk.reporter import METRICS_FILENAME
 
 
 def test_installed_module_runs_real_cpu_ppo_in_subprocess(tmp_path: Path) -> None:

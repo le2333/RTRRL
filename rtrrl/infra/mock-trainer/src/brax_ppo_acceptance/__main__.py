@@ -6,7 +6,6 @@ from collections.abc import Sequence
 
 import jax
 import jax.numpy as jnp
-
 from training_sdk.reporter import Reporter
 
 from brax_ppo_acceptance.config import AcceptanceConfig

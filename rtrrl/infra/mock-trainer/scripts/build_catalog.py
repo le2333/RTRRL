@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 """Build the contract v2 catalog baked into the acceptance image."""
 
 from __future__ import annotations
