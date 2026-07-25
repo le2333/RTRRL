@@ -2424,18 +2424,35 @@ from optuna.distributions import BaseDistribution
 optuna.logging.set_verbosity(optuna.logging.WARNING)
 
 
-def _sampler(name: str, space: Mapping[str, BaseDistribution] | None = None):
+SAMPLERS = ("tpe", "random", "grid")
+
+
+def check_sampler(name: str, space: Mapping[str, BaseDistribution]) -> None:
+    """Reject a sampler the space cannot be searched with. Called by preflight."""
+    if name not in SAMPLERS:
+        raise ValueError(f"unsupported sampler {name!r}; use {', '.join(SAMPLERS)}")
+    if name != "grid":
+        return
+    continuous = sorted(
+        key for key, dist in space.items() if not isinstance(dist, CategoricalDistribution)
+    )
+    if continuous:
+        raise ValueError(
+            f"the grid sampler needs every parameter to be a fixed list of values, "
+            f"but these are ranges: {', '.join(continuous)}; either pin them to lists "
+            f"or use the tpe or random sampler"
+        )
+
+
+def _sampler(name: str, space: Mapping[str, BaseDistribution]):
+    check_sampler(name, space)
     if name == "tpe":
         return optuna.samplers.TPESampler()
     if name == "random":
         return optuna.samplers.RandomSampler()
-    if name == "grid":
-        if space is None:
-            raise ValueError("grid sampler requires the search space")
-        return optuna.samplers.GridSampler(
-            {key: list(dist.choices) for key, dist in space.items()}  # type: ignore[attr-defined]
-        )
-    raise ValueError(f"unsupported sampler {name!r}; use tpe, random or grid")
+    return optuna.samplers.GridSampler(
+        {key: list(dist.choices) for key, dist in space.items()}  # type: ignore[attr-defined]
+    )
 
 
 def create_study(
@@ -3555,6 +3572,14 @@ proposed.
     digest, `batch_get_image` for the manifest, `get_download_url_for_layer` for
     the config blob, and `read_url` to fetch it, exactly as the existing
     `ecr.BotoEcrCatalogReader` does for the v1 label.
+  - `check_offline` additionally calls `study.check_sampler(experiment.hpo.sampler,
+    distributions(space))`, so a sampler the space cannot be searched with is
+    caught by `trainerctl validate` rather than at the first `study.ask`. The
+    reachable case is `sampler: grid` with any parameter left as a range: without
+    the check, Optuna's `GridSampler` construction fails with
+    `AttributeError: 'FloatDistribution' object has no attribute 'choices'`, which
+    names neither the sampler nor the offending parameter, and only after money
+    has been spent.
   - `check_aws(experiment, catalog, space, *, ecr_client, batch_client, s3_client, read_url, connect, tier: str = "run") -> LaunchPlan`.
     The tier selects which queue name is checked and recorded in the plan;
     everything else is identical, because both tiers share job definitions.
