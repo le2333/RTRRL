@@ -81,4 +81,5 @@ def test_run_config_round_trips() -> None:
         },
     }
     config = RunConfig.model_validate(payload)
-    assert config.model_dump(mode="json") == payload
+    assert RunConfig.model_validate(config.model_dump(mode="json")) == config
+    assert config.model_dump(mode="json", exclude_none=True) == payload

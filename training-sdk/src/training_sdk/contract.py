@@ -87,8 +87,8 @@ class Catalog(_Frozen):
 class LoggingConfig(_Frozen):
     aim: str
     every_steps: int
-    rerun_s3: str | None = Field(default=None, exclude_if=lambda v: v is None)
-    rerun_every_episodes: int | None = Field(default=None, exclude_if=lambda v: v is None)
+    rerun_s3: str | None = None
+    rerun_every_episodes: int | None = None
 
 
 class ScoreConfig(_Frozen):
