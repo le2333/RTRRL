@@ -2886,7 +2886,14 @@ git commit -m "feat(control-plane): pack rounds into job manifests and upload th
     `reason` explains a failure and is `None` on success, in both backends, so
     the control loop cannot mistake a populated `reason` for a failed job.
   - `Backend` protocol: `submit(launch, manifest_uri, name) -> str`,
-    `wait(job_ids: Sequence[str]) -> list[JobResult]`,
+    `wait(job_ids: Sequence[str]) -> list[JobResult]` returning once every job
+    has finished **or** as soon as any job has failed, whichever comes first, so
+    the control loop can stop paying for the doomed round's siblings. On the
+    failure path the returned list covers only the jobs that reached a terminal
+    state, so it may be shorter than `job_ids`; the loop must check for failure
+    before pairing results with job plans.
+    `terminate` is then what stops the survivors, and must tolerate ids that
+    have already finished,
     `terminate(job_ids: Sequence[str]) -> None`,
     `log_tail(result: JobResult, lines: int) -> str`.
   - `LocalBackend(workspace: Path, catalog_path: Path, python: str = sys.executable)`.
@@ -3068,23 +3075,23 @@ class LocalBackend:
         self._logs[job_id] = log_path
         return job_id
 
+    def _result(self, job_id: str) -> JobResult:
+        code = self._processes[job_id].returncode
+        return JobResult(
+            job_id=job_id,
+            name=self._names[job_id],
+            succeeded=code == 0,
+            log_stream=str(self._logs[job_id]),
+            reason=None if code == 0 else f"exit code {code}",
+        )
+
     def wait(self, job_ids: Sequence[str]) -> list[JobResult]:
-        while any(self._processes[job_id].poll() is None for job_id in job_ids):
+        while True:
+            done = [job_id for job_id in job_ids if self._processes[job_id].poll() is not None]
+            results = [self._result(job_id) for job_id in done]
+            if len(done) == len(job_ids) or any(not result.succeeded for result in results):
+                return results
             time.sleep(0.2)
-        return [
-            JobResult(
-                job_id=job_id,
-                name=self._names[job_id],
-                succeeded=self._processes[job_id].returncode == 0,
-                log_stream=str(self._logs[job_id]),
-                reason=(
-                    None
-                    if self._processes[job_id].returncode == 0
-                    else f"exit code {self._processes[job_id].returncode}"
-                ),
-            )
-            for job_id in job_ids
-        ]
 
     def terminate(self, job_ids: Sequence[str]) -> None:
         for job_id in job_ids:
@@ -3440,20 +3447,23 @@ def run_launch(
                 for index, plan in enumerate(plans)
             ]
             results = backend.wait(submitted)
-            owner = {
-                trial_number: result
-                for plan, result in zip(plans, results, strict=True)
-                for trial_number in plan.trials
-            }
-            submitted = []
             failed = [result for result in results if not result.succeeded]
             if failed:
+                # wait returned early, so siblings may still be burning instance time.
+                backend.terminate(submitted)
+                submitted = []
                 for result in failed:
                     printer(f"job {result.name} failed: {result.reason}")
                     printer(backend.log_tail(result, LOG_TAIL_LINES))
                 raise LaunchFailed(
                     f"round {round_index} had {len(failed)} failed job(s)"
                 )
+            owner = {
+                trial_number: result
+                for plan, result in zip(plans, results, strict=True)
+                for trial_number in plan.trials
+            }
+            submitted = []
             for trial, config in zip(trials, configs, strict=True):
                 value = _read_score(config.score.s3)
                 tell_value(study, trial, value)
@@ -4036,8 +4046,13 @@ class BatchBackend:
                 if job["status"] in TERMINAL:
                     finished[job["jobId"]] = job
             pending = [job_id for job_id in pending if job_id not in finished]
+            # Returning the moment one job fails is what lets the loop terminate
+            # the survivors instead of paying for a round that is already doomed.
+            if any(job["status"] == "FAILED" for job in finished.values()):
+                break
             if pending:
                 time.sleep(self._poll_seconds)
+        job_ids = [job_id for job_id in job_ids if job_id in finished]
         return [
             JobResult(
                 job_id=job_id,
