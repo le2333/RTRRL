@@ -8,6 +8,7 @@ import sys
 from typing import Any
 
 import boto3
+from botocore.exceptions import ClientError
 
 from trainer_infra.aws_profiles import PROFILES
 from trainer_infra.ecr import BotoEcrCatalogReader
@@ -18,6 +19,7 @@ from trainer_infra.models import ScriptCatalog
 
 ROOT = Path(__file__).resolve().parents[4]
 EXPECTED_CATALOG = ROOT / "rtrrl" / "infra" / "mock-trainer" / "scripts" / "index.yaml"
+JOB_LOG_GROUP = "/trainer/jobs"
 
 
 class DeployRequest:
@@ -127,6 +129,27 @@ def _resource_requirements(vcpus: int, memory: int, gpus: int) -> list[dict[str,
     return result
 
 
+def _log_configuration(region: str) -> dict[str, Any]:
+    return {
+        "logDriver": "awslogs",
+        "options": {
+            "awslogs-group": JOB_LOG_GROUP,
+            "awslogs-region": region,
+        },
+    }
+
+
+def _ensure_job_log_group(session: Any) -> None:
+    logs = session.client("logs")
+    try:
+        logs.create_log_group(logGroupName=JOB_LOG_GROUP)
+    except ClientError as error:
+        code = error.response.get("Error", {}).get("Code")
+        if code != "ResourceAlreadyExistsException":
+            raise
+    logs.put_retention_policy(logGroupName=JOB_LOG_GROUP, retentionInDays=30)
+
+
 def _register_definitions(
     session: Any,
     control: FacilityControl,
@@ -151,7 +174,7 @@ def _register_definitions(
                 "executionRoleArn": control.execution_role_arn,
                 "image": image,
                 "jobRoleArn": control.job_role_arn,
-                "logConfiguration": {"logDriver": "awslogs"},
+                "logConfiguration": _log_configuration(control.region),
                 "resourceRequirements": _resource_requirements(
                     profile.vcpus,
                     profile.memory_mib,
@@ -204,6 +227,7 @@ def deploy(
     if images["cpu"][1] == images["gpu"][1]:
         raise ValueError("CPU and GPU image digests must be distinct")
     _verify_digest_catalogs(active_session, control, images)
+    _ensure_job_log_group(active_session)
     definitions = _register_definitions(active_session, control, images=images)
     return {
         "digests": {kind: image for kind, (image, _digest) in images.items()},

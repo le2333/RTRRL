@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import Any
 
 import pytest
+from botocore.exceptions import ClientError
 
 from trainer_infra.aws_profiles import PROFILES
 from trainer_infra.facility_control import load_facility_control
@@ -419,9 +420,50 @@ class RegisterBatch:
         }
 
 
-def test_register_is_explicit_digest_bound_and_single_attempt(
-    deploy: Any, monkeypatch: pytest.MonkeyPatch
-) -> None:
+JOB_LOG_GROUP = "/trainer/jobs"
+FACILITY_REGION = "eu-north-1"
+
+
+def _expected_log_configuration() -> dict[str, Any]:
+    return {
+        "logDriver": "awslogs",
+        "options": {
+            "awslogs-group": JOB_LOG_GROUP,
+            "awslogs-region": FACILITY_REGION,
+        },
+    }
+
+
+class FakeDeployLogs:
+    def __init__(self, *, existing: bool = False) -> None:
+        self.existing = existing
+        self.calls: list[tuple[str, dict[str, Any]]] = []
+
+    def create_log_group(self, **kwargs: Any) -> dict[str, Any]:
+        self.calls.append(("create_log_group", deepcopy(kwargs)))
+        if self.existing:
+            raise ClientError(
+                {
+                    "Error": {
+                        "Code": "ResourceAlreadyExistsException",
+                        "Message": "The specified log group already exists",
+                    }
+                },
+                "CreateLogGroup",
+            )
+        return {}
+
+    def put_retention_policy(self, **kwargs: Any) -> dict[str, Any]:
+        self.calls.append(("put_retention_policy", deepcopy(kwargs)))
+        return {}
+
+
+def _registration_session(
+    deploy: Any,
+    monkeypatch: pytest.MonkeyPatch,
+    *,
+    logs: FakeDeployLogs,
+) -> tuple[RegisterBatch, Any]:
     batch = RegisterBatch()
     sts = FakeSts()
     ecr = object()
@@ -441,13 +483,16 @@ def test_register_is_explicit_digest_bound_and_single_attempt(
             )
 
     class RegistrationSession:
-        region_name = "eu-north-1"
+        region_name = FACILITY_REGION
 
         def client(self, name: str) -> Any:
-            return {"sts": sts, "ecr": ecr, "batch": batch}[name]
+            return {"sts": sts, "ecr": ecr, "batch": batch, "logs": logs}[name]
 
     monkeypatch.setattr(deploy, "BotoEcrCatalogReader", Reader)
-    session = RegistrationSession()
+    return batch, RegistrationSession()
+
+
+def _register_report(deploy: Any, session: Any) -> dict[str, Any]:
     cpu = "007122174918.dkr.ecr.eu-north-1.amazonaws.com/rtrrl@sha256:" + "a" * 64
     gpu = "007122174918.dkr.ecr.eu-north-1.amazonaws.com/rtrrl@sha256:" + "b" * 64
     config = deploy.DeployRequest(
@@ -456,12 +501,22 @@ def test_register_is_explicit_digest_bound_and_single_attempt(
         cpu_digest=cpu,
         gpu_digest=gpu,
     )
-
-    report = deploy.deploy(
+    return deploy.deploy(
         config,
         control=load_facility_control(CONTROL),
         session=session,
     )
+
+
+def test_register_is_explicit_digest_bound_and_single_attempt(
+    deploy: Any, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    logs = FakeDeployLogs()
+    batch, session = _registration_session(deploy, monkeypatch, logs=logs)
+    cpu = "007122174918.dkr.ecr.eu-north-1.amazonaws.com/rtrrl@sha256:" + "a" * 64
+    gpu = "007122174918.dkr.ecr.eu-north-1.amazonaws.com/rtrrl@sha256:" + "b" * 64
+
+    report = _register_report(deploy, session)
 
     assert report["mode"] == "execute"
     assert len(batch.calls) == 4
@@ -480,6 +535,52 @@ def test_register_is_explicit_digest_bound_and_single_attempt(
     ]
     assert all(
         call["containerProperties"]["command"] == ["python", "/opt/trainer/worker.py"]
+        for call in batch.calls
+    )
+
+
+def test_register_creates_retained_job_log_group_and_configures_awslogs(
+    deploy: Any, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    logs = FakeDeployLogs()
+    batch, session = _registration_session(deploy, monkeypatch, logs=logs)
+
+    report = _register_report(deploy, session)
+
+    assert report["mode"] == "execute"
+    assert logs.calls == [
+        ("create_log_group", {"logGroupName": JOB_LOG_GROUP}),
+        (
+            "put_retention_policy",
+            {"logGroupName": JOB_LOG_GROUP, "retentionInDays": 30},
+        ),
+    ]
+    expected = _expected_log_configuration()
+    assert all(
+        call["containerProperties"]["logConfiguration"] == expected
+        for call in batch.calls
+    )
+
+
+def test_register_tolerates_existing_job_log_group(
+    deploy: Any, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    logs = FakeDeployLogs(existing=True)
+    batch, session = _registration_session(deploy, monkeypatch, logs=logs)
+
+    report = _register_report(deploy, session)
+
+    assert report["mode"] == "execute"
+    assert logs.calls == [
+        ("create_log_group", {"logGroupName": JOB_LOG_GROUP}),
+        (
+            "put_retention_policy",
+            {"logGroupName": JOB_LOG_GROUP, "retentionInDays": 30},
+        ),
+    ]
+    expected = _expected_log_configuration()
+    assert all(
+        call["containerProperties"]["logConfiguration"] == expected
         for call in batch.calls
     )
 
