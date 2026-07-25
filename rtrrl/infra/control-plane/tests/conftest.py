@@ -98,6 +98,17 @@ time.sleep(600)
     return _catalog(tmp_path, [sys.executable, str(child)])
 
 
+@pytest.fixture
+def launch_for_batch(s3_base: str, tmp_path: Path):
+    from datetime import UTC, datetime
+
+    from tests.helpers import EXAMPLE, make_plan
+    from trainer_infra.launch import create_launch
+
+    when = datetime(2026, 7, 25, 5, 14, tzinfo=UTC)
+    return create_launch(make_plan(s3_base), tmp_path / "archive", EXAMPLE, when)
+
+
 def _catalog(tmp_path: Path, command: list[str]) -> Path:
     path = tmp_path / "catalog.json"
     path.write_text(

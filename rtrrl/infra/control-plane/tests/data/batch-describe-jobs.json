@@ -1,0 +1,52 @@
+{
+  "jobs": [
+    {
+      "jobArn": "arn:aws:batch:eu-north-1:000000000000:job/0ea76b3c-d095-4dc2-a795-9e17d4499c0b",
+      "jobId": "0ea76b3c-d095-4dc2-a795-9e17d4499c0b",
+      "jobName": "brax-ppo-smoke-20260724-213024-round-000-job-0",
+      "jobQueue": "run-cpu-c7am-queue",
+      "jobDefinition": "trainer-c7am-ec1ae1e426313dbbda1567dc48eb942f7b76c1b0d91b3738584ef5a9fda91a08:1",
+      "status": "SUCCEEDED",
+      "attempts": [
+        {
+          "container": {
+            "exitCode": 0,
+            "logStreamName": "trainer-c7am-ec1ae1e426313dbbda1567dc48eb942f7b76c1b0d91b3738584ef5a9fda91a08/default/2485b749b873471c9f39af54cb7eedca"
+          },
+          "startedAt": 1753395024000,
+          "stoppedAt": 1753395084000
+        }
+      ],
+      "startedAt": 1753395024000,
+      "stoppedAt": 1753395084000,
+      "container": {
+        "exitCode": 0,
+        "logStreamName": "trainer-c7am-ec1ae1e426313dbbda1567dc48eb942f7b76c1b0d91b3738584ef5a9fda91a08/default/2485b749b873471c9f39af54cb7eedca"
+      }
+    },
+    {
+      "jobArn": "arn:aws:batch:eu-north-1:000000000000:job/423dfb14-3d75-48a6-a391-c0858558d3bb",
+      "jobId": "423dfb14-3d75-48a6-a391-c0858558d3bb",
+      "jobName": "brax-ppo-smoke-20260724-213024-round-000-job-1",
+      "jobQueue": "run-gpu-queue",
+      "jobDefinition": "trainer-g6x-938fb1bfce6131ecd3f40a56475946e8865eed6f902b74f15c3e808f9da97e6a:1",
+      "status": "SUCCEEDED",
+      "attempts": [
+        {
+          "container": {
+            "exitCode": 0,
+            "logStreamName": "trainer-g6x-938fb1bfce6131ecd3f40a56475946e8865eed6f902b74f15c3e808f9da97e6a/default/2485b749b873471c9f39af54cb7eedca"
+          },
+          "startedAt": 1753395024000,
+          "stoppedAt": 1753395084000
+        }
+      ],
+      "startedAt": 1753395024000,
+      "stoppedAt": 1753395084000,
+      "container": {
+        "exitCode": 0,
+        "logStreamName": "trainer-g6x-938fb1bfce6131ecd3f40a56475946e8865eed6f902b74f15c3e808f9da97e6a/default/2485b749b873471c9f39af54cb7eedca"
+      }
+    }
+  ]
+}

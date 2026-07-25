@@ -4,11 +4,13 @@ import argparse
 from collections.abc import Callable, Sequence
 import json
 import os
+import signal
 from datetime import UTC, datetime
 from pathlib import Path
 import sys
 import tempfile
 from typing import Any, Literal
+from urllib.request import urlopen
 
 from pydantic import BaseModel, ConfigDict, PositiveFloat
 import yaml
@@ -22,6 +24,8 @@ from trainer_infra.adapters.aws_batch import (
 )
 from trainer_infra.adapters.s3 import S3ObjectStore
 from trainer_infra.aim_reader import AimReader
+from trainer_infra.backends.batch import BatchBackend
+from trainer_infra.backends.base import Backend
 from trainer_infra.controller import ExperimentController, ExperimentRunError
 from trainer_infra.ecr import BotoEcrCatalogReader
 from trainer_infra.backends.local import LocalBackend
@@ -29,7 +33,7 @@ from trainer_infra.experiment import load_experiment
 from trainer_infra.identities import canonical_json
 from trainer_infra.launch import create_launch
 from trainer_infra.loop import LaunchFailed, run_launch
-from trainer_infra.preflight import LaunchPlan, PreflightError, check_offline, format_space
+from trainer_infra.preflight import LaunchPlan, PreflightError, check_aws, check_offline, format_space
 from trainer_infra.space import SpaceError
 
 
@@ -176,6 +180,57 @@ class _Parser(argparse.ArgumentParser):
         raise ValueError(message)
 
 
+def _read_ecr_url(url: str) -> bytes:
+    with urlopen(url) as response:  # noqa: S310 - URL is issued by ECR.
+        return response.read()
+
+
+def _batch_session_factory() -> Any:
+    import boto3
+
+    return boto3.Session()
+
+
+def _warn_dev_queues(tier: str) -> None:
+    if tier == "dev":
+        print(
+            "warning: dev queues are for infrastructure development only; "
+            "delivered runs use run queues.",
+            file=sys.stderr,
+        )
+
+
+def _batch_preflight(
+    experiment_path: Path,
+    tier: str,
+    *,
+    session_factory: Callable[[], Any] | None = None,
+    read_url: Callable[[str], bytes] | None = None,
+) -> tuple[Any, dict[str, Any]]:
+    experiment = load_experiment(experiment_path)
+    factory = _batch_session_factory if session_factory is None else session_factory
+    url_reader = _read_ecr_url if read_url is None else read_url
+    session = factory()
+    ecr = session.client("ecr")
+    batch = session.client("batch")
+    s3 = session.client("s3")
+    from trainer_infra.images import resolve_image
+
+    resolved = resolve_image(experiment.image, ecr, url_reader)
+    space = check_offline(experiment, resolved.catalog)
+    plan = check_aws(
+        experiment,
+        resolved.catalog,
+        space,
+        ecr_client=ecr,
+        batch_client=batch,
+        s3_client=s3,
+        read_url=url_reader,
+        tier=tier,
+    )
+    return plan, space
+
+
 def validate_command(experiment_path: Path, catalog_path: Path) -> int:
     experiment = load_experiment(experiment_path)
     catalog = Catalog.model_validate(json.loads(catalog_path.read_text(encoding="utf-8")))
@@ -185,6 +240,107 @@ def validate_command(experiment_path: Path, catalog_path: Path) -> int:
         print(f"preflight failed: {error}", file=sys.stderr)
         return 1
     print(format_space(space))
+    return 0
+
+
+def validate_batch_command(
+    experiment_path: Path,
+    tier: str,
+    *,
+    session_factory: Callable[[], Any] | None = None,
+    read_url: Callable[[str], bytes] | None = None,
+) -> int:
+    _warn_dev_queues(tier)
+    try:
+        _plan, space = _batch_preflight(
+            experiment_path,
+            tier,
+            session_factory=session_factory,
+            read_url=read_url,
+        )
+    except (PreflightError, SpaceError, ValueError) as error:
+        print(f"preflight failed: {error}", file=sys.stderr)
+        return 1
+    print(format_space(space))
+    return 0
+
+
+class _InterruptibleBackend:
+    def __init__(self, backend: Backend) -> None:
+        self._backend = backend
+        self._active: list[str] = []
+
+    def submit(self, launch, manifest_uri: str, name: str) -> str:
+        job_id = self._backend.submit(launch, manifest_uri, name)
+        self._active.append(job_id)
+        return job_id
+
+    def wait(self, job_ids: Sequence[str]) -> list:
+        try:
+            return self._backend.wait(job_ids)
+        finally:
+            self._active.clear()
+
+    def terminate(self, job_ids: Sequence[str]) -> None:
+        self._backend.terminate(job_ids)
+
+    def log_tail(self, result, lines: int) -> str:
+        return self._backend.log_tail(result, lines)
+
+
+def run_batch_command(
+    experiment_path: Path,
+    archive_dir: Path,
+    tier: str,
+    *,
+    session_factory: Callable[[], Any] | None = None,
+    read_url: Callable[[str], bytes] | None = None,
+    poll_seconds: float = 20.0,
+) -> int:
+    _warn_dev_queues(tier)
+    try:
+        plan, _space = _batch_preflight(
+            experiment_path,
+            tier,
+            session_factory=session_factory,
+            read_url=read_url,
+        )
+    except (PreflightError, SpaceError, ValueError) as error:
+        print(f"preflight failed: {error}", file=sys.stderr)
+        return 1
+
+    session = (_batch_session_factory if session_factory is None else session_factory)()
+    batch = session.client("batch")
+    logs = session.client("logs")
+    backend = _InterruptibleBackend(
+        BatchBackend(batch, logs, poll_seconds=poll_seconds)
+    )
+    launch = create_launch(plan, archive_dir, experiment_path, datetime.now(UTC))
+
+    previous_handler = signal.getsignal(signal.SIGINT)
+
+    def handle_sigint(signum: int, frame: object | None) -> None:
+        del signum, frame
+        backend.terminate(list(backend._active))
+        raise KeyboardInterrupt
+
+    signal.signal(signal.SIGINT, handle_sigint)
+    try:
+        report = run_launch(
+            launch,
+            backend,
+            printer=lambda line: print(line, file=sys.stderr),
+        )
+    except LaunchFailed as error:
+        print(str(error), file=sys.stderr)
+        return 1
+    except KeyboardInterrupt:
+        print("trainerctl: interrupted", file=sys.stderr)
+        return 130
+    finally:
+        signal.signal(signal.SIGINT, previous_handler)
+
+    print(json.dumps(report.payload(), sort_keys=True, indent=2))
     return 0
 
 
@@ -235,12 +391,31 @@ def _parser() -> argparse.ArgumentParser:
     validate = subparsers.add_parser("validate", help="check an experiment file")
     validate.add_argument("experiment", type=Path)
     validate.add_argument("--catalog", type=Path)
+    validate.add_argument("--backend", choices=("batch",))
+    validate.add_argument(
+        "--queues",
+        choices=("run", "dev"),
+        default="run",
+        help=(
+            "dev queues are for infrastructure development only; "
+            "delivered runs use run queues"
+        ),
+    )
     run = subparsers.add_parser("run")
     run.add_argument("experiment", type=Path)
     run.add_argument("--catalog", type=Path)
     run.add_argument("--archive-dir", type=Path, default=Path("archive"))
     run.add_argument("--jobs-dir", type=Path, default=Path("jobs"))
     run.add_argument("--backend", choices=("local", "batch"))
+    run.add_argument(
+        "--queues",
+        choices=("run", "dev"),
+        default="run",
+        help=(
+            "dev queues are for infrastructure development only; "
+            "delivered runs use run queues"
+        ),
+    )
     return parser
 
 
@@ -254,8 +429,19 @@ def main(
         print(f"trainerctl: error: {error}", file=sys.stderr)
         return 2
 
-    if args.command == "validate" and args.catalog is not None:
-        return validate_command(args.experiment, args.catalog)
+    if args.command == "validate":
+        has_catalog = args.catalog is not None
+        has_batch = args.backend == "batch"
+        if has_catalog == has_batch:
+            print(
+                "trainerctl: error: validate requires exactly one of "
+                "--catalog or --backend batch",
+                file=sys.stderr,
+            )
+            return 2
+        if has_catalog:
+            return validate_command(args.experiment, args.catalog)
+        return validate_batch_command(args.experiment, args.queues)
 
     if args.command == "run" and args.backend == "local":
         if args.catalog is None:
@@ -264,6 +450,9 @@ def main(
         return run_local_command(
             args.experiment, args.catalog, args.archive_dir, args.jobs_dir
         )
+
+    if args.command == "run" and args.backend == "batch":
+        return run_batch_command(args.experiment, args.archive_dir, args.queues)
 
     try:
         controller = controller_factory(args.control)

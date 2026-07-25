@@ -61,8 +61,9 @@ def test_validate_and_run_are_foreground_and_print_stable_json(
 ) -> None:
     control = tmp_path / "control.yaml"
     experiment = tmp_path / "experiment.yaml"
+    catalog_path = write_catalog(tmp_path)
     control.write_text("{}")
-    experiment.write_text("{}")
+    experiment.write_text(EXAMPLE.read_text(encoding="utf-8"))
     controller = Controller()
     factory_calls: list[Path] = []
 
@@ -70,31 +71,36 @@ def test_validate_and_run_are_foreground_and_print_stable_json(
         factory_calls.append(path)
         return controller
 
-    assert main(["--control", str(control), "validate", str(experiment)], factory) == 0
+    assert (
+        main(
+            ["validate", str(experiment), "--catalog", str(catalog_path)],
+            factory,
+        )
+        == 0
+    )
     first = capsys.readouterr()  # type: ignore[attr-defined]
-    assert json.loads(first.out)["status"] == "valid"
+    assert first.out.startswith("resolved search space:")
     assert first.err == ""
 
     assert main(["--control", str(control), "run", str(experiment)], factory) == 0
     second = capsys.readouterr()  # type: ignore[attr-defined]
     assert json.loads(second.out)["experiment_id"] == "fresh"
     assert second.err == ""
-    assert controller.calls == [("validate", experiment), ("run", experiment)]
-    assert factory_calls == [control, control]
+    assert controller.calls == [("run", experiment)]
+    assert factory_calls == [control]
 
 
 def test_errors_use_stderr_and_nonzero_exit(tmp_path: Path, capsys: object) -> None:
-    experiment = tmp_path / "bad.yaml"
-    controller = Controller(fail=True)
+    modified(tmp_path, "metric: episode_return", "metric: reward")
+    experiment = tmp_path / "experiment.yaml"
+    bad_catalog = write_catalog(tmp_path)
 
-    code = main(["validate", str(experiment)], lambda _: controller)
+    code = main(["validate", str(experiment), "--catalog", str(bad_catalog)])
 
     captured = capsys.readouterr()  # type: ignore[attr-defined]
     assert code == 1
     assert captured.out == ""
-    assert json.loads(captured.err) == {
-        "error": {"message": "invalid experiment", "type": "ValueError"}
-    }
+    assert "reward" in captured.err
 
 
 def test_experiment_error_prints_complete_structured_failure(
@@ -240,6 +246,98 @@ def test_validate_catalog_rejects_grid_sampler_with_continuous_space(
     assert captured.out == ""
     assert "grid sampler" in captured.err
     assert "learning_rate" in captured.err
+
+
+def test_validate_requires_exactly_one_of_catalog_or_batch_backend(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    experiment = tmp_path / "experiment.yaml"
+    experiment.write_text(EXAMPLE.read_text(encoding="utf-8"))
+    catalog_path = write_catalog(tmp_path)
+
+    neither = main(["validate", str(experiment)])
+    neither_captured = capsys.readouterr()
+    assert neither == 2
+    assert "exactly one of --catalog or --backend batch" in neither_captured.err
+
+    both = main(
+        [
+            "validate",
+            str(experiment),
+            "--catalog",
+            str(catalog_path),
+            "--backend",
+            "batch",
+        ]
+    )
+    both_captured = capsys.readouterr()
+    assert both == 2
+    assert "exactly one of --catalog or --backend batch" in both_captured.err
+
+
+def test_validate_batch_backend_never_submits(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from tests.test_preflight_aws import FakeBatch, FakeEcr, FakeS3, read_url
+
+    submitted: list[dict] = []
+
+    class TrackingBatch(FakeBatch):
+        def submit_job(self, **kwargs: object) -> dict:
+            submitted.append(kwargs)
+            raise AssertionError("submit_job should not be called during validate")
+
+    experiment = tmp_path / "experiment.yaml"
+    experiment.write_text(EXAMPLE.read_text(encoding="utf-8"))
+
+    class Session:
+        def client(self, service: str):
+            if service == "ecr":
+                return FakeEcr()
+            if service == "batch":
+                return TrackingBatch()
+            if service == "s3":
+                return FakeS3()
+            raise AssertionError(f"unexpected client {service!r}")
+
+    monkeypatch.setattr("trainer_infra.cli._batch_session_factory", lambda: Session())
+    monkeypatch.setattr("trainer_infra.cli._read_ecr_url", read_url)
+
+    code = main(["validate", str(experiment), "--backend", "batch"])
+
+    captured = capsys.readouterr()
+    assert code == 0
+    assert submitted == []
+    assert captured.err == ""
+    assert captured.out.startswith("resolved search space:")
+
+
+def test_validate_batch_backend_warns_for_dev_queues(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from tests.test_preflight_aws import FakeBatch, FakeEcr, FakeS3, read_url
+
+    experiment = tmp_path / "experiment.yaml"
+    experiment.write_text(EXAMPLE.read_text(encoding="utf-8"))
+
+    class Session:
+        def client(self, service: str):
+            if service == "ecr":
+                return FakeEcr()
+            if service == "batch":
+                return FakeBatch(queues=("dev-cpu-c7am-queue",))
+            if service == "s3":
+                return FakeS3()
+            raise AssertionError(f"unexpected client {service!r}")
+
+    monkeypatch.setattr("trainer_infra.cli._batch_session_factory", lambda: Session())
+    monkeypatch.setattr("trainer_infra.cli._read_ecr_url", read_url)
+
+    code = main(["validate", str(experiment), "--backend", "batch", "--queues", "dev"])
+
+    captured = capsys.readouterr()
+    assert code == 0
+    assert "warning: dev queues are for infrastructure development only" in captured.err
 
 
 def test_run_local_backend_exits_zero_on_success(
