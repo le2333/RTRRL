@@ -3,6 +3,7 @@ import socket
 import subprocess
 import sys
 import time
+from collections.abc import Iterator
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -22,6 +23,22 @@ def _free_port() -> int:
     with socket.socket() as probe:
         probe.bind(("127.0.0.1", 0))
         return probe.getsockname()[1]
+
+
+@pytest.fixture
+def listening_endpoint() -> Iterator[str]:
+    """An endpoint whose port accepts a connection, without starting Aim.
+
+    Preflight's Aim check is a bare TCP connect, so a listener is enough. Tests
+    that need one must take this fixture rather than relying on whatever happens
+    to be listening: the two `validate --backend batch` cases used to pass only
+    because a real Aim server runs on the development machine, and they failed
+    the moment they ran anywhere else.
+    """
+    with socket.socket() as server:
+        server.bind(("127.0.0.1", 0))
+        server.listen(1)
+        yield f"aim://127.0.0.1:{server.getsockname()[1]}"
 
 
 @pytest.fixture

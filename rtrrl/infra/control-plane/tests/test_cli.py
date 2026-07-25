@@ -277,7 +277,10 @@ def test_validate_requires_exactly_one_of_catalog_or_batch_backend(
 
 
 def test_validate_batch_backend_never_submits(
-    tmp_path: Path, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+    monkeypatch: pytest.MonkeyPatch,
+    listening_endpoint: str,
 ) -> None:
     from tests.test_preflight_aws import FakeBatch, FakeEcr, FakeS3, read_url
 
@@ -288,8 +291,7 @@ def test_validate_batch_backend_never_submits(
             submitted.append(kwargs)
             raise AssertionError("submit_job should not be called during validate")
 
-    experiment = tmp_path / "experiment.yaml"
-    experiment.write_text(EXAMPLE.read_text(encoding="utf-8"))
+    experiment = write_experiment(tmp_path, "s3://rtrrl-training-data", listening_endpoint)
 
     class Session:
         def client(self, service: str):
@@ -314,12 +316,14 @@ def test_validate_batch_backend_never_submits(
 
 
 def test_validate_batch_backend_warns_for_dev_queues(
-    tmp_path: Path, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+    monkeypatch: pytest.MonkeyPatch,
+    listening_endpoint: str,
 ) -> None:
     from tests.test_preflight_aws import FakeBatch, FakeEcr, FakeS3, read_url
 
-    experiment = tmp_path / "experiment.yaml"
-    experiment.write_text(EXAMPLE.read_text(encoding="utf-8"))
+    experiment = write_experiment(tmp_path, "s3://rtrrl-training-data", listening_endpoint)
 
     class Session:
         def client(self, service: str):
