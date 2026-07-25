@@ -7,9 +7,14 @@ from tests.test_preflight_offline import CATALOG
 EXAMPLE = Path("examples/experiment-acceptance.yaml")
 
 
-def make_plan(s3_base: str) -> LaunchPlan:
+def make_plan(s3_base: str, *, rerun_enabled: bool = True) -> LaunchPlan:
     experiment = load_experiment(EXAMPLE)
-    experiment = experiment.model_copy(update={"storage": s3_base})
+    updates: dict[str, object] = {"storage": s3_base}
+    if not rerun_enabled:
+        updates["logging"] = experiment.logging.model_copy(
+            update={"rerun_every_episodes": None}
+        )
+    experiment = experiment.model_copy(update=updates)
     return LaunchPlan(
         experiment=experiment,
         entry_name=experiment.entry,
