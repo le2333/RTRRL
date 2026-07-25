@@ -1,6 +1,9 @@
 from __future__ import annotations
 
+import socket
+from collections.abc import Callable
 from dataclasses import dataclass
+from typing import Any
 
 from training_sdk.contract import CONTRACT_VERSION, Catalog, ChoiceSpec, EntryDescriptor
 from training_sdk.contract import SpaceEntry
@@ -52,6 +55,115 @@ def check_offline(experiment: Experiment, catalog: Catalog) -> dict[str, SpaceEn
             f"smallest total_steps the space can produce ({budget})"
         )
     return space
+
+
+def connect(host: str, port: int) -> None:
+    try:
+        with socket.create_connection((host, port), timeout=5):
+            return
+    except OSError as error:
+        raise PreflightError(f"aim endpoint aim://{host}:{port} is not reachable: {error}") from error
+
+
+def _parse_s3_bucket(storage: str) -> str:
+    if not storage.startswith("s3://"):
+        raise PreflightError(f"storage {storage!r} is not an s3:// URI")
+    bucket = storage.removeprefix("s3://").split("/", 1)[0]
+    if not bucket:
+        raise PreflightError(f"storage {storage!r} has no bucket name")
+    return bucket
+
+
+def _parse_aim_endpoint(aim: str) -> tuple[str, int]:
+    if not aim.startswith("aim://"):
+        raise PreflightError(f"logging aim {aim!r} is not an aim:// URI")
+    host_port = aim.removeprefix("aim://")
+    if ":" not in host_port:
+        raise PreflightError(f"logging aim {aim!r} has no port")
+    host, port_text = host_port.rsplit(":", 1)
+    if not host:
+        raise PreflightError(f"logging aim {aim!r} has no host")
+    try:
+        port = int(port_text)
+    except ValueError as error:
+        raise PreflightError(f"logging aim {aim!r} has invalid port {port_text!r}") from error
+    return host, port
+
+
+def check_aws(
+    experiment: Experiment,
+    catalog: Catalog,
+    space: dict[str, SpaceEntry],
+    *,
+    ecr_client: Any,
+    batch_client: Any,
+    s3_client: Any,
+    read_url: Callable[[str], bytes],
+    connect: Callable[[str, int], None] = connect,
+    tier: str = "run",
+) -> LaunchPlan:
+    from trainer_infra.images import resolve_image
+    from trainer_infra.queues import binding, job_definition_name
+
+    resolved = resolve_image(experiment.image, ecr_client, read_url)
+    if resolved.catalog != catalog:
+        raise PreflightError(
+            f"image catalog does not match the offline-validated catalog "
+            f"(image contract={resolved.catalog.contract}, "
+            f"offline contract={catalog.contract})"
+        )
+
+    queue_binding = binding(experiment.compute.instance_type)
+    queue_name = queue_binding.queue(tier)
+
+    queue_response = batch_client.describe_job_queues(jobQueues=[queue_name])
+    queues = queue_response.get("jobQueues", [])
+    if not queues:
+        raise PreflightError(f"queue {queue_name!r} is not registered")
+    queue_entry = queues[0]
+    if queue_entry.get("state") != "ENABLED" or queue_entry.get("status") != "VALID":
+        raise PreflightError(
+            f"queue {queue_name!r} is not ready "
+            f"(state={queue_entry.get('state')!r}, status={queue_entry.get('status')!r})"
+        )
+
+    definition_name = job_definition_name(queue_binding, resolved.digest)
+    definition_response = batch_client.describe_job_definitions(
+        jobDefinitionName=definition_name,
+        status="ACTIVE",
+    )
+    if not definition_response.get("jobDefinitions"):
+        raise PreflightError(
+            f"job definition {definition_name!r} is not registered; "
+            "run scripts/deploy_facility.py --register "
+            "--cpu-digest <digest> --gpu-digest <digest>"
+        )
+
+    bucket = _parse_s3_bucket(experiment.storage)
+    try:
+        s3_client.head_bucket(Bucket=bucket)
+    except Exception as error:
+        raise PreflightError(f"S3 bucket {bucket!r} is not reachable: {error}") from error
+
+    aim_host, aim_port = _parse_aim_endpoint(experiment.logging.aim)
+    try:
+        connect(aim_host, aim_port)
+    except PreflightError:
+        raise
+    except OSError as error:
+        raise PreflightError(
+            f"aim endpoint {experiment.logging.aim!r} is not reachable: {error}"
+        ) from error
+
+    return LaunchPlan(
+        experiment=experiment,
+        entry_name=experiment.entry,
+        entry=catalog.entries[experiment.entry],
+        space=space,
+        digest=resolved.digest,
+        queue=queue_name,
+        job_definition=definition_name,
+    )
 
 
 def format_space(space: dict[str, SpaceEntry]) -> str:
