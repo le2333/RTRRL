@@ -1,0 +1,67 @@
+name: Tests
+
+# The development machine is a micro instance and cannot run the suite without
+# running out of memory, so this workflow is the only place tests execute.
+
+on:
+  push:
+    branches:
+      - feature/trainer-infra
+    paths:
+      - .github/workflows/tests.yml
+      - training-sdk/**
+      - rtrrl/infra/control-plane/**
+      - rtrrl/infra/mock-trainer/**
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    name: ${{ matrix.name }}
+    runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: training-sdk
+            project: training-sdk
+            target: ""
+          - name: control-plane
+            project: rtrrl/infra/control-plane
+            # Scoped to the rebuilt modules: the package still holds the
+            # superseded implementation's tests, which take about forty minutes
+            # and are removed in Task 19. Widen this to the whole package then.
+            target: >-
+              tests/test_space.py
+              tests/test_experiment.py
+              tests/test_preflight_offline.py
+              tests/test_study.py
+              tests/test_launch.py
+              tests/test_packing.py
+              tests/test_loop.py
+              tests/test_local_backend.py
+              tests/test_end_to_end_local.py
+              tests/test_queues.py
+              tests/test_preflight_aws.py
+              tests/test_batch_backend.py
+              tests/test_facility_deployment.py
+              tests/test_cli.py
+          - name: mock-trainer
+            project: rtrrl/infra/mock-trainer
+            target: ""
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+
+      - name: Lint
+        working-directory: ${{ matrix.project }}
+        run: uv run ruff check .
+
+      - name: Test
+        working-directory: ${{ matrix.project }}
+        run: uv run pytest ${{ matrix.target }} -q

@@ -28,12 +28,16 @@ reads Aim.
   containers run only as AWS Batch jobs. The machine has 2 cores, 2.2 GiB of
   usable memory, and under 5 GiB of free disk: a single GPU image does not fit.
   No task may add a `docker build`, `docker run`, or image pull step.
-- **Anything heavy runs on the `dev-*` Batch queues, not locally.** That is what
-  those queues exist for. Local tests may start real Aim, Rerun, moto, and
-  short-lived worker subprocesses — these are ordinary Python processes with a
-  peak well under 1 GiB — but never a real training framework, a real GPU
-  workload, or a container. If a local test needs more than about 1 GiB or more
-  than a minute, it belongs on `dev-*` instead.
+- **The development machine never runs tests.** Not pytest, not a single module,
+  not "just a quick one". The box is a micro instance with 911 MiB of total
+  memory and roughly 250 MiB free; running the suite here has already taken the
+  machine down and severed the editor session. Tests are written locally and
+  executed remotely:
+  - Python suites run in GitHub Actions.
+  - Anything needing a container or a real training framework runs on the
+    `dev-*` Batch queues, which is what they exist for.
+  A task is not verified because it was written carefully. It is verified when a
+  remote run reports it green, and that report is what gets recorded.
 - `dev-*` queues are for infrastructure development only. Delivered
   `trainerctl run` workflows use `run-*` queues; selecting `dev-*` requires the
   explicit `--queues dev` flag added in Task 16.
