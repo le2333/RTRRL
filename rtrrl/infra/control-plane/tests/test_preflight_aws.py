@@ -11,6 +11,15 @@ from tests.helpers import EXAMPLE
 from tests.test_preflight_offline import CATALOG
 
 DIGEST = "sha256:1111111111111111111111111111111111111111111111111111111111111111"
+ACCOUNT_ID = "007122174918"
+
+
+def _require_registry_id(kwargs: object, *, method: str, account_id: str) -> None:
+    assert isinstance(kwargs, dict)
+    registry_id = kwargs.get("registryId")
+    assert registry_id == account_id, (
+        f"{method} requires registryId={account_id!r}, got {registry_id!r}"
+    )
 
 
 def _config_blob(catalog: Catalog = CATALOG) -> bytes:
@@ -24,15 +33,24 @@ CONFIG_DIGEST = "sha256:" + hashlib.sha256(CONFIG_BLOB).hexdigest()
 
 
 class FakeEcr:
-    def __init__(self, digest: str = DIGEST, *, config_blob: bytes = CONFIG_BLOB) -> None:
+    def __init__(
+        self,
+        digest: str = DIGEST,
+        *,
+        config_blob: bytes = CONFIG_BLOB,
+        account_id: str = ACCOUNT_ID,
+    ) -> None:
         self.digest = digest
         self.config_blob = config_blob
         self.config_digest = "sha256:" + hashlib.sha256(config_blob).hexdigest()
+        self.account_id = account_id
 
     def describe_images(self, **kwargs: object) -> dict:
+        _require_registry_id(kwargs, method="describe_images", account_id=self.account_id)
         return {"imageDetails": [{"imageDigest": self.digest}]}
 
     def batch_get_image(self, **kwargs: object) -> dict:
+        _require_registry_id(kwargs, method="batch_get_image", account_id=self.account_id)
         manifest = json.dumps({"config": {"digest": self.config_digest}})
         return {
             "images": [
@@ -44,6 +62,9 @@ class FakeEcr:
         }
 
     def get_download_url_for_layer(self, **kwargs: object) -> dict:
+        _require_registry_id(
+            kwargs, method="get_download_url_for_layer", account_id=self.account_id
+        )
         return {"downloadUrl": "https://example.invalid/config"}
 
 
@@ -165,5 +186,22 @@ def test_image_catalog_disagreeing_with_offline_catalog_is_rejected() -> None:
             batch_client=FakeBatch(),
             s3_client=FakeS3(),
             read_url=read_wrong,
+            connect=lambda host, port: None,
+        )
+
+
+def test_non_ecr_image_reference_is_rejected() -> None:
+    experiment, catalog, space = plan_arguments()
+    bad_reference = "registry.example/repo:tag"
+    experiment = experiment.model_copy(update={"image": bad_reference})
+    with pytest.raises(PreflightError, match=bad_reference):
+        check_aws(
+            experiment,
+            catalog,
+            space,
+            ecr_client=FakeEcr(),
+            batch_client=FakeBatch(),
+            s3_client=FakeS3(),
+            read_url=read_url,
             connect=lambda host, port: None,
         )

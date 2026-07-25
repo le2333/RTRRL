@@ -17,6 +17,10 @@ from trainer_infra.preflight import PreflightError
 
 CATALOG_LABEL = "org.rtrrl.trainer.catalog.v2"
 _DIGEST = re.compile(r"sha256:[0-9a-f]{64}\Z")
+_REGISTRY = re.compile(
+    r"(?P<account>[0-9]{12})\.dkr\.ecr\."
+    r"(?P<region>[a-z0-9-]+)\.amazonaws\.com\Z"
+)
 _MANIFEST_TYPES = [
     "application/vnd.oci.image.manifest.v1+json",
     "application/vnd.docker.distribution.manifest.v2+json",
@@ -66,6 +70,14 @@ def _parse_digest_reference(reference: str) -> tuple[str, str, str]:
     return f"{repository}@{digest}", repository, digest
 
 
+def _registry_account(reference: str) -> str:
+    registry = reference.split("/", 1)[0]
+    match = _REGISTRY.fullmatch(registry)
+    if match is None:
+        raise PreflightError(f"image {reference!r} is not an ECR image reference")
+    return match.group("account")
+
+
 def _repository_and_tag(reference: str) -> tuple[str, str, str]:
     if "://" in reference or "/" not in reference:
         raise PreflightError(f"image {reference!r} is not an ECR image reference")
@@ -76,6 +88,7 @@ def _repository_and_tag(reference: str) -> tuple[str, str, str]:
     repository, tag = repository_reference.rsplit(":", 1)
     if not registry or not repository or not tag:
         raise PreflightError(f"image {reference!r} is not an ECR image reference")
+    _registry_account(reference)
     return registry, repository, tag
 
 
@@ -92,6 +105,7 @@ def _one_image(response: dict[str, Any], *, context: str) -> dict[str, Any]:
 def _fetch_catalog(
     ecr_client: Any,
     *,
+    registry_id: str,
     repository: str,
     digest: str,
     reference: str,
@@ -99,6 +113,7 @@ def _fetch_catalog(
 ) -> Catalog:
     manifest_image = _one_image(
         ecr_client.batch_get_image(
+            registryId=registry_id,
             repositoryName=repository,
             imageIds=[{"imageDigest": digest}],
             acceptedMediaTypes=_MANIFEST_TYPES,
@@ -127,6 +142,7 @@ def _fetch_catalog(
         raise PreflightError(f"image {reference!r}: manifest has invalid config digest")
 
     response = ecr_client.get_download_url_for_layer(
+        registryId=registry_id,
         repositoryName=repository,
         layerDigest=config_digest,
     )
@@ -156,10 +172,13 @@ def resolve_image(
 ) -> ResolvedImage:
     if "@" in reference:
         canonical_reference, full_repository, digest = _parse_digest_reference(reference)
+        registry_id = _registry_account(reference)
         repository = full_repository.split("/", 1)[1]
     else:
         registry, repository, tag = _repository_and_tag(reference)
+        registry_id = _registry_account(reference)
         response = ecr_client.describe_images(
+            registryId=registry_id,
             repositoryName=repository,
             imageIds=[{"imageTag": tag}],
         )
@@ -175,6 +194,7 @@ def resolve_image(
 
     catalog = _fetch_catalog(
         ecr_client,
+        registry_id=registry_id,
         repository=repository,
         digest=digest,
         reference=canonical_reference,
