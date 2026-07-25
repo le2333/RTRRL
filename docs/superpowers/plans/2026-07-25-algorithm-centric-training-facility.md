@@ -225,8 +225,41 @@ def test_run_config_round_trips() -> None:
         },
     }
     config = RunConfig.model_validate(payload)
-    assert config.model_dump(mode="json") == payload
+    assert RunConfig.model_validate(config.model_dump(mode="json")) == config
+    assert config.model_dump(mode="json", exclude_none=True) == payload
+
+
+def test_inverted_bounds_are_rejected() -> None:
+    for spec in ({"type": "float", "low": 2.0, "high": 1.0},
+                 {"type": "int", "low": 2, "high": 1},
+                 {"type": "int", "low": 1, "high": 2, "step": 0}):
+        with pytest.raises(ValidationError):
+            ChoiceSpec.model_validate([])  # empty choice list
+        with pytest.raises(ValidationError):
+            Catalog.model_validate(
+                {"contract": 2,
+                 "entries": {"e": {"command": ["run"], "source_hash": "sha256:0",
+                                   "metrics": ["m"], "space": {"total_steps": spec}}}}
+            )
+
+
+def test_empty_command_metrics_and_window_order_are_rejected() -> None:
+    ...
 ```
+
+The round-trip assertion is split deliberately: the property that matters is
+that a configuration survives being written to S3 and read back by the worker,
+and the compact wire form omits unset optional fields. A single
+`model_dump(mode="json") == payload` would instead force the schema to suppress
+`None` fields, which on pydantic 2.8 has no supported spelling.
+
+Write the two rejection tests out in full rather than leaving the ellipsis: one
+`pytest.raises(ValidationError)` per invariant the module declares — inverted
+`FloatSpec` bounds, inverted `IntSpec` bounds, non-positive `IntSpec.step`, empty
+`ChoiceSpec`, empty `EntryDescriptor.command`, empty `EntryDescriptor.metrics`,
+and inverted `ScoreConfig.window_steps`. A validator with no failing-path test is
+a claim, not a guarantee. Also exercise `IntSpec` in the catalog parsing test so
+all three arms of the union are covered.
 
 - [ ] **Step 2: Run test to verify it fails**
 
