@@ -1,5 +1,18 @@
 # Working agreements
 
+## What this machine is for
+
+It is a permanently-on micro instance — the only size that stays free — and its
+job is to *host* things, not to compute:
+
+- the `trainerctl` control plane and its Optuna study,
+- the Aim server,
+- Rerun.
+
+All of those are small and IO-bound. Everything else — training, container
+builds, test suites — happens elsewhere. Treat any local workload heavier than
+polling and bookkeeping as a mistake in the making.
+
 ## Never run tests on this machine
 
 This box is a micro instance: 911 MiB of total memory, ~250 MiB free, 2 cores.
