@@ -60,7 +60,10 @@ def test_reporter_from_env_reads_config_and_scratch(
 ) -> None:
     config = make_config()
     config_path = tmp_path / "run-config.json"
-    config_path.write_text(config.model_dump_json(), encoding="utf-8")
+    aim_repo = tmp_path / "aim"
+    config_data = config.model_dump()
+    config_data["logging"] = {**config_data["logging"], "aim": str(aim_repo)}
+    config_path.write_text(json.dumps(config_data), encoding="utf-8")
     scratch = tmp_path / "scratch"
     scratch.mkdir()
     monkeypatch.setenv("TRAINER_RUN_CONFIG", str(config_path))

@@ -64,5 +64,6 @@ class Reporter:
 
 
 def build_default_sinks(config: RunConfig, scratch: Path) -> tuple[Sink, ...]:
-    """Populated in Task 6 (Aim) and Task 7 (Rerun)."""
-    return ()
+    from training_sdk.sinks.aim import AimSink
+
+    return (AimSink(config, repo=config.logging.aim),)
