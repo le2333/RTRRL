@@ -7,7 +7,7 @@ from pathlib import Path
 import pytest
 
 from training_sdk import objects
-from training_sdk.worker import WorkerError, _Heartbeat, run_manifest
+from training_sdk.worker import WorkerError, _Heartbeat, main, run_manifest
 from tests.test_reporter import make_config
 
 CHILD = """
@@ -291,3 +291,17 @@ def test_score_computation_failure_stops_manifest(
         run_manifest(manifest, tmp_path, startup_seconds=60, stall_factor=10)
     assert objects.exists(f"{s3_base}/trials/t200/score.json") is False
     assert objects.exists(f"{s3_base}/trials/t201/score.json") is False
+
+
+def test_main_reports_a_missing_manifest_variable(
+    capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The image's default command is this entry point, so it must explain itself.
+
+    A Batch job started without the manifest is misconfigured by the control
+    plane, and the only trace left behind is what lands in CloudWatch.
+    """
+    monkeypatch.delenv("TRAINER_MANIFEST", raising=False)
+
+    assert main() == 1
+    assert "TRAINER_MANIFEST is not set" in capsys.readouterr().err

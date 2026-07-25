@@ -9,7 +9,6 @@ import subprocess
 import sys
 import time
 import traceback
-from collections.abc import Sequence
 from pathlib import Path
 
 from training_sdk import objects
@@ -178,8 +177,19 @@ def _kill(process: subprocess.Popen[bytes]) -> None:
         process.wait()
 
 
-def main(argv: Sequence[str] | None = None) -> int:
-    manifest = os.environ["TRAINER_MANIFEST"]
+def main() -> int:
+    try:
+        manifest = os.environ["TRAINER_MANIFEST"]
+    except KeyError:
+        # The whole job is driven by this variable, and a Batch job that starts
+        # without it is misconfigured upstream. Say so, rather than leaving a
+        # bare KeyError traceback in CloudWatch for someone to decipher.
+        print(
+            "worker failed: TRAINER_MANIFEST is not set; "
+            "the control plane must pass the manifest location",
+            file=sys.stderr,
+        )
+        return 1
     workspace = Path(os.environ.get("TRAINER_WORKSPACE", "/tmp/trainer"))
     workspace.mkdir(parents=True, exist_ok=True)
     try:

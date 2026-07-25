@@ -61,7 +61,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          CATALOG="$(uv run --project rtrrl/infra/mock-trainer python scripts/build_catalog.py --print-label)"
+          CATALOG="$(uv run --project rtrrl/infra/mock-trainer python rtrrl/infra/mock-trainer/scripts/build_catalog.py --print-label)"
           echo "value=$CATALOG" >> "$GITHUB_OUTPUT"
 
       - name: Build local image
@@ -90,26 +90,37 @@ jobs:
           ACTUAL_LABEL="$ACTUAL_LABEL" uv run --project rtrrl/infra/mock-trainer python - <<'PY'
           import json
           import os
-          from pathlib import Path
+          import sys
 
-          from scripts.build_catalog import decode_catalog, encode_label, write_catalog
+          sys.path.insert(0, "rtrrl/infra/mock-trainer/scripts")
+          from build_catalog import CATALOG_PATH, decode_catalog, encode_label, write_catalog
 
           actual_bytes = os.environ["ACTUAL_LABEL"].encode("ascii")
           expected_bytes = os.environ["EXPECTED_LABEL"].encode("ascii")
           assert actual_bytes == expected_bytes
           actual_catalog = decode_catalog(os.environ["ACTUAL_LABEL"])
-          source_catalog = json.loads(Path("rtrrl/infra/mock-trainer/catalog.json").read_text())
+          source_catalog = json.loads(CATALOG_PATH.read_text())
           assert actual_catalog.model_dump(mode="json") == source_catalog
           write_catalog()
           assert encode_label(actual_catalog) == os.environ["ACTUAL_LABEL"]
           PY
 
           docker run --rm "$IMAGE" sh -eu -c '
-            test -f /opt/trainer/worker.py &&
             test -f /opt/trainer/catalog.json &&
             test -d /opt/acceptance
           '
-          docker run --rm "$IMAGE" python /opt/trainer/worker.py --help >/dev/null
+
+          # Run the image's own command, with nothing overridden. A Batch job gets
+          # exactly this, so it proves the entry point in the image is the SDK
+          # worker and that it imports. Without a manifest it must refuse, and say
+          # why: that message is all CloudWatch would show.
+          CMD="$(docker image inspect --format '{{ join .Config.Cmd " " }}' "$IMAGE")"
+          test "$CMD" = 'python -m training_sdk.worker'
+          if docker run --rm "$IMAGE" >worker-start.log 2>&1; then
+            echo "the worker exited 0 without a manifest" >&2
+            exit 1
+          fi
+          grep -q 'TRAINER_MANIFEST is not set' worker-start.log
           docker run --rm "$IMAGE" python -c '
           import brax_ppo_acceptance, boto3, jax, training_sdk
           import importlib.util
@@ -226,7 +237,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          CATALOG="$(uv run --project rtrrl/infra/mock-trainer python scripts/build_catalog.py --print-label)"
+          CATALOG="$(uv run --project rtrrl/infra/mock-trainer python rtrrl/infra/mock-trainer/scripts/build_catalog.py --print-label)"
           echo "value=$CATALOG" >> "$GITHUB_OUTPUT"
 
       - name: Rebuild local image
@@ -255,26 +266,37 @@ jobs:
           ACTUAL_LABEL="$ACTUAL_LABEL" uv run --project rtrrl/infra/mock-trainer python - <<'PY'
           import json
           import os
-          from pathlib import Path
+          import sys
 
-          from scripts.build_catalog import decode_catalog, encode_label, write_catalog
+          sys.path.insert(0, "rtrrl/infra/mock-trainer/scripts")
+          from build_catalog import CATALOG_PATH, decode_catalog, encode_label, write_catalog
 
           actual_bytes = os.environ["ACTUAL_LABEL"].encode("ascii")
           expected_bytes = os.environ["EXPECTED_LABEL"].encode("ascii")
           assert actual_bytes == expected_bytes
           actual_catalog = decode_catalog(os.environ["ACTUAL_LABEL"])
-          source_catalog = json.loads(Path("rtrrl/infra/mock-trainer/catalog.json").read_text())
+          source_catalog = json.loads(CATALOG_PATH.read_text())
           assert actual_catalog.model_dump(mode="json") == source_catalog
           write_catalog()
           assert encode_label(actual_catalog) == os.environ["ACTUAL_LABEL"]
           PY
 
           docker run --rm "$IMAGE" sh -eu -c '
-            test -f /opt/trainer/worker.py &&
             test -f /opt/trainer/catalog.json &&
             test -d /opt/acceptance
           '
-          docker run --rm "$IMAGE" python /opt/trainer/worker.py --help >/dev/null
+
+          # Run the image's own command, with nothing overridden. A Batch job gets
+          # exactly this, so it proves the entry point in the image is the SDK
+          # worker and that it imports. Without a manifest it must refuse, and say
+          # why: that message is all CloudWatch would show.
+          CMD="$(docker image inspect --format '{{ join .Config.Cmd " " }}' "$IMAGE")"
+          test "$CMD" = 'python -m training_sdk.worker'
+          if docker run --rm "$IMAGE" >worker-start.log 2>&1; then
+            echo "the worker exited 0 without a manifest" >&2
+            exit 1
+          fi
+          grep -q 'TRAINER_MANIFEST is not set' worker-start.log
           docker run --rm "$IMAGE" python -c '
           import brax_ppo_acceptance, boto3, jax, training_sdk
           import importlib.util
