@@ -3,8 +3,6 @@
 !training-sdk/**
 !rtrrl
 !rtrrl/infra
-!rtrrl/infra/worker
-!rtrrl/infra/worker/worker.py
 !rtrrl/infra/mock-trainer
 !rtrrl/infra/mock-trainer/**
 

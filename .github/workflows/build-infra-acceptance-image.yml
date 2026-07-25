@@ -9,7 +9,6 @@ on:
       - .dockerignore
       - rtrrl/infra/mock-trainer/**
       - training-sdk/**
-      - rtrrl/infra/worker/worker.py
       - rtrrl/infra/control-plane/src/trainer_infra/**
       - rtrrl/infra/control-plane/pyproject.toml
       - rtrrl/infra/control-plane/uv.lock

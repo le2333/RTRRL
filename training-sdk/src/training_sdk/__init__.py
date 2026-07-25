@@ -1,48 +1,6 @@
-from __future__ import annotations
+"""Training-side SDK: the reporter, its sinks, the worker, and the contract.
 
-from .bootstrap import RUN_CONTEXT_ENV, bootstrap_from_environment
-from .context import JsonValue, RunContext
-from .run import NullRerun, TrainingRun
-from .spool import (
-    EventSpool,
-    MemorySpool,
-    MetricEvent,
-    SpoolCorruptionError,
-)
-from .types import Episode
-
-
-_current_run: TrainingRun | None = None
-
-
-def set_current_run(run: TrainingRun | None) -> None:
-    global _current_run
-    _current_run = run
-
-
-def maybe_current_run() -> TrainingRun | None:
-    return _current_run
-
-
-def current_run() -> TrainingRun:
-    if _current_run is None:
-        raise RuntimeError("no training run has been initialized")
-    return _current_run
-
-
-__all__ = [
-    "Episode",
-    "EventSpool",
-    "JsonValue",
-    "MemorySpool",
-    "MetricEvent",
-    "NullRerun",
-    "RunContext",
-    "RUN_CONTEXT_ENV",
-    "SpoolCorruptionError",
-    "TrainingRun",
-    "bootstrap_from_environment",
-    "current_run",
-    "maybe_current_run",
-    "set_current_run",
-]
+Nothing is re-exported here. Import the module you need — `training_sdk.reporter`,
+`training_sdk.contract`, `training_sdk.episode` — so that a training script pays
+for only what it uses and the import graph stays readable.
+"""

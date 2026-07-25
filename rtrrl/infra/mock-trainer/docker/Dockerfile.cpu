@@ -17,8 +17,7 @@ LABEL org.rtrrl.trainer.catalog.v2="${TRAINER_CATALOG_V2}"
 COPY --from=builder /opt/venv /opt/venv
 COPY rtrrl/infra/mock-trainer /opt/acceptance
 COPY rtrrl/infra/mock-trainer/catalog.json /opt/trainer/catalog.json
-COPY rtrrl/infra/worker/worker.py /opt/trainer/worker.py
 ENV PATH="/opt/venv/bin:${PATH}" \
     PYTHONUNBUFFERED=1 \
     JAX_PLATFORM_NAME=cpu
-CMD ["python", "/opt/trainer/worker.py", "--help"]
+CMD ["python", "-m", "training_sdk.worker"]

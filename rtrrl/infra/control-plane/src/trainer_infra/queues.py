@@ -6,6 +6,11 @@ from trainer_infra.preflight import PreflightError
 
 JOB_LOG_GROUP = "/trainer/jobs"
 
+ACCOUNT_ID = "007122174918"
+REGION = "eu-north-1"
+JOB_ROLE_ARN = f"arn:aws:iam::{ACCOUNT_ID}:role/rtrrl-batch-job-role"
+EXECUTION_ROLE_ARN = f"arn:aws:iam::{ACCOUNT_ID}:role/rtrrl-batch-execution-role"
+
 
 @dataclass(frozen=True)
 class QueueBinding:
@@ -15,6 +20,7 @@ class QueueBinding:
     dev_queue: str
     max_vcpus: int
     vcpus_per_job: int
+    memory_mib: int
     gpus_per_job: int = 0
 
     @property
@@ -31,16 +37,16 @@ class QueueBinding:
 
 QUEUES: dict[str, QueueBinding] = {
     "c7a.medium": QueueBinding(
-        "c7a.medium", "c7am", "run-cpu-c7am-queue", "dev-cpu-c7am-queue", 16, 1
+        "c7a.medium", "c7am", "run-cpu-c7am-queue", "dev-cpu-c7am-queue", 16, 1, 1600
     ),
     "c7a.large": QueueBinding(
-        "c7a.large", "c7al", "run-cpu-c7al-queue", "dev-cpu-c7al-queue", 32, 2
+        "c7a.large", "c7al", "run-cpu-c7al-queue", "dev-cpu-c7al-queue", 32, 2, 3200
     ),
     "c7a.xlarge": QueueBinding(
-        "c7a.xlarge", "c7ax", "run-cpu-c7ax-queue", "dev-cpu-c7ax-queue", 16, 4
+        "c7a.xlarge", "c7ax", "run-cpu-c7ax-queue", "dev-cpu-c7ax-queue", 16, 4, 7168
     ),
     "g6.xlarge": QueueBinding(
-        "g6.xlarge", "g6x", "run-gpu-queue", "dev-gpu-queue", 32, 4, 1
+        "g6.xlarge", "g6x", "run-gpu-queue", "dev-gpu-queue", 32, 4, 12000, 1
     ),
 }
 

@@ -1262,7 +1262,6 @@ name = "trainer-infra"
 version = "0.1.0"
 source = { editable = "." }
 dependencies = [
-    { name = "aim" },
     { name = "boto3" },
     { name = "optuna" },
     { name = "pydantic" },
@@ -1279,7 +1278,6 @@ dev = [
 
 [package.metadata]
 requires-dist = [
-    { name = "aim", specifier = "==3.28.0" },
     { name = "boto3", specifier = ">=1.35,<2" },
     { name = "optuna", specifier = ">=4,<5" },
     { name = "pydantic", specifier = ">=2.8,<3" },

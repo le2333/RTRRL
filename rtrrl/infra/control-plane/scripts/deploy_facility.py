@@ -1,8 +1,18 @@
+"""Register the Batch job definitions a launch needs, and the log group they write to.
+
+Queues and compute environments are not created here: they already exist and are
+described by `trainer_infra.queues`. This script only binds an image digest to a
+job definition per queue profile, which is the one thing that changes when a new
+image is pushed.
+
+Dry run by default. Registering requires `--register` and the account id, because
+it is the first step in this repository that mutates AWS.
+"""
+
 from __future__ import annotations
 
 import argparse
 import json
-from pathlib import Path
 import re
 import sys
 from typing import Any
@@ -10,243 +20,146 @@ from typing import Any
 import boto3
 from botocore.exceptions import ClientError
 
-from trainer_infra.aws_profiles import PROFILES
-from trainer_infra.ecr import BotoEcrCatalogReader
-from trainer_infra.facility_control import FacilityControl, load_facility_control
-from trainer_infra.image_catalog import load_catalog_index
-from trainer_infra.models import ScriptCatalog
-from trainer_infra.queues import JOB_LOG_GROUP
+from trainer_infra.queues import (
+    ACCOUNT_ID,
+    EXECUTION_ROLE_ARN,
+    JOB_LOG_GROUP,
+    JOB_ROLE_ARN,
+    QUEUES,
+    REGION,
+    QueueBinding,
+    job_definition_name,
+)
 
+REGISTRY = f"{ACCOUNT_ID}.dkr.ecr.{REGION}.amazonaws.com"
+REPOSITORY = "rtrrl"
+WORKER_COMMAND = ["python", "-m", "training_sdk.worker"]
+LOG_RETENTION_DAYS = 30
 
-ROOT = Path(__file__).resolve().parents[4]
-EXPECTED_CATALOG = ROOT / "rtrrl" / "infra" / "mock-trainer" / "scripts" / "index.yaml"
-
-
-class DeployRequest:
-    def __init__(
-        self,
-        *,
-        register: bool = False,
-        confirm_account: str | None = None,
-        cpu_digest: str | None = None,
-        gpu_digest: str | None = None,
-    ) -> None:
-        self.register = register
-        self.confirm_account = confirm_account
-        self.cpu_digest = cpu_digest
-        self.gpu_digest = gpu_digest
+_DIGEST = re.compile(
+    rf"{re.escape(REGISTRY)}/{re.escape(REPOSITORY)}@sha256:(?P<hex>[0-9a-f]{{64}})\Z"
+)
 
 
 def _stable_json(value: object) -> str:
     return json.dumps(value, separators=(",", ":"), sort_keys=True)
 
 
-def _registry(control: FacilityControl) -> str:
-    return f"{control.account_id}.dkr.ecr.{control.region}.amazonaws.com"
-
-
-def _tagged_image(control: FacilityControl, kind: str) -> str:
-    tag = control.cpu_image_tag if kind == "cpu" else control.gpu_image_tag
-    return f"{_registry(control)}/{control.ecr_repository}:{tag}"
-
-
-def _validated_digest(
-    image: str | None,
-    kind: str,
-    control: FacilityControl,
-) -> tuple[str, str]:
-    if image is None:
-        raise ValueError(f"{kind} digest image is required for registration")
-    pattern = re.compile(
-        rf"{re.escape(_registry(control))}/"
-        rf"{re.escape(control.ecr_repository)}@sha256:([0-9a-f]{{64}})\Z"
-    )
-    match = pattern.fullmatch(image)
-    if match is None:
+def validated_digest(image: str | None, kind: str) -> str:
+    if not image:
+        raise ValueError(f"--{kind}-digest is required to register job definitions")
+    if _DIGEST.fullmatch(image) is None:
         raise ValueError(
-            f"{kind} digest must be {_registry(control)}/"
-            f"{control.ecr_repository}@sha256:<64 lowercase hex>"
+            f"{kind} image must be {REGISTRY}/{REPOSITORY}@sha256:<64 lowercase hex>, "
+            f"not {image!r}; a tag is not accepted because it can move"
         )
-    return image, match.group(1)
+    return image
 
 
-def _verify_digest_catalogs(
-    session: Any,
-    control: FacilityControl,
-    images: dict[str, tuple[str, str]],
-) -> None:
-    expected = load_catalog_index(EXPECTED_CATALOG)
-    if expected.protocol_version != "1" or set(expected.scripts) != {
-        "brax_ppo_acceptance"
-    }:
-        raise ValueError("local expected catalog identity is invalid")
-    descriptor = expected.scripts["brax_ppo_acceptance"]
-    if (
-        descriptor.sdk_protocol_version != "1"
-        or descriptor.objective.metric != "eval/episode_return"
-        or descriptor.environments != ("inverted_pendulum",)
-        or set(descriptor.fields)
-        != {
-            "seed",
-            "learning_rate",
-            "num_envs",
-            "episode_length",
-            "failure_mode",
-        }
-    ):
-        raise ValueError("local expected catalog contract is invalid")
-    expected_bytes = _catalog_bytes(expected)
-    reader = BotoEcrCatalogReader(
-        session.client("ecr"),
-        account_id=control.account_id,
-        region=control.region,
-    )
-    for image, _digest_hex in images.values():
-        verified = reader.resolve_and_fetch(image)
-        actual = verified.catalog
-        if (
-            verified.reference != image
-            or verified.repository != f"{_registry(control)}/{control.ecr_repository}"
-            or verified.digest != image.rsplit("@", 1)[1]
-            or type(actual) is not type(expected)
-            or actual != expected
-            or _catalog_bytes(actual) != expected_bytes
-        ):
-            raise ValueError(f"ECR digest catalog verification failed for {image}")
-
-
-def _catalog_bytes(catalog: ScriptCatalog) -> bytes:
-    return catalog.model_dump_json(exclude_none=True).encode("utf-8")
-
-
-def _resource_requirements(vcpus: int, memory: int, gpus: int) -> list[dict[str, str]]:
-    result = [
-        {"type": "VCPU", "value": str(vcpus)},
-        {"type": "MEMORY", "value": str(memory)},
+def _resource_requirements(binding: QueueBinding) -> list[dict[str, str]]:
+    requirements = [
+        {"type": "VCPU", "value": str(binding.vcpus_per_job)},
+        {"type": "MEMORY", "value": str(binding.memory_mib)},
     ]
-    if gpus:
-        result.append({"type": "GPU", "value": str(gpus)})
-    return result
+    if binding.gpus_per_job:
+        requirements.append({"type": "GPU", "value": str(binding.gpus_per_job)})
+    return requirements
 
 
-def _log_configuration(region: str) -> dict[str, Any]:
-    return {
-        "logDriver": "awslogs",
-        "options": {
-            "awslogs-group": JOB_LOG_GROUP,
-            "awslogs-region": region,
-        },
-    }
-
-
-def _ensure_job_log_group(session: Any) -> None:
+def ensure_log_group(session: Any) -> None:
     logs = session.client("logs")
     try:
         logs.create_log_group(logGroupName=JOB_LOG_GROUP)
     except ClientError as error:
-        code = error.response.get("Error", {}).get("Code")
-        if code != "ResourceAlreadyExistsException":
+        if error.response.get("Error", {}).get("Code") != "ResourceAlreadyExistsException":
             raise
-    logs.put_retention_policy(logGroupName=JOB_LOG_GROUP, retentionInDays=30)
+    logs.put_retention_policy(
+        logGroupName=JOB_LOG_GROUP,
+        retentionInDays=LOG_RETENTION_DAYS,
+    )
 
 
-def _register_definitions(
-    session: Any,
-    control: FacilityControl,
-    *,
-    images: dict[str, tuple[str, str]],
-) -> list[str]:
+def register_definitions(session: Any, *, cpu_image: str, gpu_image: str) -> list[str]:
     batch = session.client("batch")
-    arns = []
-    for name, profile in PROFILES.items():
-        kind = "gpu" if profile.gpus else "cpu"
-        image, digest_hex = images[kind]
+    arns: list[str] = []
+    for binding in QUEUES.values():
+        image = gpu_image if binding.gpus_per_job else cpu_image
+        digest = image.rsplit("@", 1)[1]
         response = batch.register_job_definition(
-            jobDefinitionName=f"trainer-{name}-{digest_hex}",
+            jobDefinitionName=job_definition_name(binding, digest),
             type="container",
             platformCapabilities=["EC2"],
+            # A failed run ends the launch, so a second attempt would only spend
+            # money reproducing a failure the operator has to fix anyway.
             retryStrategy={"attempts": 1},
             containerProperties={
-                "command": ["python", "/opt/trainer/worker.py"],
-                "environment": [
-                    {"name": "TRAINER_WORKER_PROTOCOL_VERSION", "value": "1"}
-                ],
-                "executionRoleArn": control.execution_role_arn,
+                "command": WORKER_COMMAND,
+                "executionRoleArn": EXECUTION_ROLE_ARN,
                 "image": image,
-                "jobRoleArn": control.job_role_arn,
-                "logConfiguration": _log_configuration(control.region),
-                "resourceRequirements": _resource_requirements(
-                    profile.vcpus,
-                    profile.memory_mib,
-                    profile.gpus,
-                ),
+                "jobRoleArn": JOB_ROLE_ARN,
+                "logConfiguration": {
+                    "logDriver": "awslogs",
+                    "options": {
+                        "awslogs-group": JOB_LOG_GROUP,
+                        "awslogs-region": REGION,
+                    },
+                },
+                "resourceRequirements": _resource_requirements(binding),
             },
         )
         arn = response.get("jobDefinitionArn")
         if not isinstance(arn, str) or not arn:
-            raise ValueError(f"Batch returned no ARN for profile {name}")
+            raise ValueError(f"Batch returned no ARN for profile {binding.profile!r}")
         arns.append(arn)
     return arns
 
 
 def deploy(
-    config: DeployRequest,
     *,
-    control: FacilityControl,
+    register: bool = False,
+    confirm_account: str | None = None,
+    cpu_digest: str | None = None,
+    gpu_digest: str | None = None,
     session: Any | None = None,
 ) -> dict[str, Any]:
-    requested = {"register": config.register}
-    if not config.register:
+    if not register:
         return {
             "mode": "dry-run",
-            "planned_images": [
-                _tagged_image(control, "cpu"),
-                _tagged_image(control, "gpu"),
+            "planned_definitions": [
+                job_definition_name(binding, "sha256:<digest>") for binding in QUEUES.values()
             ],
-            "planned_profiles": list(PROFILES),
-            "requested": requested,
-            "retry_attempts": 1,
-            "submission_supported": False,
+            "log_group": JOB_LOG_GROUP,
+            "worker_command": WORKER_COMMAND,
         }
 
-    if config.confirm_account != control.account_id:
-        raise ValueError(
-            f"mutating phases require --confirm-account {control.account_id}"
-        )
-    active_session = session or boto3.Session(region_name=control.region)
-    identity = active_session.client("sts").get_caller_identity()
-    if identity.get("Account") != control.account_id:
-        raise ValueError("AWS account does not match facility control")
-    if active_session.region_name != control.region:
-        raise ValueError("AWS region does not match facility control")
+    if confirm_account != ACCOUNT_ID:
+        raise ValueError(f"registering requires --confirm-account {ACCOUNT_ID}")
+    cpu_image = validated_digest(cpu_digest, "cpu")
+    gpu_image = validated_digest(gpu_digest, "gpu")
+    if cpu_image == gpu_image:
+        raise ValueError("the CPU and GPU images must be different digests")
 
-    images = {
-        "cpu": _validated_digest(config.cpu_digest, "CPU", control),
-        "gpu": _validated_digest(config.gpu_digest, "GPU", control),
-    }
-    if images["cpu"][1] == images["gpu"][1]:
-        raise ValueError("CPU and GPU image digests must be distinct")
-    _verify_digest_catalogs(active_session, control, images)
-    _ensure_job_log_group(active_session)
-    definitions = _register_definitions(active_session, control, images=images)
+    active = session or boto3.Session(region_name=REGION)
+    identity = active.client("sts").get_caller_identity()
+    if identity.get("Account") != ACCOUNT_ID:
+        raise ValueError(
+            f"these credentials are for account {identity.get('Account')!r}, not {ACCOUNT_ID}"
+        )
+
+    ensure_log_group(active)
+    definitions = register_definitions(active, cpu_image=cpu_image, gpu_image=gpu_image)
     return {
-        "digests": {kind: image for kind, (image, _digest) in images.items()},
+        "mode": "register",
+        "images": {"cpu": cpu_image, "gpu": gpu_image},
         "job_definitions": definitions,
-        "mode": "execute",
-        "requested": requested,
-        "retry_attempts": 1,
-        "submission_supported": False,
+        "log_group": JOB_LOG_GROUP,
+        "worker_command": WORKER_COMMAND,
     }
 
 
 def _parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(
-        description=(
-            "Plan fixed facility images or explicitly register digest-bound definitions."
-        )
-    )
+    parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--register", action="store_true")
-    parser.add_argument("--control", required=True, type=Path)
     parser.add_argument("--confirm-account")
     parser.add_argument("--cpu-digest")
     parser.add_argument("--gpu-digest")
@@ -255,14 +168,16 @@ def _parser() -> argparse.ArgumentParser:
 
 def main(argv: list[str] | None = None) -> int:
     arguments = _parser().parse_args(argv)
-    config = DeployRequest(
-        register=arguments.register,
-        confirm_account=arguments.confirm_account,
-        cpu_digest=arguments.cpu_digest,
-        gpu_digest=arguments.gpu_digest,
+    print(
+        _stable_json(
+            deploy(
+                register=arguments.register,
+                confirm_account=arguments.confirm_account,
+                cpu_digest=arguments.cpu_digest,
+                gpu_digest=arguments.gpu_digest,
+            )
+        )
     )
-    control = load_facility_control(arguments.control)
-    print(_stable_json(deploy(config, control=control)))
     return 0
 
 

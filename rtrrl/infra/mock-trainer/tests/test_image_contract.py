@@ -59,10 +59,8 @@ ROOT_CONTEXT_SOURCES = {
     "training-sdk",
     "rtrrl/infra/mock-trainer",
     "rtrrl/infra/mock-trainer/catalog.json",
-    "rtrrl/infra/worker/worker.py",
 }
 EXPECTED_PATHS = {
-    "/opt/trainer/worker.py",
     "/opt/trainer/catalog.json",
     "/opt/acceptance",
 }
@@ -204,6 +202,20 @@ def test_dockerfile_inputs_match_recorded_amd64_registry_manifests(filename: str
 
 
 @pytest.mark.parametrize("filename", DOCKERFILES)
+def test_dockerfile_runs_the_sdk_worker(filename: str) -> None:
+    """The image must default to the worker that understands the manifest contract.
+
+    An earlier revision baked a different worker at /opt/trainer/worker.py which
+    ignores TRAINER_MANIFEST, so a submitted job started, read no work and told
+    nobody. Nothing else in the image would have revealed that.
+    """
+    contents = (DOCKER_DIR / filename).read_text(encoding="utf-8")
+
+    assert 'CMD ["python", "-m", "training_sdk.worker"]' in contents
+    assert "/opt/trainer/worker.py" not in contents
+
+
+@pytest.mark.parametrize("filename", DOCKERFILES)
 def test_dockerfile_copies_only_the_infra_acceptance_context(filename: str) -> None:
     contents = (DOCKER_DIR / filename).read_text(encoding="utf-8")
     copies = _root_context_copies(contents)
@@ -240,8 +252,6 @@ def test_dockerignore_rules_apply_allowlist_before_runtime_and_secret_exclusions
         "!training-sdk/**",
         "!rtrrl",
         "!rtrrl/infra",
-        "!rtrrl/infra/worker",
-        "!rtrrl/infra/worker/worker.py",
         "!rtrrl/infra/mock-trainer",
         "!rtrrl/infra/mock-trainer/**",
     )
@@ -301,13 +311,10 @@ def test_dockerignore_actual_root_context_contains_only_required_inputs() -> Non
     included = _included_context_files(matcher)
 
     assert included
-    assert "rtrrl/infra/worker/worker.py" in included
     assert any(path.startswith("training-sdk/") for path in included)
     assert any(path.startswith("rtrrl/infra/mock-trainer/") for path in included)
     assert all(
-        path == "rtrrl/infra/worker/worker.py"
-        or path.startswith(("training-sdk/", "rtrrl/infra/mock-trainer/"))
-        for path in included
+        path.startswith(("training-sdk/", "rtrrl/infra/mock-trainer/")) for path in included
     )
     assert not any(
         forbidden in path
