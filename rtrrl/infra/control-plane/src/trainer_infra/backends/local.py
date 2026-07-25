@@ -75,14 +75,14 @@ class LocalBackend:
                 "TRAINER_STALL_FACTOR": str(self._stall_factor),
             }
         )
-        handle = log_path.open("wb")
-        process = subprocess.Popen(
-            [self._python, "-m", "training_sdk.worker"],
-            env=environment,
-            stdout=handle,
-            stderr=subprocess.STDOUT,
-            start_new_session=True,
-        )
+        with log_path.open("wb") as handle:
+            process = subprocess.Popen(
+                [self._python, "-m", "training_sdk.worker"],
+                env=environment,
+                stdout=handle,
+                stderr=subprocess.STDOUT,
+                start_new_session=True,
+            )
         job_id = f"local-{name}-{process.pid}"
         self._processes[job_id] = process
         self._names[job_id] = name
@@ -96,14 +96,15 @@ class LocalBackend:
             JobResult(
                 job_id=job_id,
                 name=self._names[job_id],
-                succeeded=self._processes[job_id].returncode == 0,
+                succeeded=(returncode := self._processes[job_id].returncode) == 0,
                 log_stream=str(self._logs[job_id]),
-                reason=f"exit code {self._processes[job_id].returncode}",
+                reason=None if returncode == 0 else f"exit code {returncode}",
             )
             for job_id in job_ids
         ]
 
     def terminate(self, job_ids: Sequence[str]) -> None:
+        """Best-effort kill: descendants are read once, so a fork after that scan may survive."""
         for job_id in job_ids:
             process = self._processes.get(job_id)
             if process is None or process.poll() is not None:

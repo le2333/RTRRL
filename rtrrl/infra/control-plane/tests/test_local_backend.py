@@ -77,6 +77,8 @@ def test_failed_worker_is_reported_with_a_readable_log(
     job_id = backend.submit_raw(f"{s3_base}/missing-manifest.json", "job-0")
     results = backend.wait([job_id])
     assert len(results) == 1 and results[0].succeeded is False
+    returncode = backend._processes[job_id].returncode
+    assert results[0].reason == f"exit code {returncode}"
     assert "worker failed" in backend.log_tail(results[0], 50)
 
 
@@ -94,6 +96,7 @@ with open(os.path.join(scratch, "metrics.jsonl"), "a") as handle:
     job_id = backend.submit_raw(manifest, "job-ok")
     results = backend.wait([job_id])
     assert len(results) == 1 and results[0].succeeded is True
+    assert results[0].reason is None
 
 
 def test_log_tail_returns_only_the_last_lines(tmp_path: Path) -> None:
