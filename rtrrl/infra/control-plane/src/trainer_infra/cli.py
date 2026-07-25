@@ -4,7 +4,6 @@ import argparse
 from collections.abc import Callable, Sequence
 import json
 import os
-import signal
 from datetime import UTC, datetime
 from pathlib import Path
 import sys
@@ -25,7 +24,6 @@ from trainer_infra.adapters.aws_batch import (
 from trainer_infra.adapters.s3 import S3ObjectStore
 from trainer_infra.aim_reader import AimReader
 from trainer_infra.backends.batch import BatchBackend
-from trainer_infra.backends.base import Backend
 from trainer_infra.controller import ExperimentController, ExperimentRunError
 from trainer_infra.ecr import BotoEcrCatalogReader
 from trainer_infra.backends.local import LocalBackend
@@ -265,29 +263,6 @@ def validate_batch_command(
     return 0
 
 
-class _InterruptibleBackend:
-    def __init__(self, backend: Backend) -> None:
-        self._backend = backend
-        self._active: list[str] = []
-
-    def submit(self, launch, manifest_uri: str, name: str) -> str:
-        job_id = self._backend.submit(launch, manifest_uri, name)
-        self._active.append(job_id)
-        return job_id
-
-    def wait(self, job_ids: Sequence[str]) -> list:
-        try:
-            return self._backend.wait(job_ids)
-        finally:
-            self._active.clear()
-
-    def terminate(self, job_ids: Sequence[str]) -> None:
-        self._backend.terminate(job_ids)
-
-    def log_tail(self, result, lines: int) -> str:
-        return self._backend.log_tail(result, lines)
-
-
 def run_batch_command(
     experiment_path: Path,
     archive_dir: Path,
@@ -312,19 +287,9 @@ def run_batch_command(
     session = (_batch_session_factory if session_factory is None else session_factory)()
     batch = session.client("batch")
     logs = session.client("logs")
-    backend = _InterruptibleBackend(
-        BatchBackend(batch, logs, poll_seconds=poll_seconds)
-    )
+    backend = BatchBackend(batch, logs, poll_seconds=poll_seconds)
     launch = create_launch(plan, archive_dir, experiment_path, datetime.now(UTC))
 
-    previous_handler = signal.getsignal(signal.SIGINT)
-
-    def handle_sigint(signum: int, frame: object | None) -> None:
-        del signum, frame
-        backend.terminate(list(backend._active))
-        raise KeyboardInterrupt
-
-    signal.signal(signal.SIGINT, handle_sigint)
     try:
         report = run_launch(
             launch,
@@ -337,8 +302,6 @@ def run_batch_command(
     except KeyboardInterrupt:
         print("trainerctl: interrupted", file=sys.stderr)
         return 130
-    finally:
-        signal.signal(signal.SIGINT, previous_handler)
 
     print(json.dumps(report.payload(), sort_keys=True, indent=2))
     return 0

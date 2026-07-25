@@ -30,14 +30,25 @@ def assert_fixture_matches_shape(value: object, shape: object, path: str = "") -
         assert isinstance(value, dict), f"{path} should be a map"
         for key, nested in value.items():
             assert_fixture_matches_shape(nested, shape.value, f"{path}[{key!r}]")
+    elif type_name == "string":
+        assert isinstance(value, str), f"{path} should be a string"
+        if shape.enum:
+            assert value in shape.enum, (
+                f"{path} value {value!r} is not one of {shape.enum}"
+            )
     else:
-        assert value is not None or shape.type_name == "string", (
-            f"{path} should be a scalar value"
-        )
+        assert value is not None, f"{path} should be a scalar value"
 
 
 def test_fixture_matches_describe_jobs_output_shape() -> None:
     assert_fixture_matches_shape(RECORDED, DESCRIBE_JOBS_OUTPUT)
+
+
+def test_batch_backend_status_literals_are_job_status_enum_members() -> None:
+    status_shape = JOB_DETAIL.members["status"]
+    assert status_shape.enum is not None
+    for literal in ("SUCCEEDED", "FAILED"):
+        assert literal in status_shape.enum
 
 
 class FakeBatch:
@@ -143,6 +154,21 @@ def test_terminate_calls_batch_for_every_job(launch_for_batch) -> None:
     job_id = backend.submit(launch_for_batch, "s3://bucket/m.json", "job-0")
     backend.terminate([job_id])
     assert batch.terminated == [job_id]
+
+
+def test_terminate_tolerates_already_finished_jobs(launch_for_batch) -> None:
+    batch = FakeBatch(
+        job_sequences={
+            "job-1": ["SUCCEEDED"],
+            "job-2": ["RUNNING", "RUNNING"],
+        }
+    )
+    backend = BatchBackend(batch, FakeLogs(), poll_seconds=0)
+    finished_id = backend.submit(launch_for_batch, "s3://bucket/finished.json", "job-finished")
+    running_id = backend.submit(launch_for_batch, "s3://bucket/running.json", "job-running")
+    backend.wait([finished_id])
+    backend.terminate([finished_id, running_id])
+    assert set(batch.terminated) == {finished_id, running_id}
 
 
 def test_wait_returns_early_when_a_sibling_is_still_running(launch_for_batch) -> None:

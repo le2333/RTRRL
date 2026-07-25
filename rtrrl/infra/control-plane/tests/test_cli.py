@@ -8,6 +8,7 @@ from training_sdk.contract import Catalog
 
 from tests.conftest import AimServer
 from tests.helpers import EXAMPLE, write_experiment
+from training_sdk import objects
 from tests.test_preflight_offline import CATALOG, modified, write_catalog
 from trainer_infra.cli import main
 from trainer_infra.experiment import load_experiment
@@ -338,6 +339,88 @@ def test_validate_batch_backend_warns_for_dev_queues(
     captured = capsys.readouterr()
     assert code == 0
     assert "warning: dev queues are for infrastructure development only" in captured.err
+
+
+def test_run_batch_backend_exits_zero_on_success(
+    s3_base: str,
+    tmp_path: Path,
+    aim_endpoint: AimServer,
+    capsys: pytest.CaptureFixture[str],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from tests.test_batch_backend import FakeBatch as PollingBatch, FakeLogs
+    from tests.test_preflight_aws import (
+        DEFINITION,
+        FakeBatch as PreflightBatch,
+        FakeEcr,
+        FakeS3,
+        read_url,
+    )
+
+    experiment_path = write_experiment(tmp_path, s3_base, aim_endpoint.uri)
+    submitted: list[dict] = []
+
+    class RunBatch(PollingBatch):
+        def __init__(self) -> None:
+            super().__init__(["SUCCEEDED"])
+            self._preflight = PreflightBatch()
+
+        def describe_job_queues(self, **kwargs: object) -> dict:
+            return self._preflight.describe_job_queues(**kwargs)
+
+        def describe_job_definitions(self, **kwargs: object) -> dict:
+            return self._preflight.describe_job_definitions(**kwargs)
+
+        def submit_job(self, **kwargs: object) -> dict:
+            submitted.append(kwargs)
+            response = super().submit_job(**kwargs)
+            environment = {
+                item["name"]: item["value"]
+                for item in kwargs["containerOverrides"]["environment"]
+            }
+            manifest = json.loads(objects.get_bytes(environment["TRAINER_MANIFEST"]))
+            for config_uri in manifest["runs"]:
+                config = json.loads(objects.get_bytes(config_uri))
+                objects.put_bytes(
+                    config["score"]["s3"],
+                    json.dumps({"value": 42.0}).encode(),
+                )
+            return response
+
+    class Session:
+        def client(self, service: str):
+            if service == "ecr":
+                return FakeEcr()
+            if service == "batch":
+                return RunBatch()
+            if service == "s3":
+                return FakeS3()
+            if service == "logs":
+                return FakeLogs()
+            raise AssertionError(f"unexpected client {service!r}")
+
+    monkeypatch.setattr("trainer_infra.cli._batch_session_factory", lambda: Session())
+    monkeypatch.setattr("trainer_infra.cli._read_ecr_url", read_url)
+
+    code = main(
+        [
+            "run",
+            str(experiment_path),
+            "--backend",
+            "batch",
+            "--archive-dir",
+            str(tmp_path / "archive"),
+        ]
+    )
+
+    captured = capsys.readouterr()
+    assert code == 0
+    assert submitted
+    assert all(request["jobQueue"] == "run-cpu-c7am-queue" for request in submitted)
+    assert all(request["jobDefinition"] == DEFINITION for request in submitted)
+    report = json.loads(captured.out)
+    assert report["status"] == "succeeded"
+    assert len(report["trials"]) == 4
 
 
 def test_run_local_backend_exits_zero_on_success(
