@@ -4325,10 +4325,16 @@ this step runs:
 
 ```bash
 cd rtrrl/infra/control-plane
-uv run python scripts/deploy_facility.py --cpu-image <cpu-digest> --gpu-image <gpu-digest>
+uv run python scripts/deploy_facility.py            # dry run, prints the plan
+uv run python scripts/deploy_facility.py --register --confirm-account 007122174918 \
+  --cpu-digest 007122174918.dkr.ecr.eu-north-1.amazonaws.com/rtrrl@sha256:<cpu> \
+  --gpu-digest 007122174918.dkr.ecr.eu-north-1.amazonaws.com/rtrrl@sha256:<gpu>
 ```
 
-Expected: four active `trainer-<profile>-<digest>` job definitions and the
+A full reference is required, not a bare digest and never a tag.
+
+Expected: four active job definitions — `trainer-c7am-<digest>`,
+`trainer-c7al-<digest>`, `trainer-c7ax-<digest>`, `trainer-g6x-<digest>` — and the
 `/trainer/jobs` log group from Task 17.
 
 - [ ] **Step 7: Smoke the image on the `dev` CPU queue**
@@ -4339,7 +4345,17 @@ container works; the local gate from Task 14 only proves the contract works.
 
 Copy the example to `examples/experiment-dev-smoke.yaml` with `rounds: 1`,
 `trials_per_round: 1`, `parallel_jobs: 1`, `total_steps: [128]`, and the pushed
-CPU image digest. Then:
+CPU image digest.
+
+`logging.aim` must name the control plane's **private IP**, not loopback. The
+endpoint is copied verbatim into every run config, so `127.0.0.1` sends the job to
+its own loopback while preflight — running here — connects to the real server and
+reports success. The network is already arranged for the routable case: both live
+in `vpc-0a403420fd30ecb83`, and this instance's security group admits TCP 53801
+from the Batch compute security group. Preflight now rejects a loopback endpoint
+for batch launches outright.
+
+Then:
 
 ```bash
 uv run trainerctl validate examples/experiment-dev-smoke.yaml --backend batch --queues dev

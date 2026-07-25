@@ -1,29 +1,29 @@
 experiment: infra-acceptance
-name: brax-ppo-smoke
-description: Infrastructure-owned CPU acceptance sweep
+name: dev-smoke
+description: One trial on the dev CPU queue, to prove the image runs on Batch
 
-image: 007122174918.dkr.ecr.eu-north-1.amazonaws.com/rtrrl:infra-acceptance-brax-ppo-cpu-20260725
+image: 007122174918.dkr.ecr.eu-north-1.amazonaws.com/rtrrl@sha256:d84ccca3d066ed070bd39840aebb0b04dc23d97dcaac544d2fcbca28d73dd9d9
 entry: brax_ppo_acceptance
 storage: s3://rtrrl-training-data
 
 compute:
   instance_type: c7a.medium
-  timeout_minutes: 60
+  timeout_minutes: 30
   startup_minutes: 10
   stall_factor: 10
 
 hpo:
   sampler: tpe
-  rounds: 2
-  trials_per_round: 2
-  parallel_jobs: 2
+  rounds: 1
+  trials_per_round: 1
+  parallel_jobs: 1
 
 space:
   env: [inverted_pendulum]
   backend: [generalized]
   total_steps: [128]
   seed: [0]
-  learning_rate: {type: float, low: 1.0e-4, high: 1.0e-3, log: true}
+  learning_rate: [3.0e-4]
 
 score:
   metric: episode_return

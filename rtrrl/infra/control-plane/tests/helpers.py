@@ -12,7 +12,7 @@ def write_experiment(tmp_path: Path, s3_base: str, aim_uri: str) -> Path:
     content = content.replace(
         "storage: s3://rtrrl-training-data", f"storage: {s3_base}"
     )
-    content = content.replace("aim: aim://127.0.0.1:53801", f"aim: {aim_uri}")
+    content = content.replace("aim: aim://172.31.62.192:53801", f"aim: {aim_uri}")
     path = tmp_path / "experiment.yaml"
     path.write_text(content, encoding="utf-8")
     return path

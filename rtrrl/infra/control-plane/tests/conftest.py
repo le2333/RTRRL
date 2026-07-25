@@ -25,6 +25,18 @@ def _free_port() -> int:
         return probe.getsockname()[1]
 
 
+def _own_address() -> str:
+    """This machine's address as another host on its network would name it.
+
+    Found by asking the routing table where a packet would leave from; the UDP
+    connect sends nothing and needs no reachable peer. Loopback will not do,
+    because preflight rejects it for batch launches.
+    """
+    with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as probe:
+        probe.connect(("192.0.2.1", 9))  # TEST-NET-1, reserved for documentation
+        return probe.getsockname()[0]
+
+
 @pytest.fixture
 def listening_endpoint() -> Iterator[str]:
     """An endpoint whose port accepts a connection, without starting Aim.
@@ -34,11 +46,15 @@ def listening_endpoint() -> Iterator[str]:
     to be listening: the two `validate --backend batch` cases used to pass only
     because a real Aim server runs on the development machine, and they failed
     the moment they ran anywhere else.
+
+    The address is this host's own, not loopback, so it is also an endpoint a
+    Batch job could have reached.
     """
+    address = _own_address()
     with socket.socket() as server:
-        server.bind(("127.0.0.1", 0))
+        server.bind((address, 0))
         server.listen(1)
-        yield f"aim://127.0.0.1:{server.getsockname()[1]}"
+        yield f"aim://{address}:{server.getsockname()[1]}"
 
 
 @pytest.fixture

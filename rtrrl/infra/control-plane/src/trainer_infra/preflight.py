@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import ipaddress
 import socket
 from collections.abc import Callable
 from dataclasses import dataclass
@@ -88,6 +89,29 @@ def _parse_aim_endpoint(aim: str) -> tuple[str, int]:
     except ValueError as error:
         raise PreflightError(f"logging aim {aim!r} has invalid port {port_text!r}") from error
     return host, port
+
+
+def _reject_loopback_aim(host: str, aim: str) -> None:
+    """A Batch host's loopback is its own, not the control plane's.
+
+    This endpoint is copied verbatim into every run config, so a loopback address
+    reaches the Aim server here and nothing at all from the job. Preflight cannot
+    catch that by connecting, because connecting from here succeeds — which is the
+    whole trap. It has to be read.
+    """
+    if host == "localhost":
+        loopback = True
+    else:
+        try:
+            loopback = ipaddress.ip_address(host).is_loopback
+        except ValueError:
+            loopback = False
+    if loopback:
+        raise PreflightError(
+            f"logging aim {aim!r} is a loopback address, which a Batch job resolves "
+            "to itself; name the address the job can reach, such as this machine's "
+            "private IP"
+        )
 
 
 def _describe_catalog_mismatch(image_catalog: Catalog, offline_catalog: Catalog) -> str:
@@ -187,6 +211,7 @@ def check_aws(
         raise PreflightError(f"S3 bucket {bucket!r} is not reachable: {error}") from error
 
     aim_host, aim_port = _parse_aim_endpoint(experiment.logging.aim)
+    _reject_loopback_aim(aim_host, experiment.logging.aim)
     try:
         connect(aim_host, aim_port)
     except PreflightError:

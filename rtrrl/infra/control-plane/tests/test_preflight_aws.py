@@ -214,6 +214,54 @@ def test_dev_tier_selects_the_dev_queue() -> None:
     assert plan.queue == "dev-cpu-c7am-queue"
 
 
+@pytest.mark.parametrize("host", ["127.0.0.1", "127.0.1.5", "localhost", "::1"])
+def test_loopback_aim_endpoint_is_rejected(host: str) -> None:
+    """Connecting from here proves nothing about what the job can reach.
+
+    The endpoint is copied verbatim into every run config, so a loopback address
+    sends the job to itself while preflight, running on the control plane, connects
+    happily to the real Aim server. Reading the address is the only way to catch it.
+    """
+    experiment, catalog, space = plan_arguments()
+    experiment = experiment.model_copy(
+        update={"logging": experiment.logging.model_copy(update={"aim": f"aim://{host}:53801"})}
+    )
+
+    with pytest.raises(PreflightError, match="loopback"):
+        check_aws(
+            experiment,
+            catalog,
+            space,
+            ecr_client=FakeEcr(),
+            batch_client=FakeBatch(),
+            s3_client=FakeS3(),
+            read_url=read_url,
+            connect=lambda host, port: None,
+        )
+
+
+def test_a_routable_aim_endpoint_is_accepted() -> None:
+    experiment, catalog, space = plan_arguments()
+    experiment = experiment.model_copy(
+        update={
+            "logging": experiment.logging.model_copy(update={"aim": "aim://10.1.2.3:53801"})
+        }
+    )
+
+    plan = check_aws(
+        experiment,
+        catalog,
+        space,
+        ecr_client=FakeEcr(),
+        batch_client=FakeBatch(),
+        s3_client=FakeS3(),
+        read_url=read_url,
+        connect=lambda host, port: None,
+    )
+
+    assert plan.experiment.logging.aim == "aim://10.1.2.3:53801"
+
+
 def test_unreachable_aim_endpoint_is_rejected() -> None:
     def refuse(host: str, port: int) -> None:
         raise OSError("connection refused")
