@@ -1,3 +1,4 @@
+import json
 from pathlib import Path
 
 import pytest
@@ -35,6 +36,12 @@ def modified(tmp_path: Path, old: str, new: str) -> Experiment:
     path = tmp_path / "experiment.yaml"
     path.write_text(text.replace(old, new), encoding="utf-8")
     return load_experiment(path)
+
+
+def write_catalog(tmp_path: Path, catalog: Catalog = CATALOG) -> Path:
+    path = tmp_path / "catalog.json"
+    path.write_text(json.dumps(catalog.model_dump()), encoding="utf-8")
+    return path
 
 
 def test_example_passes_offline_checks() -> None:

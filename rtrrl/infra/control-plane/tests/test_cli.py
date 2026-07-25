@@ -3,7 +3,13 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+import pytest
+from training_sdk.contract import Catalog
+
+from test_preflight_offline import CATALOG, EXAMPLE, modified, write_catalog
 from trainer_infra.cli import main
+from trainer_infra.experiment import load_experiment
+from trainer_infra.preflight import check_offline
 from trainer_infra.controller import (
     ExperimentReport,
     ExperimentRunError,
@@ -138,3 +144,82 @@ def test_cli_exposes_exactly_validate_and_run(capsys: object) -> None:
         assert code == 2
         assert captured.out == ""
         assert "invalid choice" in captured.err
+
+
+def test_validate_catalog_exits_zero_and_prints_resolved_space(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    catalog_path = write_catalog(tmp_path)
+    space = check_offline(load_experiment(EXAMPLE), CATALOG)
+
+    code = main(["validate", str(EXAMPLE), "--catalog", str(catalog_path)])
+
+    captured = capsys.readouterr()
+    assert code == 0
+    assert captured.err == ""
+    lines = captured.out.strip().splitlines()
+    assert lines[0] == "resolved search space:"
+    assert len(lines) == 1 + len(space)
+    assert "  total_steps: 128" in captured.out
+
+
+def test_validate_catalog_rejects_unsupported_contract(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    catalog = Catalog.model_validate(CATALOG.model_dump() | {"contract": 99})
+    catalog_path = write_catalog(tmp_path, catalog)
+
+    code = main(["validate", str(EXAMPLE), "--catalog", str(catalog_path)])
+
+    captured = capsys.readouterr()
+    assert code == 1
+    assert captured.out == ""
+    assert "contract 99" in captured.err
+    assert "contract 2" in captured.err
+
+
+def test_validate_catalog_rejects_unknown_score_metric(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    modified(tmp_path, "metric: episode_return", "metric: reward")
+    catalog_path = write_catalog(tmp_path)
+
+    code = main(["validate", str(tmp_path / "experiment.yaml"), "--catalog", str(catalog_path)])
+
+    captured = capsys.readouterr()
+    assert code == 1
+    assert captured.out == ""
+    assert "reward" in captured.err
+
+
+def test_validate_catalog_rejects_score_window_beyond_budget(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    modified(tmp_path, "window_steps: [0, 128]", "window_steps: [0, 129]")
+    catalog_path = write_catalog(tmp_path)
+
+    code = main(["validate", str(tmp_path / "experiment.yaml"), "--catalog", str(catalog_path)])
+
+    captured = capsys.readouterr()
+    assert code == 1
+    assert captured.out == ""
+    assert "score window upper bound 129" in captured.err
+
+
+def test_validate_catalog_rejects_unknown_space_override(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    modified(
+        tmp_path,
+        "  seed: [0]",
+        "  seed: [0]\n  rogue: [1]",
+    )
+    catalog_path = write_catalog(tmp_path)
+
+    code = main(["validate", str(tmp_path / "experiment.yaml"), "--catalog", str(catalog_path)])
+
+    captured = capsys.readouterr()
+    assert code == 1
+    assert captured.out == ""
+    assert "rogue" in captured.err
+    assert "does not accept" in captured.err
