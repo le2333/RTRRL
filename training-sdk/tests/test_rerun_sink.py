@@ -39,7 +39,7 @@ def test_episode_is_uploaded_and_local_copy_removed(s3_base: str, tmp_path: Path
 
     uri = f"{s3_base}/episodes/episode-000001.rrd"
     payload = objects.get_bytes(uri)
-    assert payload[:3] == b"RRF" or len(payload) > 0
+    assert payload.startswith(b"RRF2")
     assert list(tmp_path.glob("*.rrd")) == []
 
 
@@ -107,7 +107,7 @@ def test_build_default_sinks_omits_rerun_when_disabled(tmp_path: Path) -> None:
 
     Repo.from_path(str(tmp_path / "aim"), init=True)
     sinks = build_default_sinks(_config_with_local_aim(tmp_path), tmp_path)
-    assert all(type(sink).__name__ != "RerunSink" for sink in sinks)
+    assert all(not isinstance(sink, RerunSink) for sink in sinks)
 
 
 def test_build_default_sinks_includes_rerun_when_configured(
@@ -122,4 +122,4 @@ def test_build_default_sinks_includes_rerun_when_configured(
         rerun_every_episodes=1,
     )
     sinks = build_default_sinks(config, tmp_path)
-    assert any(type(sink).__name__ == "RerunSink" for sink in sinks)
+    assert any(isinstance(sink, RerunSink) for sink in sinks)

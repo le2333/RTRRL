@@ -1247,6 +1247,7 @@ testing = [
 
 [package.dev-dependencies]
 dev = [
+    { name = "moto", extra = ["server"] },
     { name = "pytest" },
     { name = "ruff" },
 ]
@@ -1265,6 +1266,7 @@ provides-extras = ["testing"]
 
 [package.metadata.requires-dev]
 dev = [
+    { name = "moto", extras = ["server"], specifier = ">=5,<6" },
     { name = "pytest" },
     { name = "ruff" },
 ]
