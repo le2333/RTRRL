@@ -2252,14 +2252,21 @@ class _Heartbeat:
             self._last_seen = now
 
     def limit(self) -> float:
-        if self._last_mtime is None:
-            return self._startup
         if not self._intervals:
-            return self._minimum
+            return self._startup
         return max(statistics.median(self._intervals) * self._factor, self._minimum)
 
     def silence(self) -> float:
         return time.monotonic() - (self._last_seen if self._last_mtime else self._started)
+
+    # The startup grace applies until an *interval* has been observed, not merely
+    # until the first report arrives. Until two reports have been seen the worker
+    # has no idea what this algorithm's normal reporting interval is, and falling
+    # back to `minimum` there kills healthy runs: an algorithm that finishes JIT
+    # compilation, reports once, and then reports every five minutes would be
+    # declared stalled sixty seconds later. Under the no-retry policy that
+    # destroys the whole experiment, so the tolerant direction is the safe one
+    # while the interval is still unknown.
 
     def stalled(self) -> bool:
         self._poll()
