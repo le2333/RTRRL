@@ -17,6 +17,16 @@ def test_report_appends_one_line(tmp_path: Path) -> None:
     ]
 
 
+def test_report_flushes_before_close(tmp_path: Path) -> None:
+    path = tmp_path / "metrics.jsonl"
+    sink = MetricsSink(path)
+    sink.report(5, {"heartbeat": 1.0})
+    with path.open(encoding="utf-8") as reader:
+        line = reader.read().strip()
+    assert json.loads(line) == {"step": 5, "metrics": {"heartbeat": 1.0}}
+    sink.close()
+
+
 def test_report_updates_modification_time(tmp_path: Path) -> None:
     path = tmp_path / "metrics.jsonl"
     sink = MetricsSink(path)

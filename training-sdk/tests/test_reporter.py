@@ -1,6 +1,8 @@
 import json
 from pathlib import Path
 
+import pytest
+
 from training_sdk.contract import RunConfig
 from training_sdk.reporter import METRICS_FILENAME, Reporter
 
@@ -44,6 +46,37 @@ class RecordingSink:
         self.closed = True
 
 
+class FailingRecordingSink(RecordingSink):
+    def __init__(self, message: str) -> None:
+        super().__init__()
+        self._message = message
+
+    def close(self) -> None:
+        raise RuntimeError(self._message)
+
+
+def test_reporter_from_env_reads_config_and_scratch(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    config = make_config()
+    config_path = tmp_path / "run-config.json"
+    config_path.write_text(config.model_dump_json(), encoding="utf-8")
+    scratch = tmp_path / "scratch"
+    scratch.mkdir()
+    monkeypatch.setenv("TRAINER_RUN_CONFIG", str(config_path))
+    monkeypatch.setenv("TRAINER_SCRATCH", str(scratch))
+
+    reporter = Reporter.from_env()
+
+    assert reporter.config.run_id == "smoke-20260725-000000-t0"
+    assert reporter.config.trial == 0
+    reporter.report(3, {"episode_return": 9.0})
+    reporter.close()
+
+    written = json.loads((scratch / METRICS_FILENAME).read_text().strip())
+    assert written == {"step": 3, "metrics": {"episode_return": 9.0}}
+
+
 def test_reporter_fans_out_and_writes_metrics_file(tmp_path: Path) -> None:
     sink = RecordingSink()
     with Reporter(make_config(), tmp_path, sinks=[sink]) as reporter:
@@ -54,17 +87,18 @@ def test_reporter_fans_out_and_writes_metrics_file(tmp_path: Path) -> None:
     assert written == {"step": 1, "metrics": {"episode_return": 3.0}}
 
 
-def test_reporter_closes_every_sink_even_when_one_raises(tmp_path: Path) -> None:
-    class Failing(RecordingSink):
-        def close(self) -> None:
-            raise RuntimeError("sink failed to close")
-
-    failing, healthy = Failing(), RecordingSink()
-    reporter = Reporter(make_config(), tmp_path, sinks=[failing, healthy])
-    try:
+def test_reporter_close_first_sink_raises_still_closes_second(tmp_path: Path) -> None:
+    first = FailingRecordingSink("aim sink failed to close")
+    second = RecordingSink()
+    reporter = Reporter(make_config(), tmp_path, sinks=[first, second])
+    with pytest.raises(RuntimeError, match="aim sink failed to close"):
         reporter.close()
-    except RuntimeError:
-        pass
-    else:  # pragma: no cover - the test asserts the raise happens
-        raise AssertionError("close must propagate the failure")
-    assert healthy.closed is True
+    assert second.closed is True
+
+
+def test_reporter_close_both_sinks_raise_propagates_first(tmp_path: Path) -> None:
+    first = FailingRecordingSink("first failure")
+    second = FailingRecordingSink("second failure")
+    reporter = Reporter(make_config(), tmp_path, sinks=[first, second])
+    with pytest.raises(RuntimeError, match="first failure"):
+        reporter.close()
