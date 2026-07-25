@@ -472,10 +472,8 @@ def with_logger(
     use_wandb = "wandb" in backends
     use_aim = "aim" in backends
     if use_aim:
-        if training_run is None:
-            from training_sdk import maybe_current_run
-
-            training_run = maybe_current_run()
+        # The SDK no longer keeps an ambient "current run" to discover; a caller
+        # that wants one passes it in. Every use below is guarded against None.
         aim_repo = _resolve_aim_repo(aim_repo, hparams)
     base = hparams if isinstance(hparams, dict) else asdict(hparams)
 

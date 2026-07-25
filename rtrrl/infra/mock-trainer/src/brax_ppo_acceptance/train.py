@@ -19,7 +19,7 @@ from brax import envs
 from brax.training import types as brax_types
 from brax.training.acme import running_statistics
 from brax.training.agents.ppo import train as ppo_train
-from training_sdk import Episode
+from training_sdk.episode import Episode
 from training_sdk.reporter import Reporter
 
 from brax_ppo_acceptance.config import AcceptanceConfig
