@@ -111,13 +111,24 @@ Deleted in Task 19: `spool.py`, `storage.py`, `bootstrap.py`, `context.py`,
 | `report.py` | Round summary and final report. |
 | `cli.py` | `validate` and `run`. |
 
-Deleted in Task 19: `aim_reader.py`, `aim_scratch.py`, `aim_process_gate.py`,
-`sampling.py`, `materialize.py`, `resolve.py`, `controller.py`, `execution.py`,
-`models.py`, `loaders.py`, `aws_profiles.py`.
+Deleted in Task 19: the whole v1 surface. Beyond `aim_reader.py`,
+`aim_scratch.py`, `aim_process_gate.py`, `sampling.py`, `materialize.py`,
+`resolve.py`, `controller.py`, `execution.py`, `models.py`, `loaders.py` and
+`aws_profiles.py`, that means `heavy_tests.py`, `heavy_test_cli.py`, `ecr.py`,
+`image_catalog.py`, `facility_control.py`, `identities.py`, the `adapters/`
+package, the v1 facility scripts and `rtrrl/infra/worker/worker.py`.
 
-Kept unchanged: `heavy_tests.py`, `heavy_test_cli.py`, `facility_control.py`,
-`ecr.py`, `image_catalog.py`, `adapters/s3.py`, `scripts/deploy_facility.py`
-(except the log group change in Task 17).
+The earlier plan kept the heavy-test runner and the v1 image readers "unchanged",
+which turned out to be untenable: they import the deleted modules, and nothing
+calls them, since dev-queue work goes through `trainerctl run --queues dev`. The
+`trainer-image-catalog` branch in `infra/build-and-push.sh` only fires for a
+project carrying `infra/scripts/index.yaml`, and no project has one. The
+historical entry points themselves stay.
+
+`scripts/deploy_facility.py` is rewritten rather than repaired: it verified images
+against a v1 catalog index that does not exist. It now ensures the retained log
+group and registers one digest-bound job definition per queue profile, running
+`python -m training_sdk.worker`.
 
 ---
 
