@@ -1928,19 +1928,40 @@ def compute_score(metrics_path: Path, spec: ScoreConfig) -> float:
         )
     selected.sort()
     values = [value for _, value in selected]
-    reduced = {
-        "mean": lambda: statistics.fmean(values),
-        "median": lambda: statistics.median(values),
-        "min": lambda: min(values),
-        "max": lambda: max(values),
-        "last": lambda: values[-1],
-    }[spec.reduce]()
-    if math.isfinite(reduced):
-        return float(reduced)
-    if spec.non_finite == "worst":
-        return -WORST_MAGNITUDE if spec.direction == "maximize" else WORST_MAGNITUDE
-    return float(spec.non_finite)
+    if not all(math.isfinite(value) for value in values):
+        if spec.non_finite == "worst":
+            return -WORST_MAGNITUDE if spec.direction == "maximize" else WORST_MAGNITUDE
+        return float(spec.non_finite)
+    return float(
+        {
+            "mean": lambda: statistics.fmean(values),
+            "median": lambda: statistics.median(values),
+            "min": lambda: min(values),
+            "max": lambda: max(values),
+            "last": lambda: values[-1],
+        }[spec.reduce]()
+    )
 ```
+
+The non-finite check happens **before** the reduction, and a single non-finite
+value anywhere in the window decides the whole score. Reducing first and
+inspecting the result afterwards is wrong in two ways that both corrupt the
+study silently:
+
+A window of `[10.0, 20.0, inf]` reduces under `median` to `20.0` and under `min`
+to `10.0`, so a run that diverged would be recorded as an ordinary result and
+Optuna would explore toward the configuration that produced it.
+
+Worse, `min`, `max` and `median` over a list containing `NaN` return different
+answers depending on where in the list the `NaN` sits — `min([nan, 10, 20])` is
+`nan` while `min([10, nan, 20])` is `10`. The same run would score differently
+according to when it diverged, which is not a defensible number to hand an
+optimiser.
+
+Treating any non-finite value as decisive avoids both. It matches the intent of
+`non_finite`: a run that produced a non-finite number diverged, and divergence is
+a real result the study should record as such rather than a reading to be
+averaged away.
 
 - [ ] **Step 4: Run the test to verify it passes**
 
