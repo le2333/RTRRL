@@ -2883,6 +2883,8 @@ git commit -m "feat(control-plane): pack rounds into job manifests and upload th
 - Produces:
   - `JobResult` frozen dataclass: `job_id: str`, `name: str`,
     `succeeded: bool`, `log_stream: str | None`, `reason: str | None`.
+    `reason` explains a failure and is `None` on success, in both backends, so
+    the control loop cannot mistake a populated `reason` for a failed job.
   - `Backend` protocol: `submit(launch, manifest_uri, name) -> str`,
     `wait(job_ids: Sequence[str]) -> list[JobResult]`,
     `terminate(job_ids: Sequence[str]) -> None`,
@@ -3075,7 +3077,11 @@ class LocalBackend:
                 name=self._names[job_id],
                 succeeded=self._processes[job_id].returncode == 0,
                 log_stream=str(self._logs[job_id]),
-                reason=f"exit code {self._processes[job_id].returncode}",
+                reason=(
+                    None
+                    if self._processes[job_id].returncode == 0
+                    else f"exit code {self._processes[job_id].returncode}"
+                ),
             )
             for job_id in job_ids
         ]
@@ -4038,8 +4044,12 @@ class BatchBackend:
                 name=self._names.get(job_id, job_id),
                 succeeded=finished[job_id]["status"] == "SUCCEEDED",
                 log_stream=finished[job_id].get("container", {}).get("logStreamName"),
-                reason=finished[job_id].get("statusReason")
-                or f"exit code {finished[job_id].get('container', {}).get('exitCode')}",
+                reason=(
+                    None
+                    if finished[job_id]["status"] == "SUCCEEDED"
+                    else finished[job_id].get("statusReason")
+                    or f"exit code {finished[job_id].get('container', {}).get('exitCode')}"
+                ),
             )
             for job_id in job_ids
         ]
