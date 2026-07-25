@@ -214,7 +214,9 @@ def run_local_command(
     launch = create_launch(plan, archive_dir, experiment_path, datetime.now(UTC))
     backend = LocalBackend(jobs_dir, catalog_path)
     try:
-        report = run_launch(launch, backend)
+        # Progress goes to stderr so stdout carries nothing but the report,
+        # which is what makes `trainerctl run ... > report.json` usable.
+        report = run_launch(launch, backend, printer=lambda line: print(line, file=sys.stderr))
     except LaunchFailed as error:
         print(str(error), file=sys.stderr)
         return 1

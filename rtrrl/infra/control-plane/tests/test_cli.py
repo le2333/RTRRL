@@ -268,8 +268,9 @@ def test_run_local_backend_exits_zero_on_success(
 
     captured = capsys.readouterr()
     assert code == 0
-    assert captured.err == ""
-    assert '"status": "succeeded"' in captured.out
+    # stdout must be nothing but the report, so `trainerctl run > report.json` works.
+    assert json.loads(captured.out)["status"] == "succeeded"
+    assert "best trial" in captured.err
     report_path = next((tmp_path / "archive").glob("**/report.json"))
     payload = json.loads(report_path.read_text())
     assert payload["status"] == "succeeded"

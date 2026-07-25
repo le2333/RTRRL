@@ -3184,7 +3184,9 @@ def test_two_round_study_completes_and_reports(
     )
     backend = LocalBackend(tmp_path / "jobs", acceptance_catalog)
 
-    report = run_launch(launch, backend)
+    # Progress goes to stderr so stdout carries nothing but the report, which is
+    # what makes `trainerctl run ... > report.json` usable.
+    report = run_launch(launch, backend, printer=lambda line: print(line, file=sys.stderr))
 
     assert report.status == "succeeded"
     assert len(report.trials) == 4  # 2 rounds x 2 trials per round
