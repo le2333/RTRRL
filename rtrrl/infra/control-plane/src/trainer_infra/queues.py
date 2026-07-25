@@ -4,6 +4,8 @@ from dataclasses import dataclass
 
 from trainer_infra.preflight import PreflightError
 
+JOB_LOG_GROUP = "/trainer/jobs"
+
 
 @dataclass(frozen=True)
 class QueueBinding:

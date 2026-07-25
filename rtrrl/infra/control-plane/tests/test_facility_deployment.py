@@ -12,6 +12,7 @@ from botocore.exceptions import ClientError
 from trainer_infra.aws_profiles import PROFILES
 from trainer_infra.facility_control import load_facility_control
 from trainer_infra.image_catalog import ResolvedImage, load_catalog_index
+from trainer_infra.queues import JOB_LOG_GROUP
 
 
 SCRIPTS = Path(__file__).parents[1] / "scripts"
@@ -420,7 +421,6 @@ class RegisterBatch:
         }
 
 
-JOB_LOG_GROUP = "/trainer/jobs"
 FACILITY_REGION = "eu-north-1"
 
 
@@ -571,6 +571,7 @@ def test_register_tolerates_existing_job_log_group(
     report = _register_report(deploy, session)
 
     assert report["mode"] == "execute"
+    assert len(batch.calls) == 4
     assert logs.calls == [
         ("create_log_group", {"logGroupName": JOB_LOG_GROUP}),
         (
@@ -583,6 +584,33 @@ def test_register_tolerates_existing_job_log_group(
         call["containerProperties"]["logConfiguration"] == expected
         for call in batch.calls
     )
+
+
+def test_register_fails_when_job_log_group_create_denied(
+    deploy: Any, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    class DeniedDeployLogs(FakeDeployLogs):
+        def create_log_group(self, **kwargs: Any) -> dict[str, Any]:
+            self.calls.append(("create_log_group", deepcopy(kwargs)))
+            raise ClientError(
+                {
+                    "Error": {
+                        "Code": "AccessDeniedException",
+                        "Message": "User is not authorized to perform logs:CreateLogGroup",
+                    }
+                },
+                "CreateLogGroup",
+            )
+
+    logs = DeniedDeployLogs()
+    batch, session = _registration_session(deploy, monkeypatch, logs=logs)
+
+    with pytest.raises(ClientError) as exc_info:
+        _register_report(deploy, session)
+
+    assert exc_info.value.response["Error"]["Code"] == "AccessDeniedException"
+    assert logs.calls == [("create_log_group", {"logGroupName": JOB_LOG_GROUP})]
+    assert batch.calls == []
 
 
 def test_legacy_build_and_push_flags_fail_closed(deploy: Any) -> None:

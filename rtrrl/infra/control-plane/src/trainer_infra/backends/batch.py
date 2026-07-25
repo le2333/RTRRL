@@ -5,6 +5,7 @@ from collections.abc import Sequence
 
 from trainer_infra.backends.base import JobResult
 from trainer_infra.launch import Launch
+from trainer_infra.queues import JOB_LOG_GROUP
 
 TERMINAL = {"SUCCEEDED", "FAILED"}
 
@@ -79,7 +80,7 @@ class BatchBackend:
         if result.log_stream is None:
             return ""
         events = self._logs.get_log_events(
-            logGroupName="/trainer/jobs",
+            logGroupName=JOB_LOG_GROUP,
             logStreamName=result.log_stream,
             limit=lines,
             startFromHead=False,

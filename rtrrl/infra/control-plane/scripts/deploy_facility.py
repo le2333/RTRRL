@@ -15,11 +15,11 @@ from trainer_infra.ecr import BotoEcrCatalogReader
 from trainer_infra.facility_control import FacilityControl, load_facility_control
 from trainer_infra.image_catalog import load_catalog_index
 from trainer_infra.models import ScriptCatalog
+from trainer_infra.queues import JOB_LOG_GROUP
 
 
 ROOT = Path(__file__).resolve().parents[4]
 EXPECTED_CATALOG = ROOT / "rtrrl" / "infra" / "mock-trainer" / "scripts" / "index.yaml"
-JOB_LOG_GROUP = "/trainer/jobs"
 
 
 class DeployRequest:
