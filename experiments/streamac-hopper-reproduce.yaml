@@ -3,8 +3,9 @@ name: reproduce-d9fe
 description: >
   Reproduce the best recorded StreamAC-RTRL score on masked Brax Hopper, Aim
   run d9fe0986, eval return 1043.66. Every parameter is pinned, so this is a
-  fidelity check on the rewritten kernel rather than a search. Note the score
-  is seed-bound: the same settings reach only ~290 on seeds 1 and 2.
+  fidelity check on the rewritten kernel rather than a search. The sweep that
+  found these settings only ever ran seeds 0 and 3, and seed 3 topped out at
+  474.60, so the score is seed-bound and the seed below is not a free choice.
 
 image: PLACEHOLDER
 entry: stream_ac_rtrl
@@ -30,7 +31,7 @@ space:
   env_mode: [P]
   env_backend: [spring]
   backbone: [rtu]
-  seed: [263256]
+  seed: [0]
   # Sixteen independent streams, each with its own trace, TD error and OBGD
   # bound, whose updates are averaged. This is not the paper's single stream:
   # it was the shared harness default that every algorithm inherited, and it
