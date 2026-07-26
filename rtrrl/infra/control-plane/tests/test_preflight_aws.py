@@ -319,8 +319,24 @@ def test_forbidden_s3_bucket_is_rejected() -> None:
 
 def test_image_without_a_registered_job_definition_is_rejected() -> None:
     other = "sha256:" + "2" * 64
+    experiment, catalog, space = plan_arguments()
+    # The experiment has to ask for this digest as well: an ECR that answered with a
+    # digest nobody requested is a different fault, caught earlier by resolve_image.
+    unregistered = experiment.model_copy(
+        update={"image": experiment.image.split("@", 1)[0] + "@" + other}
+    )
+
     with pytest.raises(PreflightError, match=f"trainer-c7am-{'2' * 64}"):
-        check(ecr=FakeEcr(digest=other))
+        check_aws(
+            unregistered,
+            catalog,
+            space,
+            ecr_client=FakeEcr(digest=other),
+            batch_client=FakeBatch(),
+            s3_client=FakeS3(),
+            read_url=read_url,
+            connect=lambda host, port: None,
+        )
 
 
 def test_image_catalog_disagreeing_with_offline_catalog_is_rejected() -> None:
