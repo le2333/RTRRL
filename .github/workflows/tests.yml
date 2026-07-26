@@ -6,7 +6,7 @@ name: Tests
 on:
   push:
     branches:
-      - feature/trainer-infra
+      - main
     paths:
       - .github/workflows/tests.yml
       - training-sdk/**
