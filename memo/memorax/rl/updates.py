@@ -22,6 +22,21 @@ from flax import struct
 
 
 @struct.dataclass
+class ObjectiveDirections:
+    """What an objective asks for, split by how the ascent reaches a parameter.
+
+    Traced directions are accumulated into an eligibility trace and later
+    weighted by the TD error; direct ones apply on the step they arise. Which
+    domains exist, and which parameter group each maps onto, is the
+    algorithm's own routing decision.
+    """
+
+    traced_by_domain: Any
+    direct_by_domain: Any
+    metrics: Any
+
+
+@struct.dataclass
 class RuleOutput:
     """Parameter updates, the rule's carried state, and its diagnostics."""
 
@@ -49,8 +64,14 @@ def _broadcast_env(values, leaf):
 
 
 def _combine(traced, direct, delta):
-    """Weight the trace by the TD error and add the untraced directions."""
+    """Weight the trace by the TD error and add the untraced directions.
 
+    ``direct`` may be None when an objective routes everything through the
+    trace, which saves carrying a tree of zeros through every step.
+    """
+
+    if direct is None:
+        return jax.tree.map(lambda trace: _broadcast_env(delta, trace) * trace, traced)
     return jax.tree.map(
         lambda trace, immediate: _broadcast_env(delta, trace) * trace + immediate,
         traced,
@@ -58,22 +79,13 @@ def _combine(traced, direct, delta):
     )
 
 
-def make_adam_rule(
-    *,
-    learning_rate,
-    b1,
-    b2,
-    eps,
-    grad_clip=None,
-) -> UpdateRule:
-    """Step along delta * trace with Adam's per-parameter scaling."""
+def make_optax_rule(transform) -> UpdateRule:
+    """Step along delta * trace through any optax transformation.
 
-    transforms = []
-    if grad_clip:
-        transforms.append(optax.clip_by_global_norm(grad_clip))
-    transforms.append(optax.scale_by_adam(b1=b1, b2=b2, eps=eps))
-    transforms.append(optax.scale(learning_rate))
-    transform = optax.chain(*transforms)
+    The transformation sees one finished ascent direction per parameter, so
+    whatever an algorithm expresses through optax -- Adam, clipping, freezing
+    a subtree -- it expresses by composing the transformation it passes in.
+    """
 
     def init(*, params, traces):
         del traces

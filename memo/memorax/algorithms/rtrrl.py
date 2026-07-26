@@ -1,9 +1,15 @@
-"""Concrete composable kernel for the meta-recurrent RTRRL program."""
+"""RTRRL: one recurrent torso shared by an actor and a critic.
+
+The torso is credited by exact RTRL, so every parameter carries an eligibility
+trace that the TD error weights on arrival. Forward passes read a slowly
+following copy of the torso while updates land on the fast parameters, which
+keeps the bootstrap target from moving with the parameters it evaluates.
+"""
 
 from __future__ import annotations
 
-from dataclasses import dataclass, replace
-from typing import Any, cast
+from dataclasses import dataclass, field, replace
+from typing import Any, Callable
 
 import jax
 import jax.numpy as jnp
@@ -11,41 +17,260 @@ import optax
 from flax import core, struct
 
 from memorax.rl import (
+    ObjectiveDirections,
     environment_owns_normalization,
     make_exact_rtrl_credit,
     make_normalizer,
+    make_obgd_rule,
+    make_optax_rule,
     make_td0,
     normalization_metrics,
 )
-from memorax.utils import Timestep
+from memorax.utils import Timestep, find_leaf, tree_norm
 from memorax.utils.axes import (
     add_time_axis,
     remove_feature_axis,
     remove_time_axis,
 )
 
-from .objectives import make_rtrrl_objective
-from .targets import make_slow_subtree_target
-from .traces import make_rtrrl_trace
-from .types import ActionDecision, AgentProgram, EvalSummary
-from .updates import make_grouped_adam
+from .contract import ActionDecision, AgentProgram, EvalSummary, EvaluationConfig
+
+RECURRENT_DOMAINS = ("feature_extractor", "torso")
 
 
 @dataclass(frozen=True)
-class MetaDebugInterface:
-    """Exact kernel hooks used by parity tests, never by traced control flow."""
+class RTRRLConfig:
+    """Everything the kernel reads that does not change during a run."""
 
-    forward: Any
-    optimizer: Any
-    step: Any
+    num_envs: int
+    gamma: float = 0.95
+    lambda_pi: float = 0.97
+    lambda_v: float = 0.9
+    lambda_rnn: float = 0.945
+    td_lr: float = 3e-5
+    rnn_lr: float = 2e-6
+    eta_pi: float = 0.38
+    eta_f: float = 0.5
+    entropy_rate: float = 3e-5
+    update_period: float = 0.1
+    b1: float = 0.9
+    b2: float = 0.999
+    eps: float = 1e-8
+    rnn_grad_clip: float = 1.0
+    act_clip: float = 0.0
+    freeze_gamma: bool = False
+    update_trace_before_td: bool = True
+    logprob_scale: float = 1.0
+    pred_coeff: float = 1.0
+    update_rule: str = "adam"
+    kappa: float = 2.0
+    obgd_beta2: float = 0.0
+    obgd_adaptive: bool = False
 
-    @staticmethod
-    def grad_params(params, slow_torso):
-        return {**params, "torso": slow_torso}
+
+@dataclass(frozen=True)
+class RTRRLParts:
+    """The modules and environment a program is built around."""
+
+    env: Any = None
+    env_params: Any = None
+    feature_extractor: Any = None
+    torso: Any = None
+    actor_head: Any = None
+    critic_head: Any = None
+    pred_head: Any = None
+    activation: Callable[[Any], Any] = jax.nn.silu
+    normalization: Any = None
+    evaluation: EvaluationConfig = field(default_factory=EvaluationConfig)
+
+    def replace(self, **updates):
+        return replace(self, **updates)
+
+
+@struct.dataclass
+class TraceDirections:
+    """The trace carried to the next step and the trace used now."""
+
+    carried: Any
+    update: Any
+
+
+def _broadcast_env(values, leaf):
+    return values[(slice(None),) + (None,) * (leaf.ndim - 1)]
+
+
+def make_rtrrl_trace(config):
+    """Build RTRRL's three-domain, post-transition trace recurrence."""
+
+    decays = {
+        "actor": config.gamma * config.lambda_pi,
+        "critic": config.gamma * config.lambda_v,
+        "recurrent": config.gamma * config.lambda_rnn,
+    }
+    use_fresh = config.update_trace_before_td
+
+    def rtrrl_trace(incoming, gradient, *, terminated_after, emphasis):
+        carried = {
+            domain: jax.tree.map(
+                lambda old, grad: (
+                    decays[domain] * (1 - _broadcast_env(terminated_after, old)) * old
+                    + _broadcast_env(emphasis, grad) * grad
+                ),
+                incoming[domain],
+                gradient[domain],
+            )
+            for domain in decays
+        }
+        return TraceDirections(
+            carried=carried,
+            update=carried if use_fresh else incoming,
+        )
+
+    return rtrrl_trace
+
+
+def make_rtrrl_objective(config):
+    """Route each ascent direction to the domains that should receive it.
+
+    The recurrent domain is the interesting one: it is the only place the
+    actor and the critic ask the same parameters to move, which is why cutting
+    one of the two off is a question worth being able to ask.
+    """
+
+    def rtrrl_objective(
+        *,
+        log_prob,
+        value,
+        entropy,
+        prediction=None,
+        prediction_target=None,
+    ):
+        actor = config.eta_pi * config.logprob_scale * log_prob
+        entropy_direction = config.entropy_rate * config.logprob_scale * entropy
+        zero = jnp.zeros_like(value)
+        prediction_direction = zero
+        if prediction is not None:
+            error = prediction - jax.lax.stop_gradient(prediction_target)
+            prediction_direction = (
+                -config.pred_coeff * 0.5 * jnp.sum(jnp.square(error), axis=-1)
+            )
+
+        return ObjectiveDirections(
+            traced_by_domain={
+                "actor": actor,
+                "critic": value,
+                "recurrent": actor + value,
+                "prediction": zero,
+            },
+            direct_by_domain={
+                "actor": entropy_direction,
+                "critic": zero,
+                "recurrent": entropy_direction + prediction_direction,
+                "prediction": prediction_direction,
+            },
+            metrics={
+                "entropy": entropy,
+                "prediction_direction": prediction_direction,
+            },
+        )
+
+    return rtrrl_objective
+
+
+def slow_view(fast_params, slow_torso):
+    """Read the slow torso while every other parameter stays current."""
+
+    if isinstance(fast_params, core.FrozenDict):
+        return fast_params.copy(add_or_replace={"torso": slow_torso})
+    return {**fast_params, "torso": slow_torso}
+
+
+def follow_torso(fast_torso, slow_torso, update_period):
+    if update_period == 1.0:
+        return fast_torso
+    return optax.incremental_update(fast_torso, slow_torso, update_period)
+
+
+def group_parameters(params):
+    """Say which rule group each top-level parameter tree belongs to.
+
+    The recurrent parameters are clipped as one and may hold a frozen decay;
+    everything else steps plainly. Every RTRRL topology splits the same way,
+    whichever names it gives its heads.
+    """
+
+    return {
+        name: ("rnn" if name in RECURRENT_DOMAINS else "td") for name in params
+    }
+
+
+def group_trees(by_name, group_of):
+    """Gather per-parameter trees into the groups the rules step over."""
+
+    groups = {}
+    for name, tree in by_name.items():
+        groups.setdefault(group_of[name], {})[name] = tree
+    return groups
+
+
+def make_rtrrl_update_rules(config, abstract_params):
+    """One rule per parameter group, both answering the same contract.
+
+    Which mechanism steps is a config choice; the groups do not move, because
+    the recurrent parameters are clipped together and may hold a frozen decay
+    while the actor and critic never do.
+    """
+
+    if config.update_rule == "obgd":
+        return {
+            group: make_obgd_rule(
+                learning_rate=rate,
+                kappa=config.kappa,
+                beta2=config.obgd_beta2,
+                eps=config.eps,
+                adaptive=config.obgd_adaptive,
+            )
+            for group, rate in (("rnn", config.rnn_lr), ("td", config.td_lr))
+        }
+    if config.update_rule != "adam":
+        raise ValueError(f"unknown update rule: {config.update_rule!r}")
+
+    recurrent = []
+    if config.rnn_grad_clip:
+        recurrent.append(optax.clip_by_global_norm(config.rnn_grad_clip))
+    recurrent.extend(
+        (
+            optax.scale_by_adam(b1=config.b1, b2=config.b2, eps=config.eps),
+            optax.scale(config.rnn_lr),
+        )
+    )
+    recurrent_transform = optax.chain(*recurrent)
+    if config.freeze_gamma:
+        labels = jax.tree_util.tree_map_with_path(
+            lambda path, _leaf: (
+                "frozen"
+                if any(getattr(part, "key", None) == "gamma_log" for part in path)
+                else "rnn"
+            ),
+            {name: abstract_params[name] for name in RECURRENT_DOMAINS},
+        )
+        recurrent_transform = optax.multi_transform(
+            {"rnn": recurrent_transform, "frozen": optax.set_to_zero()},
+            labels,
+        )
+    return {
+        "rnn": make_optax_rule(recurrent_transform),
+        "td": make_optax_rule(
+            optax.chain(
+                optax.scale_by_adam(b1=config.b1, b2=config.b2, eps=config.eps),
+                optax.scale(config.td_lr),
+            )
+        ),
+    }
 
 
 @struct.dataclass(frozen=True)
-class MetaState:
+class RTRRLState:
     step: Any
     update_step: Any
     timestep: Timestep
@@ -61,8 +286,14 @@ class MetaState:
 
 
 @struct.dataclass(frozen=True)
-class MetaStepMetrics:
-    """Fixed-shape observables from one concrete meta-program transition."""
+class RTRRLStepMetrics:
+    """Fixed-shape observables from one transition.
+
+    Everything here is a scalar or one step of trajectory. The kernel runs
+    under ``lax.scan``, so anything returned is stacked once per step; whole
+    parameter, trace, and optimiser trees used to be returned alongside these
+    and cost memory proportional to epoch length times model size.
+    """
 
     action_decision: ActionDecision | None = None
     log_prob: Any = None
@@ -70,22 +301,8 @@ class MetaStepMetrics:
     next_value: Any = None
     td_error: Any = None
     entropy: Any = None
-    acting_carry: Any = None
-    acting_sensitivity: Any = None
-    bootstrap_carry: Any = None
-    bootstrap_sensitivity: Any = None
-    differentiation_grads: Any = None
-    direct_grads: Any = None
-    incoming_traces: Any = None
-    carried_traces: Any = None
-    update_traces: Any = None
-    ascent_updates: Any = None
-    adam_updates: Any = None
-    adam_state: Any = None
-    prediction_direct_grads: Any = None
-    fast_params: Any = None
-    slow_torso: Any = None
     emphasis: Any = None
+    step_size: Any = None
     diag_lambda_max: Any = None
     diag_gamma_max: Any = None
     diag_sens_norm: Any = None
@@ -108,50 +325,21 @@ class MetaStepMetrics:
     info: Any = None
     raw_episode_return: Any = None
     normalization: Any = None
-    state_after: Any = None
 
 
-def _tree_norm(tree):
-    leaves = jax.tree.leaves(tree)
-    if not leaves:
-        return jnp.asarray(0.0)
-    return jnp.sqrt(sum(jnp.sum(jnp.abs(leaf) ** 2) for leaf in leaves))
+def build_rtrrl(config: RTRRLConfig, parts: RTRRLParts) -> AgentProgram:
+    """Close over the modules, the environment, and every static choice.
 
-
-def _find_leaf(tree, name):
-    for path, leaf in jax.tree_util.tree_leaves_with_path(tree):
-        if any(getattr(key, "key", None) == name for key in path):
-            return leaf
-    return None
-
-
-def make_meta_program(
-    parts,
-    static_config,
-    normalization_config=None,
-    *,
-    reset_on_start=None,
-    update_during_eval=None,
-    _debug_sink=None,
-) -> AgentProgram:
-    """Build the concrete shared-torso RTRRL kernel.
-
-    Modules and environment functions are captured at build time.  In
-    particular, optimizer labels are derived once here rather than by mutating
-    Python state from ``init_fn``.
+    Nothing after this point reads Python state, so the returned functions are
+    safe to trace once and call repeatedly.
     """
 
-    config = static_config
-    normalizer = make_normalizer(normalization_config or config)
-    normalization_config = normalizer.config
-    if reset_on_start is not None:
-        normalization_config = replace(
-            normalization_config, reset_on_start=reset_on_start
-        )
-    if update_during_eval is not None:
-        normalization_config = replace(
-            normalization_config, update_during_eval=update_during_eval
-        )
+    normalizer = make_normalizer(parts.normalization or config)
+    normalization_config = replace(
+        normalizer.config,
+        reset_on_start=parts.evaluation.reset_on_start,
+        update_during_eval=parts.evaluation.update_during_eval,
+    )
     normalizer = make_normalizer(normalization_config)
     normalization_enabled = (
         normalizer.config.normalize_observation or normalizer.config.normalize_reward
@@ -172,7 +360,6 @@ def make_meta_program(
     objective = make_rtrrl_objective(config)
     trace_kernel = make_rtrrl_trace(config)
     td0 = make_td0()
-    target = make_slow_subtree_target(config)
 
     def forward(params, obs, action, reward, done, carry, sensitivity):
         x, _ = feature_extractor.apply(
@@ -303,12 +490,18 @@ def make_meta_program(
         }
 
     abstract = jax.eval_shape(initialize_arrays, jax.random.key(0))
-    optimizer = make_grouped_adam(config, abstract["params"])
+    rules = make_rtrrl_update_rules(config, abstract["params"])
+    group_of = group_parameters(abstract["params"])
+
+    def regroup(by_name):
+        return group_trees(by_name, group_of)
 
     def init_fn(key):
         arrays = initialize_arrays(key)
         params = arrays["params"]
-        return MetaState(
+        grouped_params = regroup(params)
+        grouped_traces = regroup(arrays["traces"])
+        return RTRRLState(
             step=jnp.asarray(0, dtype=jnp.int32),
             update_step=jnp.asarray(0, dtype=jnp.int32),
             timestep=arrays["timestep"],
@@ -316,7 +509,13 @@ def make_meta_program(
             params=params,
             slow_torso=params["torso"],
             traces=arrays["traces"],
-            opt_state=optimizer.init(params),
+            opt_state={
+                group: rule.init(
+                    params=grouped_params[group],
+                    traces=grouped_traces[group],
+                )
+                for group, rule in rules.items()
+            },
             carry=arrays["carry"],
             sensitivity=arrays["sensitivity"],
             I=jnp.ones((config.num_envs,), dtype=jnp.float32),
@@ -326,12 +525,12 @@ def make_meta_program(
     def step_fn(state, key):
         action_key, env_key = jax.random.split(key)
         obs, done, previous_action, reward = state.timestep.to_sequence()
-        views = target.views(fast_params=state.params, slow_subtree=state.slow_torso)
+        forward_params = slow_view(state.params, state.slow_torso)
         pre_carry = jax.lax.stop_gradient(state.carry)
         pre_sensitivity = jax.lax.stop_gradient(state.sensitivity)
 
         (carry, sensitivity), (dist, value_raw, _) = forward(
-            views.acting,
+            forward_params,
             obs,
             previous_action,
             reward,
@@ -377,7 +576,7 @@ def make_meta_program(
             bootstrap_carry,
             bootstrap_sensitivity,
         ), (_, next_value_raw, _) = forward(
-            jax.lax.stop_gradient(views.bootstrap),
+            jax.lax.stop_gradient(forward_params),
             next_obs_s,
             next_action_s,
             next_reward_s,
@@ -426,10 +625,8 @@ def make_meta_program(
                 directions.direct_by_domain,
             )
 
-        traced_by_domain, direct_by_domain = jax.jacobian(differentiation)(
-            views.differentiation
-        )
-        recurrent_keys = ("feature_extractor", "torso")
+        traced_by_domain, direct_by_domain = jax.jacobian(differentiation)(forward_params)
+        recurrent_keys = RECURRENT_DOMAINS
         trace_gradients = {
             "actor": traced_by_domain["actor"]["actor"],
             "critic": traced_by_domain["critic"]["critic"],
@@ -485,30 +682,35 @@ def make_meta_program(
         if pred_head is not None:
             direct_grads["pred"] = direct_by_domain["prediction"]["pred"]
 
-        def scale_trace(trace, scale):
-            delta = td_error[(slice(None),) + (None,) * (trace.ndim - 1)]
-            return scale * delta * trace
-
-        ascent_updates = {}
-        for name in state.params:
-            scale = config.eta_f if name in recurrent_keys else 1.0
-            combined = jax.tree.map(
-                lambda trace, direct: (scale_trace(trace, scale) + direct),
-                update_traces[name],
-                direct_grads[name],
+        scaled_traces = {
+            name: (
+                jax.tree.map(lambda trace: config.eta_f * trace, update_traces[name])
+                if name in recurrent_keys
+                else update_traces[name]
             )
-            ascent_updates[name] = jax.tree.map(
-                lambda update: jnp.mean(update, axis=0), combined
+            for name in state.params
+        }
+        grouped_traces = regroup(scaled_traces)
+        grouped_direct = regroup(direct_grads)
+        grouped_params = regroup(state.params)
+        outputs = {
+            group: rule.apply(
+                grouped_traces[group],
+                grouped_direct[group],
+                state.opt_state[group],
+                delta=td_error,
+                step=state.update_step + 1,
+                params=grouped_params[group],
             )
-        mapped = views.gradient_to_destination(ascent_updates)
-        adam_updates, opt_state = optimizer.update(
-            mapped.gradient, state.opt_state, mapped.destination
-        )
-        fast_params = optax.apply_updates(mapped.destination, adam_updates)
-        finished = target.finish_update(
-            fast_params=fast_params,
-            previous_slow_subtree=state.slow_torso,
-            sensitivity=sensitivity,
+            for group, rule in rules.items()
+        }
+        updates = {
+            name: outputs[group].updates[name] for name, group in group_of.items()
+        }
+        opt_state = {group: output.state for group, output in outputs.items()}
+        fast_params = optax.apply_updates(state.params, updates)
+        slow_torso = follow_torso(
+            fast_params["torso"], state.slow_torso, config.update_period
         )
         not_done = 1 - next_done
         next_I = config.gamma * state.I * not_done + next_done
@@ -541,71 +743,48 @@ def make_meta_program(
                 done=next_done,
             ),
             env_state=env_state,
-            params=finished.fast_params,
-            slow_torso=finished.slow_subtree,
+            params=fast_params,
+            slow_torso=slow_torso,
             traces=carried_traces,
             opt_state=opt_state,
             carry=carry,
-            sensitivity=finished.sensitivity,
+            sensitivity=sensitivity,
             I=next_I,
             normalizer_state=normalizer_state,
         )
-        nu_log = _find_leaf(finished.fast_params["torso"], "nu_log")
-        gamma_log = _find_leaf(finished.fast_params["torso"], "gamma_log")
-        metrics = MetaStepMetrics(
+        nu_log = find_leaf(fast_params["torso"], "nu_log")
+        gamma_log = find_leaf(fast_params["torso"], "gamma_log")
+        metrics = RTRRLStepMetrics(
             action_decision=action_decision,
             log_prob=log_prob,
             value=value,
             next_value=next_value,
             td_error=td_error,
             entropy=entropy,
-            acting_carry=carry,
-            acting_sensitivity=sensitivity,
-            bootstrap_carry=bootstrap_carry,
-            bootstrap_sensitivity=bootstrap_sensitivity,
-            differentiation_grads={
-                "actor": trace_gradients["actor"],
-                "critic": trace_gradients["critic"],
-                **trace_gradients["recurrent"],
-                **(
-                    {"pred": traced_by_domain["prediction"]["pred"]}
-                    if pred_head is not None
-                    else {}
-                ),
-            },
-            direct_grads=direct_grads,
-            incoming_traces=state.traces,
-            carried_traces=carried_traces,
-            update_traces=update_traces,
-            ascent_updates=ascent_updates,
-            adam_updates=adam_updates,
-            adam_state=opt_state,
-            prediction_direct_grads=direct_by_domain["prediction"],
-            fast_params=finished.fast_params,
-            slow_torso=finished.slow_subtree,
             emphasis=state.I.mean(),
+            step_size=outputs["rnn"].metrics.get("step_size"),
             diag_lambda_max=(
                 jnp.max(jnp.exp(-jnp.exp(nu_log))) if nu_log is not None else jnp.nan
             ),
             diag_gamma_max=(
                 jnp.max(jnp.exp(gamma_log)) if gamma_log is not None else jnp.nan
             ),
-            diag_sens_norm=_tree_norm(sensitivity),
-            diag_carry_norm=_tree_norm(carry),
-            diag_z_rnn=_tree_norm(
+            diag_sens_norm=tree_norm(sensitivity),
+            diag_carry_norm=tree_norm(carry),
+            diag_z_rnn=tree_norm(
                 {name: carried_traces[name] for name in recurrent_keys}
             ),
-            diag_z_actor=_tree_norm(carried_traces["actor"]),
-            diag_z_critic=_tree_norm(carried_traces["critic"]),
-            diag_grad_rnn=_tree_norm(trace_gradients["recurrent"]),
-            diag_grad_actor=_tree_norm(trace_gradients["actor"]),
-            diag_grad_critic=_tree_norm(trace_gradients["critic"]),
-            diag_upd_rnn=_tree_norm(
-                {name: cast(Any, adam_updates)[name] for name in recurrent_keys}
+            diag_z_actor=tree_norm(carried_traces["actor"]),
+            diag_z_critic=tree_norm(carried_traces["critic"]),
+            diag_grad_rnn=tree_norm(trace_gradients["recurrent"]),
+            diag_grad_actor=tree_norm(trace_gradients["actor"]),
+            diag_grad_critic=tree_norm(trace_gradients["critic"]),
+            diag_upd_rnn=tree_norm(
+                {name: updates[name] for name in recurrent_keys}
             ),
-            diag_p_torso=_tree_norm(finished.fast_params["torso"]),
-            diag_p_actor=_tree_norm(finished.fast_params["actor"]),
-            diag_p_critic=_tree_norm(finished.fast_params["critic"]),
+            diag_p_torso=tree_norm(fast_params["torso"]),
+            diag_p_actor=tree_norm(fast_params["actor"]),
+            diag_p_critic=tree_norm(fast_params["critic"]),
             diag_value_abs=jnp.abs(value).mean(),
             diag_td_abs=jnp.abs(td_error).mean(),
             diag_actor_loc_abs=jnp.abs(dist.loc).mean(),
@@ -616,7 +795,6 @@ def make_meta_program(
             normalization=normalization_metrics(
                 normalizer_state, normalizer.config.eps
             ),
-            state_after=next_state,
         )
         return next_state, metrics
 
@@ -661,11 +839,8 @@ def make_meta_program(
             action_key, env_key = jax.random.split(step_key)
             del action_key
             obs_s, done_s, action_s, reward_s = current.timestep.to_sequence()
-            views = target.views(
-                fast_params=current.params, slow_subtree=current.slow_torso
-            )
             (carry, sensitivity), (dist, _, _) = forward(
-                views.acting,
+                slow_view(current.params, current.slow_torso),
                 obs_s,
                 action_s,
                 reward_s,
@@ -734,18 +909,10 @@ def make_meta_program(
         eval_state, summary = jax.lax.scan(eval_step, eval_state, step_keys)
         return eval_state, summary
 
-    if _debug_sink is not None:
-        _debug_sink.append(
-            MetaDebugInterface(
-                forward=forward,
-                optimizer=optimizer,
-                step=step_fn,
-            )
-        )
     return AgentProgram(
         init_fn=init_fn,
         train_epoch_fn=train_epoch_fn,
         evaluate_fn=evaluate_fn,
-        state_schema=MetaState,
-        metric_schema=MetaStepMetrics,
+        state_schema=RTRRLState,
+        metric_schema=RTRRLStepMetrics,
     )

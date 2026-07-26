@@ -4,7 +4,13 @@ from importlib import import_module
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
-    from .algorithm import Algorithm as Algorithm, State as State
+    from .contract import (
+        ActionDecision as ActionDecision,
+        AgentProgram as AgentProgram,
+        EvalSummary as EvalSummary,
+        EvaluationConfig as EvaluationConfig,
+        Transition as Transition,
+    )
     from .dqn import DQN as DQN, DQNConfig as DQNConfig, DQNState as DQNState
     from .gradient_ppo import (
         GradientPPO as GradientPPO,
@@ -24,22 +30,27 @@ if TYPE_CHECKING:
     from .ppo import PPO as PPO, PPOConfig as PPOConfig, PPOState as PPOState
     from .pqn import PQN as PQN, PQNConfig as PQNConfig, PQNState as PQNState
     from .r2d2 import R2D2 as R2D2, R2D2Config as R2D2Config, R2D2State as R2D2State
-    from .rtrrl import RTRRL as RTRRL, RTRRLConfig as RTRRLConfig, RTRRLState as RTRRLState
-    from .sac import SAC as SAC, SACConfig as SACConfig, SACState as SACState
-    from .stream_ac import (
-        StreamAC as StreamAC,
-        StreamACConfig as StreamACConfig,
-        StreamACState as StreamACState,
+    from .rtrrl import (
+        RTRRLConfig as RTRRLConfig,
+        RTRRLParts as RTRRLParts,
+        RTRRLState as RTRRLState,
+        build_rtrrl as build_rtrrl,
     )
+    from .sac import SAC as SAC, SACConfig as SACConfig, SACState as SACState
     from .stream_ac_rtrl import (
-        StreamACRtrl as StreamACRtrl,
-        StreamACRtrlState as StreamACRtrlState,
+        StreamACRTRLConfig as StreamACRTRLConfig,
+        StreamACRTRLParts as StreamACRTRLParts,
+        StreamACRTRLState as StreamACRTRLState,
+        build_stream_ac_rtrl as build_stream_ac_rtrl,
     )
 
 
 _EXPORTS = {
-    "Algorithm": (".algorithm", "Algorithm"),
-    "State": (".algorithm", "State"),
+    "ActionDecision": (".contract", "ActionDecision"),
+    "AgentProgram": (".contract", "AgentProgram"),
+    "EvalSummary": (".contract", "EvalSummary"),
+    "EvaluationConfig": (".contract", "EvaluationConfig"),
+    "Transition": (".contract", "Transition"),
     "DQN": (".dqn", "DQN"),
     "DQNConfig": (".dqn", "DQNConfig"),
     "DQNState": (".dqn", "DQNState"),
@@ -70,19 +81,22 @@ _EXPORTS = {
         ".independent_rtrrl",
         "IndependentRTRRLState",
     ),
-    "RTRRL": (".rtrrl", "RTRRL"),
     "RTRRLConfig": (".rtrrl", "RTRRLConfig"),
+    "RTRRLParts": (".rtrrl", "RTRRLParts"),
     "RTRRLState": (".rtrrl", "RTRRLState"),
-    "StreamAC": (".stream_ac", "StreamAC"),
-    "StreamACConfig": (".stream_ac", "StreamACConfig"),
-    "StreamACState": (".stream_ac", "StreamACState"),
-    "StreamACRtrl": (".stream_ac_rtrl", "StreamACRtrl"),
-    "StreamACRtrlState": (".stream_ac_rtrl", "StreamACRtrlState"),
+    "build_rtrrl": (".rtrrl", "build_rtrrl"),
+    "StreamACRTRLConfig": (".stream_ac_rtrl", "StreamACRTRLConfig"),
+    "StreamACRTRLParts": (".stream_ac_rtrl", "StreamACRTRLParts"),
+    "StreamACRTRLState": (".stream_ac_rtrl", "StreamACRTRLState"),
+    "build_stream_ac_rtrl": (".stream_ac_rtrl", "build_stream_ac_rtrl"),
 }
 
 __all__ = [
-    "Algorithm",
-    "State",
+    "ActionDecision",
+    "AgentProgram",
+    "EvalSummary",
+    "EvaluationConfig",
+    "Transition",
     "DQN",
     "DQNConfig",
     "DQNState",
@@ -107,14 +121,14 @@ __all__ = [
     "IndependentRTRRL",
     "IndependentRTRRLConfig",
     "IndependentRTRRLState",
-    "RTRRL",
     "RTRRLConfig",
+    "RTRRLParts",
     "RTRRLState",
-    "StreamAC",
-    "StreamACConfig",
-    "StreamACState",
-    "StreamACRtrl",
-    "StreamACRtrlState",
+    "StreamACRTRLConfig",
+    "StreamACRTRLParts",
+    "StreamACRTRLState",
+    "build_rtrrl",
+    "build_stream_ac_rtrl",
 ]
 
 

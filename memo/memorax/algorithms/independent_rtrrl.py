@@ -12,17 +12,15 @@ from typing import Any, Callable, Protocol, cast
 import flax.linen as nn
 import jax
 import jax.numpy as jnp
-import lox
 import optax
 from flax import core, struct
 
-from memorax.online_ac.types import AgentProgram, EvalSummary
+from memorax.utils import Timestep, Transition, find_leaf, tree_norm
 from memorax.rl import (
     NormalizationConfig,
     make_normalizer,
     normalization_metrics,
 )
-from memorax.utils import Timestep, Transition
 from memorax.utils.axes import add_time_axis, remove_feature_axis, remove_time_axis
 from memorax.utils.typing import (
     Array,
@@ -35,7 +33,15 @@ from memorax.utils.typing import (
     PyTree,
 )
 
-from .rtrrl import RTRRLConfig, _find_leaf, _tree_norm
+from .contract import AgentProgram, EvalSummary
+from .rtrrl import (
+    RTRRLConfig,
+    follow_torso,
+    group_parameters,
+    group_trees,
+    make_rtrrl_update_rules,
+    slow_view,
+)
 
 
 class IndependentRecurrentKernel(Protocol):
@@ -87,6 +93,16 @@ class IndependentStepMetrics:
     td_error: Any = None
     entropy: Any = None
     value: Any = None
+    emphasis: Any = None
+    diag_actor_lambda_max: Any = None
+    diag_critic_lambda_max: Any = None
+    diag_actor_sens_norm: Any = None
+    diag_critic_sens_norm: Any = None
+    diag_actor_carry_norm: Any = None
+    diag_critic_carry_norm: Any = None
+    diag_z_actor: Any = None
+    diag_z_critic: Any = None
+    diag_act_abs: Any = None
     normalization: Any = None
 
 
@@ -105,23 +121,17 @@ class IndependentRTRRL:
     critic_head: nn.Module
     activation: Callable = jax.nn.silu
     program_normalization: NormalizationConfig | None = None
-    actor_optimizer: Any = field(default=None, init=False)
-    critic_optimizer: Any = field(default=None, init=False)
+    actor_rules: Any = field(default=None, init=False)
+    critic_rules: Any = field(default=None, init=False)
     normalizer: Any = field(default=None, init=False)
 
     def __post_init__(self):
-        if self.cfg.pred_obs:
-            raise ValueError("IndependentRTRRL does not support pred_obs.")
         config = self.program_normalization or NormalizationConfig(
             normalize_observation=self.cfg.normalize_obs,
             normalize_reward=self.cfg.normalize_reward,
             reward_gamma=self.cfg.gamma,
         )
         self.normalizer = make_normalizer(config)
-
-    @staticmethod
-    def _grad_params(params: PyTree, slow_torso: PyTree) -> PyTree:
-        return {**params, "torso": slow_torso}
 
     def _forward(
         self,
@@ -188,36 +198,53 @@ class IndependentRTRRL:
             sensitivity,
         )
 
-    def _make_optimizer(self, params: PyTree) -> optax.GradientTransformation:
-        c = self.cfg
-        td_tx = optax.chain(
-            optax.scale_by_adam(b1=c.b1, b2=c.b2, eps=c.eps),
-            optax.scale(c.td_lr),
-        )
-        rnn_chain = []
-        if c.rnn_grad_clip:
-            rnn_chain.append(optax.clip_by_global_norm(c.rnn_grad_clip))
-        rnn_chain.extend(
-            [
-                optax.scale_by_adam(b1=c.b1, b2=c.b2, eps=c.eps),
-                optax.scale(c.rnn_lr),
-            ]
-        )
-        rnn_tx = optax.chain(*rnn_chain)
+    @staticmethod
+    def _init_rule_state(rules, params, traces):
+        group_of = group_parameters(params)
+        grouped_params = group_trees(params, group_of)
+        grouped_traces = group_trees(traces, group_of)
+        return {
+            group: rule.init(
+                params=grouped_params[group],
+                traces=grouped_traces[group],
+            )
+            for group, rule in rules.items()
+        }
 
-        def label(path, _leaf):
-            if path[0].key == "head":
-                return "td"
-            if self.cfg.freeze_gamma and any(
-                getattr(p, "key", None) == "gamma_log" for p in path
-            ):
-                return "frozen"
-            return "rnn"
+    def _step_branch(self, rules, params, traces, direct, opt_state, delta, step):
+        """Step one branch's parameters with the shared RTRRL update rules."""
 
-        labels = jax.tree_util.tree_map_with_path(label, params)
-        return optax.multi_transform(
-            {"td": td_tx, "rnn": rnn_tx, "frozen": optax.set_to_zero()},
-            labels,
+        group_of = group_parameters(params)
+        scaled = {
+            name: (
+                tree
+                if group_of[name] == "td"
+                else jax.tree.map(lambda leaf: self.cfg.eta_f * leaf, tree)
+            )
+            for name, tree in traces.items()
+        }
+        grouped_traces = group_trees(scaled, group_of)
+        grouped_direct = (
+            group_trees(direct, group_of) if direct is not None else None
+        )
+        grouped_params = group_trees(params, group_of)
+        outputs = {
+            group: rule.apply(
+                grouped_traces[group],
+                None if grouped_direct is None else grouped_direct[group],
+                opt_state[group],
+                delta=delta,
+                step=step,
+                params=grouped_params[group],
+            )
+            for group, rule in rules.items()
+        }
+        updates = {
+            name: outputs[group].updates[name] for name, group in group_of.items()
+        }
+        return (
+            cast(Any, optax.apply_updates(params, updates)),
+            {group: output.state for group, output in outputs.items()},
         )
 
     def _update_traces(self, traces, grads, head_decay, done, emphasis):
@@ -239,29 +266,11 @@ class IndependentRTRRL:
             for key in traces
         }
 
-    @staticmethod
-    def _delta_updates(traces, td_error, recurrent_scale):
-        updates = {}
-        for key, subtree in traces.items():
-            scale = 1.0 if key == "head" else recurrent_scale
-
-            def apply(z):
-                trailing = z.ndim - 1
-                delta = td_error[(slice(None),) + (None,) * trailing]
-                return scale * delta * z
-
-            updates[key] = jax.tree.map(apply, subtree)
-        return updates
-
-    @staticmethod
-    def _mean_batch(tree):
-        return jax.tree.map(lambda x: jnp.mean(x, axis=0), tree)
-
     def _deterministic_action(self, key: Key, state: IndependentRTRRLState):
         del key
         obs, done, action, reward = state.timestep.to_sequence()
-        actor_gp = self._grad_params(state.actor_params, state.actor_slow_torso)
-        critic_gp = self._grad_params(state.critic_params, state.critic_slow_torso)
+        actor_gp = slow_view(state.actor_params, state.actor_slow_torso)
+        critic_gp = slow_view(state.critic_params, state.critic_slow_torso)
         (actor_carry, actor_sensitivity), dist = self._actor_forward(
             actor_gp,
             obs,
@@ -319,7 +328,6 @@ class IndependentRTRRL:
             second=Timestep(obs=None, action=action, reward=reward, done=done),
             aux={"log_prob": log_prob, "value": value},
         )
-        lox.log({"info": info})
         broadcast_dims = tuple(
             range(state.timestep.done.ndim, state.timestep.action.ndim)
         )
@@ -346,8 +354,8 @@ class IndependentRTRRL:
     def _update_step(self, state: IndependentRTRRLState, key: Key):
         action_key, step_key = jax.random.split(key)
         obs, done, ts_action, reward = state.timestep.to_sequence()
-        actor_gp = self._grad_params(state.actor_params, state.actor_slow_torso)
-        critic_gp = self._grad_params(state.critic_params, state.critic_slow_torso)
+        actor_gp = slow_view(state.actor_params, state.actor_slow_torso)
+        critic_gp = slow_view(state.critic_params, state.critic_slow_torso)
 
         (actor_carry, actor_sensitivity), dist = self._actor_forward(
             actor_gp,
@@ -486,79 +494,36 @@ class IndependentRTRRL:
             if self.cfg.update_trace_before_td
             else state.critic_traces
         )
-        actor_updates = self._delta_updates(
-            actor_traces, td_error, self.cfg.eta_f
-        )
-        actor_updates = jax.tree.map(
-            lambda traced, direct: traced + direct,
-            actor_updates,
-            entropy_grads,
-        )
-        critic_updates = self._delta_updates(
-            critic_traces, td_error, self.cfg.eta_f
-        )
-        actor_adam_updates, actor_opt_state = self.actor_optimizer.update(
-            self._mean_batch(actor_updates),
-            state.actor_opt_state,
+        current_step = state.update_step + 1
+        actor_params, actor_opt_state = self._step_branch(
+            self.actor_rules,
             state.actor_params,
+            actor_traces,
+            entropy_grads,
+            state.actor_opt_state,
+            td_error,
+            current_step,
         )
-        critic_adam_updates, critic_opt_state = self.critic_optimizer.update(
-            self._mean_batch(critic_updates),
-            state.critic_opt_state,
+        critic_params, critic_opt_state = self._step_branch(
+            self.critic_rules,
             state.critic_params,
+            critic_traces,
+            None,
+            state.critic_opt_state,
+            td_error,
+            current_step,
         )
-        actor_params = cast(
-            Any, optax.apply_updates(state.actor_params, actor_adam_updates)
+        actor_slow_torso = follow_torso(
+            actor_params["torso"], state.actor_slow_torso, self.cfg.update_period
         )
-        critic_params = cast(
-            Any, optax.apply_updates(state.critic_params, critic_adam_updates)
+        critic_slow_torso = follow_torso(
+            critic_params["torso"], state.critic_slow_torso, self.cfg.update_period
         )
-
-        if self.cfg.update_period == 1.0:
-            actor_slow_torso = actor_params["torso"]
-            critic_slow_torso = critic_params["torso"]
-        else:
-            actor_slow_torso = optax.incremental_update(
-                actor_params["torso"],
-                state.actor_slow_torso,
-                self.cfg.update_period,
-            )
-            critic_slow_torso = optax.incremental_update(
-                critic_params["torso"],
-                state.critic_slow_torso,
-                self.cfg.update_period,
-            )
 
         not_done = 1 - next_done
         I_next = self.cfg.gamma * state.I * not_done + next_done
-        actor_nu = _find_leaf(actor_params["torso"], "nu_log")
-        critic_nu = _find_leaf(critic_params["torso"], "nu_log")
-        lox.log(
-            {
-                "info": info,
-                "critic/td_error": td_error.mean(),
-                "actor/entropy": entropy,
-                "critic/value": value.mean(),
-                "emphasis/I": state.I.mean(),
-                "diag/actor_lambda_max": (
-                    jnp.max(jnp.exp(-jnp.exp(actor_nu)))
-                    if actor_nu is not None
-                    else jnp.nan
-                ),
-                "diag/critic_lambda_max": (
-                    jnp.max(jnp.exp(-jnp.exp(critic_nu)))
-                    if critic_nu is not None
-                    else jnp.nan
-                ),
-                "diag/actor_sens_norm": _tree_norm(actor_sensitivity),
-                "diag/critic_sens_norm": _tree_norm(critic_sensitivity),
-                "diag/actor_carry_norm": _tree_norm(actor_carry),
-                "diag/critic_carry_norm": _tree_norm(critic_carry),
-                "diag/z_actor": _tree_norm(actor_traces_new),
-                "diag/z_critic": _tree_norm(critic_traces_new),
-                "diag/act_abs": jnp.abs(action).mean(),
-            }
-        )
+        actor_nu = find_leaf(actor_params["torso"], "nu_log")
+        critic_nu = find_leaf(critic_params["torso"], "nu_log")
 
         broadcast_dims = tuple(
             range(
@@ -604,6 +569,24 @@ class IndependentRTRRL:
                 td_error=td_error,
                 entropy=entropy,
                 value=value,
+                emphasis=state.I.mean(),
+                diag_actor_lambda_max=(
+                    jnp.max(jnp.exp(-jnp.exp(actor_nu)))
+                    if actor_nu is not None
+                    else jnp.nan
+                ),
+                diag_critic_lambda_max=(
+                    jnp.max(jnp.exp(-jnp.exp(critic_nu)))
+                    if critic_nu is not None
+                    else jnp.nan
+                ),
+                diag_actor_sens_norm=tree_norm(actor_sensitivity),
+                diag_critic_sens_norm=tree_norm(critic_sensitivity),
+                diag_actor_carry_norm=tree_norm(actor_carry),
+                diag_critic_carry_norm=tree_norm(critic_carry),
+                diag_z_actor=tree_norm(actor_traces_new),
+                diag_z_critic=tree_norm(critic_traces_new),
+                diag_act_abs=jnp.abs(action).mean(),
                 normalization=normalization_metrics(
                     normalized.state, self.normalizer.config.eps
                 ),
@@ -660,8 +643,6 @@ class IndependentRTRRL:
         return params, traces, sensitivity
 
     def init(self, key: Key) -> IndependentRTRRLState:
-        if self.cfg.pred_obs:
-            raise ValueError("IndependentRTRRL does not support pred_obs.")
         split = jax.random.split(key, 10)
         env_key = split[0]
         actor_keys = split[1:5]
@@ -703,8 +684,8 @@ class IndependentRTRRL:
             timestep,
             critic_carry,
         )
-        self.actor_optimizer = self._make_optimizer(actor_params)
-        self.critic_optimizer = self._make_optimizer(critic_params)
+        self.actor_rules = make_rtrrl_update_rules(self.cfg, actor_params)
+        self.critic_rules = make_rtrrl_update_rules(self.cfg, critic_params)
         return IndependentRTRRLState(
             step=0,
             update_step=0,
@@ -716,8 +697,12 @@ class IndependentRTRRL:
             critic_slow_torso=critic_params["torso"],
             actor_traces=actor_traces,
             critic_traces=critic_traces,
-            actor_opt_state=self.actor_optimizer.init(actor_params),
-            critic_opt_state=self.critic_optimizer.init(critic_params),
+            actor_opt_state=self._init_rule_state(
+                self.actor_rules, actor_params, actor_traces
+            ),
+            critic_opt_state=self._init_rule_state(
+                self.critic_rules, critic_params, critic_traces
+            ),
             actor_carry=actor_carry,
             critic_carry=critic_carry,
             actor_sensitivity=actor_sensitivity,

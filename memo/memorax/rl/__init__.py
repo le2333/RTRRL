@@ -19,7 +19,13 @@ from .normalization import (
 )
 from .targets import delayed_update, periodic_incremental_update
 from .td import make_td0
-from .updates import RuleOutput, UpdateRule, make_adam_rule, make_obgd_rule
+from .updates import (
+    ObjectiveDirections,
+    RuleOutput,
+    UpdateRule,
+    make_obgd_rule,
+    make_optax_rule,
+)
 
 __all__ = [
     "NormalizationConfig",
@@ -27,16 +33,17 @@ __all__ = [
     "NormalizedStep",
     "Normalizer",
     "NormalizerState",
+    "ObjectiveDirections",
     "RewardStatistics",
     "RuleOutput",
     "RunningStatistics",
     "UpdateRule",
     "delayed_update",
     "environment_owns_normalization",
-    "make_adam_rule",
     "make_exact_rtrl_credit",
     "make_normalizer",
     "make_obgd_rule",
+    "make_optax_rule",
     "make_td0",
     "normalization_metrics",
     "periodic_incremental_update",

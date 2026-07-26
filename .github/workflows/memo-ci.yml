@@ -31,6 +31,16 @@ jobs:
     name: Static checks
     runs-on: ubuntu-latest
     timeout-minutes: 20
+    env:
+      CHECKED: >-
+        memorax/rl
+        memorax/algorithms/contract.py
+        memorax/algorithms/rtrrl.py
+        memorax/algorithms/stream_ac_rtrl.py
+        memorax/algorithms/independent_rtrrl.py
+        memorax/networks/adapter.py
+        memorax/utils/trees.py
+        tests
     steps:
       - uses: actions/checkout@v4
       - uses: astral-sh/setup-uv@v6
@@ -43,34 +53,16 @@ jobs:
       - name: Install dependencies
         run: uv sync --frozen --group development
       - name: Type check
-        run: uv run pyright memorax/rl memorax/online_ac tests/online_ac
+        run: uv run pyright $CHECKED
       - name: Check formatting
-        run: uv run black --check memorax/rl memorax/online_ac tests/online_ac
+        run: uv run black --check $CHECKED
       - name: Check import order
-        run: uv run isort --check-only --profile=black memorax/rl memorax/online_ac tests/online_ac
+        run: uv run isort --check-only --profile=black $CHECKED
       - name: Lint
-        run: uv run ruff check memorax/rl memorax/online_ac tests/online_ac
+        run: uv run ruff check $CHECKED
 
-  online-ac:
-    name: Online AC full suite
-    runs-on: ubuntu-latest
-    timeout-minutes: 120
-    steps:
-      - uses: actions/checkout@v4
-      - uses: astral-sh/setup-uv@v6
-        with:
-          enable-cache: true
-          cache-dependency-glob: memo/uv.lock
-      - uses: actions/setup-python@v5
-        with:
-          python-version: "3.12"
-      - name: Install dependencies
-        run: uv sync --frozen --group development
-      - name: Run online AC suite
-        run: uv run pytest tests/online_ac -v
-
-  legacy-golden:
-    name: Legacy golden characterization
+  algorithms:
+    name: Algorithm suite
     runs-on: ubuntu-latest
     timeout-minutes: 45
     steps:
@@ -84,5 +76,5 @@ jobs:
           python-version: "3.12"
       - name: Install dependencies
         run: uv sync --frozen --group development
-      - name: Verify legacy goldens
-        run: uv run pytest tests/online_ac/test_legacy_characterization.py -v
+      - name: Run algorithm suite
+        run: uv run pytest tests -v
