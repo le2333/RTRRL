@@ -4473,11 +4473,17 @@ end-to-end gate from Task 14 passing on the current commit. Ask for
 authorisation before this task and do not run it otherwise. Agreement with this
 plan is not authorisation for this task.
 
-**Shape:** three jobs. Two CPU jobs on `c7a.medium` running a three-trial study
-over two rounds, and one GPU job on `g6.xlarge` running a single fixed
-configuration, each run limited to 128 environment steps.
+**Shape:** three jobs. Two CPU jobs on `c7a.medium` — one per round, each running
+that round's two trials one after the other — and one GPU job on `g6.xlarge`
+running a single fixed configuration. Every run is limited to 128 environment
+steps.
 
-- [ ] **Step 1: Confirm the images and job definitions from Task 18 are current**
+`parallel_jobs: 1` is deliberate. Serial packing of several runs inside one job is
+a distinct path, and nothing has exercised it on Batch: the dev smoke ran a single
+trial in a single job. Spending the same three jobs on two rounds of two serial
+trials buys that coverage; spending them on one trial per job would not.
+
+- [x] **Step 1: Confirm the images and job definitions from Task 18 are current**
 
 ```bash
 cd rtrrl/infra/control-plane
@@ -4491,19 +4497,21 @@ Expected: no commit to `mock-trainer` after the Task 18 build, and four active
 pushed. If `mock-trainer` changed since, rebuild and re-register first — a stale
 digest means the paid run tests code that no longer exists.
 
-- [ ] **Step 2: Confirm the dev smoke passed on this image**
+- [x] **Step 2: Confirm the dev smoke passed on this image**
 
 The dev-queue smoke from Task 18 Step 7 must have succeeded on exactly these
 digests. If it did not, stop: the paid run is not the place to find out.
 
-- [ ] **Step 3: Validate before spending**
+- [x] **Step 3: Validate before spending**
 
 ```bash
 uv run trainerctl validate examples/experiment-acceptance.yaml --backend batch
 ```
 
-Expected: exit 0, the resolved space printed, no job submitted, and the queue
-shown as a `run-*` queue.
+Both files pass: exit 0, the resolved space printed, nothing submitted, `run-*`
+queues selected. A copy referring to the CPU image by tag rather than digest also
+passes, which is the first proof in the real account that tag resolution works
+without `ecr:DescribeImages`.
 
 - [ ] **Step 4: Run the CPU study**
 
@@ -4514,13 +4522,14 @@ echo "exit=$?"
 ```
 
 Do not pipe through `tee`; the 2026-07-24 run hid a non-zero exit that way.
-Expected: `exit=0`, four trials reported, a best trial printed.
+Expected: `exit=0`, two CPU jobs, four trials reported, and a best trial printed.
+Round two's parameters must come from round one's scores — that is the loop under
+test, not the arithmetic.
 
 - [ ] **Step 5: Run the GPU configuration**
 
-Copy the example to `examples/experiment-acceptance-gpu.yaml` with
-`instance_type: g6.xlarge`, `rounds: 1`, `trials_per_round: 1`,
-`parallel_jobs: 1`, and the GPU image, then run it the same way.
+`examples/experiment-acceptance-gpu.yaml` is already written and validated: the GPU
+digest, `g6.xlarge`, one round of one trial. Run it the same way.
 
 - [ ] **Step 6: Collect the evidence**
 
