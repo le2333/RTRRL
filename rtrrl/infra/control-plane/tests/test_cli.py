@@ -7,9 +7,9 @@ import pytest
 from training_sdk.contract import Catalog
 
 from tests.conftest import AimServer
-from tests.helpers import EXAMPLE, write_experiment
+from tests.helpers import CATALOG, EXAMPLE, write_experiment
 from training_sdk import objects
-from tests.test_preflight_offline import CATALOG, modified, write_catalog
+from tests.test_preflight_offline import modified, write_catalog
 from trainer_infra.cli import main
 from trainer_infra.experiment import load_experiment
 from trainer_infra.preflight import check_offline

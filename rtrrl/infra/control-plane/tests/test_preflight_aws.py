@@ -9,8 +9,7 @@ from training_sdk.contract import Catalog
 from trainer_infra.experiment import load_experiment
 from trainer_infra.images import CATALOG_LABEL, encode_catalog, resolve_image
 from trainer_infra.preflight import PreflightError, check_aws, check_offline
-from tests.helpers import EXAMPLE
-from tests.test_preflight_offline import CATALOG
+from tests.helpers import CATALOG, EXAMPLE
 
 ECR_BATCH_GET_IMAGE_FIXTURE = (
     Path(__file__).parent / "data" / "ecr-batch-get-image.json"
@@ -196,6 +195,15 @@ def test_a_digest_image_resolves_to_the_same_reference() -> None:
 
     assert resolved.reference == reference
     assert resolved.digest == DIGEST
+
+
+def test_an_ecr_response_for_another_digest_is_rejected() -> None:
+    """Trusting the response would run an image nobody asked for, and pay for it."""
+    reference = f"007122174918.dkr.ecr.eu-north-1.amazonaws.com/rtrrl@{DIGEST}"
+    answering_with_another_image = FakeEcr(digest="sha256:" + "2" * 64)
+
+    with pytest.raises(PreflightError, match="does not match requested digest"):
+        resolve_image(reference, answering_with_another_image, read_url)
 
 
 def test_dev_tier_selects_the_dev_queue() -> None:

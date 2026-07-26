@@ -6,10 +6,10 @@ import pytest
 from training_sdk import objects
 
 from trainer_infra.launch import build_run_config, config_uri, create_launch
-from tests.helpers import make_plan
+from tests.helpers import EXAMPLE, make_plan
 
 WHEN = datetime(2026, 7, 25, 5, 14, 0, tzinfo=UTC)
-SOURCE = Path("examples/experiment-acceptance.yaml")
+SOURCE = EXAMPLE
 TRIAL_PARAMS = {"total_steps": 128, "learning_rate": 0.0003}
 
 

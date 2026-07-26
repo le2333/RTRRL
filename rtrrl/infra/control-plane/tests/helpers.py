@@ -1,18 +1,55 @@
 from pathlib import Path
 
+from training_sdk.contract import Catalog
+
 from trainer_infra.experiment import load_experiment
 from trainer_infra.preflight import LaunchPlan, check_offline
-from tests.test_preflight_offline import CATALOG
 
-EXAMPLE = Path("examples/experiment-acceptance.yaml")
+EXAMPLE = Path("tests/data/experiment.yaml")
+"""The suite's own experiment, deliberately not one of the shipped examples.
+
+The examples under `examples/` name real image digests and the real Aim host, and
+they change whenever an image is rebuilt. Asserting against them made every image
+push a test failure; `tests/test_examples.py` keeps them honest instead.
+"""
+
+
+CATALOG = Catalog.model_validate(
+    {
+        "contract": 2,
+        "entries": {
+            "brax_ppo_acceptance": {
+                "command": ["python", "-m", "brax_ppo_acceptance"],
+                "source_hash": "sha256:0",
+                "metrics": ["episode_return", "episode_length"],
+                "space": {
+                    "env": ["inverted_pendulum"],
+                    "backend": ["generalized"],
+                    "total_steps": {"type": "int", "low": 1, "high": 100000},
+                    "seed": {"type": "int", "low": 0, "high": 1000},
+                    "learning_rate": {"type": "float", "low": 1e-6, "high": 1e-2},
+                },
+            }
+        },
+    }
+)
+
+
+def replace_once(content: str, old: str, new: str) -> str:
+    """Substitute `old`, refusing to silently leave the text unchanged."""
+    if content.count(old) != 1:
+        raise AssertionError(
+            f"expected exactly one occurrence of {old!r}, found {content.count(old)}"
+        )
+    return content.replace(old, new)
 
 
 def write_experiment(tmp_path: Path, s3_base: str, aim_uri: str) -> Path:
     content = EXAMPLE.read_text(encoding="utf-8")
-    content = content.replace(
-        "storage: s3://rtrrl-artifacts-007122174918/trainer", f"storage: {s3_base}"
+    content = replace_once(
+        content, "storage: s3://rtrrl-artifacts-007122174918/trainer", f"storage: {s3_base}"
     )
-    content = content.replace("aim: aim://172.31.62.192:53801", f"aim: {aim_uri}")
+    content = replace_once(content, "aim: aim://10.0.0.1:53801", f"aim: {aim_uri}")
     path = tmp_path / "experiment.yaml"
     path.write_text(content, encoding="utf-8")
     return path

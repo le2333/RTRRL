@@ -6,35 +6,13 @@ from training_sdk.contract import Catalog
 
 from trainer_infra.experiment import Experiment, load_experiment
 from trainer_infra.preflight import PreflightError, check_offline, format_space
-
-EXAMPLE = Path("examples/experiment-acceptance.yaml")
-
-CATALOG = Catalog.model_validate(
-    {
-        "contract": 2,
-        "entries": {
-            "brax_ppo_acceptance": {
-                "command": ["python", "-m", "brax_ppo_acceptance"],
-                "source_hash": "sha256:0",
-                "metrics": ["episode_return", "episode_length"],
-                "space": {
-                    "env": ["inverted_pendulum"],
-                    "backend": ["generalized"],
-                    "total_steps": {"type": "int", "low": 1, "high": 100000},
-                    "seed": {"type": "int", "low": 0, "high": 1000},
-                    "learning_rate": {"type": "float", "low": 1e-6, "high": 1e-2},
-                },
-            }
-        },
-    }
-)
+from tests.helpers import CATALOG, EXAMPLE, replace_once
 
 
 def modified(tmp_path: Path, old: str, new: str) -> Experiment:
-    text = EXAMPLE.read_text()
-    assert old in text, f"fixture no longer contains {old!r}"
+    text = replace_once(EXAMPLE.read_text(), old, new)
     path = tmp_path / "experiment.yaml"
-    path.write_text(text.replace(old, new), encoding="utf-8")
+    path.write_text(text, encoding="utf-8")
     return load_experiment(path)
 
 

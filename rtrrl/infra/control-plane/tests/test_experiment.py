@@ -4,12 +4,11 @@ import pytest
 from pydantic import ValidationError
 
 from trainer_infra.experiment import load_experiment
-
-EXAMPLE = Path("examples/experiment-acceptance.yaml")
+from tests.helpers import EXAMPLE, replace_once
 
 
 def _modified_example(tmp_path: Path, old: str, new: str) -> Path:
-    text = EXAMPLE.read_text().replace(old, new)
+    text = replace_once(EXAMPLE.read_text(), old, new)
     path = tmp_path / "bad.yaml"
     path.write_text(text, encoding="utf-8")
     return path
