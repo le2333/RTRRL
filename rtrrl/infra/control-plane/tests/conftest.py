@@ -19,12 +19,6 @@ class AimServer:
     path: str
 
 
-def _free_port() -> int:
-    with socket.socket() as probe:
-        probe.bind(("127.0.0.1", 0))
-        return probe.getsockname()[1]
-
-
 def _own_address() -> str:
     """This machine's address as another host on its network would name it.
 
@@ -35,6 +29,12 @@ def _own_address() -> str:
     with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as probe:
         probe.connect(("192.0.2.1", 9))  # TEST-NET-1, reserved for documentation
         return probe.getsockname()[0]
+
+
+def _free_port() -> int:
+    with socket.socket() as probe:
+        probe.bind((_own_address(), 0))
+        return probe.getsockname()[1]
 
 
 @pytest.fixture
@@ -59,19 +59,26 @@ def listening_endpoint() -> Iterator[str]:
 
 @pytest.fixture
 def aim_endpoint(tmp_path_factory: pytest.TempPathFactory) -> AimServer:
+    """A real Aim server, reachable by the address a Batch job would use.
+
+    It listens on every interface and is named by this host's own address rather
+    than loopback, because preflight refuses a loopback endpoint for batch
+    launches — a job would resolve it to itself.
+    """
     repo_path = tmp_path_factory.mktemp("aim-repo")
     Repo.from_path(str(repo_path), init=True)
     port = _free_port()
+    address = _own_address()
     process = subprocess.Popen(
         ["aim", "server", "--repo", str(repo_path), "--port", str(port),
-         "--host", "127.0.0.1"],
+         "--host", "0.0.0.0"],
         stdout=subprocess.DEVNULL,
         stderr=subprocess.DEVNULL,
     )
     deadline = time.monotonic() + 60
     while time.monotonic() < deadline:
         with socket.socket() as probe:
-            if probe.connect_ex(("127.0.0.1", port)) == 0:
+            if probe.connect_ex((address, port)) == 0:
                 break
         if process.poll() is not None:
             raise RuntimeError("aim server exited before accepting connections")
@@ -79,7 +86,7 @@ def aim_endpoint(tmp_path_factory: pytest.TempPathFactory) -> AimServer:
     else:
         process.kill()
         raise RuntimeError("aim server did not start within 60s")
-    yield AimServer(uri=f"aim://127.0.0.1:{port}", path=str(repo_path))
+    yield AimServer(uri=f"aim://{address}:{port}", path=str(repo_path))
     process.terminate()
     process.wait(timeout=30)
 
