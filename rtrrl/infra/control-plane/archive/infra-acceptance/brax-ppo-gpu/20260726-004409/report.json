@@ -1,0 +1,40 @@
+{
+  "best": {
+    "job_id": "8a936497-c3a2-4217-b06d-14f702be6b06",
+    "log_stream": "trainer-g6x-5153ca698521cde78f5a61eea46ed4b38898197491633176ca2cef8c263bb9d0/default/40ea218f692d4f74ad144bdf4649f690",
+    "params": {
+      "backend": "generalized",
+      "env": "inverted_pendulum",
+      "episode_length": 32,
+      "failure_mode": "none",
+      "learning_rate": 0.0003,
+      "num_envs": 4,
+      "seed": 0,
+      "total_steps": 128
+    },
+    "trial": 0,
+    "value": 22.0
+  },
+  "elapsed_seconds": 282.285,
+  "failure": null,
+  "launch_id": "20260726-004409",
+  "status": "succeeded",
+  "trials": [
+    {
+      "job_id": "8a936497-c3a2-4217-b06d-14f702be6b06",
+      "log_stream": "trainer-g6x-5153ca698521cde78f5a61eea46ed4b38898197491633176ca2cef8c263bb9d0/default/40ea218f692d4f74ad144bdf4649f690",
+      "params": {
+        "backend": "generalized",
+        "env": "inverted_pendulum",
+        "episode_length": 32,
+        "failure_mode": "none",
+        "learning_rate": 0.0003,
+        "num_envs": 4,
+        "seed": 0,
+        "total_steps": 128
+      },
+      "trial": 0,
+      "value": 22.0
+    }
+  ]
+}

@@ -4513,7 +4513,7 @@ queues selected. A copy referring to the CPU image by tag rather than digest als
 passes, which is the first proof in the real account that tag resolution works
 without `ecr:DescribeImages`.
 
-- [ ] **Step 4: Run the CPU study**
+- [x] **Step 4: Run the CPU study**
 
 ```bash
 uv run trainerctl run examples/experiment-acceptance.yaml --backend batch \
@@ -4526,26 +4526,28 @@ Expected: `exit=0`, two CPU jobs, four trials reported, and a best trial printed
 Round two's parameters must come from round one's scores — that is the loop under
 test, not the arithmetic.
 
-- [ ] **Step 5: Run the GPU configuration**
+- [x] **Step 5: Run the GPU configuration**
 
 `examples/experiment-acceptance-gpu.yaml` is already written and validated: the GPU
 digest, `g6.xlarge`, one round of one trial. Run it the same way.
 
-- [ ] **Step 6: Collect the evidence**
+- [x] **Step 6: Collect the evidence**
 
 ```bash
 aws batch describe-jobs --jobs <ids> > /tmp/acceptance-jobs.json
 aws s3 ls --recursive s3://<bucket>/<experiment>/ > /tmp/acceptance-s3.txt
 ```
 
-Confirm every trial has `config.json`, `score.json`, and at least one `.rrd`, and
-confirm the Aim interface shows the runs under this launch id with the digest and
-source hash recorded.
+All five trials have `config.json`, `score.json` and one `.rrd`. The scores in S3
+match the report, so what Optuna read is what the worker wrote. Aim holds all six
+of today's runs with `launch_id`, `trial`, `entry`, parameters, image digest and
+source hash; the GPU run carries the GPU digest and the CPU runs the CPU one, all
+sharing a single source hash.
 
-- [ ] **Step 7: Write the acceptance record**
+- [x] **Step 7: Write the acceptance record**
 
-Create `docs/acceptance/<date>-algorithm-centric-facility-acceptance.md` with the
-commands, the exit codes, the job ids, the digests, and the report contents.
+Written to `docs/acceptance/2026-07-26-algorithm-centric-facility-acceptance.md`,
+including the five faults the paid path caught that no AWS-mocking test could.
 
 - [ ] **Step 8: Commit**
 
