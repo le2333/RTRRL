@@ -35,6 +35,14 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Set up uv
+        uses: astral-sh/setup-uv@v6
+
+      - name: Encode trainer script catalog
+        id: catalog
+        run: |
+          echo "value=$(uv run --project rtrrl/infra/control-plane trainer-image-catalog rtrrl/infra/scripts/index.yaml)" >> "$GITHUB_OUTPUT"
+
       # docker-container driver is required for the type=gha build cache below
       # (the default docker driver cannot export/import the GHA cache).
       - name: Set up Docker Buildx
@@ -62,6 +70,8 @@ jobs:
           file: ${{ matrix.dockerfile }}
           platforms: linux/amd64
           push: true
+          build-args: |
+            TRAINER_SCRIPT_CATALOG=${{ steps.catalog.outputs.value }}
           tags: |
             ${{ steps.ecr.outputs.registry }}/${{ env.ECR_REPO }}:${{ matrix.tag }}
             ${{ steps.ecr.outputs.registry }}/${{ env.ECR_REPO }}:${{ github.sha }}-${{ matrix.tag }}

@@ -1,0 +1,109 @@
+import json
+from pathlib import Path
+
+import pytest
+
+from training_sdk.contract import RunConfig
+from training_sdk.reporter import METRICS_FILENAME, Reporter
+
+
+def make_config(*, every_steps: int = 1) -> RunConfig:
+    return RunConfig.model_validate(
+        {
+            "contract": 2,
+            "run_id": "smoke-20260725-000000-t0",
+            "experiment": "infra-acceptance",
+            "name": "smoke",
+            "launch_id": "20260725-000000",
+            "trial": 0,
+            "entry": "e",
+            "digest": "registry.example/trainer@sha256:" + "a" * 64,
+            "source_hash": "sha256:smoke",
+            "params": {"total_steps": 4},
+            "logging": {"aim": "aim://127.0.0.1:1", "every_steps": every_steps},
+            "score": {
+                "metric": "episode_return",
+                "window_steps": [0, 4],
+                "reduce": "mean",
+                "direction": "maximize",
+                "non_finite": "worst",
+                "s3": "s3://bucket/score.json",
+            },
+        }
+    )
+
+
+class RecordingSink:
+    def __init__(self) -> None:
+        self.reports: list[tuple[int, dict[str, float]]] = []
+        self.closed = False
+
+    def report(self, step: int, metrics: dict[str, float]) -> None:
+        self.reports.append((step, dict(metrics)))
+
+    def log_episode(self, episode: object) -> None:
+        return None
+
+    def close(self) -> None:
+        self.closed = True
+
+
+class FailingRecordingSink(RecordingSink):
+    def __init__(self, message: str) -> None:
+        super().__init__()
+        self._message = message
+
+    def close(self) -> None:
+        raise RuntimeError(self._message)
+
+
+def test_reporter_from_env_reads_config_and_scratch(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    config = make_config()
+    config_path = tmp_path / "run-config.json"
+    aim_repo = tmp_path / "aim"
+    config_data = config.model_dump()
+    config_data["logging"] = {**config_data["logging"], "aim": str(aim_repo)}
+    config_path.write_text(json.dumps(config_data), encoding="utf-8")
+    scratch = tmp_path / "scratch"
+    scratch.mkdir()
+    monkeypatch.setenv("TRAINER_RUN_CONFIG", str(config_path))
+    monkeypatch.setenv("TRAINER_SCRATCH", str(scratch))
+
+    reporter = Reporter.from_env()
+
+    assert reporter.config.run_id == "smoke-20260725-000000-t0"
+    assert reporter.config.trial == 0
+    reporter.report(3, {"episode_return": 9.0})
+    reporter.close()
+
+    written = json.loads((scratch / METRICS_FILENAME).read_text().strip())
+    assert written == {"step": 3, "metrics": {"episode_return": 9.0}}
+
+
+def test_reporter_fans_out_and_writes_metrics_file(tmp_path: Path) -> None:
+    sink = RecordingSink()
+    with Reporter(make_config(), tmp_path, sinks=[sink]) as reporter:
+        reporter.report(1, {"episode_return": 3.0})
+    assert sink.reports == [(1, {"episode_return": 3.0})]
+    assert sink.closed is True
+    written = json.loads((tmp_path / METRICS_FILENAME).read_text().strip())
+    assert written == {"step": 1, "metrics": {"episode_return": 3.0}}
+
+
+def test_reporter_close_first_sink_raises_still_closes_second(tmp_path: Path) -> None:
+    first = FailingRecordingSink("aim sink failed to close")
+    second = RecordingSink()
+    reporter = Reporter(make_config(), tmp_path, sinks=[first, second])
+    with pytest.raises(RuntimeError, match="aim sink failed to close"):
+        reporter.close()
+    assert second.closed is True
+
+
+def test_reporter_close_both_sinks_raise_propagates_first(tmp_path: Path) -> None:
+    first = FailingRecordingSink("first failure")
+    second = FailingRecordingSink("second failure")
+    reporter = Reporter(make_config(), tmp_path, sinks=[first, second])
+    with pytest.raises(RuntimeError, match="first failure"):
+        reporter.close()

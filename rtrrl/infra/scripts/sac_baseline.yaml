@@ -1,0 +1,54 @@
+name: sac_baseline
+argv: [python, sac_baseline.py, --config_path, "{config_path}"]
+sdk_protocol_version: "1"
+defaults:
+  environment:
+    name: brax-hopper
+    options:
+      backend: spring
+      observation_mode: P
+      max_episode_steps: 1000
+  training_budget:
+    env_steps: 6553600
+  logging:
+    aim_every_env_steps: 10000
+    rerun_every_episodes: 100
+objective:
+  metric: eval/episode_reward
+  direction: maximize
+  reduction: last
+environments: [brax-hopper]
+fields:
+  seed:
+    path: seed
+    type: int
+    default: 0
+    constraints: {ge: 0}
+  learning_rate:
+    path: sac_overrides.learning_rate
+    type: float
+    default: 0.0006
+    searchable: true
+    constraints: {gt: 0}
+    default_search:
+      min: 0.00001
+      max: 0.01
+      scale: log
+  num_envs:
+    path: sac_overrides.num_envs
+    type: int
+    default: 128
+    searchable: true
+    constraints: {gt: 0}
+    default_search:
+      values: [64, 128, 256]
+  discounting:
+    path: sac_overrides.discounting
+    type: float
+    default: 0.997
+    searchable: true
+    constraints: {gt: 0, le: 1}
+    default_search:
+      min: 0.95
+      max: 1.0
+      scale: linear

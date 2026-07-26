@@ -1,0 +1,50 @@
+name: Tests
+
+# The development machine is a micro instance and cannot run the suite without
+# running out of memory, so this workflow is the only place tests execute.
+
+on:
+  push:
+    branches:
+      - feature/trainer-infra
+    paths:
+      - .github/workflows/tests.yml
+      - training-sdk/**
+      - rtrrl/infra/control-plane/**
+      - rtrrl/infra/mock-trainer/**
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    name: ${{ matrix.name }}
+    runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: training-sdk
+            project: training-sdk
+            target: ""
+          - name: control-plane
+            project: rtrrl/infra/control-plane
+            target: ""
+          - name: mock-trainer
+            project: rtrrl/infra/mock-trainer
+            target: ""
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+
+      - name: Lint
+        working-directory: ${{ matrix.project }}
+        run: uv run ruff check .
+
+      - name: Test
+        working-directory: ${{ matrix.project }}
+        run: uv run pytest ${{ matrix.target }} -q

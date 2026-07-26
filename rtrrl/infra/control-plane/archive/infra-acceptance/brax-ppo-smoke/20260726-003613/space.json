@@ -1,0 +1,1 @@
+{"backend": ["generalized"], "env": ["inverted_pendulum"], "episode_length": [32], "failure_mode": ["none"], "learning_rate": {"high": 0.001, "log": true, "low": 0.0001, "type": "float"}, "num_envs": [4], "seed": [0], "total_steps": [128]}

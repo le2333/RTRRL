@@ -28,6 +28,10 @@ RUN uv sync --frozen --no-dev
 # ---- runtime -----------------------------------------------------------------
 FROM python:3.12-slim AS runtime
 
+ARG TRAINER_SCRIPT_CATALOG
+RUN test -n "${TRAINER_SCRIPT_CATALOG}"
+LABEL org.rtrrl.trainer.scripts.v1="${TRAINER_SCRIPT_CATALOG}"
+
 # AWS CLI v2 for S3 checkpoint sync from the container (uses the Batch job role).
 RUN apt-get update \
     && apt-get install -y --no-install-recommends curl unzip ca-certificates \
@@ -51,6 +55,7 @@ WORKDIR /app
 # Application code (build context is the repo root; see .dockerignore).
 # config/, docs/, figures/, logs/ are excluded — configs are injected at runtime.
 COPY . /app
+COPY infra/scripts /opt/trainer/scripts
 
 # Entrypoint decodes the submit-time CONFIG_B64 into /tmp/run-config.yml, then exec's.
 COPY infra/docker/entrypoint.sh /usr/local/bin/entrypoint.sh

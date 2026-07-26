@@ -41,6 +41,18 @@ echo "Image      : ${TARGET_IMAGE}"
 # keeps run_many.py single-sourced here; the staged copy is gitignored.
 cp "${HERE}/run_many.py" "${PROJECT_DIR}/run_many.py"
 
+# Descriptor-aware projects bind their validated catalog into the image label.
+# Projects without an index (for example memo) keep the existing build behavior.
+BUILD_ARGS=()
+CATALOG_INDEX="${PROJECT_DIR}/infra/scripts/index.yaml"
+if [ -f "${CATALOG_INDEX}" ]; then
+  TRAINER_SCRIPT_CATALOG="$(
+    uv run --project "${PROJECT_DIR}/infra/control-plane" \
+      trainer-image-catalog "${CATALOG_INDEX}"
+  )"
+  BUILD_ARGS+=(--build-arg "TRAINER_SCRIPT_CATALOG=${TRAINER_SCRIPT_CATALOG}")
+fi
+
 # Create the ECR repo if it does not exist (needs ecr:CreateRepository; if the
 # jump host role lacks it, create the repo once with admin creds instead).
 aws ecr describe-repositories --repository-names "${ECR_REPO}" --region "${REGION}" >/dev/null 2>&1 \
@@ -55,6 +67,7 @@ docker build \
   --platform linux/amd64 \
   -f "${DOCKERFILE}" \
   -t "${TARGET_IMAGE}" \
+  "${BUILD_ARGS[@]}" \
   "${PROJECT_DIR}"
 
 docker push "${TARGET_IMAGE}"
