@@ -2,7 +2,6 @@ from typing import Union
 
 import jax
 import jax.numpy as jnp
-import lox
 from gymnax.environments import environment
 from gymnax.wrappers.purerl import GymnaxWrapper
 
@@ -35,6 +34,5 @@ class MaskObservationWrapper(GymnaxWrapper):
         observation, state, reward, done, info = self._env.step(
             key, state, action, params
         )
-        lox.log({"mask_observation/mask_rate": self.mask_rate})
         observation = jax.tree.map(lambda o, m: o * m, observation, self.mask)
         return observation, state, reward, done, info

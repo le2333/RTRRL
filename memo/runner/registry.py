@@ -34,6 +34,7 @@ from memorax.networks import (
     RTUConfig,
     heads,
 )
+from memorax.rl import NormalizationConfig
 
 # What the runner computes from complete evaluation episodes, for every
 # topology, and therefore what a score can always be asked for.
@@ -74,15 +75,30 @@ _BOOL = [False, True]
 # The domain the runner itself owns. Every topology accepts these, so they are
 # written once rather than repeated per entry.
 _RUNNER_SPACE: dict[str, Any] = {
-    "environment": ["gymnax::Pendulum-v1", "brax::inverted_pendulum"],
+    "environment": [
+        "brax::hopper",
+        "brax::walker2d",
+        "brax::halfcheetah",
+        "brax::ant",
+        "brax::inverted_pendulum",
+        "gymnax::Pendulum-v1",
+    ],
+    # Brax knobs. "mode" masks the observation: F is fully observed, P leaves
+    # only positions and V only velocities, which is what makes these tasks
+    # partially observed and therefore worth a recurrent policy at all.
+    "env_mode": ["F", "P", "V"],
+    "env_backend": ["generalized", "spring", "positional", "mjx"],
     "total_steps": {"type": "int", "low": 1, "high": 100_000_000},
-    "epoch_steps": {"type": "int", "low": 1, "high": 1_000_000},
+    "epoch_steps": {"type": "int", "low": 1, "high": 10_000_000},
     "eval_steps": {"type": "int", "low": 0, "high": 100_000},
-    "seed": {"type": "int", "low": 0, "high": 999_999},
+    "seed": {"type": "int", "low": 0, "high": 1_000_000},
     "num_envs": {"type": "int", "low": 1, "high": 256},
     "hidden_dim": {"type": "int", "low": 1, "high": 512},
     "feature_dim": {"type": "int", "low": 1, "high": 512},
     "backbone": ["lru", "rtu"],
+    "meta_rl": _BOOL,
+    "normalize_observation": _BOOL,
+    "normalize_reward": _BOOL,
     "record_trajectory": _BOOL,
 }
 
@@ -95,11 +111,41 @@ def _select(params: Mapping[str, Any], config_type) -> dict[str, Any]:
 
 
 def _environment(params: Mapping[str, Any]):
-    return make(params["environment"])
+    """Build the environment, forwarding the knobs its namespace understands.
+
+    Only knobs the experiment actually set are passed on, because a namespace
+    rejects a keyword it does not have and most of them have neither of these.
+    """
+
+    options = {
+        keyword: params[f"env_{keyword}"]
+        for keyword in ("mode", "backend")
+        if f"env_{keyword}" in params
+    }
+    return make(params["environment"], **options)
+
+
+def _normalization(params: Mapping[str, Any]) -> NormalizationConfig:
+    """Whether observations and rewards are normalized, and on what scale.
+
+    Both are off unless asked for. Reward normalization divides by the running
+    deviation of the discounted return, so it reads the same gamma the critic
+    bootstraps with rather than keeping a second one.
+    """
+
+    return NormalizationConfig(
+        normalize_observation=bool(params.get("normalize_observation", False)),
+        normalize_reward=bool(params.get("normalize_reward", False)),
+        reward_gamma=float(params.get("gamma", 0.99)),
+    )
 
 
 def _dimensions(env, env_params) -> int:
     return int(env.action_space(env_params).shape[0])
+
+
+def _encoder(width: int):
+    return nn.Sequential((nn.Dense(width), nn.relu))
 
 
 def _recurrent(backbone: str, features: int, hidden_dim: int, output_dim: int | None):
@@ -129,16 +175,13 @@ def build_rtrrl_topology(params: Mapping[str, Any]) -> AgentProgram:
     meta_rl = bool(params.get("meta_rl", True))
     hidden_dim = int(params.get("hidden_dim", 8))
 
-    def encoder():
-        return nn.Sequential((nn.Dense(feature_dim), nn.tanh))
-
     parts = RTRRLParts(
         env=env,
         env_params=env_params,
         feature_extractor=FeatureExtractor(
-            observation_extractor=encoder(),
-            action_extractor=encoder() if meta_rl else None,
-            reward_extractor=encoder() if meta_rl else None,
+            observation_extractor=_encoder(feature_dim),
+            action_extractor=_encoder(feature_dim) if meta_rl else None,
+            reward_extractor=_encoder(feature_dim) if meta_rl else None,
         ),
         torso=_recurrent(
             str(params.get("backbone", "lru")),
@@ -149,6 +192,7 @@ def build_rtrrl_topology(params: Mapping[str, Any]) -> AgentProgram:
         actor_head=heads.Gaussian(action_dim=action_dim),
         critic_head=heads.VNetwork(),
         activation=jax.nn.silu,
+        normalization=_normalization(params),
         record_trajectory=bool(params.get("record_trajectory", False)),
     )
     return build_rtrrl(RTRRLConfig(**_select(params, RTRRLConfig)), parts)
@@ -160,16 +204,21 @@ def build_stream_ac_rtrl_topology(params: Mapping[str, Any]) -> AgentProgram:
     env, env_params = _environment(params)
     action_dim = _dimensions(env, env_params)
     feature_dim = int(params.get("feature_dim", 3))
+    meta_rl = bool(params.get("meta_rl", False))
     hidden_dim = int(params.get("hidden_dim", 8))
 
     def network(head):
+        # Actor and critic get their own extractor and torso. Nothing is
+        # shared between them, which is what separates this from RTRRL.
         return Network(
             feature_extractor=FeatureExtractor(
-                observation_extractor=nn.Sequential((nn.Dense(feature_dim), nn.tanh))
+                observation_extractor=_encoder(feature_dim),
+                action_extractor=_encoder(feature_dim) if meta_rl else None,
+                reward_extractor=_encoder(feature_dim) if meta_rl else None,
             ),
             torso=_recurrent(
                 str(params.get("backbone", "rtu")),
-                features=feature_dim,
+                features=feature_dim * (3 if meta_rl else 1),
                 hidden_dim=hidden_dim,
                 output_dim=feature_dim,
             ),
@@ -181,6 +230,7 @@ def build_stream_ac_rtrl_topology(params: Mapping[str, Any]) -> AgentProgram:
         env_params=env_params,
         actor_network=network(heads.Gaussian(action_dim=action_dim)),
         critic_network=network(heads.VNetwork()),
+        normalization=_normalization(params),
         record_trajectory=bool(params.get("record_trajectory", False)),
     )
     return build_stream_ac_rtrl(
@@ -196,13 +246,12 @@ TOPOLOGIES: dict[str, Topology] = {
             builder=build_rtrrl_topology,
             space={
                 **_RUNNER_SPACE,
-                "meta_rl": _BOOL,
                 "gamma": {"type": "float", "low": 0.5, "high": 0.9999},
                 "lambda_pi": _FLOAT_UNIT,
                 "lambda_v": _FLOAT_UNIT,
                 "lambda_rnn": _FLOAT_UNIT,
-                "td_lr": {"type": "float", "low": 1e-8, "high": 1e-1, "log": True},
-                "rnn_lr": {"type": "float", "low": 1e-9, "high": 1e-1, "log": True},
+                "td_lr": {"type": "float", "low": 1e-9, "high": 10.0, "log": True},
+                "rnn_lr": {"type": "float", "low": 1e-9, "high": 10.0, "log": True},
                 "eta_pi": {"type": "float", "low": 0.0, "high": 10.0},
                 "eta_f": {"type": "float", "low": 0.0, "high": 10.0},
                 "entropy_rate": {
@@ -238,8 +287,8 @@ TOPOLOGIES: dict[str, Topology] = {
                 **_RUNNER_SPACE,
                 "gamma": {"type": "float", "low": 0.5, "high": 0.9999},
                 "trace_lambda": _FLOAT_UNIT,
-                "actor_lr": {"type": "float", "low": 1e-8, "high": 1e-1, "log": True},
-                "critic_lr": {"type": "float", "low": 1e-8, "high": 1e-1, "log": True},
+                "actor_lr": {"type": "float", "low": 1e-9, "high": 10.0, "log": True},
+                "critic_lr": {"type": "float", "low": 1e-9, "high": 10.0, "log": True},
                 "actor_kappa": {"type": "float", "low": 0.0, "high": 100.0},
                 "critic_kappa": {"type": "float", "low": 0.0, "high": 100.0},
                 "entropy_coefficient": {
