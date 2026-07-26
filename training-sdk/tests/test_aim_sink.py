@@ -120,6 +120,21 @@ def test_throttle_uses_elapsed_steps_not_modulus(
     assert _metric_steps(repo_path) == expected
 
 
+def test_two_reports_at_one_step_both_arrive(tmp_path: Path) -> None:
+    # A training epoch reports its own metrics and then its evaluation metrics
+    # at the same step. Throttling is meant to thin out a stream that advances
+    # too fast, not to drop the second half of one step's report.
+    repo_path = str(tmp_path / "aim")
+    Repo.from_path(repo_path, init=True)
+    sink = AimSink(make_config(every_steps=1), repo=repo_path)
+    sink.report(25600, {"train_return": 1.0})
+    sink.report(25600, {"eval_return": 2.0})
+    sink.close()
+
+    assert _metric_steps(repo_path, "train_return") == [25600]
+    assert _metric_steps(repo_path, "eval_return") == [25600]
+
+
 def test_metrics_file_keeps_every_report_while_aim_is_throttled(tmp_path: Path) -> None:
     repo_path = str(tmp_path / "aim")
     Repo.from_path(repo_path, init=True)

@@ -124,6 +124,45 @@ def test_grid_sampler_with_fixed_lists_can_ask_for_a_trial(tmp_path: Path) -> No
     assert trials[0].params["learning_rate"] in (1e-4, 1e-3)
 
 
+SINGLE_POINT = {
+    "total_steps": CategoricalDistribution(choices=[128]),
+    "seed": CategoricalDistribution(choices=[0]),
+}
+
+
+def _grid_study(tmp_path: Path, space: dict[str, CategoricalDistribution]):
+    return create_study(
+        "sweep-grid",
+        tmp_path / "grid.db",
+        sampler="grid",
+        direction="maximize",
+        user_attrs={},
+        space=space,
+    )
+
+
+def test_the_last_point_of_a_grid_can_be_told(tmp_path: Path) -> None:
+    # An exhausted GridSampler ends the search by calling Study.stop(), which
+    # optuna refuses outside its own optimize(). A pinned experiment is a grid
+    # of one, so without this every such run dies on its only result.
+    study = _grid_study(tmp_path, SINGLE_POINT)
+    (trial,) = ask_round(study, SINGLE_POINT, 1)
+    assert tell_value(study, trial, 1.0) is True
+    assert study.best_value == 1.0
+
+
+def test_a_grid_with_points_left_does_not_ask_to_stop(tmp_path: Path) -> None:
+    study = _grid_study(tmp_path, GRID_DISTRIBUTIONS)
+    (trial,) = ask_round(study, GRID_DISTRIBUTIONS, 1)
+    assert tell_value(study, trial, 1.0) is False
+
+
+def test_a_continuous_search_never_asks_to_stop(tmp_path: Path) -> None:
+    study = make(tmp_path)
+    (trial,) = ask_round(study, DISTRIBUTIONS, 1)
+    assert tell_value(study, trial, 1.0) is False
+
+
 def test_grid_sampler_rejects_continuous_parameters() -> None:
     space = {
         "learning_rate": FloatDistribution(low=1e-4, high=1e-3, log=True),

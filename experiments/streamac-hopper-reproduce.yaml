@@ -7,7 +7,7 @@ description: >
   found these settings only ever ran seeds 0 and 3, and seed 3 topped out at
   474.60, so the score is seed-bound and the seed below is not a free choice.
 
-image: PLACEHOLDER
+image: 007122174918.dkr.ecr.eu-north-1.amazonaws.com/rtrrl@sha256:2ee736282a79492c078ed6bfb3817a27153e5f463bf5abb0090493616f49771a
 entry: stream_ac_rtrl
 storage: s3://rtrrl-artifacts-007122174918/trainer
 

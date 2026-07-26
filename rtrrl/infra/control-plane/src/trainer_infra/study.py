@@ -65,5 +65,22 @@ def ask_round(
     return [study.ask(dict(distributions)) for _ in range(count)]
 
 
-def tell_value(study: optuna.Study, trial: optuna.trial.Trial, value: float) -> None:
-    study.tell(trial, value)
+def tell_value(study: optuna.Study, trial: optuna.trial.Trial, value: float) -> bool:
+    """Record a result, and report whether the sampler considers itself done.
+
+    This launch is the optimization loop; it is simply spelled with ask and tell
+    instead of ``optimize`` so that the trials can run on Batch. A sampler that
+    has nothing left to suggest ends a search by calling ``Study.stop``, which
+    raises unless a loop admits to running, so the flag says what is already
+    true for the duration of the call. An exhausted grid then reads as a reason
+    to stop asking rather than as a crash on the last result.
+    """
+
+    local = study._thread_local
+    previous, local.in_optimize_loop = local.in_optimize_loop, True
+    study._stop_flag = False
+    try:
+        study.tell(trial, value)
+    finally:
+        local.in_optimize_loop = previous
+    return bool(study._stop_flag)

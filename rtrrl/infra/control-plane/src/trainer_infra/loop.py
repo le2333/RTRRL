@@ -80,9 +80,10 @@ def run_launch(
                 for trial_number in plan.trials
             }
             submitted = []
+            exhausted = False
             for trial, config in zip(trials, configs, strict=True):
                 value = _read_score(config.score.s3)
-                tell_value(study, trial, value)
+                exhausted |= tell_value(study, trial, value)
                 result = owner[trial.number]
                 records.append(
                     TrialRecord(
@@ -94,6 +95,16 @@ def run_launch(
                     )
                 )
                 printer(f"trial {trial.number}: {trial.params} -> {value}")
+            if exhausted:
+                # A grid with nothing left would spend the remaining rounds
+                # re-running points it has already paid for.
+                remaining = experiment.hpo.rounds - round_index - 1
+                if remaining:
+                    printer(
+                        f"the search space is exhausted; skipping {remaining} "
+                        f"remaining round(s)"
+                    )
+                break
     except BaseException as failure:
         # Every abnormal end leaves the same evidence behind: an unexpected
         # exception on a paid run is exactly when an archived report matters, and

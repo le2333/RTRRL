@@ -29,7 +29,11 @@ class AimSink:
         self._last: int | None = None
 
     def report(self, step: int, metrics: Mapping[str, float]) -> None:
-        if self._last is not None and step - self._last < self._every:
+        # Reports at a step already recorded always go through. A caller that
+        # splits one step across several reports -- training metrics and then
+        # evaluation metrics for the same epoch -- is not reporting too often,
+        # and dropping the second one loses a whole family of metrics silently.
+        if self._last is not None and step != self._last and step - self._last < self._every:
             return
         self._last = step
         for name, value in metrics.items():
