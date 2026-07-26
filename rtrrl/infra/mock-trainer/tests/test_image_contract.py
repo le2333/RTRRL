@@ -248,7 +248,13 @@ def test_dockerignore_rules_apply_allowlist_before_runtime_and_secret_exclusions
     lines = (ROOT / ".dockerignore").read_text(encoding="utf-8").splitlines()
     matcher = DockerIgnoreMatcher("\n".join(lines))
     rules = matcher.rules
+    # memo builds the real training image from this same root context, so it is
+    # allowlisted here too. What this test is guarding is the order: every
+    # allowlist entry must precede the cache and secret exclusions below, or a
+    # credential inside an allowlisted directory would be sent to the daemon.
     allowlist = (
+        "!memo",
+        "!memo/**",
         "!training-sdk",
         "!training-sdk/**",
         "!rtrrl",
@@ -314,14 +320,17 @@ def test_dockerignore_actual_root_context_contains_only_required_inputs() -> Non
     assert included
     assert any(path.startswith("training-sdk/") for path in included)
     assert any(path.startswith("rtrrl/infra/mock-trainer/") for path in included)
+    # memo joined the context when it became the real training image. The
+    # control plane never belongs in a trainer, and the rest is what must never
+    # reach a build daemon regardless of which image is being built.
     assert all(
-        path.startswith(("training-sdk/", "rtrrl/infra/mock-trainer/")) for path in included
+        path.startswith(("memo/", "training-sdk/", "rtrrl/infra/mock-trainer/"))
+        for path in included
     )
     assert not any(
         forbidden in path
         for path in included
         for forbidden in (
-            "memo/",
             "control-plane/",
             "/.git/",
             "worktrees/",
