@@ -38,7 +38,7 @@ def scalar_metrics(metrics: Any, *, steps: int, prefix: str = "") -> dict[str, f
         array = _numeric(value)
         if array is None or array.ndim == 0 or array.shape[0] != steps:
             continue
-        if array.ndim > 2:
+        if array.ndim > 2 or not np.isfinite(array).any():
             continue
         mean = float(np.nanmean(array))
         if np.isfinite(mean):

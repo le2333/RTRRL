@@ -127,11 +127,7 @@ class IndependentRTRRL:
     normalizer: Any = field(default=None, init=False)
 
     def __post_init__(self):
-        config = self.program_normalization or NormalizationConfig(
-            normalize_observation=self.cfg.normalize_obs,
-            normalize_reward=self.cfg.normalize_reward,
-            reward_gamma=self.cfg.gamma,
-        )
+        config = self.program_normalization or NormalizationConfig()
         self.normalizer = make_normalizer(config)
 
     def _forward(

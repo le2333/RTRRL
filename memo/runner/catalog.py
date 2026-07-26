@@ -38,7 +38,8 @@ def source_hash(roots: tuple[Path, ...] = SOURCE_ROOTS) -> str:
             path for path in root.rglob("*.py") if "__pycache__" not in path.parts
         )
         for path in paths:
-            digest.update(path.relative_to(PACKAGE_ROOT).as_posix().encode("utf-8"))
+            name = f"{root.name}/{path.relative_to(root).as_posix()}"
+            digest.update(name.encode("utf-8"))
             digest.update(path.read_bytes())
     return f"sha256:{digest.hexdigest()}"
 

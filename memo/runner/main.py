@@ -11,9 +11,10 @@ from __future__ import annotations
 import argparse
 import sys
 from collections.abc import Mapping
-from typing import Any
+from typing import Any, Protocol
 
 import jax
+from training_sdk.episode import Episode
 from training_sdk.reporter import Reporter
 
 from .episodes import complete_episodes
@@ -21,12 +22,20 @@ from .metrics import scalar_metrics
 from .registry import topology
 
 
+class Destination(Protocol):
+    """All of the reporter that the loop below touches."""
+
+    def report(self, step: int, metrics: Mapping[str, float]) -> None: ...
+
+    def log_episode(self, episode: Episode) -> None: ...
+
+
 def _int_param(params: Mapping[str, Any], name: str, default: int) -> int:
     value = params.get(name, default)
     return int(value)
 
 
-def run(reporter: Reporter, entry: str, params: Mapping[str, Any]) -> None:
+def run(reporter: Destination, entry: str, params: Mapping[str, Any]) -> None:
     """Train to the step budget, reporting once per epoch."""
 
     program = topology(entry).build(params)

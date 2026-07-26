@@ -10,7 +10,7 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from dataclasses import dataclass, field, replace
-from typing import Any
+from typing import Any, cast
 
 import jax
 import jax.numpy as jnp
@@ -18,6 +18,7 @@ import optax
 from flax import core, struct
 
 from memorax.rl import (
+    NormalizationConfig,
     ObjectiveDirections,
     environment_owns_normalization,
     make_exact_rtrl_credit,
@@ -356,7 +357,7 @@ def build_rtrrl(config: RTRRLConfig, parts: RTRRLParts) -> AgentProgram:
     safe to trace once and call repeatedly.
     """
 
-    normalizer = make_normalizer(parts.normalization or config)
+    normalizer = make_normalizer(parts.normalization or NormalizationConfig())
     normalization_config = replace(
         normalizer.config,
         reset_on_start=parts.evaluation.reset_on_start,
@@ -733,7 +734,7 @@ def build_rtrrl(config: RTRRLConfig, parts: RTRRLParts) -> AgentProgram:
             name: outputs[group].updates[name] for name, group in group_of.items()
         }
         opt_state = {group: output.state for group, output in outputs.items()}
-        fast_params = optax.apply_updates(state.params, updates)
+        fast_params = cast(dict[str, Any], optax.apply_updates(state.params, updates))
         slow_torso = follow_torso(
             fast_params["torso"], state.slow_torso, config.update_period
         )
