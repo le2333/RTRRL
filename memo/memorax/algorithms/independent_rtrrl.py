@@ -82,7 +82,7 @@ class IndependentRTRRLState:
     critic_carry: Carry
     actor_sensitivity: Any
     critic_sensitivity: Any
-    I: Array
+    emphasis: Array
     normalizer_state: Any
 
 
@@ -466,14 +466,14 @@ class IndependentRTRRL:
             actor_grads,
             self.cfg.gamma * self.cfg.lambda_pi,
             next_done,
-            state.I,
+            state.emphasis,
         )
         critic_traces_new = self._update_traces(
             state.critic_traces,
             critic_grads,
             self.cfg.gamma * self.cfg.lambda_v,
             next_done,
-            state.I,
+            state.emphasis,
         )
         actor_traces = (
             actor_traces_new if self.cfg.update_trace_before_td else state.actor_traces
@@ -510,7 +510,7 @@ class IndependentRTRRL:
         )
 
         not_done = 1 - next_done
-        I_next = self.cfg.gamma * state.I * not_done + next_done
+        next_emphasis = self.cfg.gamma * state.emphasis * not_done + next_done
         actor_nu = find_leaf(actor_params["torso"], "nu_log")
         critic_nu = find_leaf(critic_params["torso"], "nu_log")
 
@@ -550,7 +550,7 @@ class IndependentRTRRL:
                 critic_carry=critic_carry,
                 actor_sensitivity=actor_sensitivity,
                 critic_sensitivity=critic_sensitivity,
-                I=I_next,
+                emphasis=next_emphasis,
                 normalizer_state=normalized.state,
             ),
             IndependentStepMetrics(
@@ -558,7 +558,7 @@ class IndependentRTRRL:
                 td_error=td_error,
                 entropy=entropy,
                 value=value,
-                emphasis=state.I.mean(),
+                emphasis=state.emphasis.mean(),
                 diag_actor_lambda_max=(
                     jnp.max(jnp.exp(-jnp.exp(actor_nu)))
                     if actor_nu is not None
@@ -690,7 +690,7 @@ class IndependentRTRRL:
             critic_carry=critic_carry,
             actor_sensitivity=actor_sensitivity,
             critic_sensitivity=critic_sensitivity,
-            I=jnp.ones((self.cfg.num_envs,), dtype=jnp.float32),
+            emphasis=jnp.ones((self.cfg.num_envs,), dtype=jnp.float32),
             normalizer_state=normalizer_state,
         )
 

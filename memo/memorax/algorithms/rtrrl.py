@@ -301,7 +301,7 @@ class RTRRLState:
     opt_state: Any
     carry: Any
     sensitivity: Any
-    I: Any
+    emphasis: Any
     normalizer_state: Any = None
 
 
@@ -542,7 +542,7 @@ def build_rtrrl(config: RTRRLConfig, parts: RTRRLParts) -> AgentProgram:
             },
             carry=arrays["carry"],
             sensitivity=arrays["sensitivity"],
-            I=jnp.ones((config.num_envs,), dtype=jnp.float32),
+            emphasis=jnp.ones((config.num_envs,), dtype=jnp.float32),
             normalizer_state=arrays["normalizer_state"],
         )
 
@@ -669,7 +669,7 @@ def build_rtrrl(config: RTRRLConfig, parts: RTRRLParts) -> AgentProgram:
             incoming_domains,
             trace_gradients,
             terminated_after=next_done,
-            emphasis=state.I,
+            emphasis=state.emphasis,
         )
         carried_traces = {
             "actor": trace_result.carried["actor"],
@@ -688,7 +688,7 @@ def build_rtrrl(config: RTRRLConfig, parts: RTRRLParts) -> AgentProgram:
                     decay
                     * (1 - next_done)[(slice(None),) + (None,) * (old.ndim - 1)]
                     * old
-                    + state.I[(slice(None),) + (None,) * (grad.ndim - 1)] * grad
+                    + state.emphasis[(slice(None),) + (None,) * (grad.ndim - 1)] * grad
                 ),
                 state.traces["pred"],
                 traced_by_domain["prediction"]["pred"],
@@ -739,7 +739,7 @@ def build_rtrrl(config: RTRRLConfig, parts: RTRRLParts) -> AgentProgram:
             fast_params["torso"], state.slow_torso, config.update_period
         )
         not_done = 1 - next_done
-        next_I = config.gamma * state.I * not_done + next_done
+        next_emphasis = config.gamma * state.emphasis * not_done + next_done
         broadcast_dims = tuple(
             range(state.timestep.done.ndim, state.timestep.action.ndim)
         )
@@ -775,7 +775,7 @@ def build_rtrrl(config: RTRRLConfig, parts: RTRRLParts) -> AgentProgram:
             opt_state=opt_state,
             carry=carry,
             sensitivity=sensitivity,
-            I=next_I,
+            emphasis=next_emphasis,
             normalizer_state=normalizer_state,
         )
         nu_log = find_leaf(fast_params["torso"], "nu_log")
@@ -787,7 +787,7 @@ def build_rtrrl(config: RTRRLConfig, parts: RTRRLParts) -> AgentProgram:
             next_value=next_value,
             td_error=td_error,
             entropy=entropy,
-            emphasis=state.I.mean(),
+            emphasis=state.emphasis.mean(),
             step_size=outputs["rnn"].metrics.get("step_size"),
             observation=next_obs if record_trajectory else None,
             reward=next_reward_f if record_trajectory else None,
