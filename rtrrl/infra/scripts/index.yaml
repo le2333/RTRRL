@@ -1,5 +1,0 @@
-protocol_version: "1"
-scripts:
-  - rtrrl.yaml
-  - ppo_baseline.yaml
-  - sac_baseline.yaml
