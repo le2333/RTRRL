@@ -284,8 +284,6 @@ def test_dockerignore_rules_apply_allowlist_before_runtime_and_secret_exclusions
     assert max(rules.index(rule) for rule in allowlist) < min(
         rules.index(rule) for rule in exclusions
     )
-    assert "!memo" not in rules
-    assert "!memo/**" not in rules
     assert all("control-plane" not in rule for rule in rules)
 
     for source in ROOT_CONTEXT_SOURCES:
@@ -293,7 +291,10 @@ def test_dockerignore_rules_apply_allowlist_before_runtime_and_secret_exclusions
         assert not matcher.ignored(source)
 
     excluded_examples = {
-        "memo/train.py",
+        # Allowlisting memo must not carry its caches or credentials in with it.
+        "memo/.env",
+        "memo/__pycache__/runner.cpython-312.pyc",
+        "memo/aws-credentials.json",
         "rtrrl/infra/control-plane/src/trainer_infra/cli.py",
         ".git",
         ".git/worktrees/task/HEAD",
