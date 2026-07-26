@@ -5,9 +5,10 @@ giving actor and critic separate feature extractors, recurrent torsos, RTRL
 state, eligibility traces, slow targets, and Adam moments.
 """
 
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from functools import partial
-from typing import Any, Callable, Protocol, cast
+from typing import Any, Protocol, cast
 
 import flax.linen as nn
 import jax
@@ -15,12 +16,12 @@ import jax.numpy as jnp
 import optax
 from flax import core, struct
 
-from memorax.utils import Timestep, Transition, find_leaf, tree_norm
 from memorax.rl import (
     NormalizationConfig,
     make_normalizer,
     normalization_metrics,
 )
+from memorax.utils import Timestep, Transition, find_leaf, tree_norm
 from memorax.utils.axes import add_time_axis, remove_feature_axis, remove_time_axis
 from memorax.utils.typing import (
     Array,
@@ -81,7 +82,7 @@ class IndependentRTRRLState:
     critic_carry: Carry
     actor_sensitivity: Any
     critic_sensitivity: Any
-    I: Array  # noqa: E741 - retained legacy emphasis-state name
+    I: Array
     normalizer_state: Any
 
 
@@ -224,9 +225,7 @@ class IndependentRTRRL:
             for name, tree in traces.items()
         }
         grouped_traces = group_trees(scaled, group_of)
-        grouped_direct = (
-            group_trees(direct, group_of) if direct is not None else None
-        )
+        grouped_direct = group_trees(direct, group_of) if direct is not None else None
         grouped_params = group_trees(params, group_of)
         outputs = {
             group: rule.apply(
@@ -412,11 +411,7 @@ class IndependentRTRRL:
             jax.lax.stop_gradient(critic_sensitivity),
         )
         next_value = remove_feature_axis(remove_time_axis(next_value_seq))
-        td_error = (
-            next_reward
-            + self.cfg.gamma * (1 - next_done) * next_value
-            - value
-        )
+        td_error = next_reward + self.cfg.gamma * (1 - next_done) * next_value - value
 
         initial_actor_carry = jax.lax.stop_gradient(state.actor_carry)
         initial_actor_sens = jax.lax.stop_gradient(state.actor_sensitivity)
@@ -485,9 +480,7 @@ class IndependentRTRRL:
             state.I,
         )
         actor_traces = (
-            actor_traces_new
-            if self.cfg.update_trace_before_td
-            else state.actor_traces
+            actor_traces_new if self.cfg.update_trace_before_td else state.actor_traces
         )
         critic_traces = (
             critic_traces_new
@@ -618,9 +611,7 @@ class IndependentRTRRL:
             reward=reward,
             done=done,
         )
-        torso_vars = torso.init(
-            {"params": torso_key}, x, done, initial_carry=carry
-        )
+        torso_vars = torso.init({"params": torso_key}, x, done, initial_carry=carry)
         _, h = torso.apply(torso_vars, x, done, initial_carry=carry)
         head_vars = head.init(
             {"params": head_key},
@@ -637,9 +628,7 @@ class IndependentRTRRL:
         traces = jax.tree.map(
             lambda p: jnp.zeros((self.cfg.num_envs, *p.shape)), params
         )
-        sensitivity = torso.initialize_sensitivity(
-            sens_key, (self.cfg.num_envs, None)
-        )
+        sensitivity = torso.initialize_sensitivity(sens_key, (self.cfg.num_envs, None))
         return params, traces, sensitivity
 
     def init(self, key: Key) -> IndependentRTRRLState:
@@ -651,9 +640,7 @@ class IndependentRTRRL:
         obs, env_state = jax.vmap(self.env.reset, in_axes=(0, None))(
             env_keys, self.env_params
         )
-        obs, normalizer_state = self.normalizer.reset(
-            obs, None, update=True
-        )
+        obs, normalizer_state = self.normalizer.reset(obs, None, update=True)
         action_space = self.env.action_space(self.env_params)
         action = jnp.zeros(
             (self.cfg.num_envs, *action_space.shape), dtype=action_space.dtype
@@ -721,9 +708,7 @@ class IndependentRTRRL:
         return state
 
     def _evaluate_with_summary(self, key, state, num_steps):
-        reset_key, eval_key, actor_sens_key, critic_sens_key = jax.random.split(
-            key, 4
-        )
+        reset_key, eval_key, actor_sens_key, critic_sens_key = jax.random.split(key, 4)
         reset_keys = jax.random.split(reset_key, self.cfg.num_envs)
         obs, env_state = jax.vmap(self.env.reset, in_axes=(0, None))(
             reset_keys, self.env_params

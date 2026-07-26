@@ -191,3 +191,5 @@ outputs/
 # HPO data (regenerable / large); specs+runs are kept, studies+snapshots are not.
 hpo/studies/
 hpo/snapshots/
+# Regenerated from the registry at image build time.
+catalog.json

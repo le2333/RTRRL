@@ -8,8 +8,9 @@ algorithm produced them.
 
 from __future__ import annotations
 
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass, replace
-from typing import Any, Callable, Mapping
+from typing import Any
 
 from flax import struct
 
@@ -51,10 +52,20 @@ class Transition:
 
 @struct.dataclass
 class EvalSummary:
-    """Fixed JAX-pytree evaluation outputs consumed by host-side façades."""
+    """One evaluation step, stacked by the caller's scan.
+
+    The transition is spelled out rather than left inside ``info`` because a
+    viewer needs to replay it, and reconstructing episodes from a bag of
+    environment-specific keys would make the host care which environment ran.
+    """
 
     info: Any = None
     normalization: Any = None
+    observation: Any = None
+    next_observation: Any = None
+    action: Any = None
+    reward: Any = None
+    done: Any = None
 
 
 @dataclass(frozen=True)

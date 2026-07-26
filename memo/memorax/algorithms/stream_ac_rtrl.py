@@ -251,7 +251,7 @@ def build_stream_ac_rtrl(
         carry,
         sensitivity,
     ):
-        parameter_tree = params["params"] if "params" in params else params
+        parameter_tree = params.get("params", params)
         features, _ = network.feature_extractor.apply(
             {"params": parameter_tree["feature_extractor"]},
             observation=obs,
@@ -405,8 +405,8 @@ def build_stream_ac_rtrl(
             done=next_done,
         ).to_sequence()
         (
-            bootstrap_carry,
-            bootstrap_sensitivity,
+            _bootstrap_carry,
+            _bootstrap_sensitivity,
         ), (next_value_raw, _) = forward(
             critic_network,
             critic_credit,
@@ -682,6 +682,11 @@ def build_stream_ac_rtrl(
                 normalization=normalization_metrics(
                     next_normalizer_state, normalizer.config.eps
                 ),
+                observation=current.timestep.obs,
+                next_observation=next_obs,
+                action=chosen,
+                reward=next_reward,
+                done=next_done,
             )
 
         step_keys = jax.random.split(eval_key, num_steps)

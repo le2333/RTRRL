@@ -8,8 +8,9 @@ keeps the bootstrap target from moving with the parameters it evaluates.
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass, field, replace
-from typing import Any, Callable
+from typing import Any
 
 import jax
 import jax.numpy as jnp
@@ -115,14 +116,14 @@ def make_rtrrl_trace(config):
     def rtrrl_trace(incoming, gradient, *, terminated_after, emphasis):
         carried = {
             domain: jax.tree.map(
-                lambda old, grad: (
-                    decays[domain] * (1 - _broadcast_env(terminated_after, old)) * old
+                lambda old, grad, decay=decay: (
+                    decay * (1 - _broadcast_env(terminated_after, old)) * old
                     + _broadcast_env(emphasis, grad) * grad
                 ),
                 incoming[domain],
                 gradient[domain],
             )
-            for domain in decays
+            for domain, decay in decays.items()
         }
         return TraceDirections(
             carried=carried,
@@ -213,9 +214,7 @@ def group_parameters(params):
     whichever names it gives its heads.
     """
 
-    return {
-        name: ("rnn" if name in RECURRENT_DOMAINS else "td") for name in params
-    }
+    return {name: ("rnn" if name in RECURRENT_DOMAINS else "td") for name in params}
 
 
 def group_trees(by_name, group_of):
@@ -232,10 +231,16 @@ def make_rtrrl_update_rules(config, abstract_params):
 
     Which mechanism steps is a config choice; the groups do not move, because
     the recurrent parameters are clipped together and may hold a frozen decay
-    while the actor and critic never do.
+    while the actor and critic never do. OBGD ignores ``rnn_grad_clip`` by
+    construction, since bounding the step is the whole of what it does.
     """
 
     if config.update_rule == "obgd":
+        if config.freeze_gamma:
+            raise ValueError(
+                "freeze_gamma has no effect under OBGD: the bound scales a whole "
+                "group at once and cannot hold one leaf still"
+            )
         return {
             group: make_obgd_rule(
                 learning_rate=rate,
@@ -295,7 +300,7 @@ class RTRRLState:
     opt_state: Any
     carry: Any
     sensitivity: Any
-    I: Any  # noqa: E741 - legacy RTRRL emphasis-state name
+    I: Any
     normalizer_state: Any = None
 
 
@@ -591,8 +596,8 @@ def build_rtrrl(config: RTRRLConfig, parts: RTRRLParts) -> AgentProgram:
             done=next_done,
         ).to_sequence()
         (
-            bootstrap_carry,
-            bootstrap_sensitivity,
+            _bootstrap_carry,
+            _bootstrap_sensitivity,
         ), (_, next_value_raw, _) = forward(
             jax.lax.stop_gradient(forward_params),
             next_obs_s,
@@ -643,7 +648,9 @@ def build_rtrrl(config: RTRRLConfig, parts: RTRRLParts) -> AgentProgram:
                 directions.direct_by_domain,
             )
 
-        traced_by_domain, direct_by_domain = jax.jacobian(differentiation)(forward_params)
+        traced_by_domain, direct_by_domain = jax.jacobian(differentiation)(
+            forward_params
+        )
         recurrent_keys = RECURRENT_DOMAINS
         trace_gradients = {
             "actor": traced_by_domain["actor"]["actor"],
@@ -800,9 +807,7 @@ def build_rtrrl(config: RTRRLConfig, parts: RTRRLParts) -> AgentProgram:
             diag_grad_rnn=tree_norm(trace_gradients["recurrent"]),
             diag_grad_actor=tree_norm(trace_gradients["actor"]),
             diag_grad_critic=tree_norm(trace_gradients["critic"]),
-            diag_upd_rnn=tree_norm(
-                {name: updates[name] for name in recurrent_keys}
-            ),
+            diag_upd_rnn=tree_norm({name: updates[name] for name in recurrent_keys}),
             diag_p_torso=tree_norm(fast_params["torso"]),
             diag_p_actor=tree_norm(fast_params["actor"]),
             diag_p_critic=tree_norm(fast_params["critic"]),
@@ -924,6 +929,11 @@ def build_rtrrl(config: RTRRLConfig, parts: RTRRLParts) -> AgentProgram:
                 normalization=normalization_metrics(
                     next_normalizer_state, normalizer.config.eps
                 ),
+                observation=current.timestep.obs,
+                next_observation=next_obs,
+                action=chosen,
+                reward=next_reward,
+                done=next_done,
             )
 
         step_keys = jax.random.split(eval_key, num_steps)

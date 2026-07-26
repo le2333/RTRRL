@@ -38,8 +38,8 @@ jobs:
         memorax/algorithms/rtrrl.py
         memorax/algorithms/stream_ac_rtrl.py
         memorax/algorithms/independent_rtrrl.py
-        memorax/networks/adapter.py
         memorax/utils/trees.py
+        runner
         tests
     steps:
       - uses: actions/checkout@v4
@@ -78,3 +78,5 @@ jobs:
         run: uv sync --frozen --group development
       - name: Run algorithm suite
         run: uv run pytest tests -v
+      - name: Build the catalog the image will carry
+        run: uv run python -m runner.catalog --print-label > /dev/null

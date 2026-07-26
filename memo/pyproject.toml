@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [tool.setuptools.packages.find]
 where = ["."]
-include = ["memorax*"]
+include = ["memorax*", "runner*"]
 
 [project]
 name = "memorax"
@@ -39,6 +39,7 @@ dependencies = [
     # Required by logging_util.py (Aim/W&B bridge reused from streaming-rtrrl).
     "dacite>=1.8",
     "plotly>=5.24",
+    "training-sdk",
 ]
 
 [project.urls]
@@ -115,6 +116,7 @@ requires-dist = []
 
 
 [tool.uv.sources]
+training-sdk = { path = "../training-sdk" }
 continual-foragax = { git = "https://github.com/steventango/continual-foragax" }
 grimax  = { git = "ssh://git@github.com/noahfarr/grimax" }
 cogames = { git = "https://github.com/Metta-AI/cogames" }
