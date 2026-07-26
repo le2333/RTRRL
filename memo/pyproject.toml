@@ -9,8 +9,7 @@ include = ["memorax*"]
 [project]
 name = "memorax"
 version = "1.0.1"
-description = "A unified JAX/Flax framework for memory-augmented reinforcement learning with support for RNNs, SSMs, and Transformers"
-readme = "README.md"
+description = "Online recurrent actor-critic algorithms (RTRRL, StreamAC) in JAX/Flax"
 license = "Apache-2.0"
 requires-python = ">=3.12,<3.13"
 authors = [{ name = "Noah Farr" }]
@@ -24,7 +23,6 @@ dependencies = [
     "flashbax>=0.1.0",
     "gymnax>=0.0.9",
     "wandb>=0.20.0",
-    "tensorboardx>=2.6.1",
     "hydra-core",
     # Pin to 3.28.x: the shared jump-host Aim tracking servers (main + test) run
     # aim 3.28.0, and the remote client/server RPC is version-sensitive (3.29
@@ -42,50 +40,17 @@ dependencies = [
     "plotly>=5.24",
 ]
 
-[project.urls]
-Homepage = "https://github.com/noahfarr/memorax"
-Repository = "https://github.com/noahfarr/memorax"
-Documentation = "https://memorax.readthedocs.io"
-
 [project.optional-dependencies]
 brax      = ["brax>=0.12.4"]
-jumanji   = ["jumanji>=1.1.1"]
-navix     = ["navix>=0.7.0"]
-craftax   = ["craftax>=1.5.0"]
 popgym    = ["popgym", "gymnasium"]
-foragax   = ["continual-foragax"]
-popgym-arcade    = ["popgym-arcade>=0.0.4"]
-mujoco-playground = ["playground>=0.0.5", "warp-lang>=1.9.1"]
-grimax    = ["grimax"]
-cogames   = ["cogames"]
-gymnasium = ["gymnasium"]
-ale       = ["ale-py[gymnasium]"]
-mujoco    = ["gymnasium[mujoco]"]
-pufferlib = ["pufferlib-core"]
-gxm       = ["gxm"]
-pobax     = ["pobax"]
 popjym    = ["popjym"]
-xminigrid = ["xminigrid"]
-jaxmarl   = ["jaxmarl", "brax"]
-memory-gym = ["memory-gym", "gymnasium"]
 
 environments = [
     "brax>=0.12.4",
     "gymnax>=0.0.9",
-    "jumanji>=1.1.1",
-    "navix>=0.7.0",
-    "craftax>=1.5.0",
     "popgym",
-    "popgym-arcade>=0.0.4",
-    "memory-gym",
-    "continual-foragax",
-    "warp-lang>=1.9.1",
-    "playground>=0.0.5",
-    "jaxmarl==0.1.0",
-    "gxm",
+    "gymnasium",
     "popjym",
-    "pobax",
-    "xminigrid",
 ]
 
 [dependency-groups]
@@ -97,30 +62,10 @@ development = [
     "isort>=8.0.1",
     "ruff>=0.15.22",
 ]
-docs = [
-    "sphinx>=7.2.0",
-    "sphinx-book-theme>=1.1.0",
-    "myst-parser>=2.0.0",
-    "sphinx-autodoc-typehints>=1.25.0",
-    "sphinx-copybutton>=0.5.2",
-    "sphinx-design>=0.5.0",
-    "sphinx-autobuild>=2025.8.25",
-]
 
 [tool.uv]
 package = true
 
-[[tool.uv.dependency-metadata]]
-name = "jaxmarl"
-requires-dist = []
-
-
 [tool.uv.sources]
-continual-foragax = { git = "https://github.com/steventango/continual-foragax" }
-grimax  = { git = "ssh://git@github.com/noahfarr/grimax" }
-cogames = { git = "https://github.com/Metta-AI/cogames" }
-gxm     = { git = "https://github.com/huterguier/gxm", rev = "dev", extra = "gxm" }
-pobax   = { git = "https://github.com/taodav/pobax" }
 popjym  = { git = "https://github.com/EdanToledo/popjym.git", extra = "popjym" }
-performax = { git = "https://github.com/noahfarr/performax.git" }
-lox       = { git = "https://github.com/huterguier/lox", rev = "dev" }
+lox     = { git = "https://github.com/huterguier/lox", rev = "dev" }
