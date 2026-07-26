@@ -10,8 +10,6 @@ if TYPE_CHECKING:
         IndependentRTRRLConfig as IndependentRTRRLConfig,
         IndependentRTRRLState as IndependentRTRRLState,
     )
-    from .qrc import QRC as QRC, QRCConfig as QRCConfig, QRCState as QRCState
-    from .qrc_rtrl import QRCRtrl as QRCRtrl, QRCRtrlState as QRCRtrlState
     from .rtrrl import RTRRL as RTRRL, RTRRLConfig as RTRRLConfig, RTRRLState as RTRRLState
     from .stream_ac import (
         StreamAC as StreamAC,
@@ -36,11 +34,6 @@ _EXPORTS = {
         ".independent_rtrrl",
         "IndependentRTRRLState",
     ),
-    "QRC": (".qrc", "QRC"),
-    "QRCConfig": (".qrc", "QRCConfig"),
-    "QRCState": (".qrc", "QRCState"),
-    "QRCRtrl": (".qrc_rtrl", "QRCRtrl"),
-    "QRCRtrlState": (".qrc_rtrl", "QRCRtrlState"),
     "RTRRL": (".rtrrl", "RTRRL"),
     "RTRRLConfig": (".rtrrl", "RTRRLConfig"),
     "RTRRLState": (".rtrrl", "RTRRLState"),
@@ -57,11 +50,6 @@ __all__ = [
     "IndependentRTRRL",
     "IndependentRTRRLConfig",
     "IndependentRTRRLState",
-    "QRC",
-    "QRCConfig",
-    "QRCState",
-    "QRCRtrl",
-    "QRCRtrlState",
     "RTRRL",
     "RTRRLConfig",
     "RTRRLState",

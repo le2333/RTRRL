@@ -21,15 +21,11 @@ import jax
 import jax.numpy as jnp
 import lox
 import numpy as np
-import optax
 from logging_util import DummyLogger, with_logger
 from memorax.algorithms import (
-    QRC,
     RTRRL,
     IndependentRTRRL,
     IndependentRTRRLConfig,
-    QRCConfig,
-    QRCRtrl,
     RTRRLConfig,
     StreamAC,
     StreamACConfig,
@@ -123,8 +119,8 @@ class ExperimentConfig:
     encoder_dim: int = 32
     meta_rl: bool = True
 
-    # QRC(λ) hyperparameters (used by build_qrc_agent; discrete envs only).
-    # `trace_lambda` above is reused as QRC's λ. QRC uses optax SGD (not ObGD).
+    # Retained only because the legacy config compatibility schema still
+    # accepts these keys; no agent reads them since QRC was removed.
     gradient_correction: bool = True
     reg_coeff: float = 1.0
     q_lr: float = 1e-4
@@ -472,74 +468,6 @@ def build_independent_rtrrl_agent(cfg: Any, env, env_params):
         runtime_config=cfg,
         effective_config=actor_selection.effective_config,
         compatibility_parts=parts,
-    )
-
-
-def build_qrc_networks(
-    cfg: ExperimentConfig, num_actions: int
-) -> tuple[Network, Network]:
-    """Build Q/H networks for QRC: FeatureExtractor -> RNN(RTUCell) -> DiscreteQNetwork."""
-    feat = cfg.encoder_dim
-    observation_extractor = nn.Sequential((nn.Dense(feat), nn.relu))
-    action_extractor = nn.Sequential((nn.Dense(feat), nn.relu)) if cfg.meta_rl else None
-    reward_extractor = nn.Sequential((nn.Dense(feat), nn.relu)) if cfg.meta_rl else None
-    feature_extractor = FeatureExtractor(
-        observation_extractor=observation_extractor,
-        action_extractor=action_extractor,
-        reward_extractor=reward_extractor,
-    )
-
-    streams = 3 if cfg.meta_rl else 1
-    in_dim = feat * streams
-    cell = RTUCell(config=RTUConfig(features=in_dim, hidden_dim=cfg.hidden_dim))
-    torso = RNN(cell=cell)
-
-    head = heads.DiscreteQNetwork(action_dim=num_actions)
-    q_network = Network(feature_extractor=feature_extractor, torso=torso, head=head)
-    h_network = Network(feature_extractor=feature_extractor, torso=torso, head=head)
-    return q_network, h_network
-
-
-def build_qrc_agent(cfg: ExperimentConfig, env, env_params):
-    """Build a QRC or QRCRtrl agent from cfg.agent_type (discrete envs only)."""
-    action_space = env.action_space(env_params)
-    if not isinstance(action_space, Discrete):
-        raise ValueError("QRC requires a discrete action space.")
-    q_network, h_network = build_qrc_networks(cfg, action_space.n)
-
-    qrc_cfg = QRCConfig(
-        num_envs=cfg.num_envs,
-        gamma=cfg.gamma,
-        lamda=cfg.trace_lambda,
-        gradient_correction=cfg.gradient_correction,
-        reg_coeff=cfg.reg_coeff,
-    )
-    q_optimizer = optax.sgd(cfg.q_lr)
-    h_optimizer = optax.sgd(cfg.h_lr)
-    epsilon_schedule = optax.linear_schedule(
-        1.0, cfg.epsilon_end, int(cfg.total_timesteps * cfg.epsilon_fraction)
-    )
-
-    if cfg.agent_type == "rtu_rtrl":
-        return QRCRtrl(
-            qrc_cfg,
-            env,
-            env_params,
-            q_network,
-            h_network,
-            q_optimizer,
-            h_optimizer,
-            epsilon_schedule,
-        )
-    return QRC(
-        qrc_cfg,
-        env,
-        env_params,
-        q_network,
-        h_network,
-        q_optimizer,
-        h_optimizer,
-        epsilon_schedule,
     )
 
 
