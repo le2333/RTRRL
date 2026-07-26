@@ -22,25 +22,13 @@ dependencies = [
     "distrax>=0.1.5",
     "flashbax>=0.1.0",
     "gymnax>=0.0.9",
-    "wandb>=0.20.0",
-    "tensorboardx>=2.6.1",
-    "hydra-core",
-    # Pin to 3.28.x: the shared jump-host Aim tracking servers (main + test) run
-    # aim 3.28.0, and the remote client/server RPC is version-sensitive (3.29
-    # clients hit `KeyError: 'from_union'` against a 3.28 server). streaming-rtrrl
-    # is also on 3.28.0, so keeping every client at 3.28 lets one server serve all.
-    "aim>=3.28,<3.29",
-    "simple_parsing>=0.1.8",
-    "tqdm>=4.66",
-    # Aim's log_system_params (Run(log_system_params=True)) imports pkg_resources
-    # at runtime; uv-created venvs don't ship setuptools, so add it explicitly.
-    # Pin <81: setuptools 81 removed pkg_resources, which aim 3.28 still needs.
-    "setuptools>=68,<81",
-    # Required by logging_util.py (Aim/W&B bridge reused from streaming-rtrrl).
-    "dacite>=1.8",
-    "plotly>=5.24",
-    "training-sdk",
     "brax>=0.12.4",
+    # Aim's log_system_params imports pkg_resources at runtime; uv-created venvs
+    # don't ship setuptools, so add it explicitly. Pin <81: setuptools 81 removed
+    # pkg_resources, which aim 3.28 still needs.
+    "setuptools>=68,<81",
+    # Reporting goes through the SDK, which brings its own pinned aim and rerun.
+    "training-sdk",
 ]
 
 [project.urls]
