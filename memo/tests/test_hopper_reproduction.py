@@ -58,6 +58,17 @@ def test_every_pinned_setting_is_one_the_topology_declares(experiment, pinned):
     assert not set(pinned) - set(space)
 
 
+def test_nothing_is_left_for_the_sampler_to_choose(experiment, pinned):
+    """A parameter the experiment forgets keeps the whole domain the entry
+    declared, and the sampler is then free to pick from it. For a run that
+    exists to reproduce one recorded number, every parameter must be pinned or
+    the number is not the one being reproduced.
+    """
+
+    space = topology(experiment["entry"]).space
+    assert not set(space) - set(pinned)
+
+
 def test_the_recorded_hyperparameters_survive_into_the_kernel(pinned):
     from memorax.algorithms.stream_ac_rtrl import StreamACRTRLConfig
     from runner.registry import _select

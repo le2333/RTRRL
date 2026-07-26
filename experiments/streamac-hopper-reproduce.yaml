@@ -11,19 +11,22 @@ entry: stream_ac_rtrl
 storage: s3://rtrrl-artifacts-007122174918/trainer
 
 compute:
-  instance_type: g6.xlarge
+  instance_type: c7a.medium
   timeout_minutes: 240
   startup_minutes: 15
   stall_factor: 10
 
 hpo:
-  sampler: tpe
+  sampler: grid
   rounds: 1
   trials_per_round: 1
   parallel_jobs: 1
 
 space:
   environment: [brax::hopper]
+  # Off: the eval episodes already reach Rerun, and stacking every training
+  # step's observation over a 2M-step budget would not fit.
+  record_trajectory: [false]
   env_mode: [P]
   env_backend: [spring]
   backbone: [rtu]
