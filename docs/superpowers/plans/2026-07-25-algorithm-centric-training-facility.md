@@ -20,6 +20,19 @@ reads Aim.
 
 **Spec:** `docs/superpowers/specs/2026-07-25-algorithm-centric-training-facility-design.md`
 
+## Status
+
+Complete as of 2026-07-26. `trainerctl run` has executed a full Optuna study on AWS
+Batch and the record is in
+`docs/acceptance/2026-07-26-algorithm-centric-facility-acceptance.md`.
+
+The per-step checkboxes in Tasks 1 to 17 were not maintained while those tasks were
+implemented, so read them as history rather than as state. What those tasks built is
+verified by two things that cannot be ticked into existence: all three suites green
+in GitHub Actions, and the paid acceptance run, which exercised space resolution,
+the study, run configuration, packing, submission, the worker, both sinks, score
+computation and reporting in one pass.
+
 ## Global Constraints
 
 - Python `>=3.12,<3.13`; ruff `line-length = 100`; tests are pytest.
@@ -800,7 +813,7 @@ def load_experiment(path: Path) -> Experiment:
 Run: `cd rtrrl/infra/control-plane && uv run pytest tests/test_experiment.py -v`
 Expected: PASS, 3 tests
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add rtrrl/infra/control-plane/src/trainer_infra/experiment.py \
@@ -1461,7 +1474,7 @@ def build_default_sinks(config: RunConfig, scratch: Path) -> tuple[Sink, ...]:
     return (AimSink(config, repo=config.logging.aim),)
 ```
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add training-sdk/src/training_sdk/sinks/aim.py \
@@ -1804,7 +1817,7 @@ def build_default_sinks(config: RunConfig, scratch: Path) -> tuple[Sink, ...]:
     return tuple(sinks)
 ```
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add training-sdk/pyproject.toml training-sdk/uv.lock \
@@ -2328,7 +2341,7 @@ Expected: PASS, 4 tests
 Run: `cd training-sdk && uv run pytest -q && uv run ruff check src tests`
 Expected: all tests pass, ruff reports no findings.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add training-sdk/src/training_sdk/worker.py \
@@ -2742,7 +2755,7 @@ should be corrected when this task lands.
 Run: `cd rtrrl/infra/control-plane && uv run pytest tests/test_launch.py -v`
 Expected: PASS, 3 tests
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add rtrrl/infra/control-plane/src/trainer_infra/launch.py \
@@ -3903,7 +3916,7 @@ fully populated `LaunchPlan`.
 Run: `cd rtrrl/infra/control-plane && uv run pytest tests/test_queues.py tests/test_preflight_aws.py -v`
 Expected: PASS, 11 tests
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add rtrrl/infra/control-plane/src/trainer_infra/queues.py \
@@ -4237,7 +4250,7 @@ git commit -m "feat(deploy): send Batch job logs to a retained /trainer/jobs gro
   workflow passes the encoded value as
   `--label org.rtrrl.trainer.catalog.v2=<value>`.
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 ```python
 # rtrrl/infra/mock-trainer/tests/test_catalog.py
@@ -4389,7 +4402,7 @@ none of them reachable by any test that mocks AWS:
 - The examples named `s3://rtrrl-training-data`, a bucket that does not exist; the
   real one is `rtrrl-artifacts-007122174918`.
 
-- [ ] **Step 8: Commit**
+- [x] **Step 8: Commit**
 
 ```bash
 git add rtrrl/infra/mock-trainer .github/workflows/build-infra-acceptance-image.yml \
@@ -4414,7 +4427,7 @@ git commit -m "feat(acceptance): publish a contract v2 catalog and report env st
 - Modify: `rtrrl/infra/control-plane/pyproject.toml` (drop the `aim` dependency;
   the control plane no longer talks to Aim).
 
-- [ ] **Step 1: Delete the modules and their tests**
+- [x] **Step 1: Delete the modules and their tests**
 
 ```bash
 cd rtrrl/infra/control-plane
@@ -4425,39 +4438,38 @@ git rm src/training_sdk/{spool,storage,bootstrap,context,execution,run,aim_adapt
 git rm tests/test_{spool,storage,bootstrap,context,execution,aim_adapter,rerun_adapter,types}.py
 ```
 
-- [ ] **Step 2: Run both suites to find every broken import**
+- [x] **Step 2: Run both suites to find every broken import**
 
-Run: `cd training-sdk && uv run pytest -q; cd ../rtrrl/infra/control-plane && uv run pytest -q`
-Expected: import errors listing exactly which surviving modules still depend on
-the deleted ones.
+Run in GitHub Actions. It named three survivors still reaching for deleted code:
+`mock-trainer` importing `trainer_infra`, `Episode` imported from the SDK's top
+level, and `rtrrl/logging_util.py` importing the v1 `maybe_current_run`.
 
-- [ ] **Step 3: Repair the survivors**
+- [x] **Step 3: Repair the survivors**
 
-`heavy_tests.py` and `adapters/aws_batch.py` are infrastructure-development
-tooling that must keep working. Replace their `aws_profiles.PROFILES` use with
-`queues.QUEUES`, their `models.ContractModel` use with plain pydantic models
-local to the adapter, and their `execution.JobBundle` use with the fields they
-actually read. Do not extend their behaviour.
+`heavy_tests.py` and `adapters/aws_batch.py` were removed rather than ported. Full
+removal was chosen, and the `dev-*` queues cover what they were for: the acceptance
+run submits to Batch through `trainerctl` itself, so a second submission path would
+only be a second thing to keep true.
 
-- [ ] **Step 4: Run every suite and the linter**
+The three survivors were repaired instead: `mock-trainer` no longer imports
+`trainer_infra`, `Episode` comes from `training_sdk.episode`, and `logging_util`
+drops the ambient-run lookup it already guarded against.
 
-```bash
-cd training-sdk && uv run pytest -q && uv run ruff check src tests
-cd ../rtrrl/infra/control-plane && uv run pytest -q && uv run ruff check src tests scripts
-cd ../mock-trainer && uv run pytest -q
-```
+- [x] **Step 4: Run every suite and the linter**
 
-Expected: all green.
+All three suites green in Actions, run 30180440347: `training-sdk`,
+`control-plane`, `mock-trainer`. Nothing was run on the development machine.
 
-- [ ] **Step 5: Prove the merge boundary is intact**
+- [x] **Step 5: Prove the merge boundary is intact**
 
 ```bash
 git diff --stat $(git merge-base HEAD main) HEAD -- memo/ infra/submit.sh
 ```
 
-Expected: empty output.
+Empty, as required: `memo/` is untouched and the historical Batch entry point is
+still there.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add -A
@@ -4549,7 +4561,7 @@ sharing a single source hash.
 Written to `docs/acceptance/2026-07-26-algorithm-centric-facility-acceptance.md`,
 including the five faults the paid path caught that no AWS-mocking test could.
 
-- [ ] **Step 8: Commit**
+- [x] **Step 8: Commit**
 
 ```bash
 git add docs/acceptance/
