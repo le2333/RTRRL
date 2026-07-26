@@ -37,6 +37,9 @@ Repository = "https://github.com/noahfarr/memorax"
 Documentation = "https://memorax.readthedocs.io"
 
 [project.optional-dependencies]
+# Pinned to the jax the lock already resolves, so asking for the GPU plugin
+# adds the CUDA wheels without moving jax itself under the CPU image.
+cuda12    = ["jax[cuda12]==0.10.0"]
 brax      = ["brax>=0.12.4"]
 jumanji   = ["jumanji>=1.1.1"]
 navix     = ["navix>=0.7.0"]

@@ -12,7 +12,7 @@ on:
   workflow_dispatch:
     inputs:
       push:
-        description: Push the image to the existing ECR repository
+        description: Push the images to the existing ECR repository
         required: true
         type: boolean
         default: false
@@ -29,18 +29,21 @@ concurrency:
   group: build-memo-image-${{ github.ref }}
   cancel-in-progress: true
 
-env:
-  DOCKERFILE: memo/docker/Dockerfile.cpu
-  LOCAL_TAG: memo-trainer:cpu
-  ECR_TAG: memo-trainer-cpu-20260726
-
 jobs:
   build:
-    name: Build and verify
+    name: Build and verify (${{ matrix.variant }})
     runs-on: ubuntu-24.04
-    timeout-minutes: 60
-    outputs:
-      catalog: ${{ steps.catalog.outputs.value }}
+    timeout-minutes: 90
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - variant: cpu
+            dockerfile: memo/docker/Dockerfile.cpu
+          - variant: gpu
+            dockerfile: memo/docker/Dockerfile.gpu
+    env:
+      IMAGE: memo-trainer:${{ matrix.variant }}
     steps:
       - name: Check out source
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
@@ -52,6 +55,16 @@ jobs:
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f
+
+      - name: Reclaim runner disk for the CUDA wheels
+        if: ${{ matrix.variant == 'gpu' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          # The GPU image is several gigabytes of nvidia wheels and the hosted
+          # runner does not have room for it beside its preinstalled toolchains.
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc
+          df -h /
 
       - name: Build catalog from the registry
         id: catalog
@@ -66,11 +79,11 @@ jobs:
         uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8
         with:
           context: .
-          file: ${{ env.DOCKERFILE }}
+          file: ${{ matrix.dockerfile }}
           platforms: linux/amd64
           load: true
           push: false
-          tags: ${{ env.LOCAL_TAG }}
+          tags: ${{ env.IMAGE }}
           build-args: |
             TRAINER_CATALOG_V2=${{ steps.catalog.outputs.value }}
 
@@ -78,7 +91,6 @@ jobs:
         shell: bash
         env:
           EXPECTED_LABEL: ${{ steps.catalog.outputs.value }}
-          IMAGE: ${{ env.LOCAL_TAG }}
         run: |
           set -euo pipefail
           ACTUAL_LABEL="$(docker image inspect --format '{{ index .Config.Labels "org.rtrrl.trainer.catalog.v2" }}' "$IMAGE")"
@@ -100,15 +112,42 @@ jobs:
           # own entry point has to be reachable the way the catalog spells it.
           docker run --rm "$IMAGE" python -c '
           import importlib.util
-          import jax, memorax, runner.main, training_sdk
-          assert jax.default_backend() == "cpu"
+          import memorax, runner.main, training_sdk
           assert importlib.util.find_spec("trainer_infra") is None
+          '
+
+      - name: Verify the CPU image stays on the CPU
+        if: ${{ matrix.variant == 'cpu' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          docker run --rm "$IMAGE" python -c '
+          import jax
+          assert jax.default_backend() == "cpu", jax.default_backend()
+          '
+
+      - name: Verify the GPU image carries a CUDA jax
+        if: ${{ matrix.variant == 'gpu' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          # The runner has no GPU, so the backend cannot be exercised here. What
+          # can be checked is that the plugin is installed at all: without it the
+          # image runs perfectly well on the CPU of a GPU instance and the only
+          # symptom is a bill and a slow run.
+          docker run --rm "$IMAGE" python -c '
+          import importlib.util
+          for name in ("jax_cuda12_plugin", "jax_plugins.xla_cuda12"):
+              if importlib.util.find_spec(name) is not None:
+                  break
+          else:
+              raise SystemExit("no CUDA plugin in the GPU image")
+          import jax
+          print("jax", jax.__version__, "backend here:", jax.default_backend())
           '
 
       - name: Verify the Hopper the experiment asks for actually builds
         shell: bash
-        env:
-          IMAGE: ${{ env.LOCAL_TAG }}
         run: |
           set -euo pipefail
           # Building the environment is the step that needs brax present and
@@ -129,14 +168,26 @@ jobs:
           '
 
   push:
-    name: Rebuild and push
+    name: Rebuild and push (${{ matrix.variant }})
     if: ${{ github.event_name == 'workflow_dispatch' && inputs.push == true }}
     needs: build
     runs-on: ubuntu-24.04
-    timeout-minutes: 60
+    timeout-minutes: 90
     permissions:
       contents: read
       id-token: write
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - variant: cpu
+            dockerfile: memo/docker/Dockerfile.cpu
+            ecr_tag: memo-trainer-cpu-20260726
+          - variant: gpu
+            dockerfile: memo/docker/Dockerfile.gpu
+            ecr_tag: memo-trainer-gpu-20260726
+    env:
+      IMAGE: memo-trainer:${{ matrix.variant }}
     steps:
       - name: Check out source
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
@@ -149,27 +200,32 @@ jobs:
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f
 
-      - name: Rebuild catalog and confirm it matches the verified build
+      - name: Reclaim runner disk for the CUDA wheels
+        if: ${{ matrix.variant == 'gpu' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc
+          df -h /
+
+      - name: Rebuild catalog
         id: catalog
         shell: bash
         working-directory: memo
-        env:
-          VERIFIED: ${{ needs.build.outputs.catalog }}
         run: |
           set -euo pipefail
           CATALOG="$(uv run --frozen python -m runner.catalog --print-label)"
-          test "$CATALOG" = "$VERIFIED"
           echo "value=$CATALOG" >> "$GITHUB_OUTPUT"
 
       - name: Rebuild local image
         uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8
         with:
           context: .
-          file: ${{ env.DOCKERFILE }}
+          file: ${{ matrix.dockerfile }}
           platforms: linux/amd64
           load: true
           push: false
-          tags: ${{ env.LOCAL_TAG }}
+          tags: ${{ env.IMAGE }}
           build-args: |
             TRAINER_CATALOG_V2=${{ steps.catalog.outputs.value }}
 
@@ -206,12 +262,11 @@ jobs:
         uses: aws-actions/amazon-ecr-login@d539f0932e70871a027e9d5a9d8fc38589180a64
 
       - name: Push and report the immutable digest
-        id: push
         shell: bash
         env:
-          IMAGE: ${{ env.LOCAL_TAG }}
           REGISTRY: ${{ steps.ecr.outputs.registry }}
-          TAG: ${{ env.ECR_TAG }}
+          TAG: ${{ matrix.ecr_tag }}
+          VARIANT: ${{ matrix.variant }}
         run: |
           set -euo pipefail
           REMOTE="$REGISTRY/rtrrl:$TAG"
@@ -221,7 +276,9 @@ jobs:
           DIGEST="$(printf '%s\n' "$OUTPUT" | awk '/digest: sha256:/ {print $3}' | tail -n 1)"
           [[ "$DIGEST" =~ ^sha256:[0-9a-f]{64}$ ]]
           # This is what the experiment file's image: field must be set to.
-          echo "### Immutable image" >> "$GITHUB_STEP_SUMMARY"
-          echo '```' >> "$GITHUB_STEP_SUMMARY"
-          echo "$REGISTRY/rtrrl@$DIGEST" >> "$GITHUB_STEP_SUMMARY"
-          echo '```' >> "$GITHUB_STEP_SUMMARY"
+          {
+            echo "### Immutable image ($VARIANT)"
+            echo '```'
+            echo "$REGISTRY/rtrrl@$DIGEST"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"

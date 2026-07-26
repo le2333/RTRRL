@@ -12,7 +12,10 @@ entry: stream_ac_rtrl
 storage: s3://rtrrl-artifacts-007122174918/trainer
 
 compute:
-  instance_type: c7a.medium
+  # Not c7a.medium: the recorded runs held ~1.8 GiB resident and drew 3.4 to 6
+  # cores, so a 1 vCPU box with a 1600 MiB budget would run out of memory long
+  # before it ran out of time.
+  instance_type: g6.xlarge
   timeout_minutes: 240
   startup_minutes: 15
   stall_factor: 10
