@@ -31,6 +31,11 @@ space:
   env_backend: [spring]
   backbone: [rtu]
   seed: [263256]
+  # Sixteen independent streams, each with its own trace, TD error and OBGD
+  # bound, whose updates are averaged. This is not the paper's single stream:
+  # it was the shared harness default that every algorithm inherited, and it
+  # divides the step budget, so this run makes 125k updates rather than 2M.
+  # It is kept because it is what produced the score being reproduced.
   num_envs: [16]
   total_steps: [2000000]
   epoch_steps: [100000]
