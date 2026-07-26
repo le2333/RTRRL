@@ -19,14 +19,19 @@ if TYPE_CHECKING:
     )
     from memorax.environments import make as make
     from memorax.loggers import (
+        CheckpointLogger as CheckpointLogger,
+        DashboardLogger as DashboardLogger,
+        FileLogger as FileLogger,
         Logger as Logger,
         MultiLogger as MultiLogger,
+        TensorBoardLogger as TensorBoardLogger,
         WandbLogger as WandbLogger,
     )
     from memorax.networks import (
         FeatureExtractor as FeatureExtractor,
         Network as Network,
         SequenceModel as SequenceModel,
+        SequenceModelWrapper as SequenceModelWrapper,
     )
 
 
@@ -49,10 +54,15 @@ _NETWORK_EXPORTS = {
     "FeatureExtractor",
     "Network",
     "SequenceModel",
+    "SequenceModelWrapper",
 }
 _LOGGER_EXPORTS = {
+    "CheckpointLogger",
+    "DashboardLogger",
+    "FileLogger",
     "Logger",
     "MultiLogger",
+    "TensorBoardLogger",
     "WandbLogger",
 }
 
@@ -73,8 +83,13 @@ __all__ = [
     "FeatureExtractor",
     "Network",
     "SequenceModel",
+    "SequenceModelWrapper",
+    "CheckpointLogger",
+    "DashboardLogger",
+    "FileLogger",
     "Logger",
     "MultiLogger",
+    "TensorBoardLogger",
     "WandbLogger",
 ]
 
