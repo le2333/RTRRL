@@ -7,15 +7,17 @@ description: >
   found these settings only ever ran seeds 0 and 3, and seed 3 topped out at
   474.60, so the score is seed-bound and the seed below is not a free choice.
 
-image: 007122174918.dkr.ecr.eu-north-1.amazonaws.com/rtrrl@sha256:2ee736282a79492c078ed6bfb3817a27153e5f463bf5abb0090493616f49771a
+image: 007122174918.dkr.ecr.eu-north-1.amazonaws.com/rtrrl@sha256:afa374622f8eb461e6cad3c5e1c53ede30c15f89433081d54bb6988d8d3805c3
 entry: stream_ac_rtrl
 storage: s3://rtrrl-artifacts-007122174918/trainer
 
 compute:
-  # Not c7a.medium: the recorded runs held ~1.8 GiB resident and drew 3.4 to 6
-  # cores, so a 1 vCPU box with a 1600 MiB budget would run out of memory long
-  # before it ran out of time.
-  instance_type: g6.xlarge
+  # Four cores and 7 GiB, which is what the recorded runs used: they drew 3.4
+  # to 6 cores and held about 1.8 GiB. A c7a.medium would run out of memory on
+  # its 1600 MiB budget, and the GPU image aborts on a double free before it
+  # finishes compiling, so this is both the affordable choice and the one that
+  # matches the machine the score was set on.
+  instance_type: c7a.xlarge
   timeout_minutes: 240
   startup_minutes: 15
   stall_factor: 10
