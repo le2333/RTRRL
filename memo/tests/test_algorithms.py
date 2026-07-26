@@ -33,7 +33,7 @@ from memorax.networks import (
 from memorax.rl import make_obgd_rule, make_optax_rule
 
 
-def rtrrl_program(**overrides):
+def rtrrl_program(*, record_trajectory=False, **overrides):
     env = TinyContinuousEnv()
     config = RTRRLConfig(
         num_envs=1,
@@ -62,6 +62,7 @@ def rtrrl_program(**overrides):
         ),
         actor_head=heads.Gaussian(action_dim=2),
         critic_head=heads.VNetwork(),
+        record_trajectory=record_trajectory,
     )
     return build_rtrrl(config, parts)
 
@@ -115,6 +116,10 @@ def finite(tree):
             lambda: stream_ac_program(adaptive=True),
             id="stream_ac_rtrl_adaptive",
         ),
+        pytest.param(
+            lambda: rtrrl_program(record_trajectory=True),
+            id="rtrrl_trajectory",
+        ),
     ],
 )
 def test_epoch_moves_parameters_and_stays_finite(build):
@@ -153,6 +158,51 @@ def test_evaluation_runs_without_training(build):
 
     assert finite(summary)
     assert summary.info is not None
+
+
+def test_closing_both_gates_leaves_the_shared_torso_still():
+    """With neither head steering it, nothing reaches the recurrent core.
+
+    This is the ablation's floor. If the torso still moved here, some other
+    path would be feeding it and the gates would not mean what they say.
+    """
+
+    program = rtrrl_program(actor_to_recurrent=False, critic_to_recurrent=False)
+    state = jax.jit(program.init_fn)(jax.random.key(0))
+    trained, _ = jax.jit(program.train_epoch_fn, static_argnums=2)(
+        jax.random.key(1), state, 8
+    )
+
+    for name in ("feature_extractor", "torso"):
+        for before, after in zip(
+            jax.tree.leaves(state.params[name]),
+            jax.tree.leaves(trained.params[name]),
+        ):
+            assert jnp.allclose(before, after), f"{name} moved with both gates shut"
+
+    assert any(
+        not jnp.allclose(before, after)
+        for before, after in zip(
+            jax.tree.leaves(state.params["actor"]),
+            jax.tree.leaves(trained.params["actor"]),
+        )
+    ), "the actor should still learn from a frozen representation"
+
+
+def test_one_gate_still_reaches_the_shared_torso():
+    for gates in ({"critic_to_recurrent": False}, {"actor_to_recurrent": False}):
+        program = rtrrl_program(**gates)
+        state = jax.jit(program.init_fn)(jax.random.key(0))
+        trained, _ = jax.jit(program.train_epoch_fn, static_argnums=2)(
+            jax.random.key(1), state, 8
+        )
+        assert any(
+            not jnp.allclose(before, after)
+            for before, after in zip(
+                jax.tree.leaves(state.params["torso"]),
+                jax.tree.leaves(trained.params["torso"]),
+            )
+        ), f"the torso stopped learning with {gates}"
 
 
 def test_the_two_rules_agree_on_their_contract():

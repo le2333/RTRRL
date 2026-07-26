@@ -66,6 +66,8 @@ class RTRRLConfig:
     kappa: float = 2.0
     obgd_beta2: float = 0.0
     obgd_adaptive: bool = False
+    actor_to_recurrent: bool = True
+    critic_to_recurrent: bool = True
 
 
 @dataclass(frozen=True)
@@ -82,6 +84,7 @@ class RTRRLParts:
     activation: Callable[[Any], Any] = jax.nn.silu
     normalization: Any = None
     evaluation: EvaluationConfig = field(default_factory=EvaluationConfig)
+    record_trajectory: bool = False
 
     def replace(self, **updates):
         return replace(self, **updates)
@@ -133,8 +136,11 @@ def make_rtrrl_objective(config):
     """Route each ascent direction to the domains that should receive it.
 
     The recurrent domain is the interesting one: it is the only place the
-    actor and the critic ask the same parameters to move, which is why cutting
-    one of the two off is a question worth being able to ask.
+    actor and the critic ask the same parameters to move. Closing either gate
+    leaves that side learning from the shared torso while no longer steering
+    it, which is what separates a representation the two disagree about from
+    one that is simply wrong. Entropy follows the actor gate, being an
+    actor-side objective.
     """
 
     def rtrrl_objective(
@@ -155,17 +161,25 @@ def make_rtrrl_objective(config):
                 -config.pred_coeff * 0.5 * jnp.sum(jnp.square(error), axis=-1)
             )
 
+        recurrent_traced = zero
+        recurrent_direct = prediction_direction
+        if config.actor_to_recurrent:
+            recurrent_traced = recurrent_traced + actor
+            recurrent_direct = recurrent_direct + entropy_direction
+        if config.critic_to_recurrent:
+            recurrent_traced = recurrent_traced + value
+
         return ObjectiveDirections(
             traced_by_domain={
                 "actor": actor,
                 "critic": value,
-                "recurrent": actor + value,
+                "recurrent": recurrent_traced,
                 "prediction": zero,
             },
             direct_by_domain={
                 "actor": entropy_direction,
                 "critic": zero,
-                "recurrent": entropy_direction + prediction_direction,
+                "recurrent": recurrent_direct,
                 "prediction": prediction_direction,
             },
             metrics={
@@ -303,6 +317,9 @@ class RTRRLStepMetrics:
     entropy: Any = None
     emphasis: Any = None
     step_size: Any = None
+    observation: Any = None
+    reward: Any = None
+    done: Any = None
     diag_lambda_max: Any = None
     diag_gamma_max: Any = None
     diag_sens_norm: Any = None
@@ -356,6 +373,7 @@ def build_rtrrl(config: RTRRLConfig, parts: RTRRLParts) -> AgentProgram:
         raise ValueError(
             "normalization owner conflict: wrapper and program normalization are both enabled"
         )
+    record_trajectory = parts.record_trajectory
     credit = make_exact_rtrl_credit(torso)
     objective = make_rtrrl_objective(config)
     trace_kernel = make_rtrrl_trace(config)
@@ -763,6 +781,9 @@ def build_rtrrl(config: RTRRLConfig, parts: RTRRLParts) -> AgentProgram:
             entropy=entropy,
             emphasis=state.I.mean(),
             step_size=outputs["rnn"].metrics.get("step_size"),
+            observation=next_obs if record_trajectory else None,
+            reward=next_reward_f if record_trajectory else None,
+            done=next_done if record_trajectory else None,
             diag_lambda_max=(
                 jnp.max(jnp.exp(-jnp.exp(nu_log))) if nu_log is not None else jnp.nan
             ),

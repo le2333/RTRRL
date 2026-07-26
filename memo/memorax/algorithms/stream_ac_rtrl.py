@@ -63,6 +63,7 @@ class StreamACRTRLParts:
     critic_network: Any = None
     normalization: Any = None
     evaluation: EvaluationConfig = field(default_factory=EvaluationConfig)
+    record_trajectory: bool = False
 
     def replace(self, **updates):
         return replace(self, **updates)
@@ -186,6 +187,9 @@ class StreamACRTRLStepMetrics:
     td_error: Any = None
     actor_step_size: Any = None
     critic_step_size: Any = None
+    observation: Any = None
+    reward: Any = None
+    done: Any = None
     info: Any = None
     raw_episode_return: Any = None
     normalization: Any = None
@@ -215,6 +219,7 @@ def build_stream_ac_rtrl(
         raise ValueError(
             "normalization owner conflict: wrapper and program normalization are both enabled"
         )
+    record_trajectory = parts.record_trajectory
     actor_credit = make_exact_rtrl_credit(actor_network.torso)
     critic_credit = make_exact_rtrl_credit(critic_network.torso)
     objective = make_stream_ac_objective(config)
@@ -560,6 +565,9 @@ def build_stream_ac_rtrl(
             td_error=td_error,
             actor_step_size=actor_step.metrics["step_size"],
             critic_step_size=critic_step.metrics["step_size"],
+            observation=next_obs if record_trajectory else None,
+            reward=next_reward_f if record_trajectory else None,
+            done=next_done if record_trajectory else None,
             info=info,
             raw_episode_return=raw_episode_return,
             normalization=normalization_metrics(
