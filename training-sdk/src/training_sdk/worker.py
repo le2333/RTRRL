@@ -4,7 +4,6 @@ import json
 import os
 import shutil
 import signal
-import statistics
 import subprocess
 import sys
 import time
@@ -42,7 +41,6 @@ def run_manifest(
     startup_seconds: float,
     stall_factor: int,
     poll_seconds: float = 5.0,
-    minimum_stall_seconds: float = 60.0,
 ) -> None:
     """Execute every run in a manifest serially.
 
@@ -69,7 +67,6 @@ def run_manifest(
                 startup_seconds,
                 stall_factor,
                 poll_seconds,
-                minimum_stall_seconds,
             )
             value = compute_score(scratch / METRICS_FILENAME, config.score)
             objects.put_bytes(
@@ -89,7 +86,6 @@ def _execute(
     startup_seconds: float,
     stall_factor: int,
     poll_seconds: float,
-    minimum_stall_seconds: float,
 ) -> None:
     entry = catalog.entries.get(config.entry)
     if entry is None:
@@ -104,7 +100,7 @@ def _execute(
     process = subprocess.Popen(
         list(entry.command), env=environment, start_new_session=True
     )
-    watcher = _Heartbeat(heartbeat, startup_seconds, stall_factor, minimum_stall_seconds)
+    watcher = _Heartbeat(heartbeat, startup_seconds, stall_factor)
     while True:
         code = process.poll()
         if code is not None:
@@ -121,15 +117,21 @@ def _execute(
 
 
 class _Heartbeat:
-    def __init__(
-        self, path: Path, startup_seconds: float, stall_factor: int, minimum: float
-    ) -> None:
+    """How long this run may stay silent before it counts as hung.
+
+    Reports do not arrive evenly: an epoch writes its training metrics and then
+    its evaluation metrics seconds apart, then says nothing until the next
+    epoch. So the startup grace is a floor rather than an opening offer, and
+    only the widest silence seen so far may raise it. Anything narrower reads a
+    burst as the run's pace and kills a healthy run mid-epoch.
+    """
+
+    def __init__(self, path: Path, startup_seconds: float, stall_factor: int) -> None:
         self._path = path
         self._startup = startup_seconds
         self._factor = stall_factor
-        self._minimum = minimum
         self._started = time.monotonic()
-        self._intervals: list[float] = []
+        self._widest = 0.0
         self._last_mtime: float | None = None
         self._last_seen = self._started
 
@@ -141,14 +143,12 @@ class _Heartbeat:
         if self._last_mtime is None or mtime > self._last_mtime:
             now = time.monotonic()
             if self._last_mtime is not None:
-                self._intervals.append(now - self._last_seen)
+                self._widest = max(self._widest, now - self._last_seen)
             self._last_mtime = mtime
             self._last_seen = now
 
     def limit(self) -> float:
-        if not self._intervals:
-            return self._startup
-        return max(statistics.median(self._intervals) * self._factor, self._minimum)
+        return max(self._startup, self._widest * self._factor)
 
     def silence(self) -> float:
         return time.monotonic() - (self._last_seen if self._last_mtime else self._started)

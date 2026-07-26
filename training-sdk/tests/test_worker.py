@@ -131,10 +131,9 @@ def test_stalled_run_is_killed(
         run_manifest(
             manifest,
             tmp_path,
-            startup_seconds=30,
+            startup_seconds=1.0,
             stall_factor=1,
             poll_seconds=0.05,
-            minimum_stall_seconds=1.0,
         )
 
 
@@ -148,7 +147,6 @@ def test_startup_grace_survives_long_pause_after_first_report(
         tmp_path,
         startup_seconds=30,
         stall_factor=10,
-        minimum_stall_seconds=2,
         poll_seconds=0.2,
     )
     payload = json.loads(objects.get_bytes(f"{s3_base}/trials/t0/score.json"))
@@ -163,10 +161,9 @@ def test_slow_healthy_run_is_not_killed(
     run_manifest(
         manifest,
         tmp_path,
-        startup_seconds=30,
+        startup_seconds=1.0,
         stall_factor=1,
         poll_seconds=0.05,
-        minimum_stall_seconds=1.0,
     )
     payload = json.loads(objects.get_bytes(f"{s3_base}/trials/t0/score.json"))
     assert payload["value"] == 2.0
@@ -177,22 +174,55 @@ def test_heartbeat_limit_holds_startup_grace_after_first_report(
 ) -> None:
     metrics = tmp_path / "metrics.jsonl"
     metrics.write_text('{"step": 0}\n', encoding="utf-8")
-    watcher = _Heartbeat(metrics, startup_seconds=900, stall_factor=10, minimum=60.0)
+    watcher = _Heartbeat(metrics, startup_seconds=900, stall_factor=10)
     watcher._poll()
     assert watcher.limit() == 900
 
 
-def test_heartbeat_limit_uses_observed_interval_after_second_report(
+def test_the_gap_inside_one_epoch_does_not_become_the_expected_cadence(
+    tmp_path: Path,
+) -> None:
+    # An epoch reports its training metrics and then, seconds later, its
+    # evaluation metrics; the next epoch is minutes away. Reading that burst as
+    # the run's cadence is what killed a healthy two million step run after its
+    # first epoch.
+    metrics = tmp_path / "metrics.jsonl"
+    metrics.write_text('{"step": 0}\n', encoding="utf-8")
+    watcher = _Heartbeat(metrics, startup_seconds=900, stall_factor=10)
+    watcher._poll()
+    time.sleep(0.2)
+    metrics.write_text('{"step": 0}\n{"step": 0}\n', encoding="utf-8")
+    watcher._poll()
+    assert watcher.limit() == 900
+
+
+def test_a_reporter_slower_than_the_grace_period_raises_the_limit(
     tmp_path: Path,
 ) -> None:
     metrics = tmp_path / "metrics.jsonl"
     metrics.write_text('{"step": 0}\n', encoding="utf-8")
-    watcher = _Heartbeat(metrics, startup_seconds=900, stall_factor=10, minimum=60.0)
+    watcher = _Heartbeat(metrics, startup_seconds=0.1, stall_factor=10)
     watcher._poll()
     time.sleep(0.2)
     metrics.write_text('{"step": 0}\n{"step": 1}\n', encoding="utf-8")
     watcher._poll()
-    assert watcher.limit() == 60.0
+    assert watcher.limit() > 1.0
+
+
+def test_the_widest_silence_sets_the_limit_not_the_typical_one(
+    tmp_path: Path,
+) -> None:
+    metrics = tmp_path / "metrics.jsonl"
+    metrics.write_text("0\n", encoding="utf-8")
+    watcher = _Heartbeat(metrics, startup_seconds=0.01, stall_factor=10)
+    watcher._poll()
+    for index, pause in enumerate((0.02, 0.4, 0.02), start=1):
+        time.sleep(pause)
+        metrics.write_text(f"{index}\n", encoding="utf-8")
+        watcher._poll()
+    # Three quick reports and one long pause is one run, and the pause is the
+    # part that says how long silence may legitimately last.
+    assert watcher.limit() > 3.0
 
 
 def _is_sleep_process(pid: int) -> bool:
@@ -221,10 +251,9 @@ def test_kill_terminates_grandchild_processes(
         run_manifest(
             manifest,
             tmp_path,
-            startup_seconds=30,
+            startup_seconds=1.0,
             stall_factor=1,
             poll_seconds=0.05,
-            minimum_stall_seconds=1.0,
         )
     grandchild_pid = int(pid_file.read_text(encoding="utf-8"))
     assert not _is_sleep_process(grandchild_pid)
