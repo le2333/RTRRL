@@ -5,12 +5,27 @@ from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
     from .algorithm import Algorithm as Algorithm, State as State
+    from .dqn import DQN as DQN, DQNConfig as DQNConfig, DQNState as DQNState
+    from .gradient_ppo import (
+        GradientPPO as GradientPPO,
+        GradientPPOConfig as GradientPPOConfig,
+        GradientPPOState as GradientPPOState,
+    )
     from .independent_rtrrl import (
         IndependentRTRRL as IndependentRTRRL,
         IndependentRTRRLConfig as IndependentRTRRLConfig,
         IndependentRTRRLState as IndependentRTRRLState,
     )
+    from .mappo import (
+        MAPPO as MAPPO,
+        MAPPOConfig as MAPPOConfig,
+        MAPPOState as MAPPOState,
+    )
+    from .ppo import PPO as PPO, PPOConfig as PPOConfig, PPOState as PPOState
+    from .pqn import PQN as PQN, PQNConfig as PQNConfig, PQNState as PQNState
+    from .r2d2 import R2D2 as R2D2, R2D2Config as R2D2Config, R2D2State as R2D2State
     from .rtrrl import RTRRL as RTRRL, RTRRLConfig as RTRRLConfig, RTRRLState as RTRRLState
+    from .sac import SAC as SAC, SACConfig as SACConfig, SACState as SACState
     from .stream_ac import (
         StreamAC as StreamAC,
         StreamACConfig as StreamACConfig,
@@ -25,6 +40,27 @@ if TYPE_CHECKING:
 _EXPORTS = {
     "Algorithm": (".algorithm", "Algorithm"),
     "State": (".algorithm", "State"),
+    "DQN": (".dqn", "DQN"),
+    "DQNConfig": (".dqn", "DQNConfig"),
+    "DQNState": (".dqn", "DQNState"),
+    "GradientPPO": (".gradient_ppo", "GradientPPO"),
+    "GradientPPOConfig": (".gradient_ppo", "GradientPPOConfig"),
+    "GradientPPOState": (".gradient_ppo", "GradientPPOState"),
+    "MAPPO": (".mappo", "MAPPO"),
+    "MAPPOConfig": (".mappo", "MAPPOConfig"),
+    "MAPPOState": (".mappo", "MAPPOState"),
+    "PPO": (".ppo", "PPO"),
+    "PPOConfig": (".ppo", "PPOConfig"),
+    "PPOState": (".ppo", "PPOState"),
+    "PQN": (".pqn", "PQN"),
+    "PQNConfig": (".pqn", "PQNConfig"),
+    "PQNState": (".pqn", "PQNState"),
+    "R2D2": (".r2d2", "R2D2"),
+    "R2D2Config": (".r2d2", "R2D2Config"),
+    "R2D2State": (".r2d2", "R2D2State"),
+    "SAC": (".sac", "SAC"),
+    "SACConfig": (".sac", "SACConfig"),
+    "SACState": (".sac", "SACState"),
     "IndependentRTRRL": (".independent_rtrrl", "IndependentRTRRL"),
     "IndependentRTRRLConfig": (
         ".independent_rtrrl",
@@ -47,6 +83,27 @@ _EXPORTS = {
 __all__ = [
     "Algorithm",
     "State",
+    "DQN",
+    "DQNConfig",
+    "DQNState",
+    "GradientPPO",
+    "GradientPPOConfig",
+    "GradientPPOState",
+    "MAPPO",
+    "MAPPOConfig",
+    "MAPPOState",
+    "PPO",
+    "PPOConfig",
+    "PPOState",
+    "PQN",
+    "PQNConfig",
+    "PQNState",
+    "R2D2",
+    "R2D2Config",
+    "R2D2State",
+    "SAC",
+    "SACConfig",
+    "SACState",
     "IndependentRTRRL",
     "IndependentRTRRLConfig",
     "IndependentRTRRLState",

@@ -11,6 +11,13 @@ import jax.numpy as jnp
 from flax import struct
 
 from memorax.networks import RTUCell
+from memorax.rl import (
+    environment_owns_normalization,
+    make_exact_rtrl_credit,
+    make_normalizer,
+    make_td0,
+    normalization_metrics,
+)
 from memorax.utils import Timestep
 from memorax.utils.axes import (
     add_time_axis,
@@ -18,14 +25,7 @@ from memorax.utils.axes import (
     remove_time_axis,
 )
 
-from .credit import make_exact_rtrl_credit
-from .normalization import (
-    environment_owns_normalization,
-    make_normalizer,
-    normalization_metrics,
-)
 from .objectives import make_stream_ac_objective
-from .td import make_td0
 from .traces import make_stream_ac_trace
 from .types import ActionDecision, AgentProgram, EvalSummary
 from .updates import make_whole_tree_obgd

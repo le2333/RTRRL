@@ -5,12 +5,33 @@ from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
     from memorax.algorithms import (
+        DQN as DQN,
+        MAPPO as MAPPO,
+        PPO as PPO,
+        PQN as PQN,
+        R2D2 as R2D2,
         RTRRL as RTRRL,
+        SAC as SAC,
+        DQNConfig as DQNConfig,
+        DQNState as DQNState,
+        GradientPPO as GradientPPO,
+        GradientPPOConfig as GradientPPOConfig,
+        GradientPPOState as GradientPPOState,
         IndependentRTRRL as IndependentRTRRL,
         IndependentRTRRLConfig as IndependentRTRRLConfig,
         IndependentRTRRLState as IndependentRTRRLState,
+        MAPPOConfig as MAPPOConfig,
+        MAPPOState as MAPPOState,
+        PPOConfig as PPOConfig,
+        PPOState as PPOState,
+        PQNConfig as PQNConfig,
+        PQNState as PQNState,
+        R2D2Config as R2D2Config,
+        R2D2State as R2D2State,
         RTRRLConfig as RTRRLConfig,
         RTRRLState as RTRRLState,
+        SACConfig as SACConfig,
+        SACState as SACState,
         StreamAC as StreamAC,
         StreamACConfig as StreamACConfig,
         StreamACRtrl as StreamACRtrl,
@@ -18,15 +39,6 @@ if TYPE_CHECKING:
         StreamACState as StreamACState,
     )
     from memorax.environments import make as make
-    from memorax.loggers import (
-        CheckpointLogger as CheckpointLogger,
-        DashboardLogger as DashboardLogger,
-        FileLogger as FileLogger,
-        Logger as Logger,
-        MultiLogger as MultiLogger,
-        TensorBoardLogger as TensorBoardLogger,
-        WandbLogger as WandbLogger,
-    )
     from memorax.networks import (
         FeatureExtractor as FeatureExtractor,
         Network as Network,
@@ -38,6 +50,27 @@ if TYPE_CHECKING:
 __version__ = "1.0.1"
 
 _ALGORITHM_EXPORTS = {
+    "DQN",
+    "DQNConfig",
+    "DQNState",
+    "GradientPPO",
+    "GradientPPOConfig",
+    "GradientPPOState",
+    "MAPPO",
+    "MAPPOConfig",
+    "MAPPOState",
+    "PPO",
+    "PPOConfig",
+    "PPOState",
+    "PQN",
+    "PQNConfig",
+    "PQNState",
+    "R2D2",
+    "R2D2Config",
+    "R2D2State",
+    "SAC",
+    "SACConfig",
+    "SACState",
     "RTRRL",
     "RTRRLConfig",
     "RTRRLState",
@@ -56,18 +89,30 @@ _NETWORK_EXPORTS = {
     "SequenceModel",
     "SequenceModelWrapper",
 }
-_LOGGER_EXPORTS = {
-    "CheckpointLogger",
-    "DashboardLogger",
-    "FileLogger",
-    "Logger",
-    "MultiLogger",
-    "TensorBoardLogger",
-    "WandbLogger",
-}
 
 __all__ = [
     "__version__",
+    "DQN",
+    "DQNConfig",
+    "DQNState",
+    "GradientPPO",
+    "GradientPPOConfig",
+    "GradientPPOState",
+    "MAPPO",
+    "MAPPOConfig",
+    "MAPPOState",
+    "PPO",
+    "PPOConfig",
+    "PPOState",
+    "PQN",
+    "PQNConfig",
+    "PQNState",
+    "R2D2",
+    "R2D2Config",
+    "R2D2State",
+    "SAC",
+    "SACConfig",
+    "SACState",
     "RTRRL",
     "RTRRLConfig",
     "RTRRLState",
@@ -84,13 +129,6 @@ __all__ = [
     "Network",
     "SequenceModel",
     "SequenceModelWrapper",
-    "CheckpointLogger",
-    "DashboardLogger",
-    "FileLogger",
-    "Logger",
-    "MultiLogger",
-    "TensorBoardLogger",
-    "WandbLogger",
 ]
 
 
@@ -99,8 +137,6 @@ def __getattr__(name):
         module = import_module("memorax.algorithms")
     elif name in _NETWORK_EXPORTS:
         module = import_module("memorax.networks")
-    elif name in _LOGGER_EXPORTS:
-        module = import_module("memorax.loggers")
     elif name == "make":
         module = import_module("memorax.environments")
     else:

@@ -14,11 +14,12 @@ from memorax.environments.wrappers import (
 )
 from memorax.networks import RNN, Memoroid
 
-from .meta import make_meta_program
-from .normalization import (
+from memorax.rl import (
     NormalizationConfig,
     environment_owns_normalization,
 )
+
+from .meta import make_meta_program
 from .standard import make_standard_program
 from .types import (
     AgentProgram,

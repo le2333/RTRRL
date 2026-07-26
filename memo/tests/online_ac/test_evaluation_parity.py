@@ -14,7 +14,7 @@ from memorax.environments.wrappers import (
     NormalizeObservationWrapper,
     NormalizeRewardWrapper,
 )
-from memorax.online_ac.normalization import (
+from memorax.rl import (
     NormalizationConfig,
     environment_owns_normalization,
     make_normalizer,

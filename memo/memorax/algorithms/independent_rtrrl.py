@@ -16,12 +16,12 @@ import lox
 import optax
 from flax import core, struct
 
-from memorax.online_ac.normalization import (
+from memorax.online_ac.types import AgentProgram, EvalSummary
+from memorax.rl import (
     NormalizationConfig,
     make_normalizer,
     normalization_metrics,
 )
-from memorax.online_ac.types import AgentProgram, EvalSummary
 from memorax.utils import Timestep, Transition
 from memorax.utils.axes import add_time_axis, remove_feature_axis, remove_time_axis
 from memorax.utils.typing import (

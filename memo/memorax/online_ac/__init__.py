@@ -1,5 +1,16 @@
 """Composable online actor-critic building blocks."""
 
+from memorax.rl import (
+    NormalizationConfig,
+    NormalizedStep,
+    NormalizerState,
+    RewardStatistics,
+    RunningStatistics,
+    make_exact_rtrl_credit,
+    make_normalizer,
+    make_td0,
+)
+
 from .build import (
     LegacyProgram,
     build_meta_program,
@@ -7,16 +18,7 @@ from .build import (
     legacy_env_adapter,
     legacy_normalization_config,
 )
-from .credit import make_exact_rtrl_credit
 from .meta import MetaState, MetaStepMetrics, make_meta_program
-from .normalization import (
-    NormalizationConfig,
-    NormalizedStep,
-    NormalizerState,
-    RewardStatistics,
-    RunningStatistics,
-    make_normalizer,
-)
 from .objectives import (
     ObjectiveDirections,
     make_rtrrl_objective,
@@ -34,7 +36,6 @@ from .targets import (
     TargetViews,
     make_slow_subtree_target,
 )
-from .td import make_td0
 from .traces import TraceDirections, make_rtrrl_trace, make_stream_ac_trace
 from .types import (
     ActionDecision,
