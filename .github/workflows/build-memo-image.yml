@@ -1,0 +1,227 @@
+name: Build memo training image
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - .github/workflows/build-memo-image.yml
+      - .dockerignore
+      - memo/**
+      - training-sdk/**
+  workflow_dispatch:
+    inputs:
+      push:
+        description: Push the image to the existing ECR repository
+        required: true
+        type: boolean
+        default: false
+      confirm_account:
+        description: "Required only for push: enter the exact AWS account ID"
+        required: false
+        type: string
+        default: ""
+
+permissions:
+  contents: read
+
+concurrency:
+  group: build-memo-image-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  DOCKERFILE: memo/docker/Dockerfile.cpu
+  LOCAL_TAG: memo-trainer:cpu
+  ECR_TAG: memo-trainer-cpu-20260726
+
+jobs:
+  build:
+    name: Build and verify
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    outputs:
+      catalog: ${{ steps.catalog.outputs.value }}
+    steps:
+      - name: Check out source
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@d0cc045d04ccac9d8b7881df0226f9e82c39688e
+        with:
+          version: "0.11.25"
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f
+
+      - name: Build catalog from the registry
+        id: catalog
+        shell: bash
+        working-directory: memo
+        run: |
+          set -euo pipefail
+          CATALOG="$(uv run --frozen python -m runner.catalog --print-label)"
+          echo "value=$CATALOG" >> "$GITHUB_OUTPUT"
+
+      - name: Build local image
+        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8
+        with:
+          context: .
+          file: ${{ env.DOCKERFILE }}
+          platforms: linux/amd64
+          load: true
+          push: false
+          tags: ${{ env.LOCAL_TAG }}
+          build-args: |
+            TRAINER_CATALOG_V2=${{ steps.catalog.outputs.value }}
+
+      - name: Verify the image is the one the control plane will read
+        shell: bash
+        env:
+          EXPECTED_LABEL: ${{ steps.catalog.outputs.value }}
+          IMAGE: ${{ env.LOCAL_TAG }}
+        run: |
+          set -euo pipefail
+          ACTUAL_LABEL="$(docker image inspect --format '{{ index .Config.Labels "org.rtrrl.trainer.catalog.v2" }}' "$IMAGE")"
+          test "$ACTUAL_LABEL" = "$EXPECTED_LABEL"
+          docker run --rm "$IMAGE" test -f /opt/trainer/catalog.json
+
+          # A Batch job overrides nothing, so the image's own command is what
+          # runs. Without a manifest the worker must refuse and say why: that
+          # message is all CloudWatch would show.
+          CMD="$(docker image inspect --format '{{ join .Config.Cmd " " }}' "$IMAGE")"
+          test "$CMD" = 'python -m training_sdk.worker'
+          if docker run --rm "$IMAGE" >worker-start.log 2>&1; then
+            echo "the worker exited 0 without a manifest" >&2
+            exit 1
+          fi
+          grep -q 'TRAINER_MANIFEST is not set' worker-start.log
+
+          # The control plane never ships inside a trainer, and the trainer's
+          # own entry point has to be reachable the way the catalog spells it.
+          docker run --rm "$IMAGE" python -c '
+          import importlib.util
+          import jax, memorax, runner.main, training_sdk
+          assert jax.default_backend() == "cpu"
+          assert importlib.util.find_spec("trainer_infra") is None
+          '
+
+      - name: Verify the Hopper the experiment asks for actually builds
+        shell: bash
+        env:
+          IMAGE: ${{ env.LOCAL_TAG }}
+        run: |
+          set -euo pipefail
+          # Building the environment is the step that needs brax present and
+          # the observation mask intact. A partially observed Hopper that
+          # quietly hands back its velocities is still a Hopper that trains, so
+          # the mask is checked by value rather than by shape: the run would
+          # otherwise look healthy and mean nothing.
+          docker run --rm "$IMAGE" python -c '
+          import jax
+          from runner.registry import _environment
+          env, params = _environment(
+              {"environment": "brax::hopper", "env_mode": "P", "env_backend": "spring"}
+          )
+          observation, _ = env.reset(jax.random.key(0), params)
+          assert observation.shape == (11,), observation.shape
+          assert (observation[5:] == 0).all(), "velocities survived the P mask"
+          assert env.action_space(params).shape == (3,)
+          '
+
+  push:
+    name: Rebuild and push
+    if: ${{ github.event_name == 'workflow_dispatch' && inputs.push == true }}
+    needs: build
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - name: Check out source
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@d0cc045d04ccac9d8b7881df0226f9e82c39688e
+        with:
+          version: "0.11.25"
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f
+
+      - name: Rebuild catalog and confirm it matches the verified build
+        id: catalog
+        shell: bash
+        working-directory: memo
+        env:
+          VERIFIED: ${{ needs.build.outputs.catalog }}
+        run: |
+          set -euo pipefail
+          CATALOG="$(uv run --frozen python -m runner.catalog --print-label)"
+          test "$CATALOG" = "$VERIFIED"
+          echo "value=$CATALOG" >> "$GITHUB_OUTPUT"
+
+      - name: Rebuild local image
+        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8
+        with:
+          context: .
+          file: ${{ env.DOCKERFILE }}
+          platforms: linux/amd64
+          load: true
+          push: false
+          tags: ${{ env.LOCAL_TAG }}
+          build-args: |
+            TRAINER_CATALOG_V2=${{ steps.catalog.outputs.value }}
+
+      - name: Confirm account and role boundary
+        shell: bash
+        env:
+          AWS_ROLE_ARN: ${{ vars.INFRA_ACCEPTANCE_AWS_ROLE_ARN }}
+          CONFIRM_ACCOUNT: ${{ inputs.confirm_account }}
+        run: |
+          set -euo pipefail
+          test "$CONFIRM_ACCOUNT" = "007122174918"
+          case "$AWS_ROLE_ARN" in
+            arn:aws:iam::007122174918:role/*) ;;
+            *)
+              echo "INFRA_ACCEPTANCE_AWS_ROLE_ARN is outside the approved boundary" >&2
+              exit 1
+              ;;
+          esac
+
+      - name: Configure push-only AWS credentials
+        uses: aws-actions/configure-aws-credentials@61815dcd50bd041e203e49132bacad1fd04d2708
+        with:
+          role-to-assume: ${{ vars.INFRA_ACCEPTANCE_AWS_ROLE_ARN }}
+          aws-region: eu-north-1
+
+      - name: Verify authenticated AWS account
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(aws sts get-caller-identity --query Account --output text)" = "007122174918"
+
+      - name: Log in to existing ECR
+        id: ecr
+        uses: aws-actions/amazon-ecr-login@d539f0932e70871a027e9d5a9d8fc38589180a64
+
+      - name: Push and report the immutable digest
+        id: push
+        shell: bash
+        env:
+          IMAGE: ${{ env.LOCAL_TAG }}
+          REGISTRY: ${{ steps.ecr.outputs.registry }}
+          TAG: ${{ env.ECR_TAG }}
+        run: |
+          set -euo pipefail
+          REMOTE="$REGISTRY/rtrrl:$TAG"
+          docker tag "$IMAGE" "$REMOTE"
+          OUTPUT="$(docker push "$REMOTE" 2>&1)"
+          printf '%s\n' "$OUTPUT"
+          DIGEST="$(printf '%s\n' "$OUTPUT" | awk '/digest: sha256:/ {print $3}' | tail -n 1)"
+          [[ "$DIGEST" =~ ^sha256:[0-9a-f]{64}$ ]]
+          # This is what the experiment file's image: field must be set to.
+          echo "### Immutable image" >> "$GITHUB_STEP_SUMMARY"
+          echo '```' >> "$GITHUB_STEP_SUMMARY"
+          echo "$REGISTRY/rtrrl@$DIGEST" >> "$GITHUB_STEP_SUMMARY"
+          echo '```' >> "$GITHUB_STEP_SUMMARY"
