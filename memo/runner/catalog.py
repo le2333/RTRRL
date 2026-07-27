@@ -1,8 +1,13 @@
-"""Build the catalog the image carries, from what the topologies declare.
+"""Read what the image can run out of the image, at the time it is built.
 
-The registry is the single source of both what can be built and what may be
-searched, so the catalog is derived rather than written. Nothing here needs
-editing when a topology is added.
+The control plane samples parameters on a machine that has none of this
+installed, so it cannot import an entry to ask what the entry accepts. It reads
+this catalog off the image's label instead, which binds what was sampled to the
+digest that will run it: a file edited but not rebuilt cannot quietly widen the
+space an experiment is searched over.
+
+Nothing is registered. Every module under ``entries`` that declares ``SPACE``
+and ``METRICS`` is one, and its command follows from its name.
 """
 
 from __future__ import annotations
@@ -11,16 +16,23 @@ import argparse
 import base64
 import gzip
 import hashlib
+import importlib
 import json
+import pkgutil
 from pathlib import Path
+from typing import Any
 
 from training_sdk.contract import CONTRACT_VERSION, Catalog, EntryDescriptor
 
-from .registry import TOPOLOGIES
+import entries
 
 PACKAGE_ROOT = Path(__file__).resolve().parents[1]
 CATALOG_PATH = PACKAGE_ROOT / "catalog.json"
-SOURCE_ROOTS = (PACKAGE_ROOT / "memorax", PACKAGE_ROOT / "runner")
+SOURCE_ROOTS = (
+    PACKAGE_ROOT / "memorax",
+    PACKAGE_ROOT / "runner",
+    PACKAGE_ROOT / "entries",
+)
 
 
 def source_hash(roots: tuple[Path, ...] = SOURCE_ROOTS) -> str:
@@ -44,6 +56,28 @@ def source_hash(roots: tuple[Path, ...] = SOURCE_ROOTS) -> str:
     return f"sha256:{digest.hexdigest()}"
 
 
+def discover() -> dict[str, Any]:
+    """Import every entry and take what it declares about itself."""
+
+    found = {}
+    for module in sorted(info.name for info in pkgutil.iter_modules(entries.__path__)):
+        imported = importlib.import_module(f"{entries.__name__}.{module}")
+        missing = [
+            name
+            for name in ("SPACE", "METRICS", "main")
+            if getattr(imported, name, None) is None
+        ]
+        if missing:
+            raise ValueError(
+                f"{imported.__name__} declares no {', '.join(missing)}; "
+                "an entry is a module with a space, a score, and a way to run"
+            )
+        found[module] = imported
+    if not found:
+        raise ValueError("no entries were found, so the image can run nothing")
+    return found
+
+
 def build_catalog() -> Catalog:
     revision = source_hash()
     return Catalog(
@@ -51,13 +85,13 @@ def build_catalog() -> Catalog:
         entries={
             name: EntryDescriptor.model_validate(
                 {
-                    "command": ["python", "-m", "runner.main"],
+                    "command": ["python", "-m", module.__name__],
                     "source_hash": revision,
-                    "metrics": list(topology.metrics),
-                    "space": dict(topology.space),
+                    "metrics": list(module.METRICS),
+                    "space": dict(module.SPACE),
                 }
             )
-            for name, topology in TOPOLOGIES.items()
+            for name, module in discover().items()
         },
     )
 

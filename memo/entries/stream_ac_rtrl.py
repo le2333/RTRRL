@@ -23,8 +23,6 @@ from collections.abc import Mapping
 from typing import Any
 
 import flax.linen as nn
-import jax
-import jax.numpy as jnp
 from training_sdk.reporter import Reporter
 
 from memorax.algorithms.stream_ac_rtrl import StreamACRTRL, StreamACRTRLConfig
@@ -38,7 +36,7 @@ from memorax.networks import (
     make_torso,
 )
 from memorax.rl import NormalizationConfig
-from runner.episodes import complete_episodes
+from runner.loop import drive, named_scalars
 
 _UNIT = {"type": "float", "low": 0.0, "high": 1.0}
 _RATE = {"type": "float", "low": 1e-9, "high": 10.0, "log": True}
@@ -156,72 +154,23 @@ def build(params: Mapping[str, Any]) -> StreamACRTRL:
 def training_report(metrics) -> dict[str, float]:
     """The scalars worth watching while an epoch runs, named one by one."""
 
-    return {
-        f"train/{name}": float(jnp.nanmean(getattr(metrics, name)))
-        for name in TRAINING_METRICS
-    }
-
-
-def evaluation_report(reporter, summary, *, done: int, num_envs: int, number: int):
-    """Report the score, and hand every whole episode to the viewer."""
-
-    returns: list[float] = []
-    lengths: list[int] = []
-    for episode in complete_episodes(
-        summary,
-        phase="eval",
-        start_env_steps=done,
-        num_envs=num_envs,
-        first_number=number,
-    ):
-        reporter.log_episode(episode)
-        number = episode.number + 1
-        returns.append(float(sum(episode.rewards)))
-        lengths.append(len(episode.actions))
-
-    report = {"eval/reward": float(jnp.nanmean(summary.reward))}
-    # A mean over no episodes would be reported as zero and read as a score.
-    if returns:
-        report["eval/episode_return"] = sum(returns) / len(returns)
-        report["eval/episode_length"] = sum(lengths) / len(lengths)
-    reporter.report(done, report)
-    return number
+    return named_scalars(metrics, TRAINING_METRICS, prefix="train/")
 
 
 def run(reporter, params: Mapping[str, Any]) -> None:
-    total = int(params["total_steps"])
-    epoch = int(params["epoch_steps"])
-    evaluation = int(params["eval_steps"])
-    num_envs = int(params["num_envs"])
-    # A budget that does not divide has to be rounded, and either direction is
-    # a lie: down reports a step count the run never reached, up spends money
-    # nobody asked for.
-    if epoch % num_envs:
-        raise ValueError(f"epoch_steps {epoch} is not {num_envs} streams' worth")
-    if total % epoch:
-        raise ValueError(f"total_steps {total} is not whole epochs of {epoch}")
-
     agent = build(params)
-    train = jax.jit(agent.train, static_argnums=2)
-    evaluate = jax.jit(agent.evaluate, static_argnums=2)
-
-    key = jax.random.key(int(params["seed"]))
-    key, init_key = jax.random.split(key)
-    state = jax.jit(agent.init)(init_key)
-
-    number = 1
-    for done in range(epoch, total + 1, epoch):
-        key, epoch_key = jax.random.split(key)
-        state, metrics = train(epoch_key, state, epoch)
-        reporter.report(done, training_report(metrics))
-
-        if not evaluation:
-            continue
-        key, eval_key = jax.random.split(key)
-        _, summary = evaluate(eval_key, state, evaluation)
-        number = evaluation_report(
-            reporter, summary, done=done, num_envs=num_envs, number=number
-        )
+    drive(
+        reporter,
+        init_fn=agent.init,
+        train_fn=agent.train,
+        evaluate_fn=agent.evaluate,
+        total_steps=int(params["total_steps"]),
+        epoch_steps=int(params["epoch_steps"]),
+        eval_steps=int(params["eval_steps"]),
+        num_envs=int(params["num_envs"]),
+        seed=int(params["seed"]),
+        training_report=training_report,
+    )
 
 
 def main(argv: list[str] | None = None) -> int:

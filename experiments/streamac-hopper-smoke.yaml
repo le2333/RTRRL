@@ -23,7 +23,6 @@ hpo:
 
 space:
   environment: [brax::hopper]
-  record_trajectory: [false]
   env_mode: [P]
   env_backend: [spring]
   backbone: [rtu]

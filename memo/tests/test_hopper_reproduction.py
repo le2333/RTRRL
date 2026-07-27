@@ -13,7 +13,7 @@ from pathlib import Path
 import pytest
 import yaml
 
-from runner.registry import topology
+from entries import stream_ac_rtrl
 
 EXPERIMENT = (
     Path(__file__).resolve().parents[2]
@@ -49,53 +49,46 @@ def pinned(experiment) -> dict:
 
 
 def test_the_experiment_names_the_entry_and_the_metric_it_scores(experiment):
-    entry = topology(experiment["entry"])
-    assert experiment["score"]["metric"] in entry.metrics
+    assert experiment["entry"] == stream_ac_rtrl.__name__.rsplit(".", 1)[-1]
+    assert experiment["score"]["metric"] in stream_ac_rtrl.METRICS
 
 
-def test_every_pinned_setting_is_one_the_topology_declares(experiment, pinned):
-    space = topology(experiment["entry"]).space
-    assert not set(pinned) - set(space)
+def test_every_pinned_setting_is_one_the_entry_declares(pinned):
+    assert not set(pinned) - set(stream_ac_rtrl.SPACE)
 
 
-def test_nothing_is_left_for_the_sampler_to_choose(experiment, pinned):
+def test_nothing_is_left_for_the_sampler_to_choose(pinned):
     """A parameter the experiment forgets keeps the whole domain the entry
     declared, and the sampler is then free to pick from it. For a run that
     exists to reproduce one recorded number, every parameter must be pinned or
     the number is not the one being reproduced.
     """
 
-    space = topology(experiment["entry"]).space
-    assert not set(space) - set(pinned)
+    assert not set(stream_ac_rtrl.SPACE) - set(pinned)
 
 
-def test_the_recorded_hyperparameters_survive_into_the_kernel(pinned):
-    from memorax.algorithms.stream_ac_rtrl import StreamACRTRLConfig
-    from runner.registry import _select
+@pytest.fixture(scope="module")
+def agent(pinned):
+    return stream_ac_rtrl.build(pinned)
 
-    config = StreamACRTRLConfig(**_select(pinned, StreamACRTRLConfig))
+
+def test_the_recorded_hyperparameters_survive_into_the_kernel(agent):
     for name, value in RECORDED.items():
-        assert getattr(config, name) == value, name
-    assert config.num_envs == 16
+        assert getattr(agent.cfg, name) == value, name
+    assert agent.cfg.num_envs == 16
 
 
-def test_the_masked_partially_observed_hopper_is_what_gets_built(pinned):
-    from runner.registry import _environment
-
-    env, env_params = _environment(pinned)
+def test_the_masked_partially_observed_hopper_is_what_gets_built(agent):
     # Hopper reports 11 numbers; mode P zeroes the six velocities, so a
     # recurrent policy is the only thing that can recover them.
-    assert env.observation_space(env_params).shape == (11,)
-    assert env.action_space(env_params).shape == (3,)
+    assert agent.env.observation_space(agent.env_params).shape == (11,)
+    assert agent.env.action_space(agent.env_params).shape == (3,)
 
 
-def test_both_normalizers_are_on_as_they_were_when_the_score_was_set(pinned):
-    from runner.registry import _normalization
-
-    normalization = _normalization(pinned)
-    assert normalization.normalize_observation
-    assert normalization.normalize_reward
-    assert normalization.reward_gamma == 0.99
+def test_both_normalizers_are_on_as_they_were_when_the_score_was_set(agent):
+    assert agent.normalizer.config.normalize_observation
+    assert agent.normalizer.config.normalize_reward
+    assert agent.normalizer.config.reward_gamma == 0.99
 
 
 def test_the_budget_divides_into_whole_epochs(pinned):

@@ -33,9 +33,6 @@ hpo:
 
 space:
   environment: [brax::hopper]
-  # Off: the eval episodes already reach Rerun, and stacking every training
-  # step's observation over a 2M-step budget would not fit.
-  record_trajectory: [false]
   env_mode: [P]
   env_backend: [spring]
   backbone: [rtu]
