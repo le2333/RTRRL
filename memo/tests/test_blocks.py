@@ -35,7 +35,10 @@ import pytest
 from conftest import TinyContinuousEnv, assert_within, flattened
 
 from memorax.algorithms.stream_ac import StreamAC, StreamACConfig
-from memorax.algorithms.stream_ac_rtrl import StreamACRTRL, StreamACRTRLConfig
+from memorax.algorithms.upstream_stream_ac import (
+    UpstreamStreamAC,
+    UpstreamStreamACConfig,
+)
 from memorax.environments.wrappers.normalize_observation import (
     NormalizeObservationWrapper,
 )
@@ -70,12 +73,12 @@ def network(head):
     )
 
 
-def upstream(**overrides) -> StreamAC:
+def upstream(**overrides) -> UpstreamStreamAC:
     """The version every block here answers to."""
 
     env = TinyContinuousEnv()
-    return StreamAC(
-        StreamACConfig(**{**SETTINGS, **overrides}),
+    return UpstreamStreamAC(
+        UpstreamStreamACConfig(**{**SETTINGS, **overrides}),
         env,
         env.default_params,
         network(heads.Gaussian(action_dim=2)),
@@ -83,12 +86,12 @@ def upstream(**overrides) -> StreamAC:
     )
 
 
-def ours(**overrides) -> StreamACRTRL:
+def ours(**overrides) -> StreamAC:
     """Our kernel, built for its methods; nothing here initialises it."""
 
     env = TinyContinuousEnv()
-    return StreamACRTRL(
-        StreamACRTRLConfig(**{**SETTINGS, **overrides}),
+    return StreamAC(
+        StreamACConfig(**{**SETTINGS, **overrides}),
         env,
         env.default_params,
         network(heads.Gaussian(action_dim=2)),

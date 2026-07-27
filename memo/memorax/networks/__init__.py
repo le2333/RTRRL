@@ -49,6 +49,8 @@ from memorax.networks.sequence_models import (
     Mamba3Config,
     Memoroid,
     MemoroidCellBase,
+    Memoryless,
+    MemorylessConfig,
     MinGRUCarry,
     MinGRUCell,
     MinGRUConfig,
@@ -74,5 +76,5 @@ from memorax.networks.sequence_models import (
     sLSTMCell,
     sLSTMConfig,
 )
-from memorax.networks.torso import TORSOS, make_torso
+from memorax.networks.torso import RECURRENT_TORSOS, TORSOS, make_torso
 from memorax.networks.vit import PatchEmbedding, ViT

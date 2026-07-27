@@ -40,7 +40,7 @@ jobs:
         memorax/algorithms/contract.py
         memorax/algorithms/rtrrl.py
         memorax/algorithms/stream_ac.py
-        memorax/algorithms/stream_ac_rtrl.py
+        memorax/algorithms/upstream_stream_ac.py
         memorax/algorithms/independent_rtrrl.py
         memorax/utils/trees.py
         memorax/networks/torso.py

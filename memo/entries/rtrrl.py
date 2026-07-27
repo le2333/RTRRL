@@ -23,7 +23,12 @@ from training_sdk.reporter import Reporter
 from memorax.algorithms.rtrrl import RTRRL, RTRRLConfig
 from memorax.environments import make
 from memorax.environments.brax import masks
-from memorax.networks import TORSOS, FeatureExtractor, heads, make_torso
+from memorax.networks import (
+    RECURRENT_TORSOS,
+    FeatureExtractor,
+    heads,
+    make_torso,
+)
 from memorax.rl import BOUNDED_RULES, NormalizationConfig
 from runner.loop import drive, named_scalars
 
@@ -34,7 +39,7 @@ SPACE: dict[str, Any] = {
     "environment": [f"brax::{task}" for task in sorted(masks)],
     "env_mode": ["F", "P", "V"],
     "env_backend": ["generalized", "spring", "positional", "mjx"],
-    "backbone": list(TORSOS),
+    "backbone": list(RECURRENT_TORSOS),
     "hidden_dim": {"type": "int", "low": 1, "high": 512},
     "feature_dim": {"type": "int", "low": 1, "high": 512},
     "meta_rl": [False, True],

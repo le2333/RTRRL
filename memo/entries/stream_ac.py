@@ -32,7 +32,7 @@ from typing import Any
 import flax.linen as nn
 from training_sdk.reporter import Reporter
 
-from memorax.algorithms.stream_ac_rtrl import StreamACRTRL, StreamACRTRLConfig
+from memorax.algorithms.stream_ac import StreamAC, StreamACConfig
 from memorax.environments import make
 from memorax.environments.brax import masks
 from memorax.networks import (
@@ -106,7 +106,7 @@ TRAINING_METRICS: tuple[str, ...] = (
 )
 
 
-def build(params: Mapping[str, Any]) -> StreamACRTRL:
+def build(params: Mapping[str, Any]) -> StreamAC:
     """Assemble the agent this file is about."""
 
     env, env_params = make(
@@ -138,8 +138,8 @@ def build(params: Mapping[str, Any]) -> StreamACRTRL:
         )
 
     action_dim = int(env.action_space(env_params).shape[0])
-    return StreamACRTRL(
-        StreamACRTRLConfig(
+    return StreamAC(
+        StreamACConfig(
             num_envs=int(params["num_envs"]),
             gamma=gamma,
             trace_lambda=float(params["trace_lambda"]),

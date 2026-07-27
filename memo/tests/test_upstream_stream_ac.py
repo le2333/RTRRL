@@ -16,7 +16,10 @@ import numpy as np
 import pytest
 from conftest import TinyDiscreteEnv
 
-from memorax.algorithms.stream_ac import StreamAC, StreamACConfig
+from memorax.algorithms.upstream_stream_ac import (
+    UpstreamStreamAC,
+    UpstreamStreamACConfig,
+)
 from memorax.networks import (
     RNN,
     FeatureExtractor,
@@ -31,7 +34,7 @@ HORIZON = TinyDiscreteEnv().default_params.horizon
 ENVS = 2
 
 
-def agent(**overrides) -> StreamAC:
+def agent(**overrides) -> UpstreamStreamAC:
     """Upstream's kernel on the smallest task that terminates during a test."""
 
     env = TinyDiscreteEnv()
@@ -45,8 +48,8 @@ def agent(**overrides) -> StreamAC:
             head=head,
         )
 
-    return StreamAC(
-        StreamACConfig(
+    return UpstreamStreamAC(
+        UpstreamStreamACConfig(
             num_envs=ENVS,
             gamma=0.89,
             trace_lambda=0.71,

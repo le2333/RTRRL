@@ -18,7 +18,7 @@ import pytest
 from conftest import TinyContinuousEnv
 
 from memorax.algorithms.rtrrl import RTRRL, RTRRLConfig
-from memorax.algorithms.stream_ac_rtrl import StreamACRTRL, StreamACRTRLConfig
+from memorax.algorithms.stream_ac import StreamAC, StreamACConfig
 from memorax.networks import (
     RNN,
     FeatureExtractor,
@@ -80,7 +80,7 @@ def stream_ac_program(normalization=None, **overrides):
             head=head,
         )
 
-    config = StreamACRTRLConfig(
+    config = StreamACConfig(
         num_envs=1,
         gamma=0.89,
         trace_lambda=0.71,
@@ -91,7 +91,7 @@ def stream_ac_program(normalization=None, **overrides):
         eps=1e-6,
         **overrides,
     )
-    agent = StreamACRTRL(
+    agent = StreamAC(
         config,
         env,
         env.default_params,
@@ -110,18 +110,18 @@ def finite(tree):
     "build",
     [
         pytest.param(rtrrl_program, id="rtrrl"),
-        pytest.param(stream_ac_program, id="stream_ac_rtrl"),
+        pytest.param(stream_ac_program, id="stream_ac"),
         pytest.param(
             lambda: rtrrl_program(update_rule="obgd", kappa=2.0),
             id="rtrrl_obgd",
         ),
         pytest.param(
             lambda: stream_ac_program(bounded_rule="adaptive_obgd"),
-            id="stream_ac_rtrl_adaptive",
+            id="stream_ac_adaptive",
         ),
         pytest.param(
             lambda: stream_ac_program(bounded_rule="adaptive_obgd_fixed"),
-            id="stream_ac_rtrl_adaptive_fixed",
+            id="stream_ac_adaptive_fixed",
         ),
         pytest.param(
             lambda: stream_ac_program(credit="tbptt"),
@@ -155,7 +155,7 @@ def test_epoch_moves_parameters_and_stays_finite(build):
     "build",
     [
         pytest.param(rtrrl_program, id="rtrrl"),
-        pytest.param(stream_ac_program, id="stream_ac_rtrl"),
+        pytest.param(stream_ac_program, id="stream_ac"),
     ],
 )
 def test_evaluation_runs_without_training(build):

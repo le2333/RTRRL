@@ -39,9 +39,6 @@ if TYPE_CHECKING:
     from .stream_ac import StreamAC as StreamAC
     from .stream_ac import StreamACConfig as StreamACConfig
     from .stream_ac import StreamACState as StreamACState
-    from .stream_ac_rtrl import StreamACRTRL as StreamACRTRL
-    from .stream_ac_rtrl import StreamACRTRLConfig as StreamACRTRLConfig
-    from .stream_ac_rtrl import StreamACRTRLState as StreamACRTRLState
 
 
 _EXPORTS = {
@@ -86,9 +83,6 @@ _EXPORTS = {
     "StreamAC": (".stream_ac", "StreamAC"),
     "StreamACConfig": (".stream_ac", "StreamACConfig"),
     "StreamACState": (".stream_ac", "StreamACState"),
-    "StreamACRTRL": (".stream_ac_rtrl", "StreamACRTRL"),
-    "StreamACRTRLConfig": (".stream_ac_rtrl", "StreamACRTRLConfig"),
-    "StreamACRTRLState": (".stream_ac_rtrl", "StreamACRTRLState"),
 }
 
 __all__ = [
@@ -125,9 +119,6 @@ __all__ = [
     "SACState",
     "StreamAC",
     "StreamACConfig",
-    "StreamACRTRL",
-    "StreamACRTRLConfig",
-    "StreamACRTRLState",
     "StreamACState",
     "Transition",
 ]

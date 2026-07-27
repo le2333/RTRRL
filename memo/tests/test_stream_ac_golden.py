@@ -25,7 +25,7 @@ import numpy as np
 import pytest
 from conftest import TinyDiscreteEnv, assert_within, deviations, flattened
 
-from memorax.algorithms.stream_ac_rtrl import StreamACRTRL, StreamACRTRLConfig
+from memorax.algorithms.stream_ac import StreamAC, StreamACConfig
 from memorax.networks import (
     RNN,
     FeatureExtractor,
@@ -99,7 +99,7 @@ def recorded(arrays: dict, variant: str, section: str) -> dict:
     }
 
 
-def agent_for(manifest: dict, variant: str) -> StreamACRTRL:
+def agent_for(manifest: dict, variant: str) -> StreamAC:
     """Build exactly what the snapshot says was built."""
 
     network_spec = manifest["config"]["network"]
@@ -128,8 +128,8 @@ def agent_for(manifest: dict, variant: str) -> StreamACRTRL:
     was_adaptive = bool(recorded_config.pop("adaptive"))
     recorded_config["bounded_rule"] = "adaptive_obgd" if was_adaptive else "obgd"
 
-    return StreamACRTRL(
-        StreamACRTRLConfig(**recorded_config),
+    return StreamAC(
+        StreamACConfig(**recorded_config),
         env,
         env.default_params,
         network(
