@@ -20,6 +20,10 @@ Every input is drawn from a written-down seed, never from the clock: a bit-exact
 assertion that fails one run in ten is worse than no assertion. The cases are
 chosen to cross each branch -- terminal and live steps, a TD error of exactly
 zero, a trace of exactly zero, both sides of the step-size bound.
+
+No comparison here carries a tolerance. Every block multiplies in the order the
+version it came from multiplies in, so every one of them is exact, and a last
+bit of drift is a change of arithmetic rather than a change of spelling.
 """
 
 from __future__ import annotations
@@ -54,14 +58,6 @@ SETTINGS = {
     "beta2": 0.95,
     "eps": 1e-6,
 }
-
-# How far the bounded step is allowed to have moved, in float32 last bits.
-# Upstream writes ``ss * delta * z``, which rounds ``ss * delta`` before it
-# reaches the trace; our rule weights the trace by the TD error first, because
-# it has to add untraced directions to that product before scaling it. Same
-# factors, one reassociation, and a single last bit is what it costs. Nothing
-# else in this file is allowed to differ at all.
-REASSOCIATED = 4.0
 
 
 def network(head):
@@ -261,13 +257,9 @@ def test_the_bounded_step_is_upstreams(adaptive, magnitude, step, surprise):
     output = rule.apply(traces, None, moment, delta=td_error, step=step, params=None)
 
     what = f"obgd adaptive={adaptive} trace={magnitude} step={step} td={surprise}"
-    # The second moment is the same expression on both sides, so it is exact.
     assert_within(flattened(output.state), flattened(their_moment), f"{what} moment")
     assert_within(
-        flattened(output.updates),
-        flattened(their_updates),
-        f"{what} updates",
-        allowed=REASSOCIATED,
+        flattened(output.updates), flattened(their_updates), f"{what} updates"
     )
     assert output.updates["kernel"].shape == (4, 3), "the env axis survived the update"
     assert float(jnp.max(output.metrics["step_size"])) <= cfg.critic_lr

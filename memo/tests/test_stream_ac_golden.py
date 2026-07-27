@@ -52,19 +52,20 @@ OBSERVED = {
     ),
 }
 
-# How far a section is allowed to have moved, in float32 last bits.
+# How far a section is allowed to have moved, in float32 last bits: nowhere, in
+# any of them.
 #
-# Where the initial state comes from, and every quantity a transition passes
-# through, must be exactly what was recorded: those are the arithmetic, and a
-# changed formula shows up there first.
+# The write-back used to be allowed four bits. Two of the actor's bias vectors
+# rounded one bit differently than they rounded then, while every weight matrix
+# stayed exact, and the recurrence carried that bit forward. It was traced to a
+# single reassociated product in the bounded step -- ``(ss * delta) * z`` where
+# our rule had written ``ss * (delta * z)`` -- and the rule now multiplies in the
+# recorded order, so the allowance has nothing left to cover.
 #
-# What the update writes back is allowed a few last bits. Two of the bias
-# updates round differently than they rounded then -- one bit after a single
-# transition, on the actor's two bias vectors, while every weight matrix is
-# still exact -- and the recurrence carries that rounding forward. That is a
-# reassociated product, not a different update, and four bits is far tighter
-# than any change of formula could hide under.
-SECTIONS = {"init": 0.0, "one_step": 4.0, "train": 4.0, "evaluate": 4.0}
+# If it turns out something else also differs, this is where it shows: the
+# failure names every leaf and how far each has moved, and a second source would
+# be worth far more than a tolerance that hid it.
+SECTIONS = {"init": 0.0, "one_step": 0.0, "train": 0.0, "evaluate": 0.0}
 
 
 @pytest.fixture(scope="module")
@@ -205,11 +206,11 @@ def test_a_changed_number_would_be_reported():
     nudged = np.full((2, 3), 0.5, np.float32)
     nudged[1, 2] = np.nextafter(nudged[1, 2], np.float32(1), dtype=np.float32)
 
-    # One last bit is a difference the exact sections would refuse.
+    # One last bit is a difference every section above would refuse.
     with pytest.raises(AssertionError, match="more than 0 last bits"):
         assert_within({"a": nudged}, expected, "sanity")
-    # The tolerant sections would let that one through, and nothing larger:
-    # five bits is over four.
+    # And an allowance, if one were ever granted again, would hold to its size:
+    # one bit passes at four, five bits do not.
     assert not deviations({"a": nudged}, expected, allowed=4.0)
     for _ in range(4):
         nudged[1, 2] = np.nextafter(nudged[1, 2], np.float32(1), dtype=np.float32)

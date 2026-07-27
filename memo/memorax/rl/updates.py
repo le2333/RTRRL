@@ -155,17 +155,34 @@ def make_obgd_rule(
             delta_bar * trace_sum * learning_rate * kappa,
         )
 
-        scaled = _combine(traced, direct, delta)
+        # The bounded step size reaches the TD error first, and their product
+        # multiplies the trace. That is the order StreamAC multiplies in, and
+        # multiplying in any other order is the same number differently
+        # rounded, which would leave this rule permanently a last bit away from
+        # the implementation it has to answer to. So the combined direction
+        # ``_combine`` builds for optax is not reused here.
+        ascent = jax.tree.map(
+            lambda trace: (
+                (_broadcast_env(step_size, trace) * _broadcast_env(delta, trace))
+                * trace
+            ),
+            traced,
+        )
+        if direct is not None:
+            ascent = jax.tree.map(
+                lambda leaf, immediate: (
+                    leaf + _broadcast_env(step_size, immediate) * immediate
+                ),
+                ascent,
+                direct,
+            )
         if adaptive:
-            scaled = jax.tree.map(
+            ascent = jax.tree.map(
                 lambda leaf, second: leaf / (jnp.sqrt(second) + eps),
-                scaled,
+                ascent,
                 corrected,
             )
-        updates = jax.tree.map(
-            lambda leaf: jnp.mean(_broadcast_env(step_size, leaf) * leaf, axis=0),
-            scaled,
-        )
+        updates = jax.tree.map(lambda leaf: jnp.mean(leaf, axis=0), ascent)
         return RuleOutput(
             updates=updates,
             state=moment,
