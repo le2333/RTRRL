@@ -156,7 +156,7 @@ def test_the_catalog_is_the_entries_directory_and_nothing_written_down():
     modules = discover()
 
     assert set(catalog.entries) == set(modules)
-    assert set(catalog.entries) == {"rtrrl", "stream_ac_rtrl"}
+    assert set(catalog.entries) == {"rtrrl", "stream_ac"}
     for name, entry in catalog.entries.items():
         assert entry.command == ("python", "-m", f"{entries.__name__}.{name}")
         assert set(entry.space) == set(modules[name].SPACE)

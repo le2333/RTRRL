@@ -1,11 +1,18 @@
-"""StreamAC-RTRL with separate actor and critic recurrent networks.
+"""StreamAC over a recurrent actor and critic, credited either way.
 
 What this file fixes is the wiring: the actor and the critic get their own
 feature extractor, their own torso and their own head, sharing nothing. Change
 that and it is a different algorithm, which is why it is written here rather
 than exposed. Everything else -- which task, which cell, how wide, how long,
-every hyperparameter -- is in ``SPACE``, and an experiment file narrows it by
-pinning single values.
+how the recurrence is credited, every hyperparameter -- is in ``SPACE``, and an
+experiment file narrows it by pinning single values.
+
+``credit`` is what makes one entry enough for what used to be two. Under
+``rtrl`` a sensitivity is carried forward and recurrent parameters are credited
+exactly; under ``tbptt`` nothing is carried and the gradient stops at the
+incoming carry, which is StreamAC as published. Same objective, same bounded
+update, same everything else, so a pair of runs that differ only here is an
+ablation of exact recurrent credit rather than a comparison of two programs.
 
 ``SPACE`` is the only place these names and their limits are written down. The
 constructor call below is the only place they are read. Both are on one screen,
@@ -35,7 +42,7 @@ from memorax.networks import (
     heads,
     make_torso,
 )
-from memorax.rl import BOUNDED_RULES, NormalizationConfig
+from memorax.rl import BOUNDED_RULES, CREDITS, NormalizationConfig
 from runner.loop import drive, named_scalars
 
 _UNIT = {"type": "float", "low": 0.0, "high": 1.0}
@@ -57,8 +64,14 @@ SPACE: dict[str, Any] = {
     # Whether the previous action and reward are fed back in alongside the
     # observation, which is what lets the agent condition on its own history.
     "meta_rl": [False, True],
-    "normalize_observation": [False, True],
-    "normalize_reward": [False, True],
+    # On unless an experiment says otherwise. A bounded step reads the size of
+    # its own inputs, so an unnormalised observation changes what the bound
+    # means; the published runs normalise, and a run that does not is the
+    # unusual one. First in the list is what the cheapest sampled point takes.
+    "normalize_observation": [True, False],
+    "normalize_reward": [True, False],
+    # Exact online credit, or one step of backpropagation and no sensitivity.
+    "credit": list(CREDITS),
     # Independent streams whose updates are averaged. This divides the step
     # budget: sixteen streams over two million steps make 125k updates.
     "num_envs": {"type": "int", "low": 1, "high": 256},
@@ -135,6 +148,7 @@ def build(params: Mapping[str, Any]) -> StreamACRTRL:
             actor_kappa=float(params["actor_kappa"]),
             critic_kappa=float(params["critic_kappa"]),
             entropy_coefficient=float(params["entropy_coefficient"]),
+            credit=str(params["credit"]),
             bounded_rule=str(params["bounded_rule"]),
             beta2=float(params["beta2"]),
             eps=float(params["eps"]),

@@ -8,7 +8,7 @@ description: >
   this instance type sustains. The score is not expected to mean anything.
 
 image: 007122174918.dkr.ecr.eu-north-1.amazonaws.com/rtrrl@sha256:67a47ccde6dddfb1c67265c23365efb0da61ce41d030aa835ce3cc1ed0c1fd60
-entry: stream_ac_rtrl
+entry: stream_ac
 storage: s3://rtrrl-artifacts-007122174918/trainer
 
 compute:
@@ -45,6 +45,7 @@ space:
   actor_kappa: [2.722352816476039]
   critic_kappa: [1.4401857247174306]
   entropy_coefficient: [0.000271109456772485]
+  credit: [rtrl]
   bounded_rule: ["obgd"]
   beta2: [0.999]
   eps: [1.0e-8]

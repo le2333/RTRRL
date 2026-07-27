@@ -18,16 +18,14 @@ from __future__ import annotations
 from dataclasses import dataclass, replace
 from typing import Any
 
-import flax.linen as nn
 import jax
 import jax.numpy as jnp
 from flax import struct
 
-from memorax.networks import RTUCell
 from memorax.rl import (
     ObjectiveDirections,
     environment_owns_normalization,
-    make_exact_rtrl_credit,
+    make_credit,
     make_normalizer,
     make_obgd_rule,
     make_td0,
@@ -55,6 +53,7 @@ class StreamACRTRLConfig:
     actor_kappa: float = 3.0
     critic_kappa: float = 2.0
     entropy_coefficient: float = 0.01
+    credit: str = "rtrl"
     bounded_rule: str = "obgd"
     beta2: float = 0.999
     eps: float = 1e-8
@@ -70,18 +69,6 @@ class TraceDirections:
 
 def _broadcast_env(values, leaf):
     return values[(slice(None),) + (None,) * (leaf.ndim - 1)]
-
-
-def _delegate_rtu_init_forward(next_fun, args, kwargs, context):
-    module = context.module
-    if context.method_name == "__call__" and type(module) is RTUCell:
-        carry, inputs = args
-        sensitivity = module.initialize_sensitivity(jax.random.key(0), inputs.shape)
-        if sensitivity is None:
-            raise TypeError("RTUCell initialization requires local sensitivity")
-        next_carry, output, _ = module.local_jacobian(carry, inputs, sensitivity)
-        return next_carry, output
-    return next_fun(*args, **kwargs)
 
 
 @struct.dataclass(frozen=True)
@@ -182,8 +169,8 @@ class StreamACRTRL:
                 "are both enabled"
             )
 
-        self.actor_credit = make_exact_rtrl_credit(actor_network.torso)
-        self.critic_credit = make_exact_rtrl_credit(critic_network.torso)
+        self.actor_credit = make_credit(cfg.credit, actor_network.torso)
+        self.critic_credit = make_credit(cfg.credit, critic_network.torso)
         self.actor_rule = make_obgd_rule(
             learning_rate=cfg.actor_lr,
             kappa=cfg.actor_kappa,
@@ -298,12 +285,12 @@ class StreamACRTRL:
             metrics={"entropy": entropy},
         )
 
-    def _initialize_network(self, network, key, timestep) -> NetworkState:
+    def _initialize_network(self, network, credit, key, timestep) -> NetworkState:
         carry_shape = (self.cfg.num_envs, None)
         carry = network.initialize_carry(carry_shape)
-        sensitivity = network.torso.initialize_sensitivity(key, carry_shape)
+        sensitivity = credit.initialize(key, carry_shape)
         obs, done, action, reward = timestep
-        with nn.intercept_methods(_delegate_rtu_init_forward):
+        with credit.initialization():
             params = network.init(
                 {"params": key},
                 observation=obs,
@@ -345,8 +332,12 @@ class StreamACRTRL:
             reward=jnp.zeros((self.cfg.num_envs,), dtype=jnp.float32),
             done=jnp.ones((self.cfg.num_envs,), dtype=jnp.bool_),
         ).to_sequence()
-        actor = self._initialize_network(self.actor_network, actor_key, timestep)
-        critic = self._initialize_network(self.critic_network, critic_key, timestep)
+        actor = self._initialize_network(
+            self.actor_network, self.actor_credit, actor_key, timestep
+        )
+        critic = self._initialize_network(
+            self.critic_network, self.critic_credit, critic_key, timestep
+        )
         return StreamACRTRLState(
             step=jnp.asarray(0, dtype=jnp.int32),
             update_step=jnp.asarray(0, dtype=jnp.int32),

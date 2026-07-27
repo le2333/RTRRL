@@ -13,7 +13,7 @@ from pathlib import Path
 import pytest
 import yaml
 
-from entries import stream_ac_rtrl
+from entries import stream_ac
 
 EXPERIMENT = (
     Path(__file__).resolve().parents[2]
@@ -30,6 +30,7 @@ RECORDED = {
     "actor_kappa": 2.722352816476039,
     "critic_kappa": 1.4401857247174306,
     "entropy_coefficient": 0.000271109456772485,
+    "credit": "rtrl",
     "bounded_rule": "obgd",
 }
 
@@ -49,12 +50,12 @@ def pinned(experiment) -> dict:
 
 
 def test_the_experiment_names_the_entry_and_the_metric_it_scores(experiment):
-    assert experiment["entry"] == stream_ac_rtrl.__name__.rsplit(".", 1)[-1]
-    assert experiment["score"]["metric"] in stream_ac_rtrl.METRICS
+    assert experiment["entry"] == stream_ac.__name__.rsplit(".", 1)[-1]
+    assert experiment["score"]["metric"] in stream_ac.METRICS
 
 
 def test_every_pinned_setting_is_one_the_entry_declares(pinned):
-    assert not set(pinned) - set(stream_ac_rtrl.SPACE)
+    assert not set(pinned) - set(stream_ac.SPACE)
 
 
 def test_nothing_is_left_for_the_sampler_to_choose(pinned):
@@ -64,12 +65,12 @@ def test_nothing_is_left_for_the_sampler_to_choose(pinned):
     the number is not the one being reproduced.
     """
 
-    assert not set(stream_ac_rtrl.SPACE) - set(pinned)
+    assert not set(stream_ac.SPACE) - set(pinned)
 
 
 @pytest.fixture(scope="module")
 def agent(pinned):
-    return stream_ac_rtrl.build(pinned)
+    return stream_ac.build(pinned)
 
 
 def test_the_recorded_hyperparameters_survive_into_the_kernel(agent):

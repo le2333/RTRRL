@@ -124,6 +124,10 @@ def finite(tree):
             id="stream_ac_rtrl_adaptive_fixed",
         ),
         pytest.param(
+            lambda: stream_ac_program(credit="tbptt"),
+            id="stream_ac_truncated",
+        ),
+        pytest.param(
             lambda: rtrrl_program(record_trajectory=True),
             id="rtrrl_trajectory",
         ),

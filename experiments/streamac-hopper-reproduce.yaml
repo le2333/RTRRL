@@ -13,7 +13,7 @@ description: >
   is the peak of that plateau, which is why the reduction below is max.
 
 image: 007122174918.dkr.ecr.eu-north-1.amazonaws.com/rtrrl@sha256:efb23664a537470ace5b2153d3ae26c0dce7c1688e9a99e76409d5416b017411
-entry: stream_ac_rtrl
+entry: stream_ac
 storage: s3://rtrrl-artifacts-007122174918/trainer
 
 compute:
@@ -62,6 +62,7 @@ space:
   actor_kappa: [2.722352816476039]
   critic_kappa: [1.4401857247174306]
   entropy_coefficient: [0.000271109456772485]
+  credit: [rtrl]
   bounded_rule: ["obgd"]
   beta2: [0.999]
   eps: [1.0e-8]

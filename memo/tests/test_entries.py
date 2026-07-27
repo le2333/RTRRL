@@ -27,8 +27,8 @@ BUDGET: dict[str, Any] = {
     "environment": "brax::hopper",
     "env_mode": "P",
     "env_backend": "generalized",
-    # Both algorithms credit this one by exact RTRL. Taking whichever cell
-    # happens to sort first would test a pairing nobody runs.
+    # The cell the recorded runs used. Taking whichever one happens to sort
+    # first would test a pairing nobody runs.
     "backbone": "rtu",
     "hidden_dim": 2,
     "feature_dim": 3,
