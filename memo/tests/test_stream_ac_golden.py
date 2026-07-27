@@ -23,7 +23,7 @@ import jax
 import jax.numpy as jnp
 import numpy as np
 import pytest
-from conftest import TinyDiscreteEnv
+from conftest import TinyDiscreteEnv, assert_within, deviations, flattened
 
 from memorax.algorithms.stream_ac_rtrl import StreamACRTRL, StreamACRTRLConfig
 from memorax.networks import (
@@ -78,18 +78,6 @@ def arrays() -> dict:
         return {name: payload[name] for name in payload.files}
 
 
-def flattened(tree) -> dict:
-    """Leaf paths spelled the way the snapshot spells them."""
-
-    pairs, _ = jax.tree_util.tree_flatten_with_path(tree)
-    return {
-        "/".join(str(getattr(key, "key", getattr(key, "idx", key))) for key in path): (
-            np.asarray(leaf)
-        )
-        for path, leaf in pairs
-    }
-
-
 def recorded(arrays: dict, variant: str, section: str) -> dict:
     prefix = f"{variant}/{section}/"
     return {
@@ -97,48 +85,6 @@ def recorded(arrays: dict, variant: str, section: str) -> dict:
         for name, value in arrays.items()
         if name.startswith(prefix)
     }
-
-
-def last_bits(wanted, got) -> float:
-    """How many float32 last bits apart two arrays are, at their own scale."""
-
-    scale = max(float(np.abs(wanted).max()), float(np.abs(got).max()), 1e-6)
-    gap = float(np.max(np.abs(got.astype(np.float64) - wanted.astype(np.float64))))
-    return gap / float(np.spacing(np.float32(scale)))
-
-
-def deviations(actual: dict, expected: dict, allowed: float = 0.0) -> list:
-    """Every leaf further apart than allowed, worst first, in last bits."""
-
-    missing = sorted(set(expected) - set(actual))
-    assert not missing, f"the kernel no longer reports {missing}"
-
-    found = []
-    for path, wanted in expected.items():
-        wanted = np.asarray(wanted)
-        got = np.asarray(actual[path])
-        assert got.shape == wanted.shape, f"{path}: {got.shape} not {wanted.shape}"
-        if wanted.dtype.kind in "biufc" and got.dtype.kind in "biufc":
-            bits = last_bits(wanted, got)
-            if bits > allowed:
-                found.append((bits, path))
-        elif not np.array_equal(got, wanted):
-            found.append((float("inf"), path))
-    return sorted(found, reverse=True, key=lambda entry: entry[0])
-
-
-def assert_recorded(
-    actual: dict, expected: dict, what: str, *, allowed: float = 0.0
-) -> int:
-    assert expected, f"{what}: the snapshot holds nothing to answer"
-    found = deviations(actual, expected, allowed)
-    if found:
-        listed = "\n".join(f"  {bits:.1f} last bits  {path}" for bits, path in found)
-        raise AssertionError(
-            f"{what}: {len(found)} of {len(expected)} leaves are more than "
-            f"{allowed:g} last bits from what was recorded, worst first:\n{listed}"
-        )
-    return len(expected)
 
 
 def agent_for(manifest: dict, variant: str) -> StreamACRTRL:
@@ -214,7 +160,7 @@ def replayed(manifest: dict) -> dict:
 @pytest.mark.parametrize("section", sorted(SECTIONS))
 def test_every_carried_leaf_is_what_was_recorded(manifest, arrays, replayed, section):
     for variant in manifest["snapshots"]:
-        compared = assert_recorded(
+        compared = assert_within(
             flattened(replayed[variant][section]),
             recorded(arrays, variant, section),
             f"{variant}/{section}",
@@ -235,7 +181,7 @@ def test_the_quantities_one_transition_passes_through_are_unchanged(
     """
 
     for variant in manifest["snapshots"]:
-        assert_recorded(
+        assert_within(
             flattened(replayed[variant]["observables"]),
             recorded(arrays, variant, "observables"),
             f"{variant}/observables",
@@ -261,7 +207,7 @@ def test_a_changed_number_would_be_reported():
 
     # One last bit is a difference the exact sections would refuse.
     with pytest.raises(AssertionError, match="more than 0 last bits"):
-        assert_recorded({"a": nudged}, expected, "sanity")
+        assert_within({"a": nudged}, expected, "sanity")
     # The tolerant sections would let that one through, and nothing larger:
     # five bits is over four.
     assert not deviations({"a": nudged}, expected, allowed=4.0)

@@ -1,8 +1,73 @@
+"""The environments and the numerical judgement the tests here share.
+
+Two tests compare arrays that should agree to their last bits: one answers a
+recorded snapshot, the other answers upstream's own arithmetic. They agree on
+what "apart" means, and it is measured here rather than twice.
+"""
+
 from dataclasses import dataclass
 
+import jax
 import jax.numpy as jnp
+import numpy as np
 from flax import struct
 from gymnax.environments import spaces
+
+
+def flattened(tree) -> dict:
+    """A pytree as leaf paths, spelled the way a snapshot spells them."""
+
+    pairs, _ = jax.tree_util.tree_flatten_with_path(tree)
+    return {
+        "/".join(str(getattr(key, "key", getattr(key, "idx", key))) for key in path): (
+            np.asarray(leaf)
+        )
+        for path, leaf in pairs
+    }
+
+
+def last_bits(wanted, got) -> float:
+    """How many float32 last bits apart two arrays are, at their own scale."""
+
+    scale = max(float(np.abs(wanted).max()), float(np.abs(got).max()), 1e-6)
+    gap = float(np.max(np.abs(got.astype(np.float64) - wanted.astype(np.float64))))
+    return gap / float(np.spacing(np.float32(scale)))
+
+
+def deviations(actual: dict, expected: dict, allowed: float = 0.0) -> list:
+    """Every leaf further apart than allowed, worst first, in last bits."""
+
+    missing = sorted(set(expected) - set(actual))
+    assert not missing, f"nothing reports {missing}"
+
+    found = []
+    for path, wanted in expected.items():
+        wanted = np.asarray(wanted)
+        got = np.asarray(actual[path])
+        assert got.shape == wanted.shape, f"{path}: {got.shape} not {wanted.shape}"
+        if wanted.dtype.kind in "biufc" and got.dtype.kind in "biufc":
+            bits = last_bits(wanted, got)
+            if bits > allowed:
+                found.append((bits, path))
+        elif not np.array_equal(got, wanted):
+            found.append((float("inf"), path))
+    return sorted(found, reverse=True, key=lambda entry: entry[0])
+
+
+def assert_within(
+    actual: dict, expected: dict, what: str, *, allowed: float = 0.0
+) -> int:
+    """Every leaf of expected is within allowed last bits of actual's."""
+
+    assert expected, f"{what}: there is nothing to compare"
+    found = deviations(actual, expected, allowed)
+    if found:
+        listed = "\n".join(f"  {bits:.1f} last bits  {path}" for bits, path in found)
+        raise AssertionError(
+            f"{what}: {len(found)} of {len(expected)} leaves are more than "
+            f"{allowed:g} last bits apart, worst first:\n{listed}"
+        )
+    return len(expected)
 
 
 @struct.dataclass
