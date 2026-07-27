@@ -31,13 +31,13 @@ if TYPE_CHECKING:
     from .pqn import PQN as PQN, PQNConfig as PQNConfig, PQNState as PQNState
     from .r2d2 import R2D2 as R2D2, R2D2Config as R2D2Config, R2D2State as R2D2State
     from .rtrrl import (
+        RTRRL as RTRRL,
         RTRRLConfig as RTRRLConfig,
-        RTRRLParts as RTRRLParts,
         RTRRLState as RTRRLState,
-        build_rtrrl as build_rtrrl,
     )
     from .sac import SAC as SAC, SACConfig as SACConfig, SACState as SACState
     from .stream_ac_rtrl import (
+        StreamACRTRL as StreamACRTRL,
         StreamACRTRLConfig as StreamACRTRLConfig,
         StreamACRTRLState as StreamACRTRLState,
     )
@@ -79,10 +79,10 @@ _EXPORTS = {
         ".independent_rtrrl",
         "IndependentRTRRLState",
     ),
+    "RTRRL": (".rtrrl", "RTRRL"),
     "RTRRLConfig": (".rtrrl", "RTRRLConfig"),
-    "RTRRLParts": (".rtrrl", "RTRRLParts"),
     "RTRRLState": (".rtrrl", "RTRRLState"),
-    "build_rtrrl": (".rtrrl", "build_rtrrl"),
+    "StreamACRTRL": (".stream_ac_rtrl", "StreamACRTRL"),
     "StreamACRTRLConfig": (".stream_ac_rtrl", "StreamACRTRLConfig"),
     "StreamACRTRLState": (".stream_ac_rtrl", "StreamACRTRLState"),
 }
@@ -117,12 +117,12 @@ __all__ = [
     "IndependentRTRRL",
     "IndependentRTRRLConfig",
     "IndependentRTRRLState",
+    "RTRRL",
     "RTRRLConfig",
-    "RTRRLParts",
     "RTRRLState",
+    "StreamACRTRL",
     "StreamACRTRLConfig",
     "StreamACRTRLState",
-    "build_rtrrl",
 ]
 
 

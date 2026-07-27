@@ -1,15 +1,13 @@
-"""RTRRL: one recurrent torso shared by an actor and a critic.
+"""RTRRL as it read before the closures became a class, kept to compare against.
 
-The torso is credited by exact RTRL, so every parameter carries an eligibility
-trace that the TD error weights on arrival. Forward passes read a slowly
-following copy of the torso while updates land on the fast parameters, which
-keeps the bootstrap target from moving with the parameters it evaluates.
+Deleted once the comparison has run in CI. Nothing imports it but the test
+that asserts the two produce the same numbers leaf for leaf.
 """
 
 from __future__ import annotations
 
 from collections.abc import Callable
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, field, replace
 from typing import Any, cast
 
 import jax
@@ -17,6 +15,12 @@ import jax.numpy as jnp
 import optax
 from flax import core, struct
 
+from memorax.algorithms.contract import (
+    ActionDecision,
+    AgentProgram,
+    EvalSummary,
+    EvaluationConfig,
+)
 from memorax.rl import (
     NormalizationConfig,
     ObjectiveDirections,
@@ -34,8 +38,6 @@ from memorax.utils.axes import (
     remove_feature_axis,
     remove_time_axis,
 )
-
-from .contract import ActionDecision, EvalSummary, EvaluationConfig
 
 RECURRENT_DOMAINS = ("feature_extractor", "torso")
 
@@ -69,6 +71,25 @@ class RTRRLConfig:
     obgd_adaptive: bool = False
     actor_to_recurrent: bool = True
     critic_to_recurrent: bool = True
+
+
+@dataclass(frozen=True)
+class RTRRLParts:
+    """The modules and environment a program is built around."""
+
+    env: Any = None
+    env_params: Any = None
+    feature_extractor: Any = None
+    torso: Any = None
+    actor_head: Any = None
+    critic_head: Any = None
+    activation: Callable[[Any], Any] = jax.nn.silu
+    normalization: Any = None
+    evaluation: EvaluationConfig = field(default_factory=EvaluationConfig)
+    record_trajectory: bool = False
+
+    def replace(self, **updates):
+        return replace(self, **updates)
 
 
 @struct.dataclass
@@ -311,86 +332,60 @@ class RTRRLStepMetrics:
     normalization: Any = None
 
 
-class RTRRL:
-    """An actor and a critic sharing one torso credited by exact RTRL."""
+def build_rtrrl(config: RTRRLConfig, parts: RTRRLParts) -> AgentProgram:
+    """Close over the modules, the environment, and every static choice.
 
-    def __init__(
-        self,
-        cfg: RTRRLConfig,
-        env: Any,
-        env_params: Any,
-        feature_extractor: Any,
-        torso: Any,
-        actor_head: Any,
-        critic_head: Any,
-        *,
-        activation: Callable[[Any], Any] = jax.nn.silu,
-        normalization: Any = None,
-        evaluation: EvaluationConfig | None = None,
-        record_trajectory: bool = False,
-    ) -> None:
-        evaluation = evaluation or EvaluationConfig()
-        self.cfg = cfg
-        self.env = env
-        self.env_params = env_params
-        self.feature_extractor = feature_extractor
-        self.torso = torso
-        self.actor_head = actor_head
-        self.critic_head = critic_head
-        self.activation = activation
-        self.record_trajectory = record_trajectory
+    Nothing after this point reads Python state, so the returned functions are
+    safe to trace once and call repeatedly.
+    """
 
-        declared = make_normalizer(normalization or NormalizationConfig())
-        self.normalizer = make_normalizer(
-            replace(
-                declared.config,
-                reset_on_start=evaluation.reset_on_start,
-                update_during_eval=evaluation.update_during_eval,
-            )
+    normalizer = make_normalizer(parts.normalization or NormalizationConfig())
+    normalization_config = replace(
+        normalizer.config,
+        reset_on_start=parts.evaluation.reset_on_start,
+        update_during_eval=parts.evaluation.update_during_eval,
+    )
+    normalizer = make_normalizer(normalization_config)
+    normalization_enabled = (
+        normalizer.config.normalize_observation or normalizer.config.normalize_reward
+    )
+    env = parts.env
+    env_params = parts.env_params
+    feature_extractor = parts.feature_extractor
+    torso = parts.torso
+    actor_head = parts.actor_head
+    critic_head = parts.critic_head
+    activation = parts.activation
+    if normalization_enabled and environment_owns_normalization(env):
+        raise ValueError(
+            "normalization owner conflict: wrapper and program normalization are both enabled"
         )
-        self.normalizing = (
-            self.normalizer.config.normalize_observation
-            or self.normalizer.config.normalize_reward
-        )
-        if self.normalizing and environment_owns_normalization(env):
-            raise ValueError(
-                "normalization owner conflict: wrapper and program normalization "
-                "are both enabled"
-            )
+    record_trajectory = parts.record_trajectory
+    credit = make_exact_rtrl_credit(torso)
+    objective = make_rtrrl_objective(config)
+    trace_kernel = make_rtrrl_trace(config)
+    td0 = make_td0()
 
-        self.credit = make_exact_rtrl_credit(torso)
-        self.objective = make_rtrrl_objective(cfg)
-        self.trace = make_rtrrl_trace(cfg)
-        self.td0 = make_td0()
-
-        # Which rules exist depends on the shape of the parameters, which is
-        # only known once the modules have been initialised. Tracing the
-        # initialisation for its shapes costs nothing and keeps that knowledge
-        # here rather than in the first step.
-        abstract = jax.eval_shape(self._initialize_arrays, jax.random.key(0))
-        self.rules = make_rtrrl_update_rules(cfg, abstract["params"])
-        self.group_of = group_parameters(abstract["params"])
-
-    def _forward(self, params, obs, action, reward, done, carry, sensitivity):
-        x, _ = self.feature_extractor.apply(
+    def forward(params, obs, action, reward, done, carry, sensitivity):
+        x, _ = feature_extractor.apply(
             {"params": params["feature_extractor"]},
             observation=obs,
             action=action,
             reward=reward,
             done=done,
         )
-        next_carry, h, next_sensitivity = self.credit(
+        next_carry, h, next_sensitivity = credit(
             params["torso"], x, done, carry, sensitivity
         )
-        h = self.activation(h)
-        dist, _ = self.actor_head.apply(
+        h = activation(h)
+        dist, _ = actor_head.apply(
             {"params": params["actor"]},
             h,
             action=action,
             reward=reward,
             done=done,
         )
-        value, _ = self.critic_head.apply(
+        value, _ = critic_head.apply(
             {"params": params["critic"]},
             h,
             action=action,
@@ -399,9 +394,7 @@ class RTRRL:
         )
         return (next_carry, next_sensitivity), (dist, value)
 
-    def _initialize_arrays(self, key):
-        """Reset the environments and initialise every module against them."""
-
+    def initialize_arrays(key):
         (
             env_key,
             feat_key,
@@ -410,54 +403,50 @@ class RTRRL:
             critic_key,
             sens_key,
         ) = jax.random.split(key, 6)
-        env_keys = jax.random.split(env_key, self.cfg.num_envs)
-        obs, env_state = jax.vmap(self.env.reset, in_axes=(0, None))(
-            env_keys, self.env_params
-        )
+        env_keys = jax.random.split(env_key, config.num_envs)
+        obs, env_state = jax.vmap(env.reset, in_axes=(0, None))(env_keys, env_params)
         normalizer_state = None
-        if self.normalizing:
-            obs, normalizer_state = self.normalizer.reset(obs)
-        action_space = self.env.action_space(self.env_params)
+        if normalization_enabled:
+            obs, normalizer_state = normalizer.reset(obs)
+        action_space = env.action_space(env_params)
         action = jnp.zeros(
-            (self.cfg.num_envs, *action_space.shape), dtype=action_space.dtype
+            (config.num_envs, *action_space.shape), dtype=action_space.dtype
         )
-        reward = jnp.zeros((self.cfg.num_envs,), dtype=jnp.float32)
-        done = jnp.ones((self.cfg.num_envs,), dtype=jnp.bool_)
+        reward = jnp.zeros((config.num_envs,), dtype=jnp.float32)
+        done = jnp.ones((config.num_envs,), dtype=jnp.bool_)
         timestep = Timestep(
             obs=obs, action=action, reward=reward, done=done
         ).to_sequence()
         ts_obs, ts_done, ts_action, ts_reward = timestep
 
-        carry_shape = (self.cfg.num_envs, None)
-        carry = self.torso.initialize_carry(jax.random.key(0), carry_shape)
-        sensitivity = self.torso.initialize_sensitivity(sens_key, carry_shape)
-        feat_vars = self.feature_extractor.init(
+        carry_shape = (config.num_envs, None)
+        carry = torso.initialize_carry(jax.random.key(0), carry_shape)
+        sensitivity = torso.initialize_sensitivity(sens_key, carry_shape)
+        feat_vars = feature_extractor.init(
             {"params": feat_key},
             observation=ts_obs,
             action=ts_action,
             reward=ts_reward,
             done=ts_done,
         )
-        x, _ = self.feature_extractor.apply(
+        x, _ = feature_extractor.apply(
             feat_vars,
             observation=ts_obs,
             action=ts_action,
             reward=ts_reward,
             done=ts_done,
         )
-        torso_vars = self.torso.init(
-            {"params": torso_key}, x, ts_done, initial_carry=carry
-        )
-        _, h = self.torso.apply(torso_vars, x, ts_done, initial_carry=carry)
-        h = self.activation(h)
-        actor_vars = self.actor_head.init(
+        torso_vars = torso.init({"params": torso_key}, x, ts_done, initial_carry=carry)
+        _, h = torso.apply(torso_vars, x, ts_done, initial_carry=carry)
+        h = activation(h)
+        actor_vars = actor_head.init(
             {"params": actor_key},
             h,
             action=ts_action,
             reward=ts_reward,
             done=ts_done,
         )
-        critic_vars = self.critic_head.init(
+        critic_vars = critic_head.init(
             {"params": critic_key},
             h,
             action=ts_action,
@@ -471,7 +460,7 @@ class RTRRL:
             "critic": critic_vars["params"],
         }
         traces = jax.tree.map(
-            lambda param: jnp.zeros((self.cfg.num_envs, *param.shape)), params
+            lambda param: jnp.zeros((config.num_envs, *param.shape)), params
         )
         return {
             "timestep": timestep.from_sequence(),
@@ -483,14 +472,18 @@ class RTRRL:
             "normalizer_state": normalizer_state,
         }
 
-    def _regroup(self, by_name):
-        return group_trees(by_name, self.group_of)
+    abstract = jax.eval_shape(initialize_arrays, jax.random.key(0))
+    rules = make_rtrrl_update_rules(config, abstract["params"])
+    group_of = group_parameters(abstract["params"])
 
-    def init(self, key) -> RTRRLState:
-        arrays = self._initialize_arrays(key)
+    def regroup(by_name):
+        return group_trees(by_name, group_of)
+
+    def init_fn(key):
+        arrays = initialize_arrays(key)
         params = arrays["params"]
-        grouped_params = self._regroup(params)
-        grouped_traces = self._regroup(arrays["traces"])
+        grouped_params = regroup(params)
+        grouped_traces = regroup(arrays["traces"])
         return RTRRLState(
             step=jnp.asarray(0, dtype=jnp.int32),
             update_step=jnp.asarray(0, dtype=jnp.int32),
@@ -504,24 +497,22 @@ class RTRRL:
                     params=grouped_params[group],
                     traces=grouped_traces[group],
                 )
-                for group, rule in self.rules.items()
+                for group, rule in rules.items()
             },
             carry=arrays["carry"],
             sensitivity=arrays["sensitivity"],
-            emphasis=jnp.ones((self.cfg.num_envs,), dtype=jnp.float32),
+            emphasis=jnp.ones((config.num_envs,), dtype=jnp.float32),
             normalizer_state=arrays["normalizer_state"],
         )
 
-    def _step(self, state: Any, key):
-        """Act once in every environment, then credit the step that produced it."""
-
+    def step_fn(state, key):
         action_key, env_key = jax.random.split(key)
         obs, done, previous_action, reward = state.timestep.to_sequence()
         forward_params = slow_view(state.params, state.slow_torso)
         pre_carry = jax.lax.stop_gradient(state.carry)
         pre_sensitivity = jax.lax.stop_gradient(state.sensitivity)
 
-        (carry, sensitivity), (dist, value_raw) = self._forward(
+        (carry, sensitivity), (dist, value_raw, _) = forward(
             forward_params,
             obs,
             previous_action,
@@ -531,24 +522,24 @@ class RTRRL:
             state.sensitivity,
         )
         sampled_action, log_prob = dist.sample_and_log_prob(seed=action_key)
-        entropy = (self.cfg.logprob_scale * remove_time_axis(dist.entropy())).mean()
+        entropy = (config.logprob_scale * remove_time_axis(dist.entropy())).mean()
         sampled_action = remove_time_axis(sampled_action)
         log_prob = remove_time_axis(log_prob)
         value = remove_feature_axis(remove_time_axis(value_raw))
         env_action = (
-            jnp.clip(sampled_action, -self.cfg.act_clip, self.cfg.act_clip)
-            if self.cfg.act_clip
+            jnp.clip(sampled_action, -config.act_clip, config.act_clip)
+            if config.act_clip
             else sampled_action
         )
 
-        step_keys = jax.random.split(env_key, self.cfg.num_envs)
+        step_keys = jax.random.split(env_key, config.num_envs)
         next_obs, env_state, next_reward, next_done, info = jax.vmap(
-            self.env.step, in_axes=(0, 0, 0, None)
-        )(step_keys, state.env_state, env_action, self.env_params)
+            env.step, in_axes=(0, 0, 0, None)
+        )(step_keys, state.env_state, env_action, env_params)
         normalizer_state = state.normalizer_state
         raw_episode_return = None
-        if self.normalizing:
-            normalized = self.normalizer.step(
+        if normalization_enabled:
+            normalized = normalizer.step(
                 normalizer_state,
                 observation=next_obs,
                 reward=next_reward,
@@ -567,7 +558,7 @@ class RTRRL:
         (
             _bootstrap_carry,
             _bootstrap_sensitivity,
-        ), (_, next_value_raw) = self._forward(
+        ), (_, next_value_raw, _) = forward(
             jax.lax.stop_gradient(forward_params),
             next_obs_s,
             next_action_s,
@@ -577,15 +568,15 @@ class RTRRL:
             jax.lax.stop_gradient(sensitivity),
         )
         next_value = remove_feature_axis(remove_time_axis(next_value_raw))
-        td_error = self.td0(
+        td_error = td0(
             reward=next_reward,
             value=value,
             next_value=next_value,
-            bootstrap_discount=self.cfg.gamma * (1 - next_done),
+            bootstrap_discount=config.gamma * (1 - next_done),
         )
 
         def differentiation(params):
-            _, (diff_dist, diff_value_raw) = self._forward(
+            _, (diff_dist, diff_value_raw) = forward(
                 params,
                 obs,
                 previous_action,
@@ -599,7 +590,7 @@ class RTRRL:
             )
             diff_value = remove_feature_axis(remove_time_axis(diff_value_raw))
             diff_entropy = remove_time_axis(diff_dist.entropy())
-            directions = self.objective(
+            directions = objective(
                 log_prob=diff_log_prob,
                 value=diff_value,
                 entropy=diff_entropy,
@@ -625,7 +616,7 @@ class RTRRL:
             "critic": state.traces["critic"],
             "recurrent": {name: state.traces[name] for name in recurrent_keys},
         }
-        trace_result = self.trace(
+        trace_result = trace_kernel(
             incoming_domains,
             trace_gradients,
             terminated_after=next_done,
@@ -641,25 +632,23 @@ class RTRRL:
             "critic": trace_result.update["critic"],
             **trace_result.update["recurrent"],
         }
-
         direct_grads = {
             "actor": direct_by_domain["actor"]["actor"],
             "critic": direct_by_domain["critic"]["critic"],
             "feature_extractor": direct_by_domain["recurrent"]["feature_extractor"],
             "torso": direct_by_domain["recurrent"]["torso"],
         }
-
         scaled_traces = {
             name: (
-                jax.tree.map(lambda trace: self.cfg.eta_f * trace, update_traces[name])
+                jax.tree.map(lambda trace: config.eta_f * trace, update_traces[name])
                 if name in recurrent_keys
                 else update_traces[name]
             )
             for name in state.params
         }
-        grouped_traces = self._regroup(scaled_traces)
-        grouped_direct = self._regroup(direct_grads)
-        grouped_params = self._regroup(state.params)
+        grouped_traces = regroup(scaled_traces)
+        grouped_direct = regroup(direct_grads)
+        grouped_params = regroup(state.params)
         outputs = {
             group: rule.apply(
                 grouped_traces[group],
@@ -669,18 +658,18 @@ class RTRRL:
                 step=state.update_step + 1,
                 params=grouped_params[group],
             )
-            for group, rule in self.rules.items()
+            for group, rule in rules.items()
         }
         updates = {
-            name: outputs[group].updates[name] for name, group in self.group_of.items()
+            name: outputs[group].updates[name] for name, group in group_of.items()
         }
         opt_state = {group: output.state for group, output in outputs.items()}
         fast_params = cast(dict[str, Any], optax.apply_updates(state.params, updates))
         slow_torso = follow_torso(
-            fast_params["torso"], state.slow_torso, self.cfg.update_period
+            fast_params["torso"], state.slow_torso, config.update_period
         )
         not_done = 1 - next_done
-        next_emphasis = self.cfg.gamma * state.emphasis * not_done + next_done
+        next_emphasis = config.gamma * state.emphasis * not_done + next_done
         broadcast_dims = tuple(
             range(state.timestep.done.ndim, state.timestep.action.ndim)
         )
@@ -701,7 +690,7 @@ class RTRRL:
             persisted_feedback_action=persisted_action,
         )
         next_state = state.replace(
-            step=state.step + self.cfg.num_envs,
+            step=state.step + config.num_envs,
             update_step=state.update_step + 1,
             timestep=Timestep(
                 obs=next_obs,
@@ -730,9 +719,9 @@ class RTRRL:
             entropy=entropy,
             emphasis=state.emphasis.mean(),
             step_size=outputs["rnn"].metrics.get("step_size"),
-            observation=next_obs if self.record_trajectory else None,
-            reward=next_reward_f if self.record_trajectory else None,
-            done=next_done if self.record_trajectory else None,
+            observation=next_obs if record_trajectory else None,
+            reward=next_reward_f if record_trajectory else None,
+            done=next_done if record_trajectory else None,
             diag_lambda_max=(
                 jnp.max(jnp.exp(-jnp.exp(nu_log))) if nu_log is not None else jnp.nan
             ),
@@ -761,128 +750,136 @@ class RTRRL:
             info=info,
             raw_episode_return=raw_episode_return,
             normalization=normalization_metrics(
-                normalizer_state, self.normalizer.config.eps
+                normalizer_state, normalizer.config.eps
             ),
         )
         return next_state, metrics
 
-    def train(self, key, state: Any, num_steps: int):
-        keys = jax.random.split(key, num_steps // self.cfg.num_envs)
-        return jax.lax.scan(self._step, state, keys)
+    def train_epoch_fn(key, state, num_steps):
+        keys = jax.random.split(key, num_steps // config.num_envs)
+        return jax.lax.scan(step_fn, state, keys)
 
-    def _evaluate_step(self, current: Any, step_key):
-        action_key, env_key = jax.random.split(step_key)
-        del action_key
-        obs_s, done_s, action_s, reward_s = current.timestep.to_sequence()
-        (carry, sensitivity), (dist, _) = self._forward(
-            slow_view(current.params, current.slow_torso),
-            obs_s,
-            action_s,
-            reward_s,
-            done_s,
-            current.carry,
-            current.sensitivity,
-        )
-        chosen = (
-            jnp.argmax(dist.logits, axis=-1) if hasattr(dist, "logits") else dist.mode()
-        )
-        chosen = remove_time_axis(chosen)
-        if self.cfg.act_clip:
-            chosen = jnp.clip(chosen, -self.cfg.act_clip, self.cfg.act_clip)
-        step_keys = jax.random.split(env_key, self.cfg.num_envs)
-        next_obs, next_env_state, next_reward, next_done, info = jax.vmap(
-            self.env.step, in_axes=(0, 0, 0, None)
-        )(step_keys, current.env_state, chosen, self.env_params)
-        next_normalizer_state = current.normalizer_state
-        # What the environment paid, kept before normalisation overwrites it.
-        # Episode returns and the score are read off the summary below, and
-        # those are statements about the task, not about the scale the agent
-        # happens to be learning on.
-        environment_reward = jnp.asarray(next_reward, dtype=jnp.float32)
-        if self.normalizing:
-            normalized = self.normalizer.step(
-                next_normalizer_state,
-                observation=next_obs,
-                reward=next_reward,
-                done=next_done,
-                update=self.normalizer.config.update_during_eval,
-            )
-            next_obs = normalized.observation
-            next_reward = normalized.reward
-            next_normalizer_state = normalized.state
-        broadcast_dims = tuple(
-            range(current.timestep.done.ndim, current.timestep.action.ndim)
-        )
-        next_reward = jnp.asarray(next_reward, dtype=jnp.float32)
-        return current.replace(
-            step=current.step + self.cfg.num_envs,
-            timestep=Timestep(
-                obs=next_obs,
-                action=jnp.where(
-                    jnp.expand_dims(next_done, axis=broadcast_dims),
-                    jnp.zeros_like(chosen),
-                    chosen,
-                ),
-                reward=jnp.where(next_done, jnp.zeros_like(next_reward), next_reward),
-                done=next_done,
-            ),
-            env_state=next_env_state,
-            carry=carry,
-            sensitivity=sensitivity,
-            normalizer_state=next_normalizer_state,
-        ), EvalSummary(
-            info={
-                **info,
-                "environment_info": info,
-                "reward": environment_reward,
-            },
-            normalization=normalization_metrics(
-                next_normalizer_state, self.normalizer.config.eps
-            ),
-            observation=current.timestep.obs,
-            next_observation=next_obs,
-            action=chosen,
-            reward=environment_reward,
-            done=next_done,
-        )
-
-    def evaluate(self, key, state: Any, num_steps: int):
-        """Roll the greedy policy out from a fresh reset, learning nothing."""
-
+    def evaluate_fn(key, state, num_steps):
         reset_key, eval_key = jax.random.split(key)
-        reset_keys = jax.random.split(reset_key, self.cfg.num_envs)
-        obs, env_state = jax.vmap(self.env.reset, in_axes=(0, None))(
-            reset_keys, self.env_params
-        )
+        reset_keys = jax.random.split(reset_key, config.num_envs)
+        obs, env_state = jax.vmap(env.reset, in_axes=(0, None))(reset_keys, env_params)
         normalizer_state = state.normalizer_state
-        if self.normalizing:
-            if self.normalizer.config.reset_on_start:
-                obs, normalizer_state = self.normalizer.reset(obs)
+        if normalization_enabled:
+            if normalizer.config.reset_on_start:
+                obs, normalizer_state = normalizer.reset(obs)
             else:
-                obs, normalizer_state = self.normalizer.reset(
+                obs, normalizer_state = normalizer.reset(
                     obs,
                     normalizer_state,
-                    update=self.normalizer.config.update_during_eval,
+                    update=normalizer.config.update_during_eval,
                 )
-        action_space = self.env.action_space(self.env_params)
+        action_space = env.action_space(env_params)
         action = jnp.zeros(
-            (self.cfg.num_envs, *action_space.shape), dtype=action_space.dtype
+            (config.num_envs, *action_space.shape), dtype=action_space.dtype
         )
         timestep = Timestep(
             obs=obs,
             action=action,
-            reward=jnp.zeros((self.cfg.num_envs,), dtype=jnp.float32),
-            done=jnp.ones((self.cfg.num_envs,), dtype=jnp.bool_),
+            reward=jnp.zeros((config.num_envs,), dtype=jnp.float32),
+            done=jnp.ones((config.num_envs,), dtype=jnp.bool_),
         )
-        carry_shape = (self.cfg.num_envs, None)
+        carry_shape = (config.num_envs, None)
         eval_state = state.replace(
             timestep=timestep,
             env_state=env_state,
-            carry=self.torso.initialize_carry(jax.random.key(0), carry_shape),
-            sensitivity=self.torso.initialize_sensitivity(
-                jax.random.key(0), carry_shape
-            ),
+            carry=torso.initialize_carry(jax.random.key(0), carry_shape),
+            sensitivity=torso.initialize_sensitivity(jax.random.key(0), carry_shape),
             normalizer_state=normalizer_state,
         )
+
+        def eval_step(current, step_key):
+            action_key, env_key = jax.random.split(step_key)
+            del action_key
+            obs_s, done_s, action_s, reward_s = current.timestep.to_sequence()
+            (carry, sensitivity), (dist, _, _) = forward(
+                slow_view(current.params, current.slow_torso),
+                obs_s,
+                action_s,
+                reward_s,
+                done_s,
+                current.carry,
+                current.sensitivity,
+            )
+            chosen = (
+                jnp.argmax(dist.logits, axis=-1)
+                if hasattr(dist, "logits")
+                else dist.mode()
+            )
+            chosen = remove_time_axis(chosen)
+            if config.act_clip:
+                chosen = jnp.clip(chosen, -config.act_clip, config.act_clip)
+            step_keys = jax.random.split(env_key, config.num_envs)
+            next_obs, next_env_state, next_reward, next_done, info = jax.vmap(
+                env.step, in_axes=(0, 0, 0, None)
+            )(step_keys, current.env_state, chosen, env_params)
+            next_normalizer_state = current.normalizer_state
+            # What the environment paid, kept before normalisation overwrites
+            # it. Episode returns and the score are read off the summary below,
+            # and those are statements about the task, not about the scale the
+            # agent happens to be learning on.
+            environment_reward = jnp.asarray(next_reward, dtype=jnp.float32)
+            if normalization_enabled:
+                normalized = normalizer.step(
+                    next_normalizer_state,
+                    observation=next_obs,
+                    reward=next_reward,
+                    done=next_done,
+                    update=normalizer.config.update_during_eval,
+                )
+                next_obs = normalized.observation
+                next_reward = normalized.reward
+                next_normalizer_state = normalized.state
+            broadcast_dims = tuple(
+                range(current.timestep.done.ndim, current.timestep.action.ndim)
+            )
+            next_reward = jnp.asarray(next_reward, dtype=jnp.float32)
+            return current.replace(
+                step=current.step + config.num_envs,
+                timestep=Timestep(
+                    obs=next_obs,
+                    action=jnp.where(
+                        jnp.expand_dims(next_done, axis=broadcast_dims),
+                        jnp.zeros_like(chosen),
+                        chosen,
+                    ),
+                    reward=jnp.where(
+                        next_done, jnp.zeros_like(next_reward), next_reward
+                    ),
+                    done=next_done,
+                ),
+                env_state=next_env_state,
+                carry=carry,
+                sensitivity=sensitivity,
+                normalizer_state=next_normalizer_state,
+            ), EvalSummary(
+                info={
+                    **info,
+                    "environment_info": info,
+                    "reward": environment_reward,
+                },
+                normalization=normalization_metrics(
+                    next_normalizer_state, normalizer.config.eps
+                ),
+                observation=current.timestep.obs,
+                next_observation=next_obs,
+                action=chosen,
+                reward=environment_reward,
+                done=next_done,
+            )
+
         step_keys = jax.random.split(eval_key, num_steps)
-        return jax.lax.scan(self._evaluate_step, eval_state, step_keys)
+        eval_state, summary = jax.lax.scan(eval_step, eval_state, step_keys)
+        return eval_state, summary
+
+    return AgentProgram(
+        init_fn=init_fn,
+        train_epoch_fn=train_epoch_fn,
+        evaluate_fn=evaluate_fn,
+        state_schema=RTRRLState,
+        metric_schema=RTRRLStepMetrics,
+    )

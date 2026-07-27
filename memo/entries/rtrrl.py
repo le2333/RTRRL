@@ -20,7 +20,7 @@ import flax.linen as nn
 import jax
 from training_sdk.reporter import Reporter
 
-from memorax.algorithms.rtrrl import RTRRLConfig, RTRRLParts, build_rtrrl
+from memorax.algorithms.rtrrl import RTRRL, RTRRLConfig
 from memorax.environments import make
 from memorax.environments.brax import masks
 from memorax.networks import TORSOS, FeatureExtractor, heads, make_torso
@@ -111,7 +111,7 @@ TRAINING_METRICS: tuple[str, ...] = (
 )
 
 
-def build(params: Mapping[str, Any]):
+def build(params: Mapping[str, Any]) -> RTRRL:
     """Assemble the agent this file is about."""
 
     env, env_params = make(
@@ -126,31 +126,6 @@ def build(params: Mapping[str, Any]):
     def encoder():
         return nn.Sequential((nn.Dense(feature_dim), nn.relu))
 
-    parts = RTRRLParts(
-        env=env,
-        env_params=env_params,
-        feature_extractor=FeatureExtractor(
-            observation_extractor=encoder(),
-            action_extractor=encoder() if meta_rl else None,
-            reward_extractor=encoder() if meta_rl else None,
-        ),
-        torso=make_torso(
-            str(params["backbone"]),
-            features=feature_dim * (3 if meta_rl else 1),
-            hidden_dim=int(params["hidden_dim"]),
-            output_dim=feature_dim,
-        ),
-        actor_head=heads.Gaussian(
-            action_dim=int(env.action_space(env_params).shape[0])
-        ),
-        critic_head=heads.VNetwork(),
-        activation=jax.nn.silu,
-        normalization=NormalizationConfig(
-            normalize_observation=bool(params["normalize_observation"]),
-            normalize_reward=bool(params["normalize_reward"]),
-            reward_gamma=gamma,
-        ),
-    )
     config = RTRRLConfig(
         num_envs=int(params["num_envs"]),
         gamma=gamma,
@@ -178,7 +153,30 @@ def build(params: Mapping[str, Any]):
         actor_to_recurrent=bool(params["actor_to_recurrent"]),
         critic_to_recurrent=bool(params["critic_to_recurrent"]),
     )
-    return build_rtrrl(config, parts)
+    return RTRRL(
+        config,
+        env,
+        env_params,
+        FeatureExtractor(
+            observation_extractor=encoder(),
+            action_extractor=encoder() if meta_rl else None,
+            reward_extractor=encoder() if meta_rl else None,
+        ),
+        make_torso(
+            str(params["backbone"]),
+            features=feature_dim * (3 if meta_rl else 1),
+            hidden_dim=int(params["hidden_dim"]),
+            output_dim=feature_dim,
+        ),
+        heads.Gaussian(action_dim=int(env.action_space(env_params).shape[0])),
+        heads.VNetwork(),
+        activation=jax.nn.silu,
+        normalization=NormalizationConfig(
+            normalize_observation=bool(params["normalize_observation"]),
+            normalize_reward=bool(params["normalize_reward"]),
+            reward_gamma=gamma,
+        ),
+    )
 
 
 def training_report(metrics) -> dict[str, float]:
@@ -188,12 +186,12 @@ def training_report(metrics) -> dict[str, float]:
 
 
 def run(reporter, params: Mapping[str, Any]) -> None:
-    program = build(params)
+    agent = build(params)
     drive(
         reporter,
-        init_fn=program.init_fn,
-        train_fn=program.train_epoch_fn,
-        evaluate_fn=program.evaluate_fn,
+        init_fn=agent.init,
+        train_fn=agent.train,
+        evaluate_fn=agent.evaluate,
         total_steps=int(params["total_steps"]),
         epoch_steps=int(params["epoch_steps"]),
         eval_steps=int(params["eval_steps"]),

@@ -17,7 +17,7 @@ import optax
 import pytest
 from conftest import TinyContinuousEnv
 
-from memorax.algorithms.rtrrl import RTRRLConfig, RTRRLParts, build_rtrrl
+from memorax.algorithms.rtrrl import RTRRL, RTRRLConfig
 from memorax.algorithms.stream_ac_rtrl import StreamACRTRL, StreamACRTRLConfig
 from memorax.networks import (
     RNN,
@@ -49,23 +49,23 @@ def rtrrl_program(*, record_trajectory=False, **overrides):
         update_period=0.2,
         **overrides,
     )
-    parts = RTRRLParts(
-        env=env,
-        env_params=env.default_params,
-        feature_extractor=FeatureExtractor(
+    agent = RTRRL(
+        config,
+        env,
+        env.default_params,
+        FeatureExtractor(
             observation_extractor=nn.Sequential((nn.Dense(3), nn.tanh)),
             action_extractor=nn.Sequential((nn.Dense(3), nn.tanh)),
             reward_extractor=nn.Sequential((nn.Dense(3), nn.tanh)),
         ),
-        torso=Memoroid(
+        Memoroid(
             cell=LRUCell(config=LRUConfig(features=9, hidden_dim=2, output_dim=3))
         ),
-        actor_head=heads.Gaussian(action_dim=2),
-        critic_head=heads.VNetwork(),
+        heads.Gaussian(action_dim=2),
+        heads.VNetwork(),
         record_trajectory=record_trajectory,
     )
-    program = build_rtrrl(config, parts)
-    return program.init_fn, program.train_epoch_fn, program.evaluate_fn
+    return agent.init, agent.train, agent.evaluate
 
 
 def stream_ac_program(normalization=None, **overrides):
