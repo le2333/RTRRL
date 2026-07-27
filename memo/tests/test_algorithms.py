@@ -4,6 +4,10 @@ These are wiring tests, not numerical ones. They exist because the kernels are
 assembled from a config, a set of modules, and a choice of update rule, and a
 mistake in that assembly shows up as a shape error or a silent NaN rather than
 as an import failure.
+
+Each builder below hands back the three functions the driver takes, which is
+all either kernel has to have in common: one is a class with methods and the
+other a record of closures.
 """
 
 import flax.linen as nn
@@ -14,11 +18,7 @@ import pytest
 from conftest import TinyContinuousEnv
 
 from memorax.algorithms.rtrrl import RTRRLConfig, RTRRLParts, build_rtrrl
-from memorax.algorithms.stream_ac_rtrl import (
-    StreamACRTRLConfig,
-    StreamACRTRLParts,
-    build_stream_ac_rtrl,
-)
+from memorax.algorithms.stream_ac_rtrl import StreamACRTRL, StreamACRTRLConfig
 from memorax.networks import (
     RNN,
     FeatureExtractor,
@@ -64,7 +64,8 @@ def rtrrl_program(*, record_trajectory=False, **overrides):
         critic_head=heads.VNetwork(),
         record_trajectory=record_trajectory,
     )
-    return build_rtrrl(config, parts)
+    program = build_rtrrl(config, parts)
+    return program.init_fn, program.train_epoch_fn, program.evaluate_fn
 
 
 def stream_ac_program(normalization=None, **overrides):
@@ -90,14 +91,15 @@ def stream_ac_program(normalization=None, **overrides):
         eps=1e-6,
         **overrides,
     )
-    parts = StreamACRTRLParts(
-        env=env,
-        env_params=env.default_params,
-        actor_network=network(heads.Gaussian(action_dim=2)),
-        critic_network=network(heads.VNetwork()),
+    agent = StreamACRTRL(
+        config,
+        env,
+        env.default_params,
+        network(heads.Gaussian(action_dim=2)),
+        network(heads.VNetwork()),
         normalization=normalization,
     )
-    return build_stream_ac_rtrl(config, parts)
+    return agent.init, agent.train, agent.evaluate
 
 
 def finite(tree):
@@ -124,11 +126,9 @@ def finite(tree):
     ],
 )
 def test_epoch_moves_parameters_and_stays_finite(build):
-    program = build()
-    state = jax.jit(program.init_fn)(jax.random.key(0))
-    trained, metrics = jax.jit(program.train_epoch_fn, static_argnums=2)(
-        jax.random.key(1), state, 8
-    )
+    init, train, _ = build()
+    state = jax.jit(init)(jax.random.key(0))
+    trained, metrics = jax.jit(train, static_argnums=2)(jax.random.key(1), state, 8)
 
     assert finite(metrics), "an epoch produced a non-finite observable"
     assert finite(trained)
@@ -151,11 +151,9 @@ def test_epoch_moves_parameters_and_stays_finite(build):
     ],
 )
 def test_evaluation_runs_without_training(build):
-    program = build()
-    state = jax.jit(program.init_fn)(jax.random.key(0))
-    _, summary = jax.jit(program.evaluate_fn, static_argnums=2)(
-        jax.random.key(2), state, 4
-    )
+    init, _, evaluate = build()
+    state = jax.jit(init)(jax.random.key(0))
+    _, summary = jax.jit(evaluate, static_argnums=2)(jax.random.key(2), state, 4)
 
     assert finite(summary)
     assert summary.info is not None
@@ -177,11 +175,9 @@ def test_evaluation_reports_the_reward_the_environment_gave():
     # move the policy: the two rollouts differ in what they report, not in
     # what they do.
     rewards = []
-    for program in (plain, normalized):
-        state = jax.jit(program.init_fn)(jax.random.key(0))
-        _, summary = jax.jit(program.evaluate_fn, static_argnums=2)(
-            jax.random.key(2), state, 8
-        )
+    for init, _, evaluate in (plain, normalized):
+        state = jax.jit(init)(jax.random.key(0))
+        _, summary = jax.jit(evaluate, static_argnums=2)(jax.random.key(2), state, 8)
         rewards.append(summary.reward)
 
     assert jnp.allclose(rewards[0], rewards[1])
@@ -194,11 +190,9 @@ def test_closing_both_gates_leaves_the_shared_torso_still():
     path would be feeding it and the gates would not mean what they say.
     """
 
-    program = rtrrl_program(actor_to_recurrent=False, critic_to_recurrent=False)
-    state = jax.jit(program.init_fn)(jax.random.key(0))
-    trained, _ = jax.jit(program.train_epoch_fn, static_argnums=2)(
-        jax.random.key(1), state, 8
-    )
+    init, train, _ = rtrrl_program(actor_to_recurrent=False, critic_to_recurrent=False)
+    state = jax.jit(init)(jax.random.key(0))
+    trained, _ = jax.jit(train, static_argnums=2)(jax.random.key(1), state, 8)
 
     for name in ("feature_extractor", "torso"):
         for before, after in zip(
@@ -218,11 +212,9 @@ def test_closing_both_gates_leaves_the_shared_torso_still():
 
 def test_one_gate_still_reaches_the_shared_torso():
     for gates in ({"critic_to_recurrent": False}, {"actor_to_recurrent": False}):
-        program = rtrrl_program(**gates)
-        state = jax.jit(program.init_fn)(jax.random.key(0))
-        trained, _ = jax.jit(program.train_epoch_fn, static_argnums=2)(
-            jax.random.key(1), state, 8
-        )
+        init, train, _ = rtrrl_program(**gates)
+        state = jax.jit(init)(jax.random.key(0))
+        trained, _ = jax.jit(train, static_argnums=2)(jax.random.key(1), state, 8)
         assert any(
             not jnp.allclose(before, after)
             for before, after in zip(

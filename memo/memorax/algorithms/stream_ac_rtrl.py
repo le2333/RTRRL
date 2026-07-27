@@ -15,7 +15,7 @@ run for a whole epoch can only be judged by whether the curve looked right.
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field, replace
+from dataclasses import dataclass, replace
 from typing import Any
 
 import flax.linen as nn
@@ -40,7 +40,7 @@ from memorax.utils.axes import (
     remove_time_axis,
 )
 
-from .contract import ActionDecision, AgentProgram, EvalSummary, EvaluationConfig
+from .contract import ActionDecision, EvalSummary, EvaluationConfig
 
 
 @dataclass(frozen=True)
@@ -58,22 +58,6 @@ class StreamACRTRLConfig:
     adaptive: bool = False
     beta2: float = 0.999
     eps: float = 1e-8
-
-
-@dataclass(frozen=True)
-class StreamACRTRLParts:
-    """The networks and environment a program is built around."""
-
-    env: Any = None
-    env_params: Any = None
-    actor_network: Any = None
-    critic_network: Any = None
-    normalization: Any = None
-    evaluation: EvaluationConfig = field(default_factory=EvaluationConfig)
-    record_trajectory: bool = False
-
-    def replace(self, **updates):
-        return replace(self, **updates)
 
 
 @struct.dataclass
@@ -381,7 +365,7 @@ class StreamACRTRL:
             normalizer_state=normalizer_state,
         )
 
-    def _step(self, state, key):
+    def _step(self, state: StreamACRTRLState, key):
         action_key, env_key = jax.random.split(key)
         obs, done, previous_action, reward = state.timestep.to_sequence()
         reset_before = state.timestep.done
@@ -610,11 +594,11 @@ class StreamACRTRL:
             ),
         )
 
-    def train(self, key, state, num_steps: int):
+    def train(self, key, state: StreamACRTRLState, num_steps: int):
         keys = jax.random.split(key, num_steps // self.cfg.num_envs)
         return jax.lax.scan(self._step, state, keys)
 
-    def _evaluate_step(self, current, step_key):
+    def _evaluate_step(self, current: StreamACRTRLState, step_key):
         action_key, env_key = jax.random.split(step_key)
         del action_key
         obs_s, done_s, action_s, reward_s = current.timestep.to_sequence()
@@ -684,7 +668,7 @@ class StreamACRTRL:
             done=next_done,
         )
 
-    def evaluate(self, key, state, num_steps: int):
+    def evaluate(self, key, state: StreamACRTRLState, num_steps: int):
         reset_key, eval_key = jax.random.split(key)
         reset_keys = jax.random.split(reset_key, self.cfg.num_envs)
         obs, env_state = jax.vmap(self.env.reset, in_axes=(0, None))(
@@ -726,28 +710,3 @@ class StreamACRTRL:
         )
         step_keys = jax.random.split(eval_key, num_steps)
         return jax.lax.scan(self._evaluate_step, eval_state, step_keys)
-
-
-def build_stream_ac_rtrl(
-    config: StreamACRTRLConfig,
-    parts: StreamACRTRLParts,
-) -> AgentProgram:
-    """Present the kernel through the record of callables the runner drives."""
-
-    agent = StreamACRTRL(
-        config,
-        parts.env,
-        parts.env_params,
-        parts.actor_network,
-        parts.critic_network,
-        normalization=parts.normalization,
-        evaluation=parts.evaluation,
-        record_trajectory=parts.record_trajectory,
-    )
-    return AgentProgram(
-        init_fn=agent.init,
-        train_epoch_fn=agent.train,
-        evaluate_fn=agent.evaluate,
-        state_schema=StreamACRTRLState,
-        metric_schema=StreamACRTRLStepMetrics,
-    )

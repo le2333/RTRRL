@@ -33,10 +33,8 @@ if TYPE_CHECKING:
         SACConfig as SACConfig,
         SACState as SACState,
         StreamACRTRLConfig as StreamACRTRLConfig,
-        StreamACRTRLParts as StreamACRTRLParts,
         StreamACRTRLState as StreamACRTRLState,
         build_rtrrl as build_rtrrl,
-        build_stream_ac_rtrl as build_stream_ac_rtrl,
     )
     from memorax.environments import make as make
     from memorax.networks import (
@@ -78,10 +76,8 @@ _ALGORITHM_EXPORTS = {
     "IndependentRTRRLConfig",
     "IndependentRTRRLState",
     "StreamACRTRLConfig",
-    "StreamACRTRLParts",
     "StreamACRTRLState",
     "build_rtrrl",
-    "build_stream_ac_rtrl",
 }
 _NETWORK_EXPORTS = {
     "FeatureExtractor",
@@ -120,10 +116,8 @@ __all__ = [
     "IndependentRTRRLConfig",
     "IndependentRTRRLState",
     "StreamACRTRLConfig",
-    "StreamACRTRLParts",
     "StreamACRTRLState",
     "build_rtrrl",
-    "build_stream_ac_rtrl",
     "make",
     "FeatureExtractor",
     "Network",
