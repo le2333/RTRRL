@@ -27,6 +27,7 @@ def make(tmp_path: Path) -> optuna.Study:
         direction="maximize",
         user_attrs={"launch_id": "20260725-000000", "digest": "sha256:0"},
         space=DISTRIBUTIONS,
+        round_size=1,
     )
 
 
@@ -51,6 +52,28 @@ def test_told_values_persist_in_the_sqlite_file(tmp_path: Path) -> None:
     assert reopened.user_attrs["digest"] == "sha256:0"
 
 
+def test_tpe_stops_sampling_at_random_after_one_round(tmp_path: Path) -> None:
+    """The round is what TPE could not have modelled, so it is what it spends.
+
+    Optuna's own default is ten trials, which a launch of five rounds of four
+    would spend half its budget on. The first round has no results to fit to and
+    every round after it does.
+    """
+
+    study = create_study(
+        "sweep-startup",
+        tmp_path / "startup.db",
+        sampler="tpe",
+        direction="maximize",
+        user_attrs={},
+        space=DISTRIBUTIONS,
+        round_size=4,
+    )
+    sampler = study.sampler
+    assert isinstance(sampler, optuna.samplers.TPESampler)
+    assert sampler._n_startup_trials == 4
+
+
 def test_unknown_sampler_is_rejected(tmp_path: Path) -> None:
     with pytest.raises(ValueError, match="unsupported sampler 'cma'"):
         create_study(
@@ -60,6 +83,7 @@ def test_unknown_sampler_is_rejected(tmp_path: Path) -> None:
             direction="maximize",
             user_attrs={},
             space=DISTRIBUTIONS,
+        round_size=1,
         )
     with pytest.raises(ValueError, match="tpe, random, grid"):
         check_sampler("cma", DISTRIBUTIONS)
@@ -75,6 +99,7 @@ def test_ask_round_samples_distinct_values_and_matches_study_numbers(
         direction="maximize",
         user_attrs={},
         space=DISTRIBUTIONS,
+        round_size=1,
     )
     trials = ask_round(study, DISTRIBUTIONS, 3)
     learning_rates = [trial.params["learning_rate"] for trial in trials]
@@ -100,6 +125,7 @@ def test_user_attrs_survive_sqlite_round_trip(tmp_path: Path) -> None:
         direction="maximize",
         user_attrs=attrs,
         space=DISTRIBUTIONS,
+        round_size=1,
     )
     reopened = optuna.load_study(
         study_name="sweep-attrs",
@@ -117,6 +143,7 @@ def test_grid_sampler_with_fixed_lists_can_ask_for_a_trial(tmp_path: Path) -> No
         direction="maximize",
         user_attrs={},
         space=GRID_DISTRIBUTIONS,
+        round_size=1,
     )
     trials = ask_round(study, GRID_DISTRIBUTIONS, 1)
     assert len(trials) == 1
@@ -138,6 +165,7 @@ def _grid_study(tmp_path: Path, space: dict[str, CategoricalDistribution]):
         direction="maximize",
         user_attrs={},
         space=space,
+        round_size=1,
     )
 
 
@@ -186,4 +214,5 @@ def test_grid_sampler_rejects_continuous_parameters_at_study_creation(
             direction="maximize",
             user_attrs={},
             space=DISTRIBUTIONS,
+        round_size=1,
         )

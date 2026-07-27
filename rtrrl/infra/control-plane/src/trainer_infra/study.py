@@ -28,10 +28,15 @@ def check_sampler(name: str, space: Mapping[str, BaseDistribution]) -> None:
         )
 
 
-def _sampler(name: str, space: Mapping[str, BaseDistribution]):
+def _sampler(name: str, space: Mapping[str, BaseDistribution], round_size: int):
     check_sampler(name, space)
     if name == "tpe":
-        return optuna.samplers.TPESampler()
+        # TPE samples at random until it has enough results to fit a density to,
+        # and its own default for enough is ten. A launch that asks in rounds has
+        # exactly one round it could not have modelled -- the first, which has no
+        # results yet -- so that is what it spends: a ten-trial default would have
+        # spent half of a twenty-trial budget on random points.
+        return optuna.samplers.TPESampler(n_startup_trials=round_size)
     if name == "random":
         return optuna.samplers.RandomSampler()
     return optuna.samplers.GridSampler(
@@ -46,12 +51,13 @@ def create_study(
     direction: str,
     user_attrs: Mapping[str, object],
     space: Mapping[str, BaseDistribution],
+    round_size: int,
 ) -> optuna.Study:
     Path(storage_path).parent.mkdir(parents=True, exist_ok=True)
     study = optuna.create_study(
         study_name=name,
         storage=f"sqlite:///{storage_path}",
-        sampler=_sampler(sampler, space),
+        sampler=_sampler(sampler, space, round_size),
         direction=direction,
     )
     for key, value in user_attrs.items():

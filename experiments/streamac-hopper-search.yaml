@@ -1,0 +1,85 @@
+experiment: streamac-hopper
+name: search-20
+description: >
+  Twenty trials of StreamAC on masked Brax Hopper, to produce a best setting for
+  a cross-implementation ablation rather than to win a score. What it is for:
+  the rewritten kernel agrees with upstream's arithmetic block by block and with
+  the recorded snapshot to a handful of last bits, but neither of those says the
+  two behave alike over two million steps. So this searches, and then the point
+  it lands on is run again on upstream's own implementation and the two curves
+  are compared.
+
+  Six hyperparameters are searched and everything else is pinned to the settings
+  the recorded 1043.66 run used, so the search is over the same slice that sweep
+  searched. Twenty TPE trials over six dimensions is not a converged search and
+  the best point here should not be read as a tuned one; it is a point both
+  implementations can be asked about.
+
+  The seed is fixed. Two runs of the same setting under different seeds differ by
+  more than the implementations are expected to, and a comparison that cannot
+  separate the two would answer nothing.
+
+  Gradient and trace norms are reported per network part, which is the reading
+  this run exists to collect beside the returns: under exact credit the torso
+  sees the whole stream while what feeds it sees one step, and whether that
+  pulls the two domains apart is the question the ablation after this one asks.
+
+image: 007122174918.dkr.ecr.eu-north-1.amazonaws.com/rtrrl@sha256:0beb5f44302f3b1261160bc4ffdcd524edfb1eaedec461c4e4c221c69c3b929d
+entry: stream_ac
+storage: s3://rtrrl-artifacts-007122174918/trainer
+
+compute:
+  # What the recorded runs drew: 3.4 to 6 cores and about 1.8 GiB. A c7a.medium
+  # runs out of memory on its 1600 MiB budget.
+  instance_type: c7a.xlarge
+  timeout_minutes: 240
+
+hpo:
+  sampler: tpe
+  rounds: 5
+  trials_per_round: 4
+  # Four at a time, so a round is one trial long in wall clock and the sampler
+  # still gets four results to learn from before it suggests the next four.
+  parallel_jobs: 4
+
+space:
+  environment: [brax::hopper]
+  env_mode: [P]
+  env_backend: [spring]
+  backbone: [rtu]
+  credit: [rtrl]
+  seed: [0]
+  num_envs: [16]
+  total_steps: [2000000]
+  epoch_steps: [100000]
+  eval_steps: [1000]
+  hidden_dim: [128]
+  feature_dim: [32]
+  meta_rl: [true]
+  normalize_observation: [true]
+  normalize_reward: [true]
+  gamma: [0.99]
+  bounded_rule: ["obgd"]
+  beta2: [0.999]
+  eps: [1.0e-8]
+  # The six the sweep searched, each bracketing the setting it landed on by
+  # about a decade either side. Wider would spend the twenty trials on the
+  # regions that sweep already ruled out.
+  trace_lambda: {type: float, low: 0.5, high: 0.99}
+  actor_lr: {type: float, low: 0.01, high: 3.0, log: true}
+  critic_lr: {type: float, low: 0.001, high: 1.0, log: true}
+  actor_kappa: {type: float, low: 0.5, high: 10.0}
+  critic_kappa: {type: float, low: 0.5, high: 10.0}
+  entropy_coefficient: {type: float, low: 1.0e-6, high: 1.0e-2, log: true}
+
+score:
+  metric: eval/episode_return
+  window_steps: [0, 2000000]
+  reduce: max
+  direction: maximize
+  non_finite: worst
+
+logging:
+  aim: aim://172.31.62.192:53801
+  every_steps: 1
+  rerun_every_episodes: 16

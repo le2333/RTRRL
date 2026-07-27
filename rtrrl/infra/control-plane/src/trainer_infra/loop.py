@@ -40,6 +40,7 @@ def run_launch(
             "source_hash": launch.plan.entry.source_hash,
         },
         space=built,
+        round_size=experiment.hpo.trials_per_round,
     )
 
     records: list[TrialRecord] = []
