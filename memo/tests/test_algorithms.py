@@ -20,15 +20,13 @@ from conftest import TinyContinuousEnv
 from memorax.algorithms.rtrrl import RTRRL, RTRRLConfig
 from memorax.algorithms.stream_ac import StreamAC, StreamACConfig
 from memorax.networks import (
-    RNN,
     FeatureExtractor,
     LRUCell,
     LRUConfig,
     Memoroid,
     Network,
-    RTUCell,
-    RTUConfig,
     heads,
+    make_torso,
 )
 from memorax.rl import NormalizationConfig, make_obgd_rule, make_optax_rule
 
@@ -68,7 +66,7 @@ def rtrrl_program(*, record_trajectory=False, **overrides):
     return agent.init, agent.train, agent.evaluate
 
 
-def stream_ac_program(normalization=None, **overrides):
+def stream_ac_program(normalization=None, backbone="rtu", **overrides):
     env = TinyContinuousEnv()
 
     def network(head):
@@ -76,7 +74,7 @@ def stream_ac_program(normalization=None, **overrides):
             feature_extractor=FeatureExtractor(
                 observation_extractor=nn.Sequential((nn.Dense(3), nn.tanh))
             ),
-            torso=RNN(cell=RTUCell(config=RTUConfig(features=3, hidden_dim=2))),
+            torso=make_torso(backbone, features=3, hidden_dim=2, output_dim=3),
             head=head,
         )
 
@@ -126,6 +124,12 @@ def finite(tree):
         pytest.param(
             lambda: stream_ac_program(credit="tbptt"),
             id="stream_ac_truncated",
+        ),
+        # A torso with nothing to carry, under the credit that expects to carry
+        # something: there is no sensitivity, and the kernel should not need one.
+        pytest.param(
+            lambda: stream_ac_program(backbone="mlp"),
+            id="stream_ac_memoryless",
         ),
         pytest.param(
             lambda: rtrrl_program(record_trajectory=True),
