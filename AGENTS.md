@@ -59,5 +59,9 @@ instrument. Point it at everything at once, then read what it says.
 
 ## Scope
 
-- Do not modify anything under `memo/`. Another team is refactoring it, and this
-  branch must leave it untouched.
+- `memo/` is what this repo develops, and it is not off limits. The rule that
+  said otherwise belonged to the infra branch, which had to leave it alone while
+  the control plane was being built; on `main` that no longer holds.
+- `../memorax-upstream` is a read-only clone of upstream Memorax, kept as the
+  reference that restored files answer to. Never edit it, and never let it join
+  the import path — a restored file lives in `memo/` and is checked there.
