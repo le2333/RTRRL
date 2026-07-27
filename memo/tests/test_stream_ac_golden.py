@@ -177,14 +177,34 @@ def replayed(manifest: dict) -> dict:
 
 @pytest.mark.parametrize("section", SECTIONS)
 def test_every_carried_leaf_is_what_was_recorded(manifest, arrays, replayed, section):
+    """Every variant is reported, not just the first one to differ.
+
+    An allowance is only worth what it says, and what it says has to be the
+    number that was measured. Failing on one variant would hide the others and
+    turn setting these numbers into a run apiece.
+    """
+
+    apart = []
     for variant in manifest["snapshots"]:
-        compared = assert_within(
-            flattened(replayed[variant][section]),
-            recorded(arrays, variant, section),
-            f"{variant}/{section}",
-            allowed=ALLOWED.get((variant, section), 0.0),
+        expected = recorded(arrays, variant, section)
+        assert len(expected) >= 60, f"{variant}/{section}: only {len(expected)} leaves"
+        apart += [
+            (bits, f"{variant}/{section} {path}")
+            for bits, path in deviations(
+                flattened(replayed[variant][section]),
+                expected,
+                ALLOWED.get((variant, section), 0.0),
+            )
+        ]
+
+    assert not apart, (
+        f"{section}: leaves further from the recording than this file allows, "
+        "worst first:\n"
+        + "\n".join(
+            f"  {bits:.1f} last bits  {where}"
+            for bits, where in sorted(apart, reverse=True)
         )
-        assert compared >= 60, f"{variant}/{section}: only {compared} leaves"
+    )
 
 
 def test_the_quantities_one_transition_passes_through_are_unchanged(

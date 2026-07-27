@@ -21,9 +21,10 @@ assertion that fails one run in ten is worse than no assertion. The cases are
 chosen to cross each branch -- terminal and live steps, a TD error of exactly
 zero, a trace of exactly zero, both sides of the step-size bound.
 
-No comparison here carries a tolerance. Every block multiplies in the order the
-version it came from multiplies in, so every one of them is exact, and a last
-bit of drift is a change of arithmetic rather than a change of spelling.
+Every block multiplies in the order the version it came from multiplies in, so
+every one of them is exact, and a last bit of drift is a change of arithmetic
+rather than a change of spelling. The gradient is the one exception, and it is
+named at the block that carries it rather than granted file-wide.
 """
 
 from __future__ import annotations
@@ -389,6 +390,21 @@ def transition(seed: int, done: str):
     return state, timestep, action, vector(keys[3])
 
 
+# Where the gradient is allowed to differ from upstream's, in float32 last bits.
+# Everywhere not named here: nowhere at all.
+#
+# Upstream asks for the whole batch's Jacobian at once, which costs a backward
+# pass per stream over the whole batch and so grows with the square of the number
+# of streams. We differentiate one stream at a time and map that over the batch,
+# which is the same derivative of the same expression and costs what one stream
+# costs. It is not the same summation order: the recurrent decay's gradient sums
+# over the hidden axis, and a batch of one lays that reduction out differently
+# than a batch of many. The gap that leaves is a fraction of a last bit -- 0.5 at
+# worst over the seeds below -- and it appears on that decay alone, because it is
+# the only parameter whose gradient is a reduction rather than an outer product.
+REASSOCIATED = {"params/torso/cell/nu_log": 1.0}
+
+
 @pytest.mark.parametrize("seed", range(4))
 @pytest.mark.parametrize("done", ["mixed", "live", "terminal"])
 def test_the_truncated_gradient_is_upstreams(seed, done):
@@ -402,36 +418,54 @@ def test_the_truncated_gradient_is_upstreams(seed, done):
 
     Our kernel applies the three parts of a network separately, since the credit
     adapter has to reach the torso, while upstream applies the whole module at
-    once. Same composition, so still exact -- and if separating them ever stops
-    being the same composition, this is where it shows.
+    once, and it differentiates per stream where upstream differentiates the
+    batch. Same composition and same derivative, so exact everywhere except the
+    one reduction named above -- and if that ever stops being the only place, or
+    stops being a fraction of a bit, this is where it shows.
     """
 
     state, timestep, action, delta = transition(seed, done)
     theirs, mine = upstream(), ours(credit="tbptt")
 
-    assert_within(
-        flattened(
-            mine._actor_gradient(
-                state.actor_params, timestep, state.actor_carry, None, action, delta
-            )
+    apart = {
+        "actor": deviations(
+            flattened(
+                mine._actor_gradient(
+                    state.actor_params, timestep, state.actor_carry, None, action, delta
+                )
+            ),
+            flattened(
+                theirs._actor_gradient(
+                    state.actor_params, timestep, state.actor_carry, action, delta
+                )
+            ),
         ),
-        flattened(
-            theirs._actor_gradient(
-                state.actor_params, timestep, state.actor_carry, action, delta
-            )
+        "critic": deviations(
+            flattened(
+                mine._critic_gradient(
+                    state.critic_params, timestep, state.critic_carry, None, delta
+                )
+            ),
+            flattened(
+                theirs._critic_gradient(
+                    state.critic_params, timestep, state.critic_carry
+                )
+            ),
         ),
-        f"actor gradient seed={seed} done={done}",
+    }
+    unexplained = sorted(
+        (
+            (bits, f"{domain} {path}")
+            for domain, found in apart.items()
+            for bits, path in found
+            if bits > REASSOCIATED.get(path, 0.0)
+        ),
+        reverse=True,
     )
-    assert_within(
-        flattened(
-            mine._critic_gradient(
-                state.critic_params, timestep, state.critic_carry, None, delta
-            )
-        ),
-        flattened(
-            theirs._critic_gradient(state.critic_params, timestep, state.critic_carry)
-        ),
-        f"critic gradient seed={seed} done={done}",
+    assert not unexplained, (
+        f"gradient seed={seed} done={done}: leaves apart from upstream by more "
+        "than this file explains, worst first:\n"
+        + "\n".join(f"  {bits:.1f} last bits  {where}" for bits, where in unexplained)
     )
 
 
