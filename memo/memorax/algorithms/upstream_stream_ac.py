@@ -86,7 +86,7 @@ class UpstreamStreamACState:
 
 
 @struct.dataclass(frozen=True)
-class StreamACStepMetrics:
+class UpstreamStreamACStepMetrics:
     """What one transition passed through, in the shape it is stacked in.
 
     The three scalars upstream handed to its logger are here, alongside the
@@ -104,7 +104,7 @@ class StreamACStepMetrics:
 
 
 @dataclass
-class StreamAC:
+class UpstreamStreamAC:
     cfg: UpstreamStreamACConfig
     env: Any
     env_params: Any
@@ -263,7 +263,7 @@ class StreamAC:
 
     def _update_step(
         self, state: Any, key: Key
-    ) -> tuple[UpstreamStreamACState, StreamACStepMetrics]:
+    ) -> tuple[UpstreamStreamACState, UpstreamStreamACStepMetrics]:
         action_key, step_key, actor_torso_key, critic_torso_key = jax.random.split(
             key, 4
         )
@@ -414,7 +414,7 @@ class StreamAC:
             critic_carry=critic_carry,
         )
 
-        metrics = StreamACStepMetrics(
+        metrics = UpstreamStreamACStepMetrics(
             action_decision=ActionDecision(
                 sampled_action=action,
                 logprob_action=action,
