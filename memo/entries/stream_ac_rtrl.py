@@ -35,7 +35,7 @@ from memorax.networks import (
     heads,
     make_torso,
 )
-from memorax.rl import NormalizationConfig
+from memorax.rl import BOUNDED_RULES, NormalizationConfig
 from runner.loop import drive, named_scalars
 
 _UNIT = {"type": "float", "low": 0.0, "high": 1.0}
@@ -76,7 +76,7 @@ SPACE: dict[str, Any] = {
     "actor_kappa": {"type": "float", "low": 0.0, "high": 100.0},
     "critic_kappa": {"type": "float", "low": 0.0, "high": 100.0},
     "entropy_coefficient": {"type": "float", "low": 1e-8, "high": 1.0, "log": True},
-    "adaptive": [False, True],
+    "bounded_rule": list(BOUNDED_RULES),
     "beta2": _UNIT,
     "eps": {"type": "float", "low": 1e-12, "high": 1e-2, "log": True},
 }
@@ -135,7 +135,7 @@ def build(params: Mapping[str, Any]) -> StreamACRTRL:
             actor_kappa=float(params["actor_kappa"]),
             critic_kappa=float(params["critic_kappa"]),
             entropy_coefficient=float(params["entropy_coefficient"]),
-            adaptive=bool(params["adaptive"]),
+            bounded_rule=str(params["bounded_rule"]),
             beta2=float(params["beta2"]),
             eps=float(params["eps"]),
         ),

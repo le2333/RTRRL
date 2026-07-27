@@ -20,6 +20,7 @@ from .normalization import (
 from .targets import delayed_update, periodic_incremental_update
 from .td import make_td0
 from .updates import (
+    BOUNDED_RULES,
     ObjectiveDirections,
     RuleOutput,
     UpdateRule,
@@ -28,6 +29,7 @@ from .updates import (
 )
 
 __all__ = [
+    "BOUNDED_RULES",
     "NormalizationConfig",
     "NormalizationMetrics",
     "NormalizedStep",

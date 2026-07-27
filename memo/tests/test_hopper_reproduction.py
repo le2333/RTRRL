@@ -30,7 +30,7 @@ RECORDED = {
     "actor_kappa": 2.722352816476039,
     "critic_kappa": 1.4401857247174306,
     "entropy_coefficient": 0.000271109456772485,
-    "adaptive": False,
+    "bounded_rule": "obgd",
 }
 
 

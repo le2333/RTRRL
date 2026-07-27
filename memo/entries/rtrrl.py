@@ -24,7 +24,7 @@ from memorax.algorithms.rtrrl import RTRRL, RTRRLConfig
 from memorax.environments import make
 from memorax.environments.brax import masks
 from memorax.networks import TORSOS, FeatureExtractor, heads, make_torso
-from memorax.rl import NormalizationConfig
+from memorax.rl import BOUNDED_RULES, NormalizationConfig
 from runner.loop import drive, named_scalars
 
 _UNIT = {"type": "float", "low": 0.0, "high": 1.0}
@@ -69,7 +69,7 @@ SPACE: dict[str, Any] = {
     "update_rule": ["adam", "obgd"],
     "kappa": {"type": "float", "low": 0.0, "high": 100.0},
     "obgd_beta2": _UNIT,
-    "obgd_adaptive": [False, True],
+    "obgd_rule": list(BOUNDED_RULES),
     # The ablation this entry exists to run.
     "actor_to_recurrent": [False, True],
     "critic_to_recurrent": [False, True],
@@ -149,7 +149,7 @@ def build(params: Mapping[str, Any]) -> RTRRL:
         update_rule=str(params["update_rule"]),
         kappa=float(params["kappa"]),
         obgd_beta2=float(params["obgd_beta2"]),
-        obgd_adaptive=bool(params["obgd_adaptive"]),
+        obgd_rule=str(params["obgd_rule"]),
         actor_to_recurrent=bool(params["actor_to_recurrent"]),
         critic_to_recurrent=bool(params["critic_to_recurrent"]),
     )

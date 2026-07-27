@@ -103,21 +103,49 @@ def make_optax_rule(transform) -> UpdateRule:
     return UpdateRule(init=init, apply=apply)
 
 
+BOUNDED_RULES = ("obgd", "adaptive_obgd", "adaptive_obgd_fixed")
+
+
 def make_obgd_rule(
     *,
     learning_rate,
     kappa,
     beta2=0.0,
     eps=1e-8,
-    adaptive=False,
+    rule="obgd",
 ) -> UpdateRule:
     """Step along delta * trace under an overshooting bound on the step size.
 
     The bound shrinks the step whenever ``|delta| * ||z||_1 * lr * kappa``
-    exceeds one, which keeps a single update from crossing the TD target.
-    ``adaptive`` normalises the trace by a second moment before measuring its
-    norm, giving the AdaOBGD variant.
+    exceeds one, which keeps a single update from crossing the TD target. The
+    two adaptive rules normalise the trace by a second moment before measuring
+    its norm, and differ only in where they place eps:
+
+    ``obgd``
+        No second moment and no eps at all, as published.
+    ``adaptive_obgd``
+        Divides by ``sqrt(v_hat) + eps``, which is what memorax and everything
+        forked from it compute. Kept exactly as it is because the recorded runs
+        and the golden snapshot answer to it.
+    ``adaptive_obgd_fixed``
+        Divides by ``sqrt(v_hat + eps)``, which is what AdaptiveObGD as
+        published computes. The difference is not rounding: where the second
+        moment falls far below eps the two denominators stand ``1 / sqrt(eps)``
+        apart, a factor of a thousand at eps=1e-6, so they are two rules rather
+        than one rule with a tolerance.
     """
+
+    if rule not in BOUNDED_RULES:
+        raise ValueError(
+            f"unknown bounded rule {rule!r}; use {', '.join(BOUNDED_RULES)}"
+        )
+    adaptive = rule != "obgd"
+    eps_inside_root = rule == "adaptive_obgd_fixed"
+
+    def denominator(second):
+        if eps_inside_root:
+            return jnp.sqrt(second + eps)
+        return jnp.sqrt(second) + eps
 
     def init(*, params, traces):
         del params
@@ -137,7 +165,7 @@ def make_obgd_rule(
         if adaptive:
             corrected = jax.tree.map(lambda leaf: leaf / (1.0 - beta2**step), moment)
             normalized = jax.tree.map(
-                lambda trace, second: jnp.abs(trace) / (jnp.sqrt(second) + eps),
+                lambda trace, second: jnp.abs(trace) / denominator(second),
                 traced,
                 corrected,
             )
@@ -178,7 +206,7 @@ def make_obgd_rule(
             )
         if adaptive:
             ascent = jax.tree.map(
-                lambda leaf, second: leaf / (jnp.sqrt(second) + eps),
+                lambda leaf, second: leaf / denominator(second),
                 ascent,
                 corrected,
             )

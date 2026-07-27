@@ -122,8 +122,14 @@ def agent_for(manifest: dict, variant: str) -> StreamACRTRL:
             head=head,
         )
 
+    # The snapshot was recorded when the bounded rule was a boolean. Its two
+    # values are the two rules that existed then, under the names they have now.
+    recorded_config = dict(manifest["config"]["algorithm"]["variants"][variant])
+    was_adaptive = bool(recorded_config.pop("adaptive"))
+    recorded_config["bounded_rule"] = "adaptive_obgd" if was_adaptive else "obgd"
+
     return StreamACRTRL(
-        StreamACRTRLConfig(**manifest["config"]["algorithm"]["variants"][variant]),
+        StreamACRTRLConfig(**recorded_config),
         env,
         env.default_params,
         network(

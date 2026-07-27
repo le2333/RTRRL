@@ -116,8 +116,12 @@ def finite(tree):
             id="rtrrl_obgd",
         ),
         pytest.param(
-            lambda: stream_ac_program(adaptive=True),
+            lambda: stream_ac_program(bounded_rule="adaptive_obgd"),
             id="stream_ac_rtrl_adaptive",
+        ),
+        pytest.param(
+            lambda: stream_ac_program(bounded_rule="adaptive_obgd_fixed"),
+            id="stream_ac_rtrl_adaptive_fixed",
         ),
         pytest.param(
             lambda: rtrrl_program(record_trajectory=True),

@@ -66,7 +66,7 @@ class RTRRLConfig:
     update_rule: str = "adam"
     kappa: float = 2.0
     obgd_beta2: float = 0.0
-    obgd_adaptive: bool = False
+    obgd_rule: str = "obgd"
     actor_to_recurrent: bool = True
     critic_to_recurrent: bool = True
 
@@ -209,7 +209,7 @@ def make_rtrrl_update_rules(config, abstract_params):
                 kappa=config.kappa,
                 beta2=config.obgd_beta2,
                 eps=config.eps,
-                adaptive=config.obgd_adaptive,
+                rule=config.obgd_rule,
             )
             for group, rate in (("rnn", config.rnn_lr), ("td", config.td_lr))
         }

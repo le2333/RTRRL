@@ -55,7 +55,7 @@ class StreamACRTRLConfig:
     actor_kappa: float = 3.0
     critic_kappa: float = 2.0
     entropy_coefficient: float = 0.01
-    adaptive: bool = False
+    bounded_rule: str = "obgd"
     beta2: float = 0.999
     eps: float = 1e-8
 
@@ -189,14 +189,14 @@ class StreamACRTRL:
             kappa=cfg.actor_kappa,
             beta2=cfg.beta2,
             eps=cfg.eps,
-            adaptive=cfg.adaptive,
+            rule=cfg.bounded_rule,
         )
         self.critic_rule = make_obgd_rule(
             learning_rate=cfg.critic_lr,
             kappa=cfg.critic_kappa,
             beta2=cfg.beta2,
             eps=cfg.eps,
-            adaptive=cfg.adaptive,
+            rule=cfg.bounded_rule,
         )
         self.td0 = make_td0()
         self.trace_decay = cfg.gamma * cfg.trace_lambda

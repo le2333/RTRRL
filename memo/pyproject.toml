@@ -90,6 +90,12 @@ development = [
     "isort>=8.0.1",
     "ruff>=0.15.22",
 ]
+# The published streaming-drl optimisers, so the bounded step can be compared
+# against the paper's own code rather than against a reading of it. CPU wheels
+# only, and nothing outside the test suite imports torch.
+paper = [
+    "torch>=2.6",
+]
 docs = [
     "sphinx>=7.2.0",
     "sphinx-book-theme>=1.1.0",
@@ -108,7 +114,13 @@ name = "jaxmarl"
 requires-dist = []
 
 
+[[tool.uv.index]]
+name = "pytorch-cpu"
+url = "https://download.pytorch.org/whl/cpu"
+explicit = true
+
 [tool.uv.sources]
+torch = { index = "pytorch-cpu" }
 training-sdk = { path = "../training-sdk" }
 continual-foragax = { git = "https://github.com/steventango/continual-foragax" }
 grimax  = { git = "ssh://git@github.com/noahfarr/grimax" }

@@ -25,6 +25,9 @@ defaults:
 env:
   JAX_PLATFORM_NAME: cpu
   XLA_PYTHON_CLIENT_PREALLOCATE: "false"
+  # mohmdelsayed/streaming-drl, the code behind the streaming RL paper. Pinned
+  # so the numbers our rules answer to cannot change under us.
+  STREAMING_DRL_COMMIT: 407dca7a8b584c1c20bc649053557f66e270b1e6
 
 jobs:
   static:
@@ -54,7 +57,7 @@ jobs:
         with:
           python-version: "3.12"
       - name: Install dependencies
-        run: uv sync --frozen --group development
+        run: uv sync --frozen --group development --group paper
       - name: Type check
         run: uv run pyright $CHECKED
       - name: Check formatting
@@ -78,7 +81,14 @@ jobs:
         with:
           python-version: "3.12"
       - name: Install dependencies
-        run: uv sync --frozen --group development
+        run: uv sync --frozen --group development --group paper
+      # The published optimisers the bounded step answers to. Cloned rather
+      # than vendored: that repository is CC BY-NC and this one is not.
+      - name: Fetch the published streaming-drl optimisers
+        run: |
+          git clone --quiet https://github.com/mohmdelsayed/streaming-drl.git "$RUNNER_TEMP/streaming-drl"
+          git -C "$RUNNER_TEMP/streaming-drl" checkout --quiet $STREAMING_DRL_COMMIT
+          echo "STREAMING_DRL=$RUNNER_TEMP/streaming-drl" >> "$GITHUB_ENV"
       - name: Run algorithm suite
         run: uv run pytest tests -v
       - name: Build the catalog the image will carry

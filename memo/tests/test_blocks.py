@@ -222,21 +222,27 @@ def test_the_actor_direction_is_upstreams(seed, surprise):
     )
 
 
-@pytest.mark.parametrize("adaptive", [False, True], ids=["obgd", "adaptive"])
+@pytest.mark.parametrize(
+    "rule_name", ["obgd", "adaptive_obgd"], ids=["obgd", "adaptive"]
+)
 @pytest.mark.parametrize(
     "magnitude", [0.05, 5.0, 0.0], ids=["unbound", "bound", "no_trace"]
 )
 @pytest.mark.parametrize("step", [1, 40])
 @pytest.mark.parametrize("surprise", [1.0, 0.0], ids=["surprised", "no_td"])
-def test_the_bounded_step_is_upstreams(adaptive, magnitude, step, surprise):
+def test_the_bounded_step_is_upstreams(rule_name, magnitude, step, surprise):
     """Block: the overshooting-bounded update.
 
     The bound reads the TD error and the trace norm together, so the cases cross
     both: a trace small enough to leave the learning rate alone and one large
     enough for the bound to set the step, plus the degenerate pair where there
     is no trace or no surprise at all and the step must come out zero.
+
+    Only the two rules upstream has are here. ``adaptive_obgd_fixed`` answers to
+    the published optimiser instead, which upstream does not implement.
     """
 
+    adaptive = rule_name != "obgd"
     theirs = upstream(adaptive=adaptive)
     cfg = theirs.cfg
     rule = make_obgd_rule(
@@ -244,7 +250,7 @@ def test_the_bounded_step_is_upstreams(adaptive, magnitude, step, surprise):
         kappa=cfg.critic_kappa,
         beta2=cfg.beta2,
         eps=cfg.eps,
-        adaptive=adaptive,
+        rule=rule_name,
     )
 
     traces = tree(jax.random.key(7), scale=magnitude)
@@ -256,7 +262,7 @@ def test_the_bounded_step_is_upstreams(adaptive, magnitude, step, surprise):
     )
     output = rule.apply(traces, None, moment, delta=td_error, step=step, params=None)
 
-    what = f"obgd adaptive={adaptive} trace={magnitude} step={step} td={surprise}"
+    what = f"{rule_name} trace={magnitude} step={step} td={surprise}"
     assert_within(flattened(output.state), flattened(their_moment), f"{what} moment")
     assert_within(
         flattened(output.updates), flattened(their_updates), f"{what} updates"
