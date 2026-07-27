@@ -29,10 +29,20 @@ entry: stream_ac
 storage: s3://rtrrl-artifacts-007122174918/trainer
 
 compute:
-  # What the recorded runs drew: 3.4 to 6 cores and about 1.8 GiB. A c7a.medium
-  # runs out of memory on its 1600 MiB budget.
-  instance_type: c7a.xlarge
-  timeout_minutes: 240
+  # Measured, not assumed: the three probe files beside this one ran one tenth of
+  # a trial on each CPU queue. A c7a.medium never finished it in 45 minutes, which
+  # is its 1600 MiB rather than its one core. A c7a.large finished in 162 seconds
+  # and a c7a.xlarge in 134, so twice the cores buy 21% and cost twice as much,
+  # and this is the cheaper of the two per trial by 40%. Both returned the same
+  # score to every digit, so the choice is only about money and wall clock.
+  #
+  # g6.xlarge is not an option: it still aborts on a double free part way through
+  # compiling, as it did when the reproduction was moved to CPU.
+  instance_type: c7a.large
+  # A trial of this length measured out at 13 to 19 minutes, so this is three
+  # times the estimate rather than an afternoon: a trial that hangs should be cut
+  # off, not billed to the timeout.
+  timeout_minutes: 60
 
 hpo:
   sampler: tpe
