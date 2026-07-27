@@ -27,7 +27,7 @@ from entries.streamac_rtrl import (
 )
 
 TINY: dict[str, Any] = {
-    "environment": "brax::inverted_pendulum",
+    "environment": "brax::hopper",
     "env_mode": "P",
     "env_backend": "generalized",
     "backbone": "rtu",

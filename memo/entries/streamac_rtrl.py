@@ -29,6 +29,7 @@ from training_sdk.reporter import Reporter
 
 from memorax.algorithms.stream_ac_rtrl import StreamACRTRL, StreamACRTRLConfig
 from memorax.environments import make
+from memorax.environments.brax import masks
 from memorax.networks import (
     TORSOS,
     FeatureExtractor,
@@ -43,19 +44,13 @@ _UNIT = {"type": "float", "low": 0.0, "high": 1.0}
 _RATE = {"type": "float", "low": 1e-9, "high": 10.0, "log": True}
 
 SPACE: dict[str, Any] = {
-    # Brax only, because the mask below is a Brax knob and masking is the
-    # point of this recipe. A task from another family would be reached
-    # through a different file rather than through a branch here.
-    "environment": [
-        "brax::hopper",
-        "brax::walker2d",
-        "brax::halfcheetah",
-        "brax::ant",
-        "brax::inverted_pendulum",
-    ],
-    # The observation mask. F is fully observed; P leaves only positions and V
-    # only velocities, which is what makes these tasks worth a recurrent
-    # policy at all.
+    # Exactly the Brax tasks a mask has been worked out for, because masking is
+    # the point of this recipe and an unmasked task belongs in another file.
+    # Taken from the table rather than copied out of it, so the list cannot
+    # come to name a task that has no mask.
+    "environment": [f"brax::{task}" for task in sorted(masks)],
+    # F is fully observed; P leaves only positions and V only velocities, which
+    # is what makes these tasks worth a recurrent policy at all.
     "env_mode": ["F", "P", "V"],
     "env_backend": ["generalized", "spring", "positional", "mjx"],
     "backbone": list(TORSOS),
@@ -88,9 +83,9 @@ SPACE: dict[str, Any] = {
     "eps": {"type": "float", "low": 1e-12, "high": 1e-2, "log": True},
 }
 
-METRICS = ("eval/episode_return", "eval/episode_length")
+METRICS: tuple[str, ...] = ("eval/episode_return", "eval/episode_length")
 
-TRAINING_METRICS = (
+TRAINING_METRICS: tuple[str, ...] = (
     "td_error",
     "value",
     "log_prob",
