@@ -37,6 +37,19 @@ Static checks that read files without executing them are fine: `ruff check`,
 A change is not verified because it was reasoned about carefully. It is verified
 when a remote run reports it green.
 
+## When two implementations have to agree
+
+Do not check them by hand. Write the numerical test for every module that is
+supposed to agree — the initialisation, each piece of the update, the quantities
+one transition passes through — commit them together, and push. The run names
+the leaves that disagree and how far apart they are; those, and only those, are
+worth reading.
+
+Reading a diff line by line to decide whether two expressions compute the same
+thing, or guessing what a type checker will say about a file nothing has checked
+yet, spends the attention the real disagreement is going to need. CI is the
+instrument. Point it at everything at once, then read what it says.
+
 ## AWS
 
 - `dev-*` Batch queues are for infrastructure development. Delivered

@@ -218,14 +218,15 @@ class StreamAC:
         step_size = lr / jnp.maximum(1.0, delta_bar * z_sum * lr * kappa)
 
         if self.cfg.adaptive:
-
-            def compute_update(z: Array, vh: Array):
+            # Upstream names both branches' closures alike, which a type checker
+            # reads as one shadowing the other. Only the name differs here.
+            def compute_normalized_update(z: Array, vh: Array):
                 n_trailing = z.ndim - 1
                 ss = step_size[(slice(None),) + (None,) * n_trailing]
                 delta = td_error[(slice(None),) + (None,) * n_trailing]
                 return (ss * delta * z / (jnp.sqrt(vh) + eps)).mean(axis=0)
 
-            updates = jax.tree.map(compute_update, traces, v_hat)
+            updates = jax.tree.map(compute_normalized_update, traces, v_hat)
         else:
 
             def compute_update(z: Array):
