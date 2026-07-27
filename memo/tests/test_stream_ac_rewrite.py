@@ -11,6 +11,9 @@ anything has moved. Delete both this file and the frozen copy once the rewrite
 has landed and passed.
 """
 
+from collections.abc import Callable
+from typing import Any
+
 import flax.linen as nn
 import jax
 import jax.numpy as jnp
@@ -18,9 +21,7 @@ import numpy as np
 import pytest
 from conftest import TinyContinuousEnv
 
-from memorax.algorithms._stream_ac_rtrl_frozen import (
-    build_stream_ac_rtrl as build_frozen,
-)
+from memorax.algorithms import _stream_ac_rtrl_frozen
 from memorax.algorithms.stream_ac_rtrl import (
     StreamACRTRLConfig,
     StreamACRTRLParts,
@@ -28,6 +29,11 @@ from memorax.algorithms.stream_ac_rtrl import (
 )
 from memorax.networks import RNN, FeatureExtractor, Network, RTUCell, RTUConfig, heads
 from memorax.rl import NormalizationConfig
+
+# The frozen copy declares its own config and parts types, so a checker sees
+# two unrelated names for the same shape. They are the same shape by
+# construction -- the file is a copy -- and the builder only reads attributes.
+build_frozen: Callable[[Any, Any], Any] = _stream_ac_rtrl_frozen.build_stream_ac_rtrl
 
 NUM_ENVS = 2
 # Four scanned steps against a three step horizon, so a termination lands
@@ -73,7 +79,9 @@ def _pieces(normalization, record_trajectory):
 
 def _comparable(leaf) -> np.ndarray:
     array = jnp.asarray(leaf)
-    if jax.dtypes.issubdtype(array.dtype, jax.dtypes.prng_key):
+    numeric = jnp.issubdtype(array.dtype, jnp.number) or array.dtype == jnp.bool_
+    if not numeric:
+        # A random key, which has no ordering and cannot be compared directly.
         array = jax.random.key_data(array)
     return np.asarray(array)
 
@@ -81,6 +89,7 @@ def _comparable(leaf) -> np.ndarray:
 def _same(actual, expected, label: str) -> None:
     left = jax.tree.leaves(actual)
     right = jax.tree.leaves(expected)
+    assert left, f"{label}: nothing was compared"
     assert len(left) == len(right), f"{label}: {len(left)} leaves against {len(right)}"
     for index, (one, other) in enumerate(zip(left, right)):
         np.testing.assert_array_equal(

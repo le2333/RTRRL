@@ -4,6 +4,13 @@ Neither network sees the other's gradient, so there is no shared torso to
 target and no emphasis to carry. Each keeps its own eligibility trace and each
 steps under its own overshooting bound, which is what lets the pair learn from
 a single transition at a time without a replay buffer.
+
+Everything static is resolved in the constructor, so no method below asks the
+configuration a question: what the methods read are the pieces that answer was
+turned into. The point of that, and of these being methods rather than the
+closures they used to be, is that a single step can be called on a state you
+made up and compared against another implementation. A kernel that can only be
+run for a whole epoch can only be judged by whether the curve looked right.
 """
 
 from __future__ import annotations
@@ -81,51 +88,6 @@ def _broadcast_env(values, leaf):
     return values[(slice(None),) + (None,) * (leaf.ndim - 1)]
 
 
-def make_stream_ac_trace(config):
-    """Build StreamAC's pre-forward reset, always-fresh trace recurrence."""
-
-    decay = config.gamma * config.trace_lambda
-
-    def stream_ac_trace(incoming, gradient, *, reset_before):
-        carried = jax.tree.map(
-            lambda old, grad: (
-                decay * (1 - _broadcast_env(reset_before, old)) * old + grad
-            ),
-            incoming,
-            gradient,
-        )
-        return TraceDirections(carried=carried, update=carried)
-
-    return stream_ac_trace
-
-
-def make_stream_ac_objective(config):
-    """Route the actor and critic ascent directions.
-
-    Entropy rides on the actor objective rather than arriving separately,
-    signed by the TD error so it pushes toward exploration only where the
-    critic was surprised.
-    """
-
-    def stream_ac_objective(*, log_prob, value, entropy, delta):
-        actor = (
-            log_prob
-            + config.entropy_coefficient
-            * jnp.sign(jax.lax.stop_gradient(delta))
-            * entropy
-        )
-        return ObjectiveDirections(
-            traced_by_domain={"actor": actor, "critic": value},
-            direct_by_domain={
-                "actor": jnp.zeros_like(actor),
-                "critic": jnp.zeros_like(value),
-            },
-            metrics={"entropy": entropy},
-        )
-
-    return stream_ac_objective
-
-
 def _delegate_rtu_init_forward(next_fun, args, kwargs, context):
     module = context.module
     if context.method_name == "__call__" and type(module) is RTUCell:
@@ -195,52 +157,68 @@ class StreamACRTRLStepMetrics:
     normalization: Any = None
 
 
-def build_stream_ac_rtrl(
-    config: StreamACRTRLConfig,
-    parts: StreamACRTRLParts,
-) -> AgentProgram:
-    """Close over the networks, the environment, and every static choice."""
+class StreamACRTRL:
+    """An actor and a critic learning online from one transition at a time."""
 
-    normalizer = make_normalizer(parts.normalization or config)
-    normalization_config = replace(
-        normalizer.config,
-        reset_on_start=parts.evaluation.reset_on_start,
-        update_during_eval=parts.evaluation.update_during_eval,
-    )
-    normalizer = make_normalizer(normalization_config)
-    normalization_enabled = (
-        normalizer.config.normalize_observation or normalizer.config.normalize_reward
-    )
-    env = parts.env
-    env_params = parts.env_params
-    actor_network = parts.actor_network
-    critic_network = parts.critic_network
-    if normalization_enabled and environment_owns_normalization(env):
-        raise ValueError(
-            "normalization owner conflict: wrapper and program normalization are both enabled"
+    def __init__(
+        self,
+        cfg: StreamACRTRLConfig,
+        env: Any,
+        env_params: Any,
+        actor_network: Any,
+        critic_network: Any,
+        *,
+        normalization: Any = None,
+        evaluation: EvaluationConfig | None = None,
+        record_trajectory: bool = False,
+    ) -> None:
+        evaluation = evaluation or EvaluationConfig()
+        self.cfg = cfg
+        self.env = env
+        self.env_params = env_params
+        self.actor_network = actor_network
+        self.critic_network = critic_network
+        self.record_trajectory = record_trajectory
+
+        declared = make_normalizer(normalization or cfg)
+        self.normalizer = make_normalizer(
+            replace(
+                declared.config,
+                reset_on_start=evaluation.reset_on_start,
+                update_during_eval=evaluation.update_during_eval,
+            )
         )
-    record_trajectory = parts.record_trajectory
-    actor_credit = make_exact_rtrl_credit(actor_network.torso)
-    critic_credit = make_exact_rtrl_credit(critic_network.torso)
-    objective = make_stream_ac_objective(config)
-    trace_kernel = make_stream_ac_trace(config)
-    actor_rule = make_obgd_rule(
-        learning_rate=config.actor_lr,
-        kappa=config.actor_kappa,
-        beta2=config.beta2,
-        eps=config.eps,
-        adaptive=config.adaptive,
-    )
-    critic_rule = make_obgd_rule(
-        learning_rate=config.critic_lr,
-        kappa=config.critic_kappa,
-        beta2=config.beta2,
-        eps=config.eps,
-        adaptive=config.adaptive,
-    )
-    td0 = make_td0()
+        self.normalizing = (
+            self.normalizer.config.normalize_observation
+            or self.normalizer.config.normalize_reward
+        )
+        if self.normalizing and environment_owns_normalization(env):
+            raise ValueError(
+                "normalization owner conflict: wrapper and program normalization "
+                "are both enabled"
+            )
 
-    def forward(
+        self.actor_credit = make_exact_rtrl_credit(actor_network.torso)
+        self.critic_credit = make_exact_rtrl_credit(critic_network.torso)
+        self.actor_rule = make_obgd_rule(
+            learning_rate=cfg.actor_lr,
+            kappa=cfg.actor_kappa,
+            beta2=cfg.beta2,
+            eps=cfg.eps,
+            adaptive=cfg.adaptive,
+        )
+        self.critic_rule = make_obgd_rule(
+            learning_rate=cfg.critic_lr,
+            kappa=cfg.critic_kappa,
+            beta2=cfg.beta2,
+            eps=cfg.eps,
+            adaptive=cfg.adaptive,
+        )
+        self.td0 = make_td0()
+        self.trace_decay = cfg.gamma * cfg.trace_lambda
+
+    def _forward(
+        self,
         network,
         credit,
         params,
@@ -275,8 +253,69 @@ def build_stream_ac_rtrl(
         )
         return (next_carry, next_sensitivity), output
 
-    def initialize_network(network, key, timestep):
-        carry_shape = (config.num_envs, None)
+    def _actor_forward(self, params, obs, action, reward, done, carry, sensitivity):
+        return self._forward(
+            self.actor_network,
+            self.actor_credit,
+            params,
+            obs,
+            action,
+            reward,
+            done,
+            carry,
+            sensitivity,
+        )
+
+    def _critic_forward(self, params, obs, action, reward, done, carry, sensitivity):
+        return self._forward(
+            self.critic_network,
+            self.critic_credit,
+            params,
+            obs,
+            action,
+            reward,
+            done,
+            carry,
+            sensitivity,
+        )
+
+    def _trace(self, incoming, gradient, *, reset_before) -> TraceDirections:
+        """StreamAC's pre-forward reset, always-fresh trace recurrence."""
+
+        carried = jax.tree.map(
+            lambda old, grad: (
+                self.trace_decay * (1 - _broadcast_env(reset_before, old)) * old + grad
+            ),
+            incoming,
+            gradient,
+        )
+        return TraceDirections(carried=carried, update=carried)
+
+    def _objective(self, *, log_prob, value, entropy, delta) -> ObjectiveDirections:
+        """Route the actor and critic ascent directions.
+
+        Entropy rides on the actor objective rather than arriving separately,
+        signed by the TD error so it pushes toward exploration only where the
+        critic was surprised.
+        """
+
+        actor = (
+            log_prob
+            + self.cfg.entropy_coefficient
+            * jnp.sign(jax.lax.stop_gradient(delta))
+            * entropy
+        )
+        return ObjectiveDirections(
+            traced_by_domain={"actor": actor, "critic": value},
+            direct_by_domain={
+                "actor": jnp.zeros_like(actor),
+                "critic": jnp.zeros_like(value),
+            },
+            metrics={"entropy": entropy},
+        )
+
+    def _initialize_network(self, network, key, timestep) -> NetworkState:
+        carry_shape = (self.cfg.num_envs, None)
         carry = network.initialize_carry(carry_shape)
         sensitivity = network.torso.initialize_sensitivity(key, carry_shape)
         obs, done, action, reward = timestep
@@ -290,7 +329,7 @@ def build_stream_ac_rtrl(
                 initial_carry=carry,
             )
         traces = jax.tree.map(
-            lambda param: jnp.zeros((config.num_envs, *param.shape)),
+            lambda param: jnp.zeros((self.cfg.num_envs, *param.shape)),
             params,
         )
         return NetworkState(
@@ -301,29 +340,29 @@ def build_stream_ac_rtrl(
             sensitivity=sensitivity,
         )
 
-    def init_fn(key):
+    def init(self, key) -> StreamACRTRLState:
         env_key, actor_key, critic_key = jax.random.split(key, 3)
-        env_keys = jax.random.split(env_key, config.num_envs)
-        obs, env_state = jax.vmap(env.reset, in_axes=(0, None))(
+        env_keys = jax.random.split(env_key, self.cfg.num_envs)
+        obs, env_state = jax.vmap(self.env.reset, in_axes=(0, None))(
             env_keys,
-            env_params,
+            self.env_params,
         )
         normalizer_state = None
-        if normalization_enabled:
-            obs, normalizer_state = normalizer.reset(obs)
-        action_space = env.action_space(env_params)
+        if self.normalizing:
+            obs, normalizer_state = self.normalizer.reset(obs)
+        action_space = self.env.action_space(self.env_params)
         action = jnp.zeros(
-            (config.num_envs, *action_space.shape),
+            (self.cfg.num_envs, *action_space.shape),
             dtype=action_space.dtype,
         )
         timestep = Timestep(
             obs=obs,
             action=action,
-            reward=jnp.zeros((config.num_envs,), dtype=jnp.float32),
-            done=jnp.ones((config.num_envs,), dtype=jnp.bool_),
+            reward=jnp.zeros((self.cfg.num_envs,), dtype=jnp.float32),
+            done=jnp.ones((self.cfg.num_envs,), dtype=jnp.bool_),
         ).to_sequence()
-        actor = initialize_network(actor_network, actor_key, timestep)
-        critic = initialize_network(critic_network, critic_key, timestep)
+        actor = self._initialize_network(self.actor_network, actor_key, timestep)
+        critic = self._initialize_network(self.critic_network, critic_key, timestep)
         return StreamACRTRLState(
             step=jnp.asarray(0, dtype=jnp.int32),
             update_step=jnp.asarray(0, dtype=jnp.int32),
@@ -342,7 +381,7 @@ def build_stream_ac_rtrl(
             normalizer_state=normalizer_state,
         )
 
-    def step_fn(state, key):
+    def _step(self, state: StreamACRTRLState, key):
         action_key, env_key = jax.random.split(key)
         obs, done, previous_action, reward = state.timestep.to_sequence()
         reset_before = state.timestep.done
@@ -351,9 +390,7 @@ def build_stream_ac_rtrl(
         pre_critic_carry = jax.lax.stop_gradient(state.critic_carry)
         pre_critic_sensitivity = jax.lax.stop_gradient(state.critic_sensitivity)
 
-        (actor_carry, actor_sensitivity), (dist, _) = forward(
-            actor_network,
-            actor_credit,
+        (actor_carry, actor_sensitivity), (dist, _) = self._actor_forward(
             state.actor_params,
             obs,
             previous_action,
@@ -367,9 +404,7 @@ def build_stream_ac_rtrl(
         sampled_action = remove_time_axis(sampled_action)
         log_prob = remove_time_axis(log_prob)
 
-        (critic_carry, critic_sensitivity), (value_raw, _) = forward(
-            critic_network,
-            critic_credit,
+        (critic_carry, critic_sensitivity), (value_raw, _) = self._critic_forward(
             state.critic_params,
             obs,
             previous_action,
@@ -380,15 +415,15 @@ def build_stream_ac_rtrl(
         )
         value = remove_feature_axis(remove_time_axis(value_raw))
 
-        step_keys = jax.random.split(env_key, config.num_envs)
+        step_keys = jax.random.split(env_key, self.cfg.num_envs)
         next_obs, env_state, next_reward, next_done, info = jax.vmap(
-            env.step,
+            self.env.step,
             in_axes=(0, 0, 0, None),
-        )(step_keys, state.env_state, sampled_action, env_params)
+        )(step_keys, state.env_state, sampled_action, self.env_params)
         normalizer_state = state.normalizer_state
         raw_episode_return = None
-        if normalization_enabled:
-            normalized = normalizer.step(
+        if self.normalizing:
+            normalized = self.normalizer.step(
                 normalizer_state,
                 observation=next_obs,
                 reward=next_reward,
@@ -404,12 +439,16 @@ def build_stream_ac_rtrl(
             reward=next_reward,
             done=next_done,
         ).to_sequence()
+
+        # The bootstrap runs the critic forward on the observation the agent
+        # has not answered yet, under the parameters from before this step's
+        # update, and throws away the carry it produced. The next step repeats
+        # that forward pass from the same carry but with updated parameters,
+        # which is the pass whose recurrent state is kept.
         (
             _bootstrap_carry,
             _bootstrap_sensitivity,
-        ), (next_value_raw, _) = forward(
-            critic_network,
-            critic_credit,
+        ), (next_value_raw, _) = self._critic_forward(
             jax.lax.stop_gradient(state.critic_params),
             next_obs_s,
             next_action_s,
@@ -419,17 +458,15 @@ def build_stream_ac_rtrl(
             jax.lax.stop_gradient(critic_sensitivity),
         )
         next_value = remove_feature_axis(remove_time_axis(next_value_raw))
-        td_error = td0(
+        td_error = self.td0(
             reward=next_reward,
             value=value,
             next_value=next_value,
-            bootstrap_discount=config.gamma * (1 - next_done),
+            bootstrap_discount=self.cfg.gamma * (1 - next_done),
         )
 
         def actor_direction(params):
-            _, (diff_dist, _) = forward(
-                actor_network,
-                actor_credit,
+            _, (diff_dist, _) = self._actor_forward(
                 params,
                 obs,
                 previous_action,
@@ -438,7 +475,7 @@ def build_stream_ac_rtrl(
                 pre_actor_carry,
                 pre_actor_sensitivity,
             )
-            directions = objective(
+            directions = self._objective(
                 log_prob=remove_time_axis(
                     diff_dist.log_prob(add_time_axis(sampled_action))
                 ),
@@ -449,9 +486,7 @@ def build_stream_ac_rtrl(
             return directions.traced_by_domain["actor"]
 
         def critic_direction(params):
-            _, (diff_value_raw, _) = forward(
-                critic_network,
-                critic_credit,
+            _, (diff_value_raw, _) = self._critic_forward(
                 params,
                 obs,
                 previous_action,
@@ -461,7 +496,7 @@ def build_stream_ac_rtrl(
                 pre_critic_sensitivity,
             )
             diff_value = remove_feature_axis(remove_time_axis(diff_value_raw))
-            directions = objective(
+            directions = self._objective(
                 log_prob=jnp.zeros_like(diff_value),
                 value=diff_value,
                 entropy=jnp.zeros_like(diff_value),
@@ -471,12 +506,12 @@ def build_stream_ac_rtrl(
 
         actor_grads = jax.jacobian(actor_direction)(state.actor_params)
         critic_grads = jax.jacobian(critic_direction)(state.critic_params)
-        actor_trace_result = trace_kernel(
+        actor_trace_result = self._trace(
             state.actor_traces,
             actor_grads,
             reset_before=reset_before,
         )
-        critic_trace_result = trace_kernel(
+        critic_trace_result = self._trace(
             state.critic_traces,
             critic_grads,
             reset_before=reset_before,
@@ -484,7 +519,7 @@ def build_stream_ac_rtrl(
         actor_traces = actor_trace_result.carried
         critic_traces = critic_trace_result.carried
         current_step = state.update_step + 1
-        critic_step = critic_rule.apply(
+        critic_step = self.critic_rule.apply(
             critic_trace_result.update,
             None,
             state.critic_v,
@@ -492,7 +527,7 @@ def build_stream_ac_rtrl(
             step=current_step,
             params=state.critic_params,
         )
-        actor_step = actor_rule.apply(
+        actor_step = self.actor_rule.apply(
             actor_trace_result.update,
             None,
             state.actor_v,
@@ -535,7 +570,7 @@ def build_stream_ac_rtrl(
             persisted_feedback_action=persisted_action,
         )
         next_state = state.replace(
-            step=state.step + config.num_envs,
+            step=state.step + self.cfg.num_envs,
             update_step=current_step,
             timestep=Timestep(
                 obs=next_obs,
@@ -565,143 +600,154 @@ def build_stream_ac_rtrl(
             td_error=td_error,
             actor_step_size=actor_step.metrics["step_size"],
             critic_step_size=critic_step.metrics["step_size"],
-            observation=next_obs if record_trajectory else None,
-            reward=next_reward_f if record_trajectory else None,
-            done=next_done if record_trajectory else None,
+            observation=next_obs if self.record_trajectory else None,
+            reward=next_reward_f if self.record_trajectory else None,
+            done=next_done if self.record_trajectory else None,
             info=info,
             raw_episode_return=raw_episode_return,
             normalization=normalization_metrics(
-                normalizer_state, normalizer.config.eps
+                normalizer_state, self.normalizer.config.eps
             ),
         )
 
-    def train_epoch_fn(key, state, num_steps):
-        keys = jax.random.split(key, num_steps // config.num_envs)
-        return jax.lax.scan(step_fn, state, keys)
+    def train(self, key, state: StreamACRTRLState, num_steps: int):
+        keys = jax.random.split(key, num_steps // self.cfg.num_envs)
+        return jax.lax.scan(self._step, state, keys)
 
-    def evaluate_fn(key, state, num_steps):
+    def _evaluate_step(self, current: StreamACRTRLState, step_key):
+        action_key, env_key = jax.random.split(step_key)
+        del action_key
+        obs_s, done_s, action_s, reward_s = current.timestep.to_sequence()
+        (actor_carry, actor_sensitivity), (dist, _) = self._actor_forward(
+            current.actor_params,
+            obs_s,
+            action_s,
+            reward_s,
+            done_s,
+            current.actor_carry,
+            current.actor_sensitivity,
+        )
+        chosen = (
+            jnp.argmax(dist.logits, axis=-1) if hasattr(dist, "logits") else dist.mode()
+        )
+        chosen = remove_time_axis(chosen)
+        step_keys = jax.random.split(env_key, self.cfg.num_envs)
+        next_obs, next_env_state, next_reward, next_done, info = jax.vmap(
+            self.env.step, in_axes=(0, 0, 0, None)
+        )(step_keys, current.env_state, chosen, self.env_params)
+        next_normalizer_state = current.normalizer_state
+        # What the environment paid, kept before normalisation overwrites
+        # it. Episode returns and the score are read off the summary below,
+        # and those are statements about the task, not about the scale the
+        # agent happens to be learning on.
+        environment_reward = jnp.asarray(next_reward, dtype=jnp.float32)
+        if self.normalizing:
+            normalized = self.normalizer.step(
+                next_normalizer_state,
+                observation=next_obs,
+                reward=next_reward,
+                done=next_done,
+                update=self.normalizer.config.update_during_eval,
+            )
+            next_obs = normalized.observation
+            next_reward = normalized.reward
+            next_normalizer_state = normalized.state
+        broadcast_dims = tuple(
+            range(current.timestep.done.ndim, current.timestep.action.ndim)
+        )
+        next_reward = jnp.asarray(next_reward, dtype=jnp.float32)
+        return current.replace(
+            step=current.step + self.cfg.num_envs,
+            timestep=Timestep(
+                obs=next_obs,
+                action=jnp.where(
+                    jnp.expand_dims(next_done, axis=broadcast_dims),
+                    jnp.zeros_like(chosen),
+                    chosen,
+                ),
+                reward=jnp.where(next_done, jnp.zeros_like(next_reward), next_reward),
+                done=next_done,
+            ),
+            env_state=next_env_state,
+            actor_carry=actor_carry,
+            actor_sensitivity=actor_sensitivity,
+            normalizer_state=next_normalizer_state,
+        ), EvalSummary(
+            info=info,
+            normalization=normalization_metrics(
+                next_normalizer_state, self.normalizer.config.eps
+            ),
+            observation=current.timestep.obs,
+            next_observation=next_obs,
+            action=chosen,
+            reward=environment_reward,
+            done=next_done,
+        )
+
+    def evaluate(self, key, state: StreamACRTRLState, num_steps: int):
         reset_key, eval_key = jax.random.split(key)
-        reset_keys = jax.random.split(reset_key, config.num_envs)
-        obs, env_state = jax.vmap(env.reset, in_axes=(0, None))(reset_keys, env_params)
+        reset_keys = jax.random.split(reset_key, self.cfg.num_envs)
+        obs, env_state = jax.vmap(self.env.reset, in_axes=(0, None))(
+            reset_keys, self.env_params
+        )
         normalizer_state = state.normalizer_state
-        if normalization_enabled:
-            if normalizer.config.reset_on_start:
-                obs, normalizer_state = normalizer.reset(obs)
+        if self.normalizing:
+            if self.normalizer.config.reset_on_start:
+                obs, normalizer_state = self.normalizer.reset(obs)
             else:
-                obs, normalizer_state = normalizer.reset(
+                obs, normalizer_state = self.normalizer.reset(
                     obs,
                     normalizer_state,
-                    update=normalizer.config.update_during_eval,
+                    update=self.normalizer.config.update_during_eval,
                 )
-        action_space = env.action_space(env_params)
+        action_space = self.env.action_space(self.env_params)
         action = jnp.zeros(
-            (config.num_envs, *action_space.shape), dtype=action_space.dtype
+            (self.cfg.num_envs, *action_space.shape), dtype=action_space.dtype
         )
         timestep = Timestep(
             obs=obs,
             action=action,
-            reward=jnp.zeros((config.num_envs,), dtype=jnp.float32),
-            done=jnp.ones((config.num_envs,), dtype=jnp.bool_),
+            reward=jnp.zeros((self.cfg.num_envs,), dtype=jnp.float32),
+            done=jnp.ones((self.cfg.num_envs,), dtype=jnp.bool_),
         )
-        carry_shape = (config.num_envs, None)
+        carry_shape = (self.cfg.num_envs, None)
         eval_state = state.replace(
             timestep=timestep,
             env_state=env_state,
-            actor_carry=actor_network.initialize_carry(carry_shape),
-            critic_carry=critic_network.initialize_carry(carry_shape),
-            actor_sensitivity=actor_network.torso.initialize_sensitivity(
+            actor_carry=self.actor_network.initialize_carry(carry_shape),
+            critic_carry=self.critic_network.initialize_carry(carry_shape),
+            actor_sensitivity=self.actor_network.torso.initialize_sensitivity(
                 jax.random.key(0), carry_shape
             ),
-            critic_sensitivity=critic_network.torso.initialize_sensitivity(
+            critic_sensitivity=self.critic_network.torso.initialize_sensitivity(
                 jax.random.key(0), carry_shape
             ),
             normalizer_state=normalizer_state,
         )
-
-        def eval_step(current, step_key):
-            action_key, env_key = jax.random.split(step_key)
-            del action_key
-            obs_s, done_s, action_s, reward_s = current.timestep.to_sequence()
-            (actor_carry, actor_sensitivity), (dist, _) = forward(
-                actor_network,
-                actor_credit,
-                current.actor_params,
-                obs_s,
-                action_s,
-                reward_s,
-                done_s,
-                current.actor_carry,
-                current.actor_sensitivity,
-            )
-            chosen = (
-                jnp.argmax(dist.logits, axis=-1)
-                if hasattr(dist, "logits")
-                else dist.mode()
-            )
-            chosen = remove_time_axis(chosen)
-            step_keys = jax.random.split(env_key, config.num_envs)
-            next_obs, next_env_state, next_reward, next_done, info = jax.vmap(
-                env.step, in_axes=(0, 0, 0, None)
-            )(step_keys, current.env_state, chosen, env_params)
-            next_normalizer_state = current.normalizer_state
-            # What the environment paid, kept before normalisation overwrites
-            # it. Episode returns and the score are read off the summary below,
-            # and those are statements about the task, not about the scale the
-            # agent happens to be learning on.
-            environment_reward = jnp.asarray(next_reward, dtype=jnp.float32)
-            if normalization_enabled:
-                normalized = normalizer.step(
-                    next_normalizer_state,
-                    observation=next_obs,
-                    reward=next_reward,
-                    done=next_done,
-                    update=normalizer.config.update_during_eval,
-                )
-                next_obs = normalized.observation
-                next_reward = normalized.reward
-                next_normalizer_state = normalized.state
-            broadcast_dims = tuple(
-                range(current.timestep.done.ndim, current.timestep.action.ndim)
-            )
-            next_reward = jnp.asarray(next_reward, dtype=jnp.float32)
-            return current.replace(
-                step=current.step + config.num_envs,
-                timestep=Timestep(
-                    obs=next_obs,
-                    action=jnp.where(
-                        jnp.expand_dims(next_done, axis=broadcast_dims),
-                        jnp.zeros_like(chosen),
-                        chosen,
-                    ),
-                    reward=jnp.where(
-                        next_done, jnp.zeros_like(next_reward), next_reward
-                    ),
-                    done=next_done,
-                ),
-                env_state=next_env_state,
-                actor_carry=actor_carry,
-                actor_sensitivity=actor_sensitivity,
-                normalizer_state=next_normalizer_state,
-            ), EvalSummary(
-                info=info,
-                normalization=normalization_metrics(
-                    next_normalizer_state, normalizer.config.eps
-                ),
-                observation=current.timestep.obs,
-                next_observation=next_obs,
-                action=chosen,
-                reward=environment_reward,
-                done=next_done,
-            )
-
         step_keys = jax.random.split(eval_key, num_steps)
-        eval_state, summary = jax.lax.scan(eval_step, eval_state, step_keys)
-        return eval_state, summary
+        return jax.lax.scan(self._evaluate_step, eval_state, step_keys)
 
+
+def build_stream_ac_rtrl(
+    config: StreamACRTRLConfig,
+    parts: StreamACRTRLParts,
+) -> AgentProgram:
+    """Present the kernel through the record of callables the runner drives."""
+
+    agent = StreamACRTRL(
+        config,
+        parts.env,
+        parts.env_params,
+        parts.actor_network,
+        parts.critic_network,
+        normalization=parts.normalization,
+        evaluation=parts.evaluation,
+        record_trajectory=parts.record_trajectory,
+    )
     return AgentProgram(
-        init_fn=init_fn,
-        train_epoch_fn=train_epoch_fn,
-        evaluate_fn=evaluate_fn,
+        init_fn=agent.init,
+        train_epoch_fn=agent.train,
+        evaluate_fn=agent.evaluate,
         state_schema=StreamACRTRLState,
         metric_schema=StreamACRTRLStepMetrics,
     )

@@ -95,11 +95,13 @@ def run(reporter: Destination, entry: str, params: Mapping[str, Any]) -> None:
             report["eval/episode_length"] = sum(lengths) / len(lengths)
         reporter.report(completed, report)
 
-
+# entry point
 def main(argv: list[str] | None = None) -> int:
+    # 解析参数
     parser = argparse.ArgumentParser(description=__doc__)
     parser.parse_args(argv)
     with Reporter.from_env() as reporter:
+        # 运行训练
         run(reporter, reporter.config.entry, reporter.config.params)
     return 0
 
