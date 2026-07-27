@@ -57,14 +57,14 @@ SECTIONS = ("init", "one_step", "train", "evaluate")
 # Where a section of a variant is allowed to have moved from the recording, in
 # float32 last bits. Everywhere not named here: nowhere at all.
 #
-# One place is named, and this is what is known about it. The bounded step used
+# Two things are named. The first is a single transition of the adaptive variant,
+# and this is what is known about it. The bounded step used
 # to weight the trace by the TD error before the step size reached it, which
 # rounds a bit away from the order the recording multiplies in; the rule now
-# multiplies in the recorded order. That made the non-adaptive variant exact in
-# every section and left exactly this much: after one transition of the adaptive
-# variant, four bias vectors move -- the critic's two by two last bits, the
-# actor's two by one -- while every weight matrix, the other two sections, and
-# the whole non-adaptive variant are exact.
+# multiplies in the recorded order. That left exactly this much: after one
+# transition of the adaptive variant, four bias vectors move -- the critic's two
+# by two last bits, the actor's two by one -- while every weight matrix and every
+# section of the non-adaptive variant came out exact.
 #
 # It is not the bounded step. The rule that recorded the snapshot was lifted out
 # of commit 5f7ff4e and asked directly, on seeded inputs in both branches, and it
@@ -76,7 +76,33 @@ SECTIONS = ("init", "one_step", "train", "evaluate")
 # That is visible on vectors whose elements are all one size and hidden on
 # matrices with a large element to be measured against, which is why the biases
 # are named and no kernel is.
-ALLOWED = {("obgd/adaptive", "one_step"): 2.0}
+#
+# The other places are the two sections that take more than one transition, and
+# they are the price of differentiating one stream at a time instead of asking
+# for the whole batch's Jacobian, which is what took the gradient's cost from
+# growing with the square of the stream count to growing with it. Same
+# derivative of the same expression, different summation order.
+#
+# Where it lands says which order moved. ``init`` and ``one_step`` are still
+# exact, and so is every quantity one transition passes through: at the first
+# transition the sensitivity is zero, so the term that carries it into the
+# gradient has nothing to sum. From the second on it does, over each parameter's
+# trailing axes -- and the leaves that move are exactly the torso's input
+# matrices, the only ones with trailing axes to sum over. The recurrent decay,
+# which has none, is exact here and is the one leaf that moves in the truncated
+# comparison next door, where there is no sensitivity term and its own gradient
+# is the reduction that reassociates.
+#
+# Measured over three transitions and the rollout that follows them: four last
+# bits on the non-adaptive variant's actor trace, one on the adaptive variant's
+# sensitivity, and nothing at all on the critic or on any part outside the torso.
+ALLOWED = {
+    ("obgd/adaptive", "one_step"): 2.0,
+    ("obgd/non_adaptive", "train"): 4.0,
+    ("obgd/non_adaptive", "evaluate"): 4.0,
+    ("obgd/adaptive", "train"): 1.0,
+    ("obgd/adaptive", "evaluate"): 1.0,
+}
 
 
 @pytest.fixture(scope="module")
