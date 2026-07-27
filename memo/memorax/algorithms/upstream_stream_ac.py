@@ -261,6 +261,52 @@ class UpstreamStreamAC:
         not_done = (1 - done)[(slice(None),) + (None,) * n_trailing]
         return trace_decay * not_done * z + g
 
+    def _actor_gradient(self, params: PyTree, timestep, carry, action, td_error):
+        """The Jacobian of the actor's ascent direction at one transition.
+
+        Extracted from ``_update_step``, where it was a closure, so that a test
+        can put the same transition through this and through the fork's and see
+        whether one step of backpropagation is what the fork's truncated credit
+        computes. The arithmetic is upstream's, moved and not touched.
+        """
+
+        obs, done, ts_action, reward = timestep.to_sequence()
+        initial_carry = jax.lax.stop_gradient(carry)
+
+        def actor_loss_fn(differentiated: PyTree):
+            _, (dist, _) = self.actor_network.apply(
+                differentiated,
+                observation=obs,
+                action=ts_action,
+                reward=reward,
+                done=done,
+                initial_carry=initial_carry,
+            )
+            log_p = remove_time_axis(dist.log_prob(add_time_axis(action)))
+            entropy = remove_time_axis(dist.entropy())
+            return self._actor_direction(log_p, entropy, td_error)
+
+        return jax.jacobian(actor_loss_fn)(params)
+
+    def _critic_gradient(self, params: PyTree, timestep, carry):
+        """The Jacobian of the critic's value at one transition."""
+
+        obs, done, ts_action, reward = timestep.to_sequence()
+        initial_carry = jax.lax.stop_gradient(carry)
+
+        def critic_loss_fn(differentiated: PyTree):
+            _, (v, _) = self.critic_network.apply(
+                differentiated,
+                observation=obs,
+                action=ts_action,
+                reward=reward,
+                done=done,
+                initial_carry=initial_carry,
+            )
+            return remove_feature_axis(remove_time_axis(v))
+
+        return jax.jacobian(critic_loss_fn)(params)
+
     def _update_step(
         self, state: Any, key: Key
     ) -> tuple[UpstreamStreamACState, UpstreamStreamACStepMetrics]:
@@ -319,35 +365,12 @@ class UpstreamStreamAC:
         gamma = self.cfg.gamma
         td_error = self._td_error(next_reward, next_done, next_value, value)
 
-        initial_actor_carry = jax.lax.stop_gradient(state.actor_carry)
-        initial_critic_carry = jax.lax.stop_gradient(state.critic_carry)
-
-        def critic_loss_fn(params: PyTree):
-            _, (v, _) = self.critic_network.apply(
-                params,
-                observation=obs,
-                action=ts_action,
-                reward=reward,
-                done=done,
-                initial_carry=initial_critic_carry,
-            )
-            return remove_feature_axis(remove_time_axis(v))
-
-        def actor_loss_fn(params: PyTree):
-            _, (dist, _) = self.actor_network.apply(
-                params,
-                observation=obs,
-                action=ts_action,
-                reward=reward,
-                done=done,
-                initial_carry=initial_actor_carry,
-            )
-            log_p = remove_time_axis(dist.log_prob(add_time_axis(action)))
-            entropy = remove_time_axis(dist.entropy())
-            return self._actor_direction(log_p, entropy, td_error)
-
-        critic_grads = jax.jacobian(critic_loss_fn)(state.critic_params)
-        actor_grads = jax.jacobian(actor_loss_fn)(state.actor_params)
+        critic_grads = self._critic_gradient(
+            state.critic_params, state.timestep, state.critic_carry
+        )
+        actor_grads = self._actor_gradient(
+            state.actor_params, state.timestep, state.actor_carry, action, td_error
+        )
 
         trace_decay = gamma * self.cfg.trace_lambda
 

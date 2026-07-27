@@ -356,6 +356,63 @@ class StreamAC:
             normalizer_state=normalizer_state,
         )
 
+    def _actor_gradient(self, params, timestep, carry, sensitivity, action, delta):
+        """The Jacobian of the actor's ascent direction at one transition.
+
+        A method rather than a closure because this is where the credit setting
+        shows: everything else about an update is arithmetic on quantities, and
+        this is the one place a parameter's effect on the past enters or does
+        not. A test can hand it a state and compare.
+        """
+
+        obs, done, previous_action, reward = timestep.to_sequence()
+
+        def direction(differentiated):
+            _, (dist, _) = self._actor_forward(
+                differentiated,
+                obs,
+                previous_action,
+                reward,
+                done,
+                carry,
+                sensitivity,
+            )
+            directions = self._objective(
+                log_prob=remove_time_axis(dist.log_prob(add_time_axis(action))),
+                value=jnp.zeros_like(delta),
+                entropy=remove_time_axis(dist.entropy()),
+                delta=delta,
+            )
+            return directions.traced_by_domain["actor"]
+
+        return jax.jacobian(direction)(params)
+
+    def _critic_gradient(self, params, timestep, carry, sensitivity, delta):
+        """The Jacobian of the critic's ascent direction at one transition."""
+
+        obs, done, previous_action, reward = timestep.to_sequence()
+
+        def direction(differentiated):
+            _, (value_raw, _) = self._critic_forward(
+                differentiated,
+                obs,
+                previous_action,
+                reward,
+                done,
+                carry,
+                sensitivity,
+            )
+            value = remove_feature_axis(remove_time_axis(value_raw))
+            directions = self._objective(
+                log_prob=jnp.zeros_like(value),
+                value=value,
+                entropy=jnp.zeros_like(value),
+                delta=delta,
+            )
+            return directions.traced_by_domain["critic"]
+
+        return jax.jacobian(direction)(params)
+
     def _step(self, state: Any, key):
         action_key, env_key = jax.random.split(key)
         obs, done, previous_action, reward = state.timestep.to_sequence()
@@ -440,47 +497,21 @@ class StreamAC:
             bootstrap_discount=self.cfg.gamma * (1 - next_done),
         )
 
-        def actor_direction(params):
-            _, (diff_dist, _) = self._actor_forward(
-                params,
-                obs,
-                previous_action,
-                reward,
-                done,
-                pre_actor_carry,
-                pre_actor_sensitivity,
-            )
-            directions = self._objective(
-                log_prob=remove_time_axis(
-                    diff_dist.log_prob(add_time_axis(sampled_action))
-                ),
-                value=jnp.zeros_like(td_error),
-                entropy=remove_time_axis(diff_dist.entropy()),
-                delta=td_error,
-            )
-            return directions.traced_by_domain["actor"]
-
-        def critic_direction(params):
-            _, (diff_value_raw, _) = self._critic_forward(
-                params,
-                obs,
-                previous_action,
-                reward,
-                done,
-                pre_critic_carry,
-                pre_critic_sensitivity,
-            )
-            diff_value = remove_feature_axis(remove_time_axis(diff_value_raw))
-            directions = self._objective(
-                log_prob=jnp.zeros_like(diff_value),
-                value=diff_value,
-                entropy=jnp.zeros_like(diff_value),
-                delta=td_error,
-            )
-            return directions.traced_by_domain["critic"]
-
-        actor_grads = jax.jacobian(actor_direction)(state.actor_params)
-        critic_grads = jax.jacobian(critic_direction)(state.critic_params)
+        actor_grads = self._actor_gradient(
+            state.actor_params,
+            state.timestep,
+            pre_actor_carry,
+            pre_actor_sensitivity,
+            sampled_action,
+            td_error,
+        )
+        critic_grads = self._critic_gradient(
+            state.critic_params,
+            state.timestep,
+            pre_critic_carry,
+            pre_critic_sensitivity,
+            td_error,
+        )
         actor_trace_result = self._trace(
             state.actor_traces,
             actor_grads,

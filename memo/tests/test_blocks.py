@@ -32,7 +32,7 @@ import flax.linen as nn
 import jax
 import jax.numpy as jnp
 import pytest
-from conftest import TinyContinuousEnv, assert_within, flattened
+from conftest import TinyContinuousEnv, assert_within, deviations, flattened
 
 from memorax.algorithms.stream_ac import StreamAC, StreamACConfig
 from memorax.algorithms.upstream_stream_ac import (
@@ -368,4 +368,97 @@ def test_the_initial_second_moment_is_upstreams():
         flattened(rule.init(params=None, traces=traces)),
         flattened(jax.tree.map(jnp.zeros_like, traces)),
         "initial second moment",
+    )
+
+
+def transition(seed: int, done: str):
+    """A state both kernels can be handed, and the pieces an update needs.
+
+    Built by upstream's ``init`` so that the parameters, the carry and the
+    observation are one consistent set rather than three separate inventions,
+    and because a tree of the right shape is not the same thing as a tree the
+    networks would actually produce.
+    """
+
+    keys = jax.random.split(jax.random.key(seed), 4)
+    state = upstream().init(keys[0])
+    timestep = state.timestep.replace(done=terminals(done, keys[1]))
+    action = jax.random.normal(keys[2], (ENVS, 2), dtype=jnp.float32)
+    return state, timestep, action, vector(keys[3])
+
+
+@pytest.mark.parametrize("seed", range(4))
+@pytest.mark.parametrize("done", ["mixed", "live", "terminal"])
+def test_the_truncated_gradient_is_upstreams(seed, done):
+    """Block: the gradient, under the credit setting that claims to be theirs.
+
+    This is the seam the other blocks leave open. They compare arithmetic on
+    quantities that were already computed; this compares how the quantities a
+    parameter is credited for are obtained, which is the only thing StreamAC
+    and our kernel were ever supposed to disagree about. Under ``tbptt`` they
+    are not supposed to disagree at all.
+
+    Our kernel applies the three parts of a network separately, since the credit
+    adapter has to reach the torso, while upstream applies the whole module at
+    once. Same composition, so still exact -- and if separating them ever stops
+    being the same composition, this is where it shows.
+    """
+
+    state, timestep, action, delta = transition(seed, done)
+    theirs, mine = upstream(), ours(credit="tbptt")
+
+    assert_within(
+        flattened(
+            mine._actor_gradient(
+                state.actor_params, timestep, state.actor_carry, None, action, delta
+            )
+        ),
+        flattened(
+            theirs._actor_gradient(
+                state.actor_params, timestep, state.actor_carry, action, delta
+            )
+        ),
+        f"actor gradient seed={seed} done={done}",
+    )
+    assert_within(
+        flattened(
+            mine._critic_gradient(
+                state.critic_params, timestep, state.critic_carry, None, delta
+            )
+        ),
+        flattened(
+            theirs._critic_gradient(state.critic_params, timestep, state.critic_carry)
+        ),
+        f"critic gradient seed={seed} done={done}",
+    )
+
+
+def test_exact_credit_is_not_the_truncated_one():
+    """And the setting is a setting, not a label on one behaviour.
+
+    A sensitivity of zero would make the two agree, which is why the one here is
+    drawn rather than initialised: at the very first step of a run they do agree,
+    since nothing has accumulated yet. The assertion is only that they part once
+    something has.
+    """
+
+    state, timestep, action, delta = transition(0, "live")
+    exact, truncated = ours(), ours(credit="tbptt")
+    shape = (ENVS, None)
+    empty = exact.actor_credit.initialize(jax.random.key(0), shape)
+    assert empty is not None, "exact credit stopped carrying a sensitivity"
+    sensitivity = jax.tree.map(
+        lambda leaf: jax.random.normal(jax.random.key(1), leaf.shape, leaf.dtype),
+        empty,
+    )
+
+    carried = exact._actor_gradient(
+        state.actor_params, timestep, state.actor_carry, sensitivity, action, delta
+    )
+    cut = truncated._actor_gradient(
+        state.actor_params, timestep, state.actor_carry, None, action, delta
+    )
+    assert deviations(flattened(carried), flattened(cut)), (
+        "exact and truncated credit produced the same gradient from a "
+        "sensitivity that was not zero, so one of them is not doing its job"
     )
