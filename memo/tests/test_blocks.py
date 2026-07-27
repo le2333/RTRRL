@@ -28,6 +28,8 @@ bit of drift is a change of arithmetic rather than a change of spelling.
 
 from __future__ import annotations
 
+from dataclasses import replace
+
 import flax.linen as nn
 import jax
 import jax.numpy as jnp
@@ -382,7 +384,7 @@ def transition(seed: int, done: str):
 
     keys = jax.random.split(jax.random.key(seed), 4)
     state = upstream().init(keys[0])
-    timestep = state.timestep.replace(done=terminals(done, keys[1]))
+    timestep = replace(state.timestep, done=terminals(done, keys[1]))
     action = jax.random.normal(keys[2], (ENVS, 2), dtype=jnp.float32)
     return state, timestep, action, vector(keys[3])
 
