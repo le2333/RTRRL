@@ -7,7 +7,7 @@ description: >
   Rerun, what the process actually costs in memory, and how many steps a second
   this instance type sustains. The score is not expected to mean anything.
 
-image: 007122174918.dkr.ecr.eu-north-1.amazonaws.com/rtrrl@sha256:afa374622f8eb461e6cad3c5e1c53ede30c15f89433081d54bb6988d8d3805c3
+image: 007122174918.dkr.ecr.eu-north-1.amazonaws.com/rtrrl@sha256:67a47ccde6dddfb1c67265c23365efb0da61ce41d030aa835ce3cc1ed0c1fd60
 entry: stream_ac_rtrl
 storage: s3://rtrrl-artifacts-007122174918/trainer
 
