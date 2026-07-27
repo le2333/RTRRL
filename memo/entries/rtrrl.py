@@ -63,7 +63,6 @@ SPACE: dict[str, Any] = {
     "freeze_gamma": [False, True],
     "update_trace_before_td": [False, True],
     "logprob_scale": {"type": "float", "low": 0.0, "high": 100.0},
-    "pred_coeff": {"type": "float", "low": 0.0, "high": 100.0},
     # Adam keeps a moment estimate per parameter; OBGD instead bounds the step
     # by the trace and the TD error, and only then do kappa and the two knobs
     # below mean anything.
@@ -172,7 +171,6 @@ def build(params: Mapping[str, Any]):
         freeze_gamma=bool(params["freeze_gamma"]),
         update_trace_before_td=bool(params["update_trace_before_td"]),
         logprob_scale=float(params["logprob_scale"]),
-        pred_coeff=float(params["pred_coeff"]),
         update_rule=str(params["update_rule"]),
         kappa=float(params["kappa"]),
         obgd_beta2=float(params["obgd_beta2"]),

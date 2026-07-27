@@ -63,7 +63,6 @@ class RTRRLConfig:
     freeze_gamma: bool = False
     update_trace_before_td: bool = True
     logprob_scale: float = 1.0
-    pred_coeff: float = 1.0
     update_rule: str = "adam"
     kappa: float = 2.0
     obgd_beta2: float = 0.0
@@ -82,7 +81,6 @@ class RTRRLParts:
     torso: Any = None
     actor_head: Any = None
     critic_head: Any = None
-    pred_head: Any = None
     activation: Callable[[Any], Any] = jax.nn.silu
     normalization: Any = None
     evaluation: EvaluationConfig = field(default_factory=EvaluationConfig)
@@ -145,26 +143,13 @@ def make_rtrrl_objective(config):
     actor-side objective.
     """
 
-    def rtrrl_objective(
-        *,
-        log_prob,
-        value,
-        entropy,
-        prediction=None,
-        prediction_target=None,
-    ):
+    def rtrrl_objective(*, log_prob, value, entropy):
         actor = config.eta_pi * config.logprob_scale * log_prob
         entropy_direction = config.entropy_rate * config.logprob_scale * entropy
         zero = jnp.zeros_like(value)
-        prediction_direction = zero
-        if prediction is not None:
-            error = prediction - jax.lax.stop_gradient(prediction_target)
-            prediction_direction = (
-                -config.pred_coeff * 0.5 * jnp.sum(jnp.square(error), axis=-1)
-            )
 
         recurrent_traced = zero
-        recurrent_direct = prediction_direction
+        recurrent_direct = zero
         if config.actor_to_recurrent:
             recurrent_traced = recurrent_traced + actor
             recurrent_direct = recurrent_direct + entropy_direction
@@ -176,18 +161,13 @@ def make_rtrrl_objective(config):
                 "actor": actor,
                 "critic": value,
                 "recurrent": recurrent_traced,
-                "prediction": zero,
             },
             direct_by_domain={
                 "actor": entropy_direction,
                 "critic": zero,
                 "recurrent": recurrent_direct,
-                "prediction": prediction_direction,
             },
-            metrics={
-                "entropy": entropy,
-                "prediction_direction": prediction_direction,
-            },
+            metrics={"entropy": entropy},
         )
 
     return rtrrl_objective
@@ -373,7 +353,6 @@ def build_rtrrl(config: RTRRLConfig, parts: RTRRLParts) -> AgentProgram:
     torso = parts.torso
     actor_head = parts.actor_head
     critic_head = parts.critic_head
-    pred_head = parts.pred_head
     activation = parts.activation
     if normalization_enabled and environment_owns_normalization(env):
         raise ValueError(
@@ -411,19 +390,7 @@ def build_rtrrl(config: RTRRLConfig, parts: RTRRLParts) -> AgentProgram:
             reward=reward,
             done=done,
         )
-        prediction = None
-        if pred_head is not None:
-            prediction, _ = pred_head.apply(
-                {"params": params["pred"]},
-                h,
-                action=action,
-                reward=reward,
-                done=done,
-            )
-        return (
-            next_carry,
-            next_sensitivity,
-        ), (dist, value, prediction)
+        return (next_carry, next_sensitivity), (dist, value)
 
     def initialize_arrays(key):
         (
@@ -432,9 +399,8 @@ def build_rtrrl(config: RTRRLConfig, parts: RTRRLParts) -> AgentProgram:
             torso_key,
             actor_key,
             critic_key,
-            pred_key,
             sens_key,
-        ) = jax.random.split(key, 7)
+        ) = jax.random.split(key, 6)
         env_keys = jax.random.split(env_key, config.num_envs)
         obs, env_state = jax.vmap(env.reset, in_axes=(0, None))(env_keys, env_params)
         normalizer_state = None
@@ -491,15 +457,6 @@ def build_rtrrl(config: RTRRLConfig, parts: RTRRLParts) -> AgentProgram:
             "actor": actor_vars["params"],
             "critic": critic_vars["params"],
         }
-        if pred_head is not None:
-            pred_vars = pred_head.init(
-                {"params": pred_key},
-                h,
-                action=ts_action,
-                reward=ts_reward,
-                done=ts_done,
-            )
-            params["pred"] = pred_vars["params"]
         traces = jax.tree.map(
             lambda param: jnp.zeros((config.num_envs, *param.shape)), params
         )
@@ -615,13 +572,9 @@ def build_rtrrl(config: RTRRLConfig, parts: RTRRLParts) -> AgentProgram:
             next_value=next_value,
             bootstrap_discount=config.gamma * (1 - next_done),
         )
-        prediction_target = jnp.concatenate(
-            [next_obs, jnp.asarray(next_reward, jnp.float32)[..., None]],
-            axis=-1,
-        )
 
         def differentiation(params):
-            _, (diff_dist, diff_value_raw, diff_prediction) = forward(
+            _, (diff_dist, diff_value_raw) = forward(
                 params,
                 obs,
                 previous_action,
@@ -635,14 +588,10 @@ def build_rtrrl(config: RTRRLConfig, parts: RTRRLParts) -> AgentProgram:
             )
             diff_value = remove_feature_axis(remove_time_axis(diff_value_raw))
             diff_entropy = remove_time_axis(diff_dist.entropy())
-            if diff_prediction is not None:
-                diff_prediction = remove_time_axis(diff_prediction)
             directions = objective(
                 log_prob=diff_log_prob,
                 value=diff_value,
                 entropy=diff_entropy,
-                prediction=diff_prediction,
-                prediction_target=prediction_target,
             )
             return (
                 directions.traced_by_domain,
@@ -681,33 +630,12 @@ def build_rtrrl(config: RTRRLConfig, parts: RTRRLParts) -> AgentProgram:
             "critic": trace_result.update["critic"],
             **trace_result.update["recurrent"],
         }
-        if pred_head is not None:
-            decay = config.gamma * config.lambda_rnn
-            carried_traces["pred"] = jax.tree.map(
-                lambda old, grad: (
-                    decay
-                    * (1 - next_done)[(slice(None),) + (None,) * (old.ndim - 1)]
-                    * old
-                    + state.emphasis[(slice(None),) + (None,) * (grad.ndim - 1)] * grad
-                ),
-                state.traces["pred"],
-                traced_by_domain["prediction"]["pred"],
-            )
-            update_traces["pred"] = (
-                carried_traces["pred"]
-                if config.update_trace_before_td
-                else state.traces["pred"]
-            )
-
         direct_grads = {
             "actor": direct_by_domain["actor"]["actor"],
             "critic": direct_by_domain["critic"]["critic"],
             "feature_extractor": direct_by_domain["recurrent"]["feature_extractor"],
             "torso": direct_by_domain["recurrent"]["torso"],
         }
-        if pred_head is not None:
-            direct_grads["pred"] = direct_by_domain["prediction"]["pred"]
-
         scaled_traces = {
             name: (
                 jax.tree.map(lambda trace: config.eta_f * trace, update_traces[name])
