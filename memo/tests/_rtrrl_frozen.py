@@ -1,7 +1,9 @@
 """RTRRL as it read before the closures became a class, kept to compare against.
 
-Deleted once the comparison has run in CI. Nothing imports it but the test
-that asserts the two produce the same numbers leaf for leaf.
+The prediction head had already been taken out of it, so this is the closure
+version of exactly what the class is supposed to compute, and not one line
+further back. Deleted once the comparison has run in CI. Nothing imports it
+but the test that asserts the two produce the same numbers leaf for leaf.
 """
 
 from __future__ import annotations
@@ -512,7 +514,7 @@ def build_rtrrl(config: RTRRLConfig, parts: RTRRLParts) -> AgentProgram:
         pre_carry = jax.lax.stop_gradient(state.carry)
         pre_sensitivity = jax.lax.stop_gradient(state.sensitivity)
 
-        (carry, sensitivity), (dist, value_raw, _) = forward(
+        (carry, sensitivity), (dist, value_raw) = forward(
             forward_params,
             obs,
             previous_action,
@@ -558,7 +560,7 @@ def build_rtrrl(config: RTRRLConfig, parts: RTRRLParts) -> AgentProgram:
         (
             _bootstrap_carry,
             _bootstrap_sensitivity,
-        ), (_, next_value_raw, _) = forward(
+        ), (_, next_value_raw) = forward(
             jax.lax.stop_gradient(forward_params),
             next_obs_s,
             next_action_s,
@@ -796,7 +798,7 @@ def build_rtrrl(config: RTRRLConfig, parts: RTRRLParts) -> AgentProgram:
             action_key, env_key = jax.random.split(step_key)
             del action_key
             obs_s, done_s, action_s, reward_s = current.timestep.to_sequence()
-            (carry, sensitivity), (dist, _, _) = forward(
+            (carry, sensitivity), (dist, _) = forward(
                 slow_view(current.params, current.slow_torso),
                 obs_s,
                 action_s,
