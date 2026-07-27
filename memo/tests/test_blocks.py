@@ -303,7 +303,10 @@ def test_the_observation_statistics_are_upstreams():
     def theirs(stats, observation):
         """One stream's step through upstream's wrapper, without the wrapper."""
 
-        mean, m2, count = wrapper._welford_update(*stats, observation)
+        was_mean, was_m2, was_count = stats
+        mean, m2, count = wrapper._welford_update(
+            was_mean, was_m2, was_count, observation
+        )
         return (mean, m2, count), (observation - mean) / jnp.sqrt(
             m2 / count + wrapper.eps
         )
@@ -326,6 +329,9 @@ def test_the_observation_statistics_are_upstreams():
             )
             normalized, state = outcome.observation, outcome.state
 
+        statistics = state.observation
+        assert statistics is not None, "the normaliser stopped keeping statistics"
+
         for env in range(ENVS):
             upstream_stats[env], expected = theirs(
                 upstream_stats[env], observation[env]
@@ -335,9 +341,9 @@ def test_the_observation_statistics_are_upstreams():
                 flattened(
                     {
                         "normalized": normalized[env],
-                        "mean": state.observation.mean[env],
-                        "M2": state.observation.M2[env],
-                        "count": state.observation.count[env],
+                        "mean": statistics.mean[env],
+                        "M2": statistics.M2[env],
+                        "count": statistics.count[env],
                     }
                 ),
                 flattened(
