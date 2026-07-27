@@ -77,7 +77,7 @@ def modules():
 def frozen_side(normalization, record_trajectory, overrides):
     env = TinyContinuousEnv()
     program = build_rtrrl(
-        FrozenConfig(**BASE, **overrides),
+        FrozenConfig(**{**BASE, **overrides}),
         FrozenParts(
             env=env,
             env_params=env.default_params,
@@ -92,7 +92,7 @@ def frozen_side(normalization, record_trajectory, overrides):
 def class_side(normalization, record_trajectory, overrides):
     env = TinyContinuousEnv()
     agent = RTRRL(
-        RTRRLConfig(**BASE, **overrides),
+        RTRRLConfig(**{**BASE, **overrides}),
         env,
         env.default_params,
         normalization=normalization,
