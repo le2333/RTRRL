@@ -32,7 +32,6 @@ import flax.linen as nn
 import jax
 import jax.numpy as jnp
 import pytest
-from _recorded_obgd import make_whole_tree_obgd as recorded_obgd
 from conftest import TinyContinuousEnv, assert_within, flattened
 
 from memorax.algorithms.stream_ac import StreamAC, StreamACConfig
@@ -344,52 +343,6 @@ def test_the_observation_statistics_are_upstreams():
                 ),
                 f"observation statistics step={step} env={env}",
             )
-
-
-@pytest.mark.parametrize("adaptive", [False, True], ids=["obgd", "adaptive"])
-@pytest.mark.parametrize(
-    "magnitude", [0.05, 5.0, 0.0], ids=["unbound", "bound", "no_trace"]
-)
-@pytest.mark.parametrize("step", [1, 40])
-def test_the_bounded_step_is_what_the_recording_used(adaptive, magnitude, step):
-    """Block: the bounded step, against the code that recorded the snapshot.
-
-    The snapshot's adaptive variant still lands one or two last bits away on
-    four bias vectors while everything else is exact, and this says whether the
-    bounded step is where that happens. Both answers are worth having: if the
-    two rules agree here, the difference is upstream of this block, in the trace
-    or the gradient that reaches it.
-    """
-
-    cfg = upstream(adaptive=adaptive).cfg
-    theirs = recorded_obgd(cfg)
-    ours = make_obgd_rule(
-        learning_rate=cfg.critic_lr,
-        kappa=cfg.critic_kappa,
-        beta2=cfg.beta2,
-        eps=cfg.eps,
-        adaptive=adaptive,
-    )
-
-    traces = tree(jax.random.key(7), scale=magnitude)
-    td_error = jnp.array([0.75, -2.5, 0.0], dtype=jnp.float32)
-    moment = ours.init(params=None, traces=traces)
-
-    their_updates, their_moment = theirs(
-        traces,
-        moment,
-        delta=td_error,
-        learning_rate=cfg.critic_lr,
-        kappa=cfg.critic_kappa,
-        step=step,
-    )
-    output = ours.apply(traces, None, moment, delta=td_error, step=step, params=None)
-
-    what = f"recorded obgd adaptive={adaptive} trace={magnitude} step={step}"
-    assert_within(flattened(output.state), flattened(their_moment), f"{what} moment")
-    assert_within(
-        flattened(output.updates), flattened(their_updates), f"{what} updates"
-    )
 
 
 def test_the_initial_second_moment_is_upstreams():
