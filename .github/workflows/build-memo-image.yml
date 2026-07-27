@@ -66,7 +66,7 @@ jobs:
           sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc
           df -h /
 
-      - name: Build catalog from the registry
+      - name: Build the catalog by scanning the entries
         id: catalog
         shell: bash
         working-directory: memo
@@ -108,12 +108,23 @@ jobs:
           fi
           grep -q 'TRAINER_MANIFEST is not set' worker-start.log
 
-          # The control plane never ships inside a trainer, and the trainer's
-          # own entry point has to be reachable the way the catalog spells it.
+          # The control plane never ships inside a trainer, and every entry the
+          # catalog advertises has to be reachable the way the catalog spells
+          # it. Asking the catalog rather than naming an entry here is the
+          # point: a job that reaches Batch only to find its module missing
+          # costs an instance to discover.
           docker run --rm "$IMAGE" python -c '
-          import importlib.util
-          import memorax, runner.main, training_sdk
+          import importlib, importlib.util, json
+          import memorax, training_sdk
           assert importlib.util.find_spec("trainer_infra") is None
+          with open("/opt/trainer/catalog.json", encoding="utf-8") as handle:
+              catalog = json.load(handle)
+          assert catalog["entries"], "the image advertises no entry at all"
+          for name, entry in sorted(catalog["entries"].items()):
+              command = entry["command"]
+              assert command[:2] == ["python", "-m"], (name, command)
+              importlib.import_module(command[2])
+              print("entry", name, "->", command[2])
           '
 
       - name: Verify the CPU image stays on the CPU
@@ -157,10 +168,8 @@ jobs:
           # otherwise look healthy and mean nothing.
           docker run --rm "$IMAGE" python -c '
           import jax
-          from runner.registry import _environment
-          env, params = _environment(
-              {"environment": "brax::hopper", "env_mode": "P", "env_backend": "spring"}
-          )
+          from memorax.environments import make
+          env, params = make("brax::hopper", mode="P", backend="spring")
           observation, _ = env.reset(jax.random.key(0), params)
           assert observation.shape == (11,), observation.shape
           assert (observation[5:] == 0).all(), "velocities survived the P mask"
