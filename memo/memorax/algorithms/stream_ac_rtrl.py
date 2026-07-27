@@ -365,7 +365,7 @@ class StreamACRTRL:
             normalizer_state=normalizer_state,
         )
 
-    def _step(self, state: StreamACRTRLState, key):
+    def _step(self, state: Any, key):
         action_key, env_key = jax.random.split(key)
         obs, done, previous_action, reward = state.timestep.to_sequence()
         reset_before = state.timestep.done
@@ -594,11 +594,11 @@ class StreamACRTRL:
             ),
         )
 
-    def train(self, key, state: StreamACRTRLState, num_steps: int):
+    def train(self, key, state: Any, num_steps: int):
         keys = jax.random.split(key, num_steps // self.cfg.num_envs)
         return jax.lax.scan(self._step, state, keys)
 
-    def _evaluate_step(self, current: StreamACRTRLState, step_key):
+    def _evaluate_step(self, current: Any, step_key):
         action_key, env_key = jax.random.split(step_key)
         del action_key
         obs_s, done_s, action_s, reward_s = current.timestep.to_sequence()
@@ -668,7 +668,7 @@ class StreamACRTRL:
             done=next_done,
         )
 
-    def evaluate(self, key, state: StreamACRTRLState, num_steps: int):
+    def evaluate(self, key, state: Any, num_steps: int):
         reset_key, eval_key = jax.random.split(key)
         reset_keys = jax.random.split(reset_key, self.cfg.num_envs)
         obs, env_state = jax.vmap(self.env.reset, in_axes=(0, None))(
