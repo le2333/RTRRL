@@ -644,6 +644,11 @@ def build_stream_ac_rtrl(
                 env.step, in_axes=(0, 0, 0, None)
             )(step_keys, current.env_state, chosen, env_params)
             next_normalizer_state = current.normalizer_state
+            # What the environment paid, kept before normalisation overwrites
+            # it. Episode returns and the score are read off the summary below,
+            # and those are statements about the task, not about the scale the
+            # agent happens to be learning on.
+            environment_reward = jnp.asarray(next_reward, dtype=jnp.float32)
             if normalization_enabled:
                 normalized = normalizer.step(
                     next_normalizer_state,
@@ -685,7 +690,7 @@ def build_stream_ac_rtrl(
                 observation=current.timestep.obs,
                 next_observation=next_obs,
                 action=chosen,
-                reward=next_reward,
+                reward=environment_reward,
                 done=next_done,
             )
 

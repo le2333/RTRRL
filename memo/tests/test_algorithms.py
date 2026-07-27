@@ -30,7 +30,7 @@ from memorax.networks import (
     RTUConfig,
     heads,
 )
-from memorax.rl import make_obgd_rule, make_optax_rule
+from memorax.rl import NormalizationConfig, make_obgd_rule, make_optax_rule
 
 
 def rtrrl_program(*, record_trajectory=False, **overrides):
@@ -67,7 +67,7 @@ def rtrrl_program(*, record_trajectory=False, **overrides):
     return build_rtrrl(config, parts)
 
 
-def stream_ac_program(**overrides):
+def stream_ac_program(normalization=None, **overrides):
     env = TinyContinuousEnv()
 
     def network(head):
@@ -95,6 +95,7 @@ def stream_ac_program(**overrides):
         env_params=env.default_params,
         actor_network=network(heads.Gaussian(action_dim=2)),
         critic_network=network(heads.VNetwork()),
+        normalization=normalization,
     )
     return build_stream_ac_rtrl(config, parts)
 
@@ -158,6 +159,32 @@ def test_evaluation_runs_without_training(build):
 
     assert finite(summary)
     assert summary.info is not None
+
+
+def test_evaluation_reports_the_reward_the_environment_gave():
+    """Reward normalisation is a training device, not a change of task.
+
+    The evaluation summary is what episode returns and the recorded score are
+    built from, so a scaled reward there silently rescales the score and makes
+    it incomparable to anything recorded before.
+    """
+
+    normalization = NormalizationConfig(normalize_reward=True)
+    plain = stream_ac_program()
+    normalized = stream_ac_program(normalization=normalization)
+
+    # The networks here read observations only, so scaling the reward cannot
+    # move the policy: the two rollouts differ in what they report, not in
+    # what they do.
+    rewards = []
+    for program in (plain, normalized):
+        state = jax.jit(program.init_fn)(jax.random.key(0))
+        _, summary = jax.jit(program.evaluate_fn, static_argnums=2)(
+            jax.random.key(2), state, 8
+        )
+        rewards.append(summary.reward)
+
+    assert jnp.allclose(rewards[0], rewards[1])
 
 
 def test_closing_both_gates_leaves_the_shared_torso_still():
