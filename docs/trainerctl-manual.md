@@ -127,8 +127,6 @@ storage: s3://rtrrl-artifacts-007122174918/trainer
 compute:
   instance_type: c7a.medium
   timeout_minutes: 60
-  startup_minutes: 10
-  stall_factor: 10
 
 hpo:
   sampler: tpe
@@ -170,15 +168,11 @@ preflight resolves it and the moment a job pulls it.
 | --- | --- |
 | `instance_type` | Selects the queue. One of `c7a.medium`, `c7a.large`, `c7a.xlarge`, `g6.xlarge` |
 | `timeout_minutes` | Batch kills the job after this. It covers every trial packed into that job |
-| `startup_minutes` | How long a run may take to report its first metric before being treated as stalled |
-| `stall_factor` | After the first report, a run may be silent for this multiple of its own observed reporting interval |
 
-All three durations must be at least 1. `instance_type` is only checked against the queue
-table during a Batch preflight, so a typo survives `validate --catalog`.
-
-The stall detector exists because a wedged process on a GPU instance costs money
-indefinitely. Once a run has reported twice, the limit adapts to how often that run
-actually reports, with a floor of 60 seconds.
+`timeout_minutes` must be at least 1, and it is the only thing bounding a wedged run:
+the worker starts a run and waits for it, without judging how often it reports.
+`instance_type` is only checked against the queue table during a Batch preflight, so a
+typo survives `validate --catalog`.
 
 **`hpo`.**
 
@@ -354,9 +348,9 @@ the field and, where a fix exists, the fix. Common ones:
 CloudWatch log are printed to stderr, surviving jobs in that round are terminated, and the
 command exits 1. The report in S3 records how far the study got.
 
-**A run stalled.** The worker kills it and reports `run ... stalled: no report for Ns`.
-Either the process wedged, or it legitimately goes quiet longer than `startup_minutes` or
-`stall_factor` allow — in which case raise them.
+**A run hung.** Nothing intervenes until `timeout_minutes` elapses, at which point Batch
+kills the job and the launch fails. Raise the timeout for a run that legitimately needs
+longer; lower it to cap what a wedged run can cost.
 
 ---
 
@@ -384,8 +378,7 @@ with Reporter.from_env() as reporter:
 the worker; your script never sets them. It wires up the sinks automatically:
 
 - **metrics file** — always. Every `report()` is appended to `metrics.jsonl` in the
-  scratch directory. This is what the score is computed from, and its modification time is
-  the heartbeat the stall detector watches.
+  scratch directory. This is what the score is computed from.
 - **Aim** — always, over the network to the configured server.
 - **Rerun** — only when `rerun_every_episodes` is set.
 

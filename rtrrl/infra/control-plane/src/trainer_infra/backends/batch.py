@@ -33,11 +33,6 @@ class BatchBackend:
                     # first S3 call raises NoRegionError, on a host being paid for.
                     {"name": "AWS_REGION", "value": REGION},
                     {"name": "AWS_DEFAULT_REGION", "value": REGION},
-                    {
-                        "name": "TRAINER_STARTUP_SECONDS",
-                        "value": str(compute.startup_minutes * 60),
-                    },
-                    {"name": "TRAINER_STALL_FACTOR", "value": str(compute.stall_factor)},
                 ]
             },
         )

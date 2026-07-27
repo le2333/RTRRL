@@ -9,8 +9,6 @@ storage: s3://rtrrl-artifacts-007122174918/trainer
 compute:
   instance_type: g6.xlarge
   timeout_minutes: 60
-  startup_minutes: 15
-  stall_factor: 10
 
 hpo:
   sampler: tpe

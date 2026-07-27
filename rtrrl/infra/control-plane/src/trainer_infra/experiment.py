@@ -15,13 +15,11 @@ class _Frozen(BaseModel):
 class Compute(_Frozen):
     instance_type: str
     timeout_minutes: int
-    startup_minutes: int
-    stall_factor: int
 
     @model_validator(mode="after")
     def _positive(self) -> "Compute":
-        if min(self.timeout_minutes, self.startup_minutes, self.stall_factor) < 1:
-            raise ValueError("compute durations and stall_factor must be positive")
+        if self.timeout_minutes < 1:
+            raise ValueError("timeout_minutes must be positive")
         return self
 
 

@@ -3,10 +3,8 @@ from __future__ import annotations
 import json
 import os
 import shutil
-import signal
 import subprocess
 import sys
-import time
 import traceback
 from pathlib import Path
 
@@ -16,7 +14,6 @@ from training_sdk.reporter import METRICS_FILENAME
 from training_sdk.score import compute_score
 
 CATALOG_PATH = Path("/opt/trainer/catalog.json")
-TERMINATE_GRACE_SECONDS = 10.0
 
 
 class WorkerError(RuntimeError):
@@ -34,14 +31,7 @@ def load_catalog() -> Catalog:
     return catalog
 
 
-def run_manifest(
-    manifest_uri: str,
-    workspace: Path,
-    *,
-    startup_seconds: float,
-    stall_factor: int,
-    poll_seconds: float = 5.0,
-) -> None:
+def run_manifest(manifest_uri: str, workspace: Path) -> None:
     """Execute every run in a manifest serially.
 
     Raises ``WorkerError`` when a run does not complete, or ``ScoreError`` when
@@ -60,14 +50,7 @@ def run_manifest(
         scratch = Path(workspace) / config.run_id
         scratch.mkdir(parents=True, exist_ok=True)
         try:
-            _execute(
-                config,
-                catalog,
-                scratch,
-                startup_seconds,
-                stall_factor,
-                poll_seconds,
-            )
+            _execute(config, catalog, scratch)
             value = compute_score(scratch / METRICS_FILENAME, config.score)
             objects.put_bytes(
                 config.score.s3,
@@ -79,14 +62,7 @@ def run_manifest(
             shutil.rmtree(scratch, ignore_errors=True)
 
 
-def _execute(
-    config: RunConfig,
-    catalog: Catalog,
-    scratch: Path,
-    startup_seconds: float,
-    stall_factor: int,
-    poll_seconds: float,
-) -> None:
+def _execute(config: RunConfig, catalog: Catalog, scratch: Path) -> None:
     entry = catalog.entries.get(config.entry)
     if entry is None:
         raise WorkerError(f"image catalog does not declare entry {config.entry!r}")
@@ -95,86 +71,13 @@ def _execute(
     environment = dict(os.environ)
     environment["TRAINER_RUN_CONFIG"] = str(config_path)
     environment["TRAINER_SCRATCH"] = str(scratch)
-    heartbeat = scratch / METRICS_FILENAME
 
-    process = subprocess.Popen(
-        list(entry.command), env=environment, start_new_session=True
-    )
-    watcher = _Heartbeat(heartbeat, startup_seconds, stall_factor)
-    while True:
-        code = process.poll()
-        if code is not None:
-            break
-        if watcher.stalled():
-            _kill(process)
-            raise WorkerError(
-                f"run {config.run_id} stalled: no report for "
-                f"{watcher.silence():.0f}s (limit {watcher.limit():.0f}s)"
-            )
-        time.sleep(poll_seconds)
+    # A run that hangs is bounded by the job timeout the experiment declares.
+    # Second-guessing that here, by reading the pace of reports, only produces
+    # ways to kill a healthy run.
+    code = subprocess.call(list(entry.command), env=environment)
     if code != 0:
         raise WorkerError(f"run {config.run_id} exited with exit code {code}")
-
-
-class _Heartbeat:
-    """How long this run may stay silent before it counts as hung.
-
-    Reports do not arrive evenly: an epoch writes its training metrics and then
-    its evaluation metrics seconds apart, then says nothing until the next
-    epoch. So the startup grace is a floor rather than an opening offer, and
-    only the widest silence seen so far may raise it. Anything narrower reads a
-    burst as the run's pace and kills a healthy run mid-epoch.
-    """
-
-    def __init__(self, path: Path, startup_seconds: float, stall_factor: int) -> None:
-        self._path = path
-        self._startup = startup_seconds
-        self._factor = stall_factor
-        self._started = time.monotonic()
-        self._widest = 0.0
-        self._last_mtime: float | None = None
-        self._last_seen = self._started
-
-    def _poll(self) -> None:
-        try:
-            mtime = self._path.stat().st_mtime
-        except FileNotFoundError:
-            return
-        if self._last_mtime is None or mtime > self._last_mtime:
-            now = time.monotonic()
-            if self._last_mtime is not None:
-                self._widest = max(self._widest, now - self._last_seen)
-            self._last_mtime = mtime
-            self._last_seen = now
-
-    def limit(self) -> float:
-        return max(self._startup, self._widest * self._factor)
-
-    def silence(self) -> float:
-        return time.monotonic() - (self._last_seen if self._last_mtime else self._started)
-
-    def stalled(self) -> bool:
-        self._poll()
-        return self.silence() > self.limit()
-
-
-def _kill(process: subprocess.Popen[bytes]) -> None:
-    try:
-        pgid = os.getpgid(process.pid)
-    except ProcessLookupError:
-        return
-    try:
-        os.killpg(pgid, signal.SIGTERM)
-    except ProcessLookupError:
-        return
-    try:
-        process.wait(timeout=TERMINATE_GRACE_SECONDS)
-    except subprocess.TimeoutExpired:
-        try:
-            os.killpg(pgid, signal.SIGKILL)
-        except ProcessLookupError:
-            pass
-        process.wait()
 
 
 def main() -> int:
@@ -193,12 +96,7 @@ def main() -> int:
     workspace = Path(os.environ.get("TRAINER_WORKSPACE", "/tmp/trainer"))
     workspace.mkdir(parents=True, exist_ok=True)
     try:
-        run_manifest(
-            manifest,
-            workspace,
-            startup_seconds=float(os.environ.get("TRAINER_STARTUP_SECONDS", "900")),
-            stall_factor=int(os.environ.get("TRAINER_STALL_FACTOR", "10")),
-        )
+        run_manifest(manifest, workspace)
     except Exception as error:  # noqa: BLE001 - the exit code is the only signal
         print(f"worker failed: {error}", file=sys.stderr)
         traceback.print_exc()

@@ -45,14 +45,10 @@ class LocalBackend:
         workspace: Path,
         catalog_path: Path,
         python: str = sys.executable,
-        startup_seconds: float = 120.0,
-        stall_factor: int = 10,
     ) -> None:
         self._workspace = Path(workspace)
         self._catalog = Path(catalog_path)
         self._python = python
-        self._startup = startup_seconds
-        self._stall_factor = stall_factor
         self._processes: dict[str, subprocess.Popen[bytes]] = {}
         self._names: dict[str, str] = {}
         self._logs: dict[str, Path] = {}
@@ -71,8 +67,6 @@ class LocalBackend:
                 "TRAINER_MANIFEST": manifest_uri,
                 "TRAINER_WORKSPACE": str(directory),
                 "TRAINER_CATALOG": str(self._catalog),
-                "TRAINER_STARTUP_SECONDS": str(self._startup),
-                "TRAINER_STALL_FACTOR": str(self._stall_factor),
             }
         )
         with log_path.open("wb") as handle:

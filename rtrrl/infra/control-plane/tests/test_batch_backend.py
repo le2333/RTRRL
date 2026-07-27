@@ -123,8 +123,6 @@ def test_submit_passes_manifest_and_timeout(launch_for_batch) -> None:
     }
     assert environment["TRAINER_MANIFEST"] == "s3://bucket/manifest.json"
     assert environment["TRAINER_WORKSPACE"] == "/tmp/trainer"
-    assert environment["TRAINER_STARTUP_SECONDS"] == "600"
-    assert environment["TRAINER_STALL_FACTOR"] == "10"
     assert request["timeout"]["attemptDurationSeconds"] == 60 * 60
     assert request["jobQueue"] == "run-cpu-c7am-queue"
 

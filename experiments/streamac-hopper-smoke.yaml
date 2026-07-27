@@ -14,8 +14,6 @@ storage: s3://rtrrl-artifacts-007122174918/trainer
 compute:
   instance_type: c7a.xlarge
   timeout_minutes: 30
-  startup_minutes: 15
-  stall_factor: 10
 
 hpo:
   sampler: grid

@@ -19,8 +19,6 @@ compute:
   # matches the machine the score was set on.
   instance_type: c7a.xlarge
   timeout_minutes: 240
-  startup_minutes: 15
-  stall_factor: 10
 
 hpo:
   sampler: grid
