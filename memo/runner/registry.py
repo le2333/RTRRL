@@ -23,17 +23,7 @@ from memorax.algorithms.stream_ac_rtrl import (
     build_stream_ac_rtrl,
 )
 from memorax.environments import make
-from memorax.networks import (
-    RNN,
-    FeatureExtractor,
-    LRUCell,
-    LRUConfig,
-    Memoroid,
-    Network,
-    RTUCell,
-    RTUConfig,
-    heads,
-)
+from memorax.networks import TORSOS, FeatureExtractor, Network, heads, make_torso
 from memorax.rl import NormalizationConfig
 
 # What the runner computes from complete evaluation episodes, for every
@@ -95,7 +85,7 @@ _RUNNER_SPACE: dict[str, Any] = {
     "num_envs": {"type": "int", "low": 1, "high": 256},
     "hidden_dim": {"type": "int", "low": 1, "high": 512},
     "feature_dim": {"type": "int", "low": 1, "high": 512},
-    "backbone": ["lru", "rtu"],
+    "backbone": list(TORSOS),
     "meta_rl": _BOOL,
     "normalize_observation": _BOOL,
     "normalize_reward": _BOOL,
@@ -149,21 +139,12 @@ def _encoder(width: int):
 
 
 def _recurrent(backbone: str, features: int, hidden_dim: int, output_dim: int | None):
-    if backbone == "rtu":
-        return RNN(
-            cell=RTUCell(config=RTUConfig(features=features, hidden_dim=hidden_dim))
-        )
-    if backbone == "lru":
-        return Memoroid(
-            cell=LRUCell(
-                config=LRUConfig(
-                    features=features,
-                    hidden_dim=hidden_dim,
-                    output_dim=output_dim,
-                )
-            )
-        )
-    raise ValueError(f"unknown backbone: {backbone!r}; use 'lru' or 'rtu'")
+    return make_torso(
+        backbone,
+        features=features,
+        hidden_dim=hidden_dim,
+        output_dim=output_dim,
+    )
 
 
 def build_rtrrl_topology(params: Mapping[str, Any]) -> AgentProgram:

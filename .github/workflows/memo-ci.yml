@@ -39,6 +39,8 @@ jobs:
         memorax/algorithms/stream_ac_rtrl.py
         memorax/algorithms/independent_rtrrl.py
         memorax/utils/trees.py
+        memorax/networks/torso.py
+        entries
         runner
         tests
     steps:
