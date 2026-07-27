@@ -132,8 +132,27 @@ def named_scalars(metrics, names, *, prefix: str) -> dict[str, float]:
 
     report = {}
     for name in names:
-        value = getattr(metrics, name, None)
+        value = _reading(metrics, name)
         if value is None:
             continue
         report[f"{prefix}{name}"] = float(jnp.nanmean(value))
     return report
+
+
+def _reading(metrics, name: str):
+    """A named field, or a named key of one, which is how a family is read.
+
+    A kernel that reports one number per part of a network cannot know what the
+    parts are called, so it hands back a mapping and the entry names the parts
+    it built.
+    """
+
+    found = metrics
+    for step in name.split("/"):
+        if isinstance(found, Mapping):
+            found = found.get(step)
+        else:
+            found = getattr(found, step, None)
+        if found is None:
+            return None
+    return found

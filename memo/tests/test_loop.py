@@ -38,6 +38,7 @@ class Recorder:
 class Metrics(NamedTuple):
     loss: Any
     only_sometimes: Any = None
+    by_part: Any = None
 
 
 class Rollout(NamedTuple):
@@ -217,3 +218,20 @@ def test_every_episode_carries_one_more_observation_than_action():
         assert len(episode.rewards) == len(episode.actions)
         assert episode.terminals[-1] is True
         assert not any(episode.terminals[:-1])
+
+
+def test_a_named_family_is_read_one_part_at_a_time():
+    """A kernel that measures parts of a network cannot name them.
+
+    It reports a mapping and the entry, which built the network, names the parts
+    it wants watched. A part that is absent is skipped like any other absent
+    field rather than failing the epoch.
+    """
+
+    metrics = Metrics(
+        loss=jnp.asarray([1.0]),
+        by_part={"torso": jnp.asarray([1.0, 3.0])},
+    )
+    assert named_scalars(
+        metrics, ("by_part/torso", "by_part/absent", "absent/torso"), prefix="train/"
+    ) == {"train/by_part/torso": 2.0}

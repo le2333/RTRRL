@@ -37,6 +37,7 @@ from memorax.utils.axes import (
     remove_feature_axis,
     remove_time_axis,
 )
+from memorax.utils.trees import subtree_norms
 
 from .contract import ActionDecision, EvalSummary, EvaluationConfig
 
@@ -120,6 +121,10 @@ class StreamACStepMetrics:
     td_error: Any = None
     actor_step_size: Any = None
     critic_step_size: Any = None
+    actor_grad_norm: Any = None
+    critic_grad_norm: Any = None
+    actor_trace_norm: Any = None
+    critic_trace_norm: Any = None
     observation: Any = None
     reward: Any = None
     done: Any = None
@@ -606,6 +611,10 @@ class StreamAC:
             td_error=td_error,
             actor_step_size=actor_step.metrics["step_size"],
             critic_step_size=critic_step.metrics["step_size"],
+            actor_grad_norm=subtree_norms(actor_grads, streams=True),
+            critic_grad_norm=subtree_norms(critic_grads, streams=True),
+            actor_trace_norm=subtree_norms(actor_traces, streams=True),
+            critic_trace_norm=subtree_norms(critic_traces, streams=True),
             observation=next_obs if self.record_trajectory else None,
             reward=next_reward_f if self.record_trajectory else None,
             done=next_done if self.record_trajectory else None,

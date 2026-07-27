@@ -96,6 +96,11 @@ SPACE: dict[str, Any] = {
 
 METRICS: tuple[str, ...] = ("eval/episode_return", "eval/episode_length")
 
+# The parts of the networks this file wires, which is what makes a norm per
+# part reportable: the kernel measures whatever parts it is given and cannot
+# name them.
+PARTS: tuple[str, ...] = ("feature_extractor", "torso", "head")
+
 TRAINING_METRICS: tuple[str, ...] = (
     "td_error",
     "value",
@@ -103,6 +108,17 @@ TRAINING_METRICS: tuple[str, ...] = (
     "entropy",
     "actor_step_size",
     "critic_step_size",
+    # Split by part because the parts are not credited alike: under
+    # ``credit=rtrl`` the torso's cell sees the whole stream while what feeds it
+    # sees one step, and one norm over the whole network hides that. Read them
+    # beside the step sizes, since a bounded step can shrink a large gradient
+    # into a small update and the two cases look alike from the update alone.
+    *(
+        f"{domain}_{reading}_norm/{part}"
+        for domain in ("actor", "critic")
+        for reading in ("grad", "trace")
+        for part in PARTS
+    ),
 )
 
 

@@ -15,6 +15,35 @@ def tree_norm(tree):
     return jnp.sqrt(sum(jnp.sum(jnp.abs(leaf) ** 2) for leaf in leaves))
 
 
+def subtree_norms(tree, *, streams: bool = False) -> dict:
+    """One L2 norm per top-level subtree, keyed by its name.
+
+    Split rather than summed because a network's parts are not credited alike:
+    with exact recurrent credit the cell's own parameters see the whole stream
+    while everything before it sees one step, and a single norm over the tree
+    averages that distinction away.
+
+    With ``streams``, each leaf's leading axis is a parallel environment and is
+    kept, so the reading is per stream rather than over all of them at once.
+    """
+
+    parameter_tree = tree.get("params", tree) if hasattr(tree, "get") else tree
+
+    def norm(subtree):
+        leaves = jax.tree.leaves(subtree)
+        if not leaves:
+            return jnp.asarray(0.0)
+        if not streams:
+            return tree_norm(subtree)
+        squares = [
+            jnp.sum(jnp.square(leaf.reshape(leaf.shape[0], -1)), axis=1)
+            for leaf in leaves
+        ]
+        return jnp.sqrt(sum(squares))
+
+    return {name: norm(subtree) for name, subtree in parameter_tree.items()}
+
+
 def find_leaf(tree, name):
     """The first leaf whose path passes through ``name``, or None."""
 
