@@ -113,11 +113,10 @@ def assert_recorded(actual: dict, expected: dict, what: str) -> int:
     assert expected, f"{what}: the snapshot holds nothing to answer"
     found = deviations(actual, expected)
     if found:
-        gap, path, wanted, got = found[0]
+        listed = "\n".join(f"  {gap:g} {path}" for gap, path, _, _ in found)
         raise AssertionError(
-            f"{what}: {len(found)} of {len(expected)} leaves differ; worst is "
-            f"{path} by {gap:g}, recorded {wanted.reshape(-1)[:4]} "
-            f"against {got.reshape(-1)[:4]}"
+            f"{what}: {len(found)} of {len(expected)} leaves differ, "
+            f"worst first:\n{listed}"
         )
     return len(expected)
 
@@ -232,6 +231,6 @@ def test_a_changed_number_would_be_reported():
     expected = {"a": np.zeros((2, 3), np.float32)}
     nudged = np.zeros((2, 3), np.float32)
     nudged[1, 2] = np.float32(1e-7)
-    with pytest.raises(AssertionError, match="worst is a"):
+    with pytest.raises(AssertionError, match="1 of 1 leaves differ"):
         assert_recorded({"a": nudged}, expected, "sanity")
     assert not deviations({"a": jnp.zeros((2, 3))}, expected)
