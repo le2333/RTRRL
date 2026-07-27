@@ -12,7 +12,7 @@ description: >
   to 1043.66 at 1M, and then holds between 1014 and 1026 to the end. The score
   is the peak of that plateau, which is why the reduction below is max.
 
-image: 007122174918.dkr.ecr.eu-north-1.amazonaws.com/rtrrl@sha256:bdfa2a1c70bc55eb05d3eb91821bbb722fdb4ed255bca01429cd3b24cbaf60c5
+image: 007122174918.dkr.ecr.eu-north-1.amazonaws.com/rtrrl@sha256:efb23664a537470ace5b2153d3ae26c0dce7c1688e9a99e76409d5416b017411
 entry: stream_ac_rtrl
 storage: s3://rtrrl-artifacts-007122174918/trainer
 
