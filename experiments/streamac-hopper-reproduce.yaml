@@ -7,7 +7,12 @@ description: >
   found these settings only ever ran seeds 0 and 3, and seed 3 topped out at
   474.60, so the score is seed-bound and the seed below is not a free choice.
 
-image: 007122174918.dkr.ecr.eu-north-1.amazonaws.com/rtrrl@sha256:afa374622f8eb461e6cad3c5e1c53ede30c15f89433081d54bb6988d8d3805c3
+  The recorded curve is what to compare against, not just the number: eval
+  return sits at 85 after the first epoch, climbs to 269 by 900k steps, jumps
+  to 1043.66 at 1M, and then holds between 1014 and 1026 to the end. The score
+  is the peak of that plateau, which is why the reduction below is max.
+
+image: 007122174918.dkr.ecr.eu-north-1.amazonaws.com/rtrrl@sha256:bdfa2a1c70bc55eb05d3eb91821bbb722fdb4ed255bca01429cd3b24cbaf60c5
 entry: stream_ac_rtrl
 storage: s3://rtrrl-artifacts-007122174918/trainer
 
@@ -42,6 +47,10 @@ space:
   # It is kept because it is what produced the score being reproduced.
   num_envs: [16]
   total_steps: [2000000]
+  # Twenty epochs with an evaluation after each, which is the shape the
+  # recorded run used (num_epochs 20, eval_every 1, eval_steps 1000). The epoch
+  # is only where training leaves JIT to report: state, traces and the
+  # normalisers carry across the boundary, so the stream is unbroken.
   epoch_steps: [100000]
   eval_steps: [1000]
   hidden_dim: [128]
