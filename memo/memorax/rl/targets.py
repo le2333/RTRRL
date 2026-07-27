@@ -1,3 +1,11 @@
+"""Target-network updates, moved here from upstream's ``memorax/utils/update.py``.
+
+The file is that one, unchanged: nothing was rearranged, so there is no
+rearrangement to check and no test compares it. Only its address changed, since
+what it does belongs with the rest of the reinforcement-learning arithmetic
+rather than in a utilities drawer.
+"""
+
 import jax
 from optax import incremental_update, periodic_update
 from optax._src import base

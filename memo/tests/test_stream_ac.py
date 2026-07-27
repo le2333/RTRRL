@@ -1,17 +1,10 @@
-"""Upstream's StreamAC runs here, and our rewrite bounds a step the way it does.
+"""The restored StreamAC runs, and hands back what upstream used to log.
 
-Two things are checked, and they are different in kind.
-
-The first is that the restored file works at all: it trains, it evaluates, and
-what upstream handed to ``lox`` from inside the scan now comes back as returned
-data with a fixed shape, which is what lets an SDK report it from outside JIT.
-
-The second is the reason the file is worth keeping. ``StreamACRTRL`` is this
-algorithm with recurrent credit swapped in, and the overshooting bound is meant
-to be untouched by that swap. Upstream's ``_obgd_update`` is verbatim, so it can
-answer for our ``make_obgd_rule`` directly, on the same traces, the same second
-moment and the same TD error. The private method is reached on purpose: a rule
-that agreed only after an epoch of training would tell us much less.
+Nothing here compares it to anything: its arithmetic is answered for block by
+block in ``test_blocks.py``. What is checked here is that the file works at all
+after being cut off from ``lox`` -- that an epoch trains, that an evaluation
+rollout reports the environment's own reward, and that the transition record it
+returns instead of logging is shaped the way a sink and a score need it.
 """
 
 from __future__ import annotations
@@ -21,7 +14,7 @@ import jax
 import jax.numpy as jnp
 import numpy as np
 import pytest
-from conftest import TinyDiscreteEnv, assert_within, flattened
+from conftest import TinyDiscreteEnv
 
 from memorax.algorithms.stream_ac import StreamAC, StreamACConfig
 from memorax.networks import (
@@ -32,20 +25,10 @@ from memorax.networks import (
     RTUConfig,
     heads,
 )
-from memorax.rl import make_obgd_rule
 from runner.episodes import complete_episodes
 
 HORIZON = TinyDiscreteEnv().default_params.horizon
 ENVS = 2
-
-# The product the two spell differently. Upstream writes ``ss * delta * z``,
-# which multiplies the bounded step size into the TD error before the trace;
-# our rule weights the trace by the TD error first, because it has to add
-# untraced directions to that product before scaling it. Same factors, one
-# reassociation, and the golden snapshot puts the cost of it at a single last
-# bit on a bias vector. Four is loose enough not to fail on a machine that
-# rounds differently and far tighter than a changed bound could hide under.
-REASSOCIATED = 4.0
 
 
 def agent(**overrides) -> StreamAC:
@@ -83,73 +66,6 @@ def agent(**overrides) -> StreamAC:
 
 def finite(tree) -> bool:
     return all(jnp.all(jnp.isfinite(leaf)) for leaf in jax.tree.leaves(tree))
-
-
-def traces_and_errors(magnitude: float):
-    """A trace tree wide enough to bind the step size, and one TD error per env.
-
-    ``magnitude`` decides which side of the bound the step lands on: at 0.05
-    the trace norm leaves the learning rate alone, and at 5.0 the maximum in
-    the denominator is what sets the step, so both branches get exercised.
-    """
-
-    traces = {
-        "kernel": magnitude * jnp.linspace(-1.0, 1.0, ENVS * 12).reshape(ENVS, 4, 3),
-        "bias": magnitude * jnp.linspace(0.3, -0.7, ENVS * 3).reshape(ENVS, 3),
-    }
-    return traces, jnp.array([0.75, -2.5], dtype=jnp.float32)
-
-
-@pytest.mark.parametrize("adaptive", [False, True], ids=["obgd", "adaptive"])
-@pytest.mark.parametrize("magnitude", [0.05, 5.0], ids=["unbound", "bound"])
-@pytest.mark.parametrize("step", [1, 40])
-def test_our_rule_bounds_the_step_the_way_upstream_does(adaptive, magnitude, step):
-    theirs = agent(adaptive=adaptive)
-    cfg = theirs.cfg
-    ours = make_obgd_rule(
-        learning_rate=cfg.critic_lr,
-        kappa=cfg.critic_kappa,
-        beta2=cfg.beta2,
-        eps=cfg.eps,
-        adaptive=adaptive,
-    )
-
-    traces, td_error = traces_and_errors(magnitude)
-    params = jax.tree.map(lambda leaf: jnp.mean(leaf, axis=0), traces)
-    moment = ours.init(params=params, traces=traces)
-
-    their_updates, their_moment = theirs._obgd_update(
-        traces, moment, td_error, cfg.critic_lr, cfg.critic_kappa, step
-    )
-    output = ours.apply(traces, None, moment, delta=td_error, step=step, params=params)
-
-    # The second moment is the same expression in both, so it is exact; the
-    # update carries the one reassociated product.
-    assert_within(
-        flattened(output.state),
-        flattened(their_moment),
-        "second moment",
-    )
-    assert_within(
-        flattened(output.updates),
-        flattened(their_updates),
-        "updates",
-        allowed=REASSOCIATED,
-    )
-    # Both average the env axis out, since the parameters they step do not
-    # carry one.
-    assert output.updates["kernel"].shape == (4, 3)
-    assert float(jnp.max(output.metrics["step_size"])) <= cfg.critic_lr
-
-
-def test_the_second_moment_starts_where_upstream_starts_it():
-    """Our rule builds its own state; upstream's caller passes one in."""
-
-    traces, _ = traces_and_errors(1.0)
-    ours = make_obgd_rule(learning_rate=0.1, kappa=2.0)
-    initial = ours.init(params=None, traces=traces)
-    upstream_initial = jax.tree.map(jnp.zeros_like, traces)
-    assert_within(flattened(initial), flattened(upstream_initial), "initial moment")
 
 
 @pytest.mark.parametrize("adaptive", [False, True], ids=["obgd", "adaptive"])

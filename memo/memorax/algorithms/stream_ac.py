@@ -24,6 +24,13 @@ the boundary every other algorithm in this package keeps.
 ``_stochastic_action`` and ``warmup``, which nothing reaches: the training step
 inlines its own acting forward, evaluation acts greedily, and warmup returned
 its argument.
+
+Three pieces of the update are small methods here rather than an expression and
+a closure buried in the training step: the TD error, the actor's ascent
+direction, and the trace recurrence. A reference nothing can call is a reference
+that has to be copied into a test to be used, and a copy drifts. The expressions
+themselves are unchanged, character for character; only what they can be reached
+from is.
 """
 
 from __future__ import annotations
@@ -239,6 +246,22 @@ class StreamAC:
 
         return updates, new_v
 
+    def _td_error(
+        self, next_reward: Array, next_done: Array, next_value: Array, value: Array
+    ) -> Array:
+        gamma = self.cfg.gamma
+        return next_reward + gamma * (1 - next_done) * next_value - value
+
+    def _actor_direction(self, log_p: Array, entropy: Array, td_error: Array) -> Array:
+        return log_p + self.cfg.entropy_coefficient * jnp.sign(td_error) * entropy
+
+    def _update_trace(
+        self, z: Array, g: Array, done: Array, trace_decay: Array | float
+    ) -> Array:
+        n_trailing = z.ndim - 1
+        not_done = (1 - done)[(slice(None),) + (None,) * n_trailing]
+        return trace_decay * not_done * z + g
+
     def _update_step(
         self, state: Any, key: Key
     ) -> tuple[StreamACState, StreamACStepMetrics]:
@@ -295,7 +318,7 @@ class StreamAC:
         next_value = remove_feature_axis(next_value)
 
         gamma = self.cfg.gamma
-        td_error = next_reward + gamma * (1 - next_done) * next_value - value
+        td_error = self._td_error(next_reward, next_done, next_value, value)
 
         initial_actor_carry = jax.lax.stop_gradient(state.actor_carry)
         initial_critic_carry = jax.lax.stop_gradient(state.critic_carry)
@@ -322,7 +345,7 @@ class StreamAC:
             )
             log_p = remove_time_axis(dist.log_prob(add_time_axis(action)))
             entropy = remove_time_axis(dist.entropy())
-            return log_p + self.cfg.entropy_coefficient * jnp.sign(td_error) * entropy
+            return self._actor_direction(log_p, entropy, td_error)
 
         critic_grads = jax.jacobian(critic_loss_fn)(state.critic_params)
         actor_grads = jax.jacobian(actor_loss_fn)(state.actor_params)
@@ -330,9 +353,7 @@ class StreamAC:
         trace_decay = gamma * self.cfg.trace_lambda
 
         def update_trace(z: Array, g: Array):
-            n_trailing = z.ndim - 1
-            not_done = (1 - state.timestep.done)[(slice(None),) + (None,) * n_trailing]
-            return trace_decay * not_done * z + g
+            return self._update_trace(z, g, state.timestep.done, trace_decay)
 
         critic_traces = jax.tree.map(update_trace, state.critic_traces, critic_grads)
         actor_traces = jax.tree.map(update_trace, state.actor_traces, actor_grads)

@@ -1,0 +1,364 @@
+"""Every block of arithmetic we rearranged, against the version it came from.
+
+Our kernels are upstream's StreamAC taken apart: the overshooting bound became a
+rule that any algorithm can step with, the TD error a primitive, the trace and
+the objective methods on the kernel. Taking arithmetic apart is where it gets
+quietly changed, so each block is driven here beside the one it was lifted from
+and compared leaf by leaf.
+
+The reference is ``memorax.algorithms.stream_ac``, which is upstream's file with
+its arithmetic untouched. It is used rather than the read-only clone next door
+because the clone imports ``lox`` and answers to the same package name.
+
+One test per block. A block with no counterpart is not tested here -- RTRRL's
+emphasis recurrence and three-domain trace exist in no other implementation, and
+inventing an expression in a test to compare them against would only assert that
+two copies of a guess agree. ``rl/credit.py`` and ``rl/targets.py`` are absent
+for the opposite reason, written at the head of each.
+
+Every input is drawn from a written-down seed, never from the clock: a bit-exact
+assertion that fails one run in ten is worse than no assertion. The cases are
+chosen to cross each branch -- terminal and live steps, a TD error of exactly
+zero, a trace of exactly zero, both sides of the step-size bound.
+"""
+
+from __future__ import annotations
+
+import flax.linen as nn
+import jax
+import jax.numpy as jnp
+import pytest
+from conftest import TinyContinuousEnv, assert_within, flattened
+
+from memorax.algorithms.stream_ac import StreamAC, StreamACConfig
+from memorax.algorithms.stream_ac_rtrl import StreamACRTRL, StreamACRTRLConfig
+from memorax.environments.wrappers.normalize_observation import (
+    NormalizeObservationWrapper,
+)
+from memorax.networks import RNN, FeatureExtractor, Network, RTUCell, RTUConfig, heads
+from memorax.rl import NormalizationConfig, make_normalizer, make_obgd_rule, make_td0
+
+ENVS = 3
+
+# The shared settings both kernels are built from. Written once so a block can
+# never be compared against a differently-configured version of itself.
+SETTINGS = {
+    "num_envs": ENVS,
+    "gamma": 0.89,
+    "trace_lambda": 0.71,
+    "actor_lr": 0.15,
+    "critic_lr": 0.12,
+    "actor_kappa": 3.0,
+    "critic_kappa": 2.0,
+    "entropy_coefficient": 0.02,
+    "beta2": 0.95,
+    "eps": 1e-6,
+}
+
+# How far the bounded step is allowed to have moved, in float32 last bits.
+# Upstream writes ``ss * delta * z``, which rounds ``ss * delta`` before it
+# reaches the trace; our rule weights the trace by the TD error first, because
+# it has to add untraced directions to that product before scaling it. Same
+# factors, one reassociation, and a single last bit is what it costs. Nothing
+# else in this file is allowed to differ at all.
+REASSOCIATED = 4.0
+
+
+def network(head):
+    return Network(
+        feature_extractor=FeatureExtractor(
+            observation_extractor=nn.Sequential((nn.Dense(3), nn.tanh))
+        ),
+        torso=RNN(cell=RTUCell(config=RTUConfig(features=3, hidden_dim=2))),
+        head=head,
+    )
+
+
+def upstream(**overrides) -> StreamAC:
+    """The version every block here answers to."""
+
+    env = TinyContinuousEnv()
+    return StreamAC(
+        StreamACConfig(**{**SETTINGS, **overrides}),
+        env,
+        env.default_params,
+        network(heads.Gaussian(action_dim=2)),
+        network(heads.VNetwork()),
+    )
+
+
+def ours(**overrides) -> StreamACRTRL:
+    """Our kernel, built for its methods; nothing here initialises it."""
+
+    env = TinyContinuousEnv()
+    return StreamACRTRL(
+        StreamACRTRLConfig(**{**SETTINGS, **overrides}),
+        env,
+        env.default_params,
+        network(heads.Gaussian(action_dim=2)),
+        network(heads.VNetwork()),
+    )
+
+
+def vector(key, *, scale: float = 1.0):
+    return scale * jax.random.normal(key, (ENVS,), dtype=jnp.float32)
+
+
+def tree(key, *, scale: float = 1.0):
+    """A parameter-shaped tree: one leaf with trailing axes, one without."""
+
+    kernel, bias = jax.random.split(key)
+    return {
+        "kernel": scale * jax.random.normal(kernel, (ENVS, 4, 3), dtype=jnp.float32),
+        "bias": scale * jax.random.normal(bias, (ENVS, 3), dtype=jnp.float32),
+    }
+
+
+def terminals(kind: str, key):
+    """Which streams ended on this step."""
+
+    if kind == "live":
+        return jnp.zeros((ENVS,), dtype=bool)
+    if kind == "terminal":
+        return jnp.ones((ENVS,), dtype=bool)
+    return jax.random.bernoulli(key, 0.5, (ENVS,))
+
+
+@pytest.mark.parametrize("seed", range(4))
+@pytest.mark.parametrize("done", ["mixed", "live", "terminal"])
+def test_the_td_error_is_upstreams(seed, done):
+    """Block: TD(0).
+
+    Ours takes the bootstrap discount already formed, because an algorithm that
+    discounts differently should not have to reimplement the difference. That
+    makes the discount part of the comparison: it is spelled here the way both
+    kernels spell it at the call site.
+    """
+
+    keys = jax.random.split(jax.random.key(seed), 4)
+    reward, value, next_value = (vector(key) for key in keys[:3])
+    next_done = terminals(done, keys[3])
+
+    theirs = upstream()
+    mine = make_td0()(
+        reward=reward,
+        value=value,
+        next_value=next_value,
+        bootstrap_discount=theirs.cfg.gamma * (1 - next_done),
+    )
+    assert_within(
+        {"td": mine},
+        {"td": theirs._td_error(reward, next_done, next_value, value)},
+        f"td0 seed={seed} done={done}",
+    )
+
+
+@pytest.mark.parametrize("seed", range(4))
+@pytest.mark.parametrize("done", ["mixed", "live", "terminal"])
+@pytest.mark.parametrize("scale", [1.0, 0.0], ids=["gradient", "no_gradient"])
+def test_the_trace_recurrence_is_upstreams(seed, done, scale):
+    """Block: the eligibility trace.
+
+    A trailing-axis leaf and a flat one, because the decay is broadcast over
+    whatever axes a parameter has and getting that wrong is invisible on a
+    vector.
+    """
+
+    keys = jax.random.split(jax.random.key(seed), 3)
+    incoming = tree(keys[0])
+    gradient = tree(keys[1], scale=scale)
+    reset_before = terminals(done, keys[2])
+
+    mine, theirs = ours(), upstream()
+    assert mine.trace_decay == theirs.cfg.gamma * theirs.cfg.trace_lambda
+
+    carried = mine._trace(incoming, gradient, reset_before=reset_before)
+    expected = jax.tree.map(
+        lambda z, g: theirs._update_trace(z, g, reset_before, mine.trace_decay),
+        incoming,
+        gradient,
+    )
+    assert_within(
+        flattened(carried.carried),
+        flattened(expected),
+        f"trace seed={seed} done={done} scale={scale}",
+    )
+    # StreamAC resets before it acts, so the trace it carries away and the one
+    # it steps with are the same object.
+    assert_within(
+        flattened(carried.update), flattened(expected), "trace used for the update"
+    )
+
+
+@pytest.mark.parametrize("seed", range(4))
+@pytest.mark.parametrize(
+    "surprise", ["signed", "none", "positive"], ids=["signed", "zero_td", "positive_td"]
+)
+def test_the_actor_direction_is_upstreams(seed, surprise):
+    """Block: the actor and critic ascent directions.
+
+    A TD error of exactly zero is a case worth naming: ``sign`` returns zero
+    there, so the entropy term drops out entirely, and an implementation that
+    used ``where(td > 0, ...)`` instead would agree everywhere else.
+    """
+
+    keys = jax.random.split(jax.random.key(seed), 4)
+    log_prob, entropy, value = (vector(key) for key in keys[:3])
+    delta = {
+        "signed": vector(keys[3]),
+        "none": jnp.zeros((ENVS,), dtype=jnp.float32),
+        "positive": jnp.abs(vector(keys[3])),
+    }[surprise]
+
+    mine, theirs = ours(), upstream()
+    directions = mine._objective(
+        log_prob=log_prob, value=value, entropy=entropy, delta=delta
+    )
+    assert_within(
+        {"actor": directions.traced_by_domain["actor"]},
+        {"actor": theirs._actor_direction(log_prob, entropy, delta)},
+        f"actor direction seed={seed} td={surprise}",
+    )
+    # Upstream's critic objective is the value itself; ours has to route it
+    # rather than recompute it, so it is exactly that value or it is wrong.
+    assert_within(
+        {"critic": directions.traced_by_domain["critic"]}, {"critic": value}, "critic"
+    )
+
+
+@pytest.mark.parametrize("adaptive", [False, True], ids=["obgd", "adaptive"])
+@pytest.mark.parametrize(
+    "magnitude", [0.05, 5.0, 0.0], ids=["unbound", "bound", "no_trace"]
+)
+@pytest.mark.parametrize("step", [1, 40])
+@pytest.mark.parametrize("surprise", [1.0, 0.0], ids=["surprised", "no_td"])
+def test_the_bounded_step_is_upstreams(adaptive, magnitude, step, surprise):
+    """Block: the overshooting-bounded update.
+
+    The bound reads the TD error and the trace norm together, so the cases cross
+    both: a trace small enough to leave the learning rate alone and one large
+    enough for the bound to set the step, plus the degenerate pair where there
+    is no trace or no surprise at all and the step must come out zero.
+    """
+
+    theirs = upstream(adaptive=adaptive)
+    cfg = theirs.cfg
+    rule = make_obgd_rule(
+        learning_rate=cfg.critic_lr,
+        kappa=cfg.critic_kappa,
+        beta2=cfg.beta2,
+        eps=cfg.eps,
+        adaptive=adaptive,
+    )
+
+    traces = tree(jax.random.key(7), scale=magnitude)
+    td_error = surprise * jnp.array([0.75, -2.5, 0.0], dtype=jnp.float32)
+    moment = rule.init(params=None, traces=traces)
+
+    their_updates, their_moment = theirs._obgd_update(
+        traces, moment, td_error, cfg.critic_lr, cfg.critic_kappa, step
+    )
+    output = rule.apply(traces, None, moment, delta=td_error, step=step, params=None)
+
+    what = f"obgd adaptive={adaptive} trace={magnitude} step={step} td={surprise}"
+    # The second moment is the same expression on both sides, so it is exact.
+    assert_within(flattened(output.state), flattened(their_moment), f"{what} moment")
+    assert_within(
+        flattened(output.updates),
+        flattened(their_updates),
+        f"{what} updates",
+        allowed=REASSOCIATED,
+    )
+    assert output.updates["kernel"].shape == (4, 3), "the env axis survived the update"
+    assert float(jnp.max(output.metrics["step_size"])) <= cfg.critic_lr
+
+
+def test_the_observation_statistics_are_upstreams():
+    """Block: running observation normalisation.
+
+    Upstream normalises in an environment wrapper, one stream at a time, cold
+    starting from a mean of zero and a second moment of one and folding the
+    reset observation in before anything is normalised. We do the same inside
+    the kernel over a batch of streams, so the comparison drives one stream at a
+    time on their side and reads the matching row on ours.
+
+    The reward half of the normaliser is not here. Upstream's version of it is
+    not reachable: it sits inline in a wrapper step that both needs a live
+    environment and logs through ``lox``. Comparing it would mean rewriting its
+    six lines in this file, and two copies of a guess agreeing proves nothing.
+    """
+
+    epsilon = 1e-8
+    wrapper = NormalizeObservationWrapper(TinyContinuousEnv(), eps=epsilon)
+    normalizer = make_normalizer(
+        NormalizationConfig(normalize_observation=True, eps=epsilon)
+    )
+
+    key = jax.random.key(3)
+    rollout = [
+        jax.random.normal(jax.random.fold_in(key, step), (ENVS, 2), dtype=jnp.float32)
+        for step in range(5)
+    ]
+
+    def theirs(stats, observation):
+        """One stream's step through upstream's wrapper, without the wrapper."""
+
+        mean, m2, count = wrapper._welford_update(*stats, observation)
+        return (mean, m2, count), (observation - mean) / jnp.sqrt(
+            m2 / count + wrapper.eps
+        )
+
+    # Upstream's reset builds these three and then folds the first observation
+    # in, which is what our cold start does too.
+    upstream_stats = [
+        (jnp.zeros_like(rollout[0][env]), jnp.ones_like(rollout[0][env]), 1.0)
+        for env in range(ENVS)
+    ]
+
+    normalized, state = normalizer.reset(rollout[0])
+    for step, observation in enumerate(rollout):
+        if step:
+            outcome = normalizer.step(
+                state,
+                observation=observation,
+                reward=jnp.zeros((ENVS,), dtype=jnp.float32),
+                done=jnp.zeros((ENVS,), dtype=bool),
+            )
+            normalized, state = outcome.observation, outcome.state
+
+        for env in range(ENVS):
+            upstream_stats[env], expected = theirs(
+                upstream_stats[env], observation[env]
+            )
+            mean, m2, count = upstream_stats[env]
+            assert_within(
+                flattened(
+                    {
+                        "normalized": normalized[env],
+                        "mean": state.observation.mean[env],
+                        "M2": state.observation.M2[env],
+                        "count": state.observation.count[env],
+                    }
+                ),
+                flattened(
+                    {"normalized": expected, "mean": mean, "M2": m2, "count": count}
+                ),
+                f"observation statistics step={step} env={env}",
+            )
+
+
+def test_the_initial_second_moment_is_upstreams():
+    """Block: where the bound's second moment starts.
+
+    Upstream's caller builds it in ``init``; our rule builds its own, and the
+    bias correction divides by ``1 - beta2**step`` from the first step, so
+    starting anywhere else would show up as a first update of the wrong size.
+    """
+
+    traces = tree(jax.random.key(11))
+    rule = make_obgd_rule(learning_rate=0.1, kappa=2.0)
+    assert_within(
+        flattened(rule.init(params=None, traces=traces)),
+        flattened(jax.tree.map(jnp.zeros_like, traces)),
+        "initial second moment",
+    )
