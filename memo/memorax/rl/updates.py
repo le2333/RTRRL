@@ -129,10 +129,12 @@ def make_obgd_rule(
         and the golden snapshot answer to it.
     ``adaptive_obgd_fixed``
         Divides by ``sqrt(v_hat + eps)``, which is what AdaptiveObGD as
-        published computes. The difference is not rounding: where the second
-        moment falls far below eps the two denominators stand ``1 / sqrt(eps)``
-        apart, a factor of a thousand at eps=1e-6, so they are two rules rather
-        than one rule with a tolerance.
+        published computes. The difference is not a rounding. While the second
+        moment is near eps the two denominators stand a factor apart, and the
+        step with it: measured against the published optimiser, this rule and
+        the one above are about a factor of two apart there. They agree again
+        once the second moment clears eps, where both denominators are
+        ``sqrt(v_hat)``.
     """
 
     if rule not in BOUNDED_RULES:

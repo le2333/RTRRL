@@ -11,9 +11,8 @@ Two things are being established. That ``obgd`` is the published ObGD, since
 every recorded run of ours used it and nothing had ever checked it against
 anything but a fork. And that ``adaptive_obgd_fixed`` is the published
 AdaptiveObGD while ``adaptive_obgd`` is not, which is the whole reason the two
-exist separately: the fork moved eps out of the square root, and where the
-second moment falls below eps that is a factor of a thousand rather than a
-rounding difference.
+exist separately: the fork moved eps out of the square root, and while the
+second moment is near eps that changes the step by a factor, not by a rounding.
 
 The comparison crosses frameworks, so it cannot be exact. Their z_sum
 accumulates in float64 through ``.item()`` and ours in float32, and torch and
@@ -106,7 +105,7 @@ def theirs(module, optimiser: str, scale: float):
     for gradient, delta in zip(grads(scale), surprises()):
         before = {name: tensor.detach().clone() for name, tensor in tensors.items()}
         for name, tensor in tensors.items():
-            tensor.grad = torch.from_numpy(np.asarray(gradient[name], dtype=np.float32))
+            tensor.grad = torch.from_numpy(np.array(gradient[name], dtype=np.float32))
         step.step(delta)
         # They descend a loss where we ascend an objective, so their parameter
         # change is our update with the sign turned around once.
@@ -184,14 +183,33 @@ def test_the_fixed_adaptive_rule_is_the_published_adaptive_obgd(published, magni
         )
 
 
+def gap(ours, reference) -> float:
+    """How far apart two updates are, relative to the size of the reference."""
+
+    worst = 0.0
+    for name, leaf in flattened(ours).items():
+        expected = flattened(reference)[name]
+        scale = float(jnp.max(jnp.abs(expected)))
+        if scale == 0.0:
+            continue
+        worst = max(worst, float(jnp.max(jnp.abs(leaf - expected))) / scale)
+    return worst
+
+
 def test_the_forks_adaptive_rule_is_not_the_published_one(published):
     """And the fork's variant is a different rule, not a rounding of it.
 
     Kept as an assertion rather than a comment because it is the reason two
-    adaptive rules exist. A trace this small keeps the second moment far below
-    eps, which is exactly where moving eps out of the square root stops being
-    a detail: the denominator is eps instead of sqrt(eps), so the fork steps
-    hundreds of times further on the same surprise.
+    adaptive rules exist. Which way the difference points is not obvious: the
+    published denominator is the larger one while the second moment is near eps,
+    which shrinks the update, but it also shrinks the normalised trace norm the
+    bound is measured from, which grows it back. Measured, on a trace this
+    small, the fork steps about half as far -- not the thousandfold the
+    denominators alone would suggest.
+
+    The one thing the algebra does settle is that the difference has to fade:
+    once the second moment clears eps, both denominators are sqrt(v_hat) to
+    within a rounding, and the second case checks that it does.
     """
 
     reference = theirs(published, "AdaptiveObGD", 0.001)
@@ -205,9 +223,16 @@ def test_the_forks_adaptive_rule_is_not_the_published_one(published):
         flattened(fixed[0]), flattened(reference[0]), allowed=FRAMEWORKS
     ), "and the fixed one would not"
 
-    published_step = float(jnp.max(jnp.abs(reference[0]["kernel"])))
-    fork_step = float(jnp.max(jnp.abs(fork[0]["kernel"])))
-    assert fork_step > 100 * published_step, (
-        f"the fork's first step is {fork_step:g} against the published "
-        f"{published_step:g}; the gap is what eps placement costs"
+    near_eps = gap(fork[0], reference[0])
+    assert near_eps > 0.2, (
+        f"where the second moment sits near eps the two rules are {near_eps:.3g} "
+        f"apart relative to the published step, which is not a rounding"
+    )
+
+    clear_of_eps = gap(
+        mine("adaptive_obgd", 5.0)[0], theirs(published, "AdaptiveObGD", 5.0)[0]
+    )
+    assert clear_of_eps < near_eps / 100, (
+        f"and once the second moment clears eps they should converge, but they "
+        f"are still {clear_of_eps:.3g} apart"
     )
