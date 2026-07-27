@@ -133,6 +133,29 @@ class StreamACStepMetrics:
     normalization: Any = None
 
 
+def _per_stream(direction, params, *streamed):
+    """Differentiate each stream's own direction, and only its own.
+
+    Streams share parameters but not activations, so a stream's direction cannot
+    depend on another's hidden state and the Jacobian of the whole batch is zero
+    everywhere but the diagonal. Asking for that Jacobian asks the compiler to
+    fill the zeros in too, at a cost that grows with the square of the streams;
+    one gradient per stream, taken together, costs what the diagonal costs.
+
+    The stream axis is put back inside as a length of one so that every layer
+    still sees the batched shapes it was written for, which is also why the
+    arithmetic is unchanged and the comparisons against upstream still hold.
+    """
+
+    def one(params, *stream):
+        batched = jax.tree.map(lambda leaf: leaf[None], stream)
+        return direction(params, *batched)[0]
+
+    return jax.vmap(jax.grad(one), in_axes=(None, *(0,) * len(streamed)))(
+        params, *streamed
+    )
+
+
 class StreamAC:
     """An actor and a critic learning online from one transition at a time."""
 
@@ -362,7 +385,7 @@ class StreamAC:
         )
 
     def _actor_gradient(self, params, timestep, carry, sensitivity, action, delta):
-        """The Jacobian of the actor's ascent direction at one transition.
+        """The actor's ascent direction differentiated, one stream at a time.
 
         A method rather than a closure because this is where the credit setting
         shows: everything else about an update is arithmetic on quantities, and
@@ -372,7 +395,17 @@ class StreamAC:
 
         obs, done, previous_action, reward = timestep.to_sequence()
 
-        def direction(differentiated):
+        def direction(
+            differentiated,
+            obs,
+            previous_action,
+            reward,
+            done,
+            carry,
+            sensitivity,
+            action,
+            delta,
+        ):
             _, (dist, _) = self._actor_forward(
                 differentiated,
                 obs,
@@ -390,14 +423,34 @@ class StreamAC:
             )
             return directions.traced_by_domain["actor"]
 
-        return jax.jacobian(direction)(params)
+        return _per_stream(
+            direction,
+            params,
+            obs,
+            previous_action,
+            reward,
+            done,
+            carry,
+            sensitivity,
+            action,
+            delta,
+        )
 
     def _critic_gradient(self, params, timestep, carry, sensitivity, delta):
-        """The Jacobian of the critic's ascent direction at one transition."""
+        """The critic's ascent direction differentiated, one stream at a time."""
 
         obs, done, previous_action, reward = timestep.to_sequence()
 
-        def direction(differentiated):
+        def direction(
+            differentiated,
+            obs,
+            previous_action,
+            reward,
+            done,
+            carry,
+            sensitivity,
+            delta,
+        ):
             _, (value_raw, _) = self._critic_forward(
                 differentiated,
                 obs,
@@ -416,7 +469,17 @@ class StreamAC:
             )
             return directions.traced_by_domain["critic"]
 
-        return jax.jacobian(direction)(params)
+        return _per_stream(
+            direction,
+            params,
+            obs,
+            previous_action,
+            reward,
+            done,
+            carry,
+            sensitivity,
+            delta,
+        )
 
     def _step(self, state: Any, key):
         action_key, env_key = jax.random.split(key)
