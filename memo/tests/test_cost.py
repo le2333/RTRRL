@@ -68,3 +68,46 @@ def test_a_gradient_costs_what_the_streams_it_credits_cost():
         f"the cost per stream is not flat, so the streams are not being "
         f"credited independently:\n{reported}"
     )
+
+
+def training_step_cost(credit: str, streams: int) -> float:
+    """One training step of the kernel, under one credit setting."""
+
+    agent = ours(num_envs=streams, credit=credit)
+    state = agent.init(jax.random.key(0))
+    return flops(lambda s: agent.train(jax.random.key(1), s, streams), state)
+
+
+def test_exact_credit_costs_what_carrying_a_sensitivity_costs(capsys):
+    """What the recurrent credit is worth per step, in arithmetic.
+
+    Exact credit carries a sensitivity of the carry with respect to the torso's
+    parameters and advances it every step; truncated credit carries nothing. For
+    a diagonal recurrence like the RTU that sensitivity is not a dense Jacobian:
+    it is one entry per parameter element per stream, and the two input matrices
+    dominate it. Advancing it is a rotation and a rescale of every one of those
+    entries, so the step's cost is expected to be a multiple of the truncated
+    one rather than the same number, and this reports which multiple.
+
+    Asserted loosely on purpose. The claim worth defending is that exact credit
+    costs more than truncated and not unboundedly more; the exact ratio depends
+    on widths and belongs in the report, where a run's wall clock can be read
+    against it.
+    """
+
+    streams = 4
+    costs = {
+        credit: training_step_cost(credit, streams) for credit in ("tbptt", "rtrl")
+    }
+    ratio = costs["rtrl"] / costs["tbptt"]
+    with capsys.disabled():
+        print(
+            f"\n  {streams} streams, one step:"
+            f"\n    tbptt {costs['tbptt']:14.0f} flops"
+            f"\n    rtrl  {costs['rtrl']:14.0f} flops  ({ratio:.2f}x)"
+        )
+
+    assert 1.0 < ratio < 100.0, (
+        f"exact credit costs {ratio:.2f}x truncated, which is outside the range "
+        "carrying a per-parameter sensitivity can explain"
+    )
