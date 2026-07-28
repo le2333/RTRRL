@@ -41,6 +41,7 @@ def run_launch(
         },
         space=built,
         round_size=experiment.hpo.trials_per_round,
+        seed=experiment.hpo.seed,
     )
 
     records: list[TrialRecord] = []

@@ -28,7 +28,12 @@ def check_sampler(name: str, space: Mapping[str, BaseDistribution]) -> None:
         )
 
 
-def _sampler(name: str, space: Mapping[str, BaseDistribution], round_size: int):
+def _sampler(
+    name: str,
+    space: Mapping[str, BaseDistribution],
+    round_size: int,
+    seed: int | None,
+):
     check_sampler(name, space)
     if name == "tpe":
         # TPE samples at random until it has enough results to fit a density to,
@@ -36,9 +41,11 @@ def _sampler(name: str, space: Mapping[str, BaseDistribution], round_size: int):
         # exactly one round it could not have modelled -- the first, which has no
         # results yet -- so that is what it spends: a ten-trial default would have
         # spent half of a twenty-trial budget on random points.
-        return optuna.samplers.TPESampler(n_startup_trials=round_size)
+        return optuna.samplers.TPESampler(n_startup_trials=round_size, seed=seed)
     if name == "random":
-        return optuna.samplers.RandomSampler()
+        return optuna.samplers.RandomSampler(seed=seed)
+    # A grid is enumerated rather than drawn, so a seed would only shuffle the
+    # order it is walked in, and it is walked to the end either way.
     return optuna.samplers.GridSampler(
         {key: list(dist.choices) for key, dist in space.items()}  # type: ignore[attr-defined]
     )
@@ -52,12 +59,13 @@ def create_study(
     user_attrs: Mapping[str, object],
     space: Mapping[str, BaseDistribution],
     round_size: int,
+    seed: int | None = None,
 ) -> optuna.Study:
     Path(storage_path).parent.mkdir(parents=True, exist_ok=True)
     study = optuna.create_study(
         study_name=name,
         storage=f"sqlite:///{storage_path}",
-        sampler=_sampler(sampler, space, round_size),
+        sampler=_sampler(sampler, space, round_size, seed),
         direction=direction,
     )
     for key, value in user_attrs.items():

@@ -74,6 +74,34 @@ def test_tpe_stops_sampling_at_random_after_one_round(tmp_path: Path) -> None:
     assert sampler._n_startup_trials == 4
 
 
+def test_two_searches_given_one_seed_open_with_the_same_questions(
+    tmp_path: Path,
+) -> None:
+    """A comparison of two searches is only about what differs between them.
+
+    Two entries searched over one space are compared by what each one's best
+    point scores, and an unseeded sampler hands them different points to start
+    from, so part of the difference would be which points each happened to draw.
+    Seeded, the round neither of them could have modelled is the same round.
+    """
+
+    def opening_round(name: str, seed: int | None) -> list[dict[str, float]]:
+        study = create_study(
+            name,
+            tmp_path / f"{name}.db",
+            sampler="tpe",
+            direction="maximize",
+            user_attrs={},
+            space=DISTRIBUTIONS,
+            round_size=4,
+            seed=seed,
+        )
+        return [trial.params for trial in ask_round(study, DISTRIBUTIONS, 4)]
+
+    assert opening_round("seeded-one", 7) == opening_round("seeded-two", 7)
+    assert opening_round("seeded-one-again", 7) != opening_round("other-seed", 8)
+
+
 def test_unknown_sampler_is_rejected(tmp_path: Path) -> None:
     with pytest.raises(ValueError, match="unsupported sampler 'cma'"):
         create_study(

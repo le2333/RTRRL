@@ -28,6 +28,11 @@ class Hpo(_Frozen):
     rounds: int
     trials_per_round: int
     parallel_jobs: int
+    # Where the sampler starts. Two searches meant to be compared -- two entries
+    # over one space, say -- have to be asked the same questions first, or part of
+    # whatever separates them is which points they happened to try. Left unset the
+    # sampler seeds itself, which is right for a search that answers to nobody.
+    seed: int | None = None
 
     @model_validator(mode="after")
     def _consistent(self) -> "Hpo":

@@ -1,19 +1,25 @@
 experiment: streamac-hopper
-name: ablate-tbptt
+name: ablate-upstream
 description: >
-  Our kernel, trial 4's settings, and one thing changed: truncated credit
-  instead of exact sensitivity. This exists to read the run beside it.
+  Upstream's StreamAC on the settings our kernel scored 1034.13 with, which is
+  trial 4 of the 20-trial search (launch 20260727-201154) and within 1% of the
+  1043.66 the historical run recorded. One run, no search: the question is
+  whether the two implementations behave alike over two million steps, and the
+  block tests already say their arithmetic agrees to a fraction of a last bit.
 
-  Upstream scored 324.90 on these settings where our kernel scored 1034.13, and
-  two things could account for that at once. Upstream stops the gradient at the
-  incoming carry, which is our tbptt and not our rtrl, and these settings were
-  tuned under rtrl. It also normalises in environment wrappers whose statistics
-  restart at every evaluation. This run holds the second fixed and changes only
-  the first, so the pair separates them: near 325 says the gap is the credit and
-  the implementations agree; near 1034 says the gap is ours to explain.
+  Read the curve, not only the number. Our kernel's trial 4 climbed to its peak
+  and held; a comparison that lands at a similar score by a different route is a
+  different answer than one that tracks it. Both report eval/episode_return in
+  the task's own units -- upstream normalises rewards in a wrapper, so this
+  entry digs the paid reward back out rather than summing the scaled one.
 
-image: 007122174918.dkr.ecr.eu-north-1.amazonaws.com/rtrrl@sha256:b33d69821d4dd8e601fea78b3dde331bacfd2797bda256da1dbdfeb5b1ce12a5
-entry: stream_ac
+  Two differences are structural and are not being controlled for, because they
+  are what upstream is: normalisation lives in wrappers whose statistics restart
+  at every evaluation, and there is no credit choice, so this is our tbptt and
+  not our rtrl.
+
+image: 007122174918.dkr.ecr.eu-north-1.amazonaws.com/rtrrl@sha256:0ff8f723f2df153d4a664ca8e277c680e2a2b9a37872074758941ba30ea7009d
+entry: upstream_stream_ac
 storage: s3://rtrrl-artifacts-007122174918/trainer
 
 compute:
@@ -53,7 +59,6 @@ space:
   critic_kappa: [0.5913297355240426]
   entropy_coefficient: [1.213619081634158e-06]
   bounded_rule: ["obgd"]
-  credit: [tbptt]
   beta2: [0.999]
   eps: [1.0e-8]
 

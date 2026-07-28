@@ -12,7 +12,7 @@ description: >
   the first, so the pair separates them: near 325 says the gap is the credit and
   the implementations agree; near 1034 says the gap is ours to explain.
 
-image: 007122174918.dkr.ecr.eu-north-1.amazonaws.com/rtrrl@sha256:b33d69821d4dd8e601fea78b3dde331bacfd2797bda256da1dbdfeb5b1ce12a5
+image: 007122174918.dkr.ecr.eu-north-1.amazonaws.com/rtrrl@sha256:0ff8f723f2df153d4a664ca8e277c680e2a2b9a37872074758941ba30ea7009d
 entry: stream_ac
 storage: s3://rtrrl-artifacts-007122174918/trainer
 
