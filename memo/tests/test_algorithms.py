@@ -104,39 +104,43 @@ def finite(tree):
     return all(jnp.all(jnp.isfinite(leaf)) for leaf in jax.tree.leaves(tree))
 
 
-@pytest.mark.parametrize(
-    "build",
-    [
-        pytest.param(rtrrl_program, id="rtrrl"),
-        pytest.param(stream_ac_program, id="stream_ac"),
-        pytest.param(
-            lambda: rtrrl_program(update_rule="obgd", kappa=2.0),
-            id="rtrrl_obgd",
-        ),
-        pytest.param(
-            lambda: stream_ac_program(bounded_rule="adaptive_obgd"),
-            id="stream_ac_adaptive",
-        ),
-        pytest.param(
-            lambda: stream_ac_program(bounded_rule="adaptive_obgd_fixed"),
-            id="stream_ac_adaptive_fixed",
-        ),
-        pytest.param(
-            lambda: stream_ac_program(credit="tbptt"),
-            id="stream_ac_truncated",
-        ),
-        # A torso with nothing to carry, under the credit that expects to carry
-        # something: there is no sensitivity, and the kernel should not need one.
-        pytest.param(
-            lambda: stream_ac_program(backbone="mlp"),
-            id="stream_ac_memoryless",
-        ),
-        pytest.param(
-            lambda: rtrrl_program(record_trajectory=True),
-            id="rtrrl_trajectory",
-        ),
-    ],
-)
+# Every variant, exercised by everything below rather than by training alone.
+# Evaluation rebuilds the carry from scratch and a variant that changes what is
+# carried can be trainable and unevaluable at once: the truncated credit was,
+# and it reached a Batch queue to say so.
+PROGRAMS = [
+    pytest.param(rtrrl_program, id="rtrrl"),
+    pytest.param(stream_ac_program, id="stream_ac"),
+    pytest.param(
+        lambda: rtrrl_program(update_rule="obgd", kappa=2.0),
+        id="rtrrl_obgd",
+    ),
+    pytest.param(
+        lambda: stream_ac_program(bounded_rule="adaptive_obgd"),
+        id="stream_ac_adaptive",
+    ),
+    pytest.param(
+        lambda: stream_ac_program(bounded_rule="adaptive_obgd_fixed"),
+        id="stream_ac_adaptive_fixed",
+    ),
+    pytest.param(
+        lambda: stream_ac_program(credit="tbptt"),
+        id="stream_ac_truncated",
+    ),
+    # A torso with nothing to carry, under the credit that expects to carry
+    # something: there is no sensitivity, and the kernel should not need one.
+    pytest.param(
+        lambda: stream_ac_program(backbone="mlp"),
+        id="stream_ac_memoryless",
+    ),
+    pytest.param(
+        lambda: rtrrl_program(record_trajectory=True),
+        id="rtrrl_trajectory",
+    ),
+]
+
+
+@pytest.mark.parametrize("build", PROGRAMS)
 def test_epoch_moves_parameters_and_stays_finite(build):
     init, train, _ = build()
     state = jax.jit(init)(jax.random.key(0))
@@ -155,13 +159,7 @@ def test_epoch_moves_parameters_and_stays_finite(build):
     ), "training left every parameter untouched"
 
 
-@pytest.mark.parametrize(
-    "build",
-    [
-        pytest.param(rtrrl_program, id="rtrrl"),
-        pytest.param(stream_ac_program, id="stream_ac"),
-    ],
-)
+@pytest.mark.parametrize("build", PROGRAMS)
 def test_evaluation_runs_without_training(build):
     init, _, evaluate = build()
     state = jax.jit(init)(jax.random.key(0))

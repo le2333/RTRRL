@@ -794,10 +794,13 @@ class StreamAC:
             env_state=env_state,
             actor_carry=self.actor_network.initialize_carry(carry_shape),
             critic_carry=self.critic_network.initialize_carry(carry_shape),
-            actor_sensitivity=self.actor_network.torso.initialize_sensitivity(
+            # Through the credit, not around it: a truncated credit carries no
+            # sensitivity at all, and asking the torso directly hands back a tree
+            # the evaluation step will not produce, which scan rejects.
+            actor_sensitivity=self.actor_credit.initialize(
                 jax.random.key(0), carry_shape
             ),
-            critic_sensitivity=self.critic_network.torso.initialize_sensitivity(
+            critic_sensitivity=self.critic_credit.initialize(
                 jax.random.key(0), carry_shape
             ),
             normalizer_state=normalizer_state,
