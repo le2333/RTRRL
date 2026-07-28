@@ -421,9 +421,9 @@ def test_the_reward_scale_is_upstreams():
         )
         state = outcome.state
         statistics = state.reward
-        assert statistics is not None, (
-            "the normaliser stopped keeping reward statistics"
-        )
+        assert (
+            statistics is not None
+        ), "the normaliser stopped keeping reward statistics"
         assert_within(
             flattened(
                 {
