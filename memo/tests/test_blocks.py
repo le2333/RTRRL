@@ -30,6 +30,7 @@ named at the block that carries it rather than granted file-wide.
 from __future__ import annotations
 
 from dataclasses import replace
+from typing import Any
 
 import flax.linen as nn
 import jax
@@ -373,7 +374,9 @@ def test_the_reward_scale_is_upstreams():
 
     gamma, epsilon = 0.91, 1e-8
     env = TinyContinuousEnv()
-    params = env.default_params
+    # The wrapper is typed for gymnax's own parameters; this environment is small
+    # enough to terminate inside a test and is not one of theirs.
+    params: Any = env.default_params
     wrapper = NormalizeRewardWrapper(env, gamma=gamma, eps=epsilon)
     normalizer = make_normalizer(
         NormalizationConfig(normalize_reward=True, reward_gamma=gamma, eps=epsilon)
