@@ -45,6 +45,7 @@ from memorax.algorithms.upstream_stream_ac import (
 from memorax.environments.wrappers.normalize_observation import (
     NormalizeObservationWrapper,
 )
+from memorax.environments.wrappers.normalize_reward import NormalizeRewardWrapper
 from memorax.networks import RNN, FeatureExtractor, Network, RTUCell, RTUConfig, heads
 from memorax.rl import NormalizationConfig, make_normalizer, make_obgd_rule, make_td0
 
@@ -285,11 +286,6 @@ def test_the_observation_statistics_are_upstreams():
     reset observation in before anything is normalised. We do the same inside
     the kernel over a batch of streams, so the comparison drives one stream at a
     time on their side and reads the matching row on ours.
-
-    The reward half of the normaliser is not here. Upstream's version of it is
-    not reachable: it sits inline in a wrapper step that both needs a live
-    environment and logs through ``lox``. Comparing it would mean rewriting its
-    six lines in this file, and two copies of a guess agreeing proves nothing.
     """
 
     epsilon = 1e-8
@@ -355,6 +351,98 @@ def test_the_observation_statistics_are_upstreams():
                 ),
                 f"observation statistics step={step} env={env}",
             )
+
+
+def test_the_reward_scale_is_upstreams():
+    """Block: running reward normalisation, and the channel that survives it.
+
+    Upstream scales the reward by the spread of the discounted return, in a
+    wrapper that replaces the reward on its way out of the environment. Ours does
+    the same arithmetic inside the kernel, which is what lets it keep what the
+    environment paid; the wrapper had nothing to keep it in, so it now leaves it
+    in ``info``, and this drives the wrapper for real rather than restating its
+    six lines here.
+
+    So three things are asserted at once, on the same rollout: the scale is theirs
+    leaf for leaf, the statistics behind it are theirs, and the reward the wrapper
+    parks in ``info`` is the one the environment paid rather than the one the
+    agent learns on. The last is what an episode return is read off, and reading
+    it off the wrong one is how a score in normalised units came to be compared
+    against a recorded one in the task's.
+    """
+
+    gamma, epsilon = 0.91, 1e-8
+    env = TinyContinuousEnv()
+    params = env.default_params
+    wrapper = NormalizeRewardWrapper(env, gamma=gamma, eps=epsilon)
+    normalizer = make_normalizer(
+        NormalizationConfig(normalize_reward=True, reward_gamma=gamma, eps=epsilon)
+    )
+
+    actions = jax.random.normal(jax.random.key(5), (6, ENVS, 2), dtype=jnp.float32)
+    nothing = jnp.zeros((ENVS, 2), dtype=jnp.float32)
+
+    def row(state, action):
+        """One stream through the wrapper, which is written for one."""
+
+        _, state, scaled, done, info = wrapper.step(
+            jax.random.key(0), state, action, params
+        )
+        return state, (scaled, info["environment_reward"], done)
+
+    states = [wrapper.reset(jax.random.key(env), params)[1] for env in range(ENVS)]
+    rollout = []
+    for step in actions:
+        stepped = [row(states[env], step[env]) for env in range(ENVS)]
+        states = [state for state, _ in stepped]
+        readings = [reading for _, reading in stepped]
+        rollout.append(
+            {
+                name: jnp.stack([jnp.asarray(reading[index]) for reading in readings])
+                for index, name in enumerate(("scaled", "paid", "done"))
+            }
+            | {
+                name: jnp.stack([getattr(state, name) for state in states])
+                for name in ("mean", "M2", "count", "G")
+            }
+        )
+
+    # Ours: the whole batch at once, fed the reward the wrapper says was paid.
+    _, state = normalizer.reset(nothing)
+    for step, theirs in enumerate(rollout):
+        outcome = normalizer.step(
+            state,
+            observation=nothing,
+            reward=theirs["paid"],
+            done=theirs["done"],
+        )
+        state = outcome.state
+        statistics = state.reward
+        assert statistics is not None, (
+            "the normaliser stopped keeping reward statistics"
+        )
+        assert_within(
+            flattened(
+                {
+                    "scaled": outcome.reward,
+                    "mean": statistics.mean,
+                    "M2": statistics.M2,
+                    "count": statistics.count,
+                    "G": statistics.G,
+                }
+            ),
+            flattened(
+                {name: theirs[name] for name in ("scaled", "mean", "M2", "count", "G")}
+            ),
+            f"reward scale step={step}",
+        )
+
+    # And the two channels are two channels, or there was nothing here to
+    # get wrong in the first place.
+    assert any(
+        deviations({"reward": theirs["paid"]}, {"reward": theirs["scaled"]})
+        for theirs in rollout
+    ), "the wrapper scaled nothing, so this rollout cannot tell the channels apart"
 
 
 def test_the_initial_second_moment_is_upstreams():

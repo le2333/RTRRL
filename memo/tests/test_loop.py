@@ -127,6 +127,36 @@ def test_the_whole_episode_is_scored_and_the_partial_ones_are_not():
     assert all("eval/episode_return" in report for report in scored)
 
 
+def test_an_episode_is_worth_what_was_paid_not_what_the_algorithm_was_shown():
+    """The scale an algorithm learns on is not the scale a score is read on.
+
+    A kernel that normalises inside itself keeps the environment's own reward for
+    the summary, and this argument is for the other arrangement: normalisation in
+    an environment wrapper, which overwrites the reward before the algorithm ever
+    sees it. The entry that wrapped the environment is what knows where the
+    untouched one went, so it hands it in, and both the episode returns and the
+    reported mean have to come from it rather than from the summary.
+    """
+
+    shown, paid = Recorder(), Recorder()
+    run_arithmetic(shown)
+    run_arithmetic(paid, eval_reward=lambda summary: summary.reward / 10)
+
+    assert [episode.rewards for episode in paid.episodes] != [
+        episode.rewards for episode in shown.episodes
+    ]
+    for one, other in zip(paid.episodes, shown.episodes, strict=True):
+        assert one.rewards == pytest.approx([reward / 10 for reward in other.rewards])
+
+    def scores(recorder, key):
+        return [report[key] for _, report in recorder.reports if key in report]
+
+    for key in ("eval/reward", "eval/episode_return"):
+        assert scores(paid, key) == pytest.approx(
+            [value / 10 for value in scores(shown, key)]
+        )
+
+
 def test_evaluation_can_be_switched_off_entirely():
     recorder = Recorder()
     run_arithmetic(recorder, eval_steps=0)
@@ -157,7 +187,7 @@ def test_the_catalog_is_the_entries_directory_and_nothing_written_down():
     modules = discover()
 
     assert set(catalog.entries) == set(modules)
-    assert set(catalog.entries) == {"rtrrl", "stream_ac"}
+    assert set(catalog.entries) == {"rtrrl", "stream_ac", "upstream_stream_ac"}
     for name, entry in catalog.entries.items():
         assert entry.command == ("python", "-m", f"{entries.__name__}.{name}")
         assert set(entry.space) == set(modules[name].SPACE)

@@ -64,6 +64,11 @@ class NormalizeRewardWrapper(GymnaxWrapper):
             }
         )
 
+        # What the environment paid, kept beside the scaled reward it is being
+        # replaced by. The agent learns on the scaled one; an episode return is a
+        # statement about the task and has to be readable in the task's own units.
+        info = {**info, "environment_reward": reward}
+
         new_state = NormalizeRewardWrapperState(
             mean=mean,
             M2=M2,

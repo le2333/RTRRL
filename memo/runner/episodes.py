@@ -22,13 +22,22 @@ def complete_episodes(
     start_env_steps: int,
     num_envs: int,
     first_number: int = 1,
+    rewards=None,
 ) -> Iterator[Episode]:
-    """Yield every episode that both starts and ends inside the rollout."""
+    """Yield every episode that both starts and ends inside the rollout.
+
+    The rewards may be given rather than read off the summary, because what an
+    episode is worth is a statement about the task and an algorithm is entitled
+    to learn on another scale. A kernel that normalises internally keeps the
+    environment's own reward for the summary and needs nothing here; one that
+    normalises in an environment wrapper has had it overwritten, and its entry --
+    which is what knows the wrapper is there -- passes the untouched one in.
+    """
 
     before = np.asarray(summary.observation)
     after = np.asarray(summary.next_observation)
     actions = np.asarray(summary.action)
-    rewards = np.asarray(summary.reward)
+    rewards = np.asarray(summary.reward if rewards is None else rewards)
     dones = np.asarray(summary.done).astype(bool)
     steps = dones.shape[0]
 

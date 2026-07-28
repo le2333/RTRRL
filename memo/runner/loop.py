@@ -50,9 +50,11 @@ def report_evaluation(
     done: int,
     num_envs: int,
     number: int,
+    rewards=None,
 ) -> int:
     """Report the score, and hand every whole episode to the viewer."""
 
+    paid = summary.reward if rewards is None else rewards
     returns: list[float] = []
     lengths: list[int] = []
     for episode in complete_episodes(
@@ -61,13 +63,14 @@ def report_evaluation(
         start_env_steps=done,
         num_envs=num_envs,
         first_number=number,
+        rewards=paid,
     ):
         reporter.log_episode(episode)
         number = episode.number + 1
         returns.append(float(sum(episode.rewards)))
         lengths.append(len(episode.actions))
 
-    report = {"eval/reward": float(jnp.nanmean(summary.reward))}
+    report = {"eval/reward": float(jnp.nanmean(paid))}
     # A mean over no episodes would be reported as zero and read as a score.
     if returns:
         report["eval/episode_return"] = sum(returns) / len(returns)
@@ -88,12 +91,17 @@ def drive(
     num_envs: int,
     seed: int,
     training_report: Callable[[Any], Mapping[str, float]],
+    eval_reward: Callable[[Any], Any] | None = None,
 ) -> None:
     """Run the algorithm to its budget, reporting once per epoch.
 
     Three functions rather than an object, so that an algorithm can be a class
     with methods or a built program holding closures without either having to
     become the other to be driven.
+
+    ``eval_reward`` picks what an episode was worth out of the summary, for the
+    entry whose environment hands its algorithm a rescaled reward. Left out, the
+    summary's own reward is what it was worth.
     """
 
     epochs = whole_epochs(
@@ -118,7 +126,12 @@ def drive(
         key, eval_key = jax.random.split(key)
         _, summary = evaluate(eval_key, state, eval_steps)
         number = report_evaluation(
-            reporter, summary, done=done, num_envs=num_envs, number=number
+            reporter,
+            summary,
+            done=done,
+            num_envs=num_envs,
+            number=number,
+            rewards=None if eval_reward is None else eval_reward(summary),
         )
 
 
