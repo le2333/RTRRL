@@ -156,6 +156,9 @@ jobs:
           import jax
           print("jax", jax.__version__, "backend here:", jax.default_backend())
           '
+          # And a debugger, since a native abort on a GPU instance is only worth
+          # one job if the stack can be read out of it.
+          docker run --rm "$IMAGE" gdb --version | head -n 1
 
       - name: Verify the Hopper the experiment asks for actually builds
         shell: bash

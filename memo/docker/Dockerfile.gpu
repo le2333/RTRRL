@@ -18,6 +18,15 @@ FROM python:3.12.11-slim-bookworm@sha256:c00fc7b44d844b6da22861ec24af43968a5200e
 ARG TRAINER_CATALOG_V2
 RUN test -n "${TRAINER_CATALOG_V2}"
 LABEL org.rtrrl.trainer.catalog.v2="${TRAINER_CATALOG_V2}"
+# A debugger, because this is the image where things die without a Python frame:
+# the CUDA plugin aborts inside native code during compilation, and faulthandler
+# has nothing to print for a thread that never entered the interpreter. Without
+# gdb here the only way to work such a crash is to guess at compiler flags, one
+# ten-minute job at a time, and a guess that happens to dodge it still cannot
+# name it. Sixty megabytes on a multi-gigabyte CUDA image.
+RUN apt-get update \
+ && apt-get install --no-install-recommends -y gdb \
+ && rm -rf /var/lib/apt/lists/*
 COPY --from=builder /opt/venv /opt/venv
 COPY memo/catalog.json /opt/trainer/catalog.json
 # No JAX_PLATFORM_NAME here: the CUDA plugin picks the GPU when the driver is
