@@ -71,7 +71,10 @@ def ensure_log_group(session: Any) -> None:
     try:
         logs.create_log_group(logGroupName=JOB_LOG_GROUP)
     except ClientError as error:
-        if error.response.get("Error", {}).get("Code") != "ResourceAlreadyExistsException":
+        if (
+            error.response.get("Error", {}).get("Code")
+            != "ResourceAlreadyExistsException"
+        ):
             raise
     logs.put_retention_policy(
         logGroupName=JOB_LOG_GROUP,
@@ -79,11 +82,16 @@ def ensure_log_group(session: Any) -> None:
     )
 
 
-def register_definitions(session: Any, *, cpu_image: str, gpu_image: str) -> list[str]:
+def register_definitions(
+    session: Any, *, cpu_image: str, gpu_image: str | None
+) -> list[str]:
     batch = session.client("batch")
     arns: list[str] = []
     for binding in QUEUES.values():
+        if binding.gpus_per_job and gpu_image is None:
+            continue
         image = gpu_image if binding.gpus_per_job else cpu_image
+        assert image is not None
         digest = image.rsplit("@", 1)[1]
         response = batch.register_job_definition(
             jobDefinitionName=job_definition_name(binding, digest),
@@ -126,7 +134,8 @@ def deploy(
         return {
             "mode": "dry-run",
             "planned_definitions": [
-                job_definition_name(binding, "sha256:<digest>") for binding in QUEUES.values()
+                job_definition_name(binding, "sha256:<digest>")
+                for binding in QUEUES.values()
             ],
             "log_group": JOB_LOG_GROUP,
             "worker_command": WORKER_COMMAND,
@@ -135,8 +144,13 @@ def deploy(
     if confirm_account != ACCOUNT_ID:
         raise ValueError(f"registering requires --confirm-account {ACCOUNT_ID}")
     cpu_image = validated_digest(cpu_digest, "cpu")
-    gpu_image = validated_digest(gpu_digest, "gpu")
-    if cpu_image == gpu_image:
+    # A GPU digest is optional because building the CUDA image is optional: it
+    # doubles a build and the GPU aborts inside the compiler's fusion emitter, so
+    # it is built when someone is working on that and not otherwise. Omitting it
+    # leaves the GPU profiles unregistered, which is what a launch onto a GPU
+    # queue will then say, before it costs an instance to find out.
+    gpu_image = validated_digest(gpu_digest, "gpu") if gpu_digest else None
+    if gpu_image is not None and cpu_image == gpu_image:
         raise ValueError("the CPU and GPU images must be different digests")
 
     active = session or boto3.Session(region_name=REGION)
@@ -150,7 +164,7 @@ def deploy(
     definitions = register_definitions(active, cpu_image=cpu_image, gpu_image=gpu_image)
     return {
         "mode": "register",
-        "images": {"cpu": cpu_image, "gpu": gpu_image},
+        "images": {"cpu": cpu_image, **({"gpu": gpu_image} if gpu_image else {})},
         "job_definitions": definitions,
         "log_group": JOB_LOG_GROUP,
         "worker_command": WORKER_COMMAND,

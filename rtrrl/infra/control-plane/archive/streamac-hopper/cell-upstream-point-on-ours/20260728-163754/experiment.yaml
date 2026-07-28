@@ -1,0 +1,74 @@
+experiment: streamac-hopper
+name: cell-upstream-point-on-ours
+description: >
+  One cell of a two-by-two: this kernel, truncated credit, at the point the upstream search found.
+
+  Each search's best point is run under both implementations, so the four cells
+  differ in exactly two things and a row of them can be read. The earlier attempt
+  at this could not be read, because the two kernels spent one seed differently --
+  seven keys against three -- and so began from different parameters and different
+  environment resets. They now begin from the same ones, asserted leaf by leaf at
+  zero last bits, which is what makes a single run per cell worth anything on a
+  task whose seed spread is a thousand points wide.
+
+  What the columns answer: whether a point that one implementation found good is
+  good under the other, from the same start. What is left over after that is the
+  frameworks' own difference, and the one candidate still uncontrolled is where
+  normalisation lives -- inside this kernel, around the reference's environment.
+
+image: 007122174918.dkr.ecr.eu-north-1.amazonaws.com/rtrrl@sha256:db44f57d2a09848e3bd75908a8a43bec196bc478f45c8593b2064fc7822eaa7e
+entry: stream_ac
+storage: s3://rtrrl-artifacts-007122174918/trainer
+
+compute:
+  # What the search ran on: two cores and 3.5 GiB, about 19 minutes for these
+  # two million steps, and 40% cheaper per trial than the xlarge that was 21%
+  # faster. A c7a.medium runs out of memory on sixteen streams.
+  instance_type: c7a.large
+  timeout_minutes: 90
+
+hpo:
+  sampler: grid
+  rounds: 1
+  trials_per_round: 1
+  parallel_jobs: 1
+
+space:
+  environment: [brax::hopper]
+  env_mode: [P]
+  env_backend: [spring]
+  backbone: [rtu]
+  seed: [0]
+  num_envs: [16]
+  total_steps: [2000000]
+  epoch_steps: [100000]
+  eval_steps: [1000]
+  hidden_dim: [128]
+  feature_dim: [32]
+  meta_rl: [true]
+  normalize_observation: [true]
+  normalize_reward: [true]
+  gamma: [0.99]
+  # The point the reference's own search settled on, copied unrounded.
+  trace_lambda: [0.9797411807117462]
+  actor_lr: [0.05499866812307019]
+  critic_lr: [0.0010141983465261348]
+  actor_kappa: [9.247649246034655]
+  critic_kappa: [9.826203892009069]
+  entropy_coefficient: [1.6264746914214218e-06]
+  bounded_rule: ["obgd"]
+  credit: [tbptt]
+  beta2: [0.999]
+  eps: [1.0e-8]
+
+score:
+  metric: eval/episode_return
+  window_steps: [0, 2000000]
+  reduce: max
+  direction: maximize
+  non_finite: worst
+
+logging:
+  aim: aim://172.31.62.192:53801
+  every_steps: 1
+  rerun_every_episodes: 16

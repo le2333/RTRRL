@@ -42,19 +42,29 @@ class FakeBatch:
 
 
 class FakeLogs:
-    def __init__(self, *, exists: bool = False, create_error: str | None = None) -> None:
+    def __init__(
+        self, *, exists: bool = False, create_error: str | None = None
+    ) -> None:
         self.exists = exists
         self.create_error = create_error
         self.created: list[str] = []
         self.retention: list[tuple[str, int]] = []
 
-    def create_log_group(self, logGroupName: str) -> None:  # noqa: N803 - botocore casing
-        code = self.create_error or ("ResourceAlreadyExistsException" if self.exists else None)
+    def create_log_group(
+        self, logGroupName: str
+    ) -> None:  # noqa: N803 - botocore casing
+        code = self.create_error or (
+            "ResourceAlreadyExistsException" if self.exists else None
+        )
         if code is not None:
-            raise ClientError({"Error": {"Code": code, "Message": code}}, "CreateLogGroup")
+            raise ClientError(
+                {"Error": {"Code": code, "Message": code}}, "CreateLogGroup"
+            )
         self.created.append(logGroupName)
 
-    def put_retention_policy(self, logGroupName: str, retentionInDays: int) -> None:  # noqa: N803
+    def put_retention_policy(
+        self, logGroupName: str, retentionInDays: int
+    ) -> None:  # noqa: N803
         self.retention.append((logGroupName, retentionInDays))
 
 
@@ -121,13 +131,45 @@ def test_register_binds_every_profile_to_a_digest(script: Any) -> None:
         assert properties["jobRoleArn"] == JOB_ROLE_ARN
         assert properties["executionRoleArn"] == EXECUTION_ROLE_ARN
         assert call["retryStrategy"] == {"attempts": 1}
-        requirements = {item["type"]: item["value"] for item in properties["resourceRequirements"]}
+        requirements = {
+            item["type"]: item["value"] for item in properties["resourceRequirements"]
+        }
         assert requirements["VCPU"] == str(binding.vcpus_per_job)
         assert requirements["MEMORY"] == str(binding.memory_mib)
         if binding.gpus_per_job:
             assert requirements["GPU"] == str(binding.gpus_per_job)
         else:
             assert "GPU" not in requirements
+
+
+def test_without_a_cuda_image_only_the_cpu_profiles_are_bound(script: Any) -> None:
+    """A build that skipped the CUDA image should still be deployable.
+
+    Building it triples a build's minutes and sets its wall clock, and nothing
+    runs on it while the GPU aborts inside the compiler, so it is built on
+    request. What must not happen is that skipping it blocks binding the CPU
+    image: a GPU profile left unregistered is a launch that stops at validation,
+    which costs nothing, while a build held hostage costs every launch.
+    """
+    session = FakeSession()
+
+    report = script.deploy(
+        register=True,
+        confirm_account=ACCOUNT_ID,
+        cpu_digest=CPU_IMAGE,
+        session=session,
+    )
+
+    expected = [binding for binding in QUEUES.values() if not binding.gpus_per_job]
+    assert expected, "there are no CPU profiles to bind"
+    assert len(session.batch.calls) == len(expected)
+    assert len(report["job_definitions"]) == len(expected)
+    assert "gpu" not in report["images"]
+    for call in session.batch.calls:
+        properties = call["containerProperties"]
+        assert properties["image"] == CPU_IMAGE
+        requirements = {item["type"] for item in properties["resourceRequirements"]}
+        assert "GPU" not in requirements
 
 
 def test_the_registered_command_is_the_sdk_worker(script: Any) -> None:
@@ -148,7 +190,11 @@ def test_the_registered_command_is_the_sdk_worker(script: Any) -> None:
     )
 
     for call in session.batch.calls:
-        assert call["containerProperties"]["command"] == ["python", "-m", "training_sdk.worker"]
+        assert call["containerProperties"]["command"] == [
+            "python",
+            "-m",
+            "training_sdk.worker",
+        ]
 
 
 def test_register_creates_the_retained_log_group(script: Any) -> None:
@@ -207,7 +253,7 @@ def test_a_denied_log_group_is_not_swallowed(script: Any) -> None:
         ({"confirm_account": None}, "confirm-account"),
         ({"confirm_account": "000000000000"}, "confirm-account"),
         ({"cpu_digest": None}, "cpu-digest"),
-        ({"gpu_digest": None}, "gpu-digest"),
+        ({"gpu_digest": f"{REGISTRY}/rtrrl:latest"}, "a tag is not accepted"),
         ({"cpu_digest": f"{REGISTRY}/rtrrl:latest"}, "a tag is not accepted"),
         ({"cpu_digest": GPU_IMAGE}, "different digests"),
     ],
@@ -247,7 +293,9 @@ def test_register_refuses_the_wrong_account(script: Any) -> None:
     assert session.batch.calls == []
 
 
-def test_the_cli_prints_stable_json(script: Any, capsys: pytest.CaptureFixture[str]) -> None:
+def test_the_cli_prints_stable_json(
+    script: Any, capsys: pytest.CaptureFixture[str]
+) -> None:
     assert script.main([]) == 0
 
     payload = json.loads(capsys.readouterr().out)

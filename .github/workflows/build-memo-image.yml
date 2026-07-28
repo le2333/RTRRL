@@ -21,6 +21,11 @@ on:
         required: false
         type: string
         default: ""
+      gpu:
+        description: "Also build the CUDA image (parked: the GPU aborts in XLA's fusion emitter)"
+        required: false
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -37,13 +42,14 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        include:
-          - variant: cpu
-            dockerfile: memo/docker/Dockerfile.cpu
-          - variant: gpu
-            dockerfile: memo/docker/Dockerfile.gpu
+        # The CUDA variant is built on request only. It costs three times the CPU
+        # variant's minutes and it is the one that sets a build's wall clock,
+        # while the GPU itself aborts inside XLA's fusion emitter and so nothing
+        # currently runs on the image. Ask for it when working on that.
+        variant: ${{ fromJSON(inputs.gpu && '["cpu","gpu"]' || '["cpu"]') }}
     env:
       IMAGE: memo-trainer:${{ matrix.variant }}
+      DOCKERFILE: memo/docker/Dockerfile.${{ matrix.variant }}
     steps:
       - name: Check out source
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
@@ -79,7 +85,7 @@ jobs:
         uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8
         with:
           context: .
-          file: ${{ matrix.dockerfile }}
+          file: ${{ env.DOCKERFILE }}
           platforms: linux/amd64
           load: true
           push: false
@@ -191,15 +197,11 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        include:
-          - variant: cpu
-            dockerfile: memo/docker/Dockerfile.cpu
-            ecr_tag: memo-trainer-cpu-20260726
-          - variant: gpu
-            dockerfile: memo/docker/Dockerfile.gpu
-            ecr_tag: memo-trainer-gpu-20260726
+        variant: ${{ fromJSON(inputs.gpu && '["cpu","gpu"]' || '["cpu"]') }}
     env:
       IMAGE: memo-trainer:${{ matrix.variant }}
+      DOCKERFILE: memo/docker/Dockerfile.${{ matrix.variant }}
+      ECR_TAG: memo-trainer-${{ matrix.variant }}-20260726
     steps:
       - name: Check out source
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
@@ -233,7 +235,7 @@ jobs:
         uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8
         with:
           context: .
-          file: ${{ matrix.dockerfile }}
+          file: ${{ env.DOCKERFILE }}
           platforms: linux/amd64
           load: true
           push: false
@@ -277,7 +279,7 @@ jobs:
         shell: bash
         env:
           REGISTRY: ${{ steps.ecr.outputs.registry }}
-          TAG: ${{ matrix.ecr_tag }}
+          TAG: ${{ env.ECR_TAG }}
           VARIANT: ${{ matrix.variant }}
         run: |
           set -euo pipefail

@@ -1,0 +1,77 @@
+experiment: streamac-hopper
+name: swap-upstream-on-tbptt
+description: >
+  Upstream's best point, run on our framework under truncated credit.
+
+  The two searches that produced these points reached 1025.03 (ours, truncated
+  credit) and 1063.39 (upstream), from the same opening four trials over the same
+  space. Thirty-eight points apart is nothing to read: the sweep that recorded
+  1043.66 got 474.60 from the same settings under another seed, so the task's own
+  seed spread is hundreds of points wide.
+
+  What can be read is transfer. Each framework's best point is run on the other
+  here, both directions. A point that carries over says the two frameworks are
+  the same machine wearing different code; a point that collapses says whatever
+  the searches found is specific to the framework that found it, and then the
+  ceilings agreeing was luck rather than agreement.
+
+  This is the pair that replaces a seed sweep: a seed sweep would price the noise
+  around one point, and these two runs ask whether the points mean anything to
+  each other at all.
+
+image: 007122174918.dkr.ecr.eu-north-1.amazonaws.com/rtrrl@sha256:b33d69821d4dd8e601fea78b3dde331bacfd2797bda256da1dbdfeb5b1ce12a5
+entry: stream_ac
+storage: s3://rtrrl-artifacts-007122174918/trainer
+
+compute:
+  # What the search ran on: two cores and 3.5 GiB, about 19 minutes for these
+  # two million steps, and 40% cheaper per trial than the xlarge that was 21%
+  # faster. A c7a.medium runs out of memory on sixteen streams.
+  instance_type: c7a.large
+  timeout_minutes: 90
+
+hpo:
+  sampler: grid
+  rounds: 1
+  trials_per_round: 1
+  parallel_jobs: 1
+
+space:
+  environment: [brax::hopper]
+  env_mode: [P]
+  env_backend: [spring]
+  backbone: [rtu]
+  seed: [0]
+  num_envs: [16]
+  total_steps: [2000000]
+  epoch_steps: [100000]
+  eval_steps: [1000]
+  hidden_dim: [128]
+  feature_dim: [32]
+  meta_rl: [true]
+  normalize_observation: [true]
+  normalize_reward: [true]
+  gamma: [0.99]
+  # Trial 4, copied from the search report rather than rounded.
+  trace_lambda: [0.9797411807117462]
+  actor_lr: [0.05499866812307019]
+  critic_lr: [0.0010141983465261348]
+  actor_kappa: [9.247649246034655]
+  critic_kappa: [9.826203892009069]
+  entropy_coefficient: [1.6264746914214218e-06]
+  bounded_rule: ["obgd"]
+  credit: [tbptt]
+  beta2: [0.999]
+  eps: [1.0e-8]
+
+score:
+  metric: eval/episode_return
+  window_steps: [0, 2000000]
+  reduce: max
+  direction: maximize
+  non_finite: worst
+
+logging:
+  aim: aim://172.31.62.192:53801
+  every_steps: 1
+  rerun_every_episodes: 16
