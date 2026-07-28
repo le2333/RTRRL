@@ -354,6 +354,43 @@ def test_the_observation_statistics_are_upstreams():
             )
 
 
+def test_one_seed_buys_both_kernels_the_same_start():
+    """The same seed should start the two kernels in the same place.
+
+    Two implementations of one algorithm can be compared at a single seed only
+    if the seed buys them the same starting parameters; otherwise a run of each
+    at matched hyperparameters compares two different draws, and on a task whose
+    seed spread is hundreds of points that comparison says nothing. The seed is
+    spent here by splitting it seven ways in the reference's order, two of those
+    keys feeding rng streams our networks never ask for, so that every stream
+    both kernels do use receives the same key.
+
+    Asserted for truncated credit, which is the setting the reference computes.
+    Exact credit initialises the recurrent cell through its Jacobian instead of
+    its forward, and is not claimed to land on the same parameters.
+    """
+
+    key = jax.random.key(11)
+    mine = ours(credit="tbptt").init(key)
+    theirs = upstream().init(key)
+
+    counted = assert_within(
+        flattened(mine.actor_params),
+        flattened(theirs.actor_params),
+        "the actor's start",
+    ) + assert_within(
+        flattened(mine.critic_params),
+        flattened(theirs.critic_params),
+        "the critic's start",
+    )
+    assert counted > 4, f"only {counted} parameters were compared"
+    assert_within(
+        flattened(mine.env_state),
+        flattened(theirs.env_state),
+        "the environments' start",
+    )
+
+
 def test_the_reward_scale_is_upstreams():
     """Block: running reward normalisation, and the channel that survives it.
 

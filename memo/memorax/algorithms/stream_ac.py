@@ -313,14 +313,15 @@ class StreamAC:
             metrics={"entropy": entropy},
         )
 
-    def _initialize_network(self, network, credit, key, timestep) -> NetworkState:
+    def _initialize_network(self, network, credit, keys, timestep) -> NetworkState:
         carry_shape = (self.cfg.num_envs, None)
         carry = network.initialize_carry(carry_shape)
-        sensitivity = credit.initialize(key, carry_shape)
+        param_key, torso_key, dropout_key = keys
+        sensitivity = credit.initialize(param_key, carry_shape)
         obs, done, action, reward = timestep
         with credit.initialization():
             params = network.init(
-                {"params": key},
+                {"params": param_key, "torso": torso_key, "dropout": dropout_key},
                 observation=obs,
                 action=action,
                 reward=reward,
@@ -340,7 +341,22 @@ class StreamAC:
         )
 
     def init(self, key) -> StreamACState:
-        env_key, actor_key, critic_key = jax.random.split(key, 3)
+        # Seven keys in this order because that is how the published kernel
+        # spends its seed. Two implementations of the same algorithm can only be
+        # compared at one seed if the seed buys them the same starting point,
+        # and drawing three keys where the reference draws seven makes every
+        # such comparison a comparison of two different draws instead. Two of
+        # the seven feed rng streams our networks do not ask for; they are drawn
+        # anyway, because what matters is which key each stream receives.
+        (
+            env_key,
+            actor_key,
+            actor_torso_key,
+            actor_dropout_key,
+            critic_key,
+            critic_torso_key,
+            critic_dropout_key,
+        ) = jax.random.split(key, 7)
         env_keys = jax.random.split(env_key, self.cfg.num_envs)
         obs, env_state = jax.vmap(self.env.reset, in_axes=(0, None))(
             env_keys,
@@ -361,10 +377,16 @@ class StreamAC:
             done=jnp.ones((self.cfg.num_envs,), dtype=jnp.bool_),
         ).to_sequence()
         actor = self._initialize_network(
-            self.actor_network, self.actor_credit, actor_key, timestep
+            self.actor_network,
+            self.actor_credit,
+            (actor_key, actor_torso_key, actor_dropout_key),
+            timestep,
         )
         critic = self._initialize_network(
-            self.critic_network, self.critic_credit, critic_key, timestep
+            self.critic_network,
+            self.critic_credit,
+            (critic_key, critic_torso_key, critic_dropout_key),
+            timestep,
         )
         return StreamACState(
             step=jnp.asarray(0, dtype=jnp.int32),
