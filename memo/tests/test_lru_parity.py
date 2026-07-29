@@ -59,6 +59,10 @@ from conftest import deviations, flattened
 from flax import traverse_util
 
 from memorax.networks.sequence_models.lru import LRUCarry, LRUCell, LRUConfig
+from memorax.networks.sequence_models.lru_upstream import (
+    PublishedLRUCell,
+    RewrittenLRUCell,
+)
 from memorax.networks.sequence_models.memoroid import Memoroid
 from memorax.networks.sequence_models.upstream_lru import OnlineLRULayer
 
@@ -196,16 +200,20 @@ def paper_step(layer, params, carry, x) -> tuple[Any, Any]:
     return cast(tuple[Any, Any], layer.apply(params, carry, x))
 
 
-def our_side(seed: int, *, skip: float = 0.0):
+def our_side(seed: int, *, skip: float = 0.0, cell=LRUCell):
     """Ours, its parameters injected, with the skip term the reference lacks.
 
     ``skip`` is the constant every element of ``D`` is set to. It is zero
     everywhere the readout is compared, since the reference has no such term at
     all, and non-zero only in the test that asserts the zero was doing work.
+
+    ``cell`` selects which of the three this drives. All three take the same
+    config and build the same tree, so the same injection reaches all of them --
+    which is the property the arms depend on, exercised here rather than assumed.
     """
 
     core = Memoroid(
-        cell=LRUCell(
+        cell=cell(
             config=LRUConfig(features=FEATURES, hidden_dim=HIDDEN, output_dim=HIDDEN)
         )
     )
@@ -263,24 +271,32 @@ def input_gain(values: dict):
     return jnp.exp(values["gamma_log"]) / values["gamma_log"]
 
 
-def expected_sensitivity(values: dict, traces) -> dict:
+def expected_sensitivity(values: dict, traces, *, correcting: bool = True) -> dict:
     """Our sensitivities as their influence matrices determine them.
 
     Theirs carry ``dh/dLambda``, ``dh/dgamma`` and ``dh/dB`` and chain the
     parameter derivatives on afterwards. Ours carry the chained quantity already,
     and since none of the three chain factors depends on the step, each is the
     other scaled by a constant.
+
+    ``correcting`` is what the two callers differ by, and the difference is the
+    point of having both. Our LRU exponentiates the input gain where theirs takes
+    its logarithm, so comparing it against theirs needs the factor; the arm that
+    reproduces their line needs the factor gone, and gets ``to_b`` as they compute
+    it. One expectation with a flag rather than two, so that no second
+    transcription of the same recursion can drift from this one.
     """
 
     lam = jnp.exp(-jnp.exp(values["nu_log"]) + 1j * jnp.exp(values["theta_log"]))
     gain = jnp.exp(values["gamma_log"])
     to_lambda, to_gamma, to_b = traces
+    factor = input_gain(values)[:, None] if correcting else 1.0
     return {
         "nu_log": -jnp.exp(values["nu_log"]) * lam * to_lambda,
         "theta_log": 1j * jnp.exp(values["theta_log"]) * lam * to_lambda,
         "gamma_log": gain * to_gamma,
-        "B_real": to_b * input_gain(values)[:, None],
-        "B_imag": 1j * to_b * input_gain(values)[:, None],
+        "B_real": to_b * factor,
+        "B_imag": 1j * to_b * factor,
     }
 
 
@@ -496,6 +512,113 @@ def test_the_scan_agrees_with_stepping():
         "one call against five",
     )
     assert_explained(worst, {}, "one call against five", default=UNROLLED)
+
+
+@pytest.mark.parametrize("seed", range(4))
+def test_the_published_arm_needs_no_correction(seed):
+    """The arm that reproduces their line agrees with it uncorrected.
+
+    Every comparison above scales their influence matrix for ``B`` by
+    ``exp(gamma_log) / gamma_log`` before ours will match it, because ours has
+    the exponential their published revision is missing. ``PublishedLRUCell`` is
+    ours with that one line put back the way they have it, so it is asserted
+    against the same reference with the factor removed -- the same recursion, the
+    same reference, one term different, and the term is the defect.
+
+    That is what makes the arm worth running. A learning curve from it is
+    comparable to theirs because the quantity it accumulates is theirs, not
+    theirs-up-to-a-correction, and the gap between it and our correct arm is then
+    the cost of the defect rather than the cost of two implementations differing.
+    """
+
+    layer, paper_params, paper_carry = paper_side(seed)
+    core, our_params, our_carry, sensitivity = our_side(seed, cell=PublishedLRUCell)
+    values = drawn(seed)
+    xs, _ = inputs(seed)
+
+    worst: dict = {}
+    for step, x in enumerate(xs):
+        paper_carry, _ = paper_step(layer, paper_params, paper_carry, x)
+        our_carry, _, sensitivity = our_step(
+            core, our_params, our_carry, sensitivity, x
+        )
+        watch(
+            worst,
+            flattened(jax.tree.map(lambda leaf: leaf[0, 0], sensitivity)),
+            flattened(expected_sensitivity(values, paper_carry[1], correcting=False)),
+            f"step={step}",
+        )
+    assert_explained(worst, INFLUENCE, f"published arm seed={seed}")
+
+
+def test_the_rewritten_arm_forgets_while_crediting_as_though_it_had_not():
+    """The other arm, and the disagreement it exists to hold open.
+
+    Their HEAD reshapes to a length-one sequence before an associative scan, so
+    the scan is the identity and the previous carry reaches the new state only to
+    supply its width. The influence matrices were not rewritten with it and still
+    accumulate under ``Lambda``. ``RewrittenLRUCell`` reproduces that by reporting
+    a decay of zero from the forward while ``local_jacobian`` keeps reporting
+    ``Lambda``, and both halves of that are asserted here, because an arm that
+    reproduced only the forgetting would be a different defect than theirs.
+
+    The forgetting is asserted by driving it from two different carries and
+    requiring the same state and readout. That is only worth asserting if the
+    carry could have mattered, so ours is driven from the same two and required to
+    differ. The credit is asserted against our correct cell stepped along the
+    rewritten carry sequence: same jacobians, same decay, so bit-exact and not
+    approximately, and if the rewrite ever reached the sensitivities that equality
+    is what breaks.
+    """
+
+    xs, _ = inputs(0)
+    core, params, empty, zeros = our_side(0, cell=RewrittenLRUCell)
+    correct, _, _, _ = our_side(0)
+
+    elsewhere = LRUCarry(
+        state=jnp.full_like(empty.state, 0.5 + 0.25j),
+        decay=jnp.full_like(empty.decay, 0.5),
+    )
+
+    forgotten: dict = {}
+    carry, credit = empty, zeros
+    other, other_credit = elsewhere, zeros
+    correct_credit = zeros
+    remembered, from_empty, from_elsewhere = [], empty, elsewhere
+    for step, x in enumerate(xs):
+        from_empty, _, _ = our_step(correct, params, from_empty, zeros, x)
+        from_elsewhere, _, _ = our_step(correct, params, from_elsewhere, zeros, x)
+        remembered.append(
+            float(jnp.max(jnp.abs(from_empty.state - from_elsewhere.state)))
+        )
+
+        # Ours, at the state theirs is in, credited by the machinery neither arm
+        # overrides. Its carry is discarded: the recurrence is in it, and the next
+        # step's jacobians have to come from the state the rewrite arrives at.
+        _, _, correct_credit = our_step(correct, params, carry, correct_credit, x)
+
+        carry, y, credit = our_step(core, params, carry, credit, x)
+        other, other_y, other_credit = our_step(core, params, other, other_credit, x)
+        watch(
+            forgotten,
+            flattened({"h": other.state, "y": other_y}),
+            flattened({"h": carry.state, "y": y}),
+            f"step={step}",
+        )
+        assert not deviations(credit, correct_credit), (
+            f"step={step}: the rewritten arm's sensitivities are not the ones our "
+            "correct cell accumulates from the same states, so the rewrite reached "
+            "the credit assignment, which at their HEAD it does not"
+        )
+
+    assert_explained(forgotten, {}, "the rewritten arm's state, from two carries")
+    # Ours keeps them apart at every step, by a margin that decays as |lambda|^t
+    # and has not reached the float noise the comparison above lives in.
+    assert min(remembered) > 1e-3, (
+        "our LRU driven from those same two carries also ended up in the same "
+        f"state, closest {min(remembered):.3g} apart, so requiring the rewritten "
+        "arm's states to agree did not establish that it has no memory"
+    )
 
 
 def test_the_missing_exponential_is_a_real_difference():

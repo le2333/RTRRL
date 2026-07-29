@@ -1,0 +1,8 @@
+{
+  "best": null,
+  "elapsed_seconds": 564.634,
+  "failure": "LaunchFailed: round 0 had 1 failed job(s)",
+  "launch_id": "20260726-214306",
+  "status": "failed",
+  "trials": []
+}
