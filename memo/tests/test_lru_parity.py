@@ -141,11 +141,15 @@ def drawn(seed: int) -> dict:
     }
 
 
-def inputs(seed: int):
-    """One stream of observations, and the weights a scalar reads them out by."""
+def inputs(seed: int, *, steps: int = STEPS):
+    """One stream of observations, and the weights a scalar reads them out by.
+
+    ``steps`` is longer only where the accumulation along the stream is the thing
+    being measured rather than bounded, which is the precision comparison.
+    """
 
     keys = jax.random.split(jax.random.key(seed + 1000), 2)
-    xs = jax.random.normal(keys[0], (STEPS, FEATURES), jnp.float32)
+    xs = jax.random.normal(keys[0], (steps, FEATURES), jnp.float32)
     weights = jax.random.normal(keys[1], (HIDDEN,), jnp.float32)
     return xs, weights
 
@@ -178,20 +182,35 @@ def _inject(tree, values: dict, spelling: dict) -> dict:
     return cast(dict, traverse_util.unflatten_dict(out))
 
 
-def paper_side(seed: int):
+def widened(values: dict, dtype) -> dict:
+    """The same draw, in the precision it is about to be computed in.
+
+    Widened rather than redrawn, so that the double-precision run is the same
+    problem as the single-precision one and the difference between them is the
+    rounding and nothing else. A float32 value is exact in float64, so this
+    changes no number.
+    """
+
+    real = jnp.finfo(dtype).dtype
+    return {name: value.astype(real) for name, value in values.items()}
+
+
+def paper_side(seed: int, *, dtype=jnp.complex64):
     """The published layer, its parameters injected, ready to be stepped."""
 
     layer = OnlineLRULayer(d_hidden=HIDDEN)
+    real = jnp.finfo(dtype).dtype
     carry = (
-        jnp.zeros((HIDDEN,), jnp.complex64),
+        jnp.zeros((HIDDEN,), dtype),
         (
-            jnp.zeros((HIDDEN,), jnp.complex64),
-            jnp.zeros((HIDDEN,), jnp.complex64),
-            jnp.zeros((HIDDEN, FEATURES), jnp.complex64),
+            jnp.zeros((HIDDEN,), dtype),
+            jnp.zeros((HIDDEN,), dtype),
+            jnp.zeros((HIDDEN, FEATURES), dtype),
         ),
     )
-    shaped = layer.init(jax.random.key(0), carry, jnp.zeros((FEATURES,), jnp.float32))
-    return layer, {"params": _inject(shaped["params"], drawn(seed), PAPER)}, carry
+    shaped = layer.init(jax.random.key(0), carry, jnp.zeros((FEATURES,), real))
+    values = widened(drawn(seed), dtype)
+    return layer, {"params": _inject(shaped["params"], values, PAPER)}, carry
 
 
 def paper_step(layer, params, carry, x) -> tuple[Any, Any]:
@@ -200,7 +219,7 @@ def paper_step(layer, params, carry, x) -> tuple[Any, Any]:
     return cast(tuple[Any, Any], layer.apply(params, carry, x))
 
 
-def our_side(seed: int, *, skip: float = 0.0, cell=LRUCell):
+def our_side(seed: int, *, skip: float = 0.0, cell=LRUCell, dtype=jnp.complex64):
     """Ours, its parameters injected, with the skip term the reference lacks.
 
     ``skip`` is the constant every element of ``D`` is set to. It is zero
@@ -217,26 +236,27 @@ def our_side(seed: int, *, skip: float = 0.0, cell=LRUCell):
             config=LRUConfig(features=FEATURES, hidden_dim=HIDDEN, output_dim=HIDDEN)
         )
     )
+    real = jnp.finfo(dtype).dtype
     carry = LRUCarry(
-        state=jnp.zeros((1, 1, HIDDEN), jnp.complex64),
-        decay=jnp.ones((1, 1, HIDDEN), jnp.complex64),
+        state=jnp.zeros((1, 1, HIDDEN), dtype),
+        decay=jnp.ones((1, 1, HIDDEN), dtype),
     )
     sensitivity = {
-        "nu_log": jnp.zeros((1, 1, HIDDEN), jnp.complex64),
-        "theta_log": jnp.zeros((1, 1, HIDDEN), jnp.complex64),
-        "gamma_log": jnp.zeros((1, 1, HIDDEN), jnp.complex64),
-        "B_real": jnp.zeros((1, 1, HIDDEN, FEATURES), jnp.complex64),
-        "B_imag": jnp.zeros((1, 1, HIDDEN, FEATURES), jnp.complex64),
+        "nu_log": jnp.zeros((1, 1, HIDDEN), dtype),
+        "theta_log": jnp.zeros((1, 1, HIDDEN), dtype),
+        "gamma_log": jnp.zeros((1, 1, HIDDEN), dtype),
+        "B_real": jnp.zeros((1, 1, HIDDEN, FEATURES), dtype),
+        "B_imag": jnp.zeros((1, 1, HIDDEN, FEATURES), dtype),
     }
-    values = dict(drawn(seed))
-    values["D"] = jnp.full((HIDDEN, FEATURES), skip, jnp.float32)
+    values = widened(drawn(seed), dtype)
+    values["D"] = jnp.full((HIDDEN, FEATURES), skip, real)
     # Traced through the method that will be applied, not through the plain
     # forward: the two are separate compact methods, and initialising against one
     # while running the other is how a parameter comes out shaped for a call the
     # run never makes.
     shaped = core.init(
         jax.random.key(0),
-        jnp.zeros((1, 1, FEATURES), jnp.float32),
+        jnp.zeros((1, 1, FEATURES), real),
         jnp.zeros((1, 1), bool),
         carry,
         sensitivity=sensitivity,
