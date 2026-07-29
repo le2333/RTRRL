@@ -210,11 +210,22 @@ def test_keying_the_sensitivity_by_parameter_costs_a_redundant_accumulator(capsy
     accumulate the previous carry against a constant, and ``B_imag`` is ``1j``
     times ``B_real``. So we carry the widest one, ``hidden * features``, twice.
 
-    Reported rather than tightly asserted, because the number is the input to a
-    decision -- whether to key by influence matrix and chain at the phantom, which
-    would keep the contract and drop the redundancy -- and not a property to
-    freeze. The assertion only holds the shape of the claim: we carry more, and
-    not unboundedly more.
+    The bill turned out to be memory alone. We carry 1.94x at hidden 32 and 1.97x
+    at hidden 128, and the duplicated accumulator explains all of it. The gradient
+    does not follow: 1.08x at the narrow width, and 0.92x at the width a hopper run
+    uses, where building each Jacobian already chained saves more than the extra
+    accumulator costs. Keying by parameter is cheaper to differentiate at the
+    widths that matter, which is the opposite of what the redundancy suggested.
+
+    So the decision this measurement was taken for -- whether to key by influence
+    matrix and chain at the phantom instead, dropping the duplication -- was made
+    against. It would buy back half the carried state, and cost a change to the
+    ``MemoroidCellBase`` contract that every cell implements, for no compute. Left
+    here as the reason, so that the question is not reopened without a run that
+    shows the carried state is what a configuration is short of.
+
+    Reported rather than tightly asserted either way. The assertion holds only the
+    shape of the claim: we carry more, and not unboundedly more.
     """
 
     lines, ratios = [], []
