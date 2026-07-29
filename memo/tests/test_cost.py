@@ -10,6 +10,7 @@ and had to be either explained or fixed.
 from __future__ import annotations
 
 from functools import partial
+from typing import Any, cast
 
 import jax
 import jax.numpy as jnp
@@ -151,11 +152,14 @@ def _ours_at(hidden: int, features: int):
         jax.random.key(0), x, done, carry, sensitivity=credit, method="local_jacobian"
     )["params"]
 
+    def stepped(p) -> tuple[Any, Any, Any]:
+        return cast(tuple[Any, Any, Any], step({"params": p}, x, done, carry))
+
     def loss(p):
-        _, y, _ = step({"params": p}, x, done, carry)
+        _, y, _ = stepped(p)
         return jnp.sum(y.real)
 
-    _, _, advanced = step({"params": params}, x, done, carry)
+    _, _, advanced = stepped(params)
     return loss, params, advanced
 
 
@@ -174,11 +178,14 @@ def _theirs_at(hidden: int, features: int):
     )
     params = layer.init(jax.random.key(0), carry, x)
 
+    def stepped(p) -> tuple[Any, Any]:
+        return cast(tuple[Any, Any], layer.apply(p, carry, x))
+
     def loss(p):
-        _, y = layer.apply(p, carry, x)
+        _, y = stepped(p)
         return jnp.sum(y)
 
-    advanced, _ = layer.apply(params, carry, x)
+    advanced, _ = stepped(params)
     return loss, params, advanced[1]
 
 
