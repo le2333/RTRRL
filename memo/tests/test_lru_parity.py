@@ -40,9 +40,12 @@ correction untestable.
 They accumulate ``dh/dLambda`` and chain it to ``nu_log`` and ``theta_log``
 afterwards, through a ``vjp`` of ``get_lambda``; we fold ``dLambda/dnu`` into the
 Jacobian before the scan. ``dLambda/dnu`` does not depend on the step, so
-factoring it out is the same quantity, but it is not the same operation, and the
-conjugation convention a ``vjp`` of a real-to-complex function applies is what
-those two leaves test.
+factoring it out is the same quantity, but it is not the same operation, and a
+``vjp`` of a real-to-complex function is where a conjugation convention would
+differ if the two had one. They do not. What those two leaves are apart by is
+single last bits, growing with the step, which is a distributive law rounding
+rather than a sign: conjugating one of them would put the gradient of every
+recurrent parameter into a different direction, not a different final bit.
 """
 
 from __future__ import annotations
@@ -73,22 +76,34 @@ PAPER = {"B_imaginary": "B_img", "C_imaginary": "C_img"}
 OURS = {"B_imaginary": "B_imag", "C_imaginary": "C_imag"}
 
 # Where the two agree on the arithmetic and disagree on the order of it, per leaf
-# and in last bits. Every entry below is the same cause: the input gain
-# ``exp(gamma_log)``. We fold it into the input projection before the recurrence
-# accumulates, so it is inside every term of the sum; they accumulate the bare
-# projection and multiply the gain on afterwards, so it is outside. Distributing
-# a scale over a sum of five terms is exact in arithmetic and is not exact in
-# float32, and the leaves it reaches are exactly the ones the gain touches --
-# ``gamma_log``, whose Jacobian is the projection itself, and ``B``, whose
-# Jacobian carries the gain as a factor. The readout inherits it through ``h``,
-# and inherits a second reassociation of its own: we contract ``C`` with an
-# ``einsum`` over a batched time axis where they write a matrix product over one
-# step. The gaps are fractions of a last bit that compound over the stream, and
-# the allowances are the worst measured over the four seeds with room for the
-# accumulation, not a tolerance chosen to make a comparison pass.
+# and in last bits. Every entry below has one cause, and it is the same cause for
+# all four recurrent parameters: a chain factor that does not depend on the step,
+# multiplied on the inside of the accumulation by us and on the outside by them.
+# We build each Jacobian already chained -- the input gain into the projection for
+# ``gamma_log`` and ``B``, ``dLambda/dnu`` and ``dLambda/dtheta`` into the carry
+# for ``nu_log`` and ``theta_log`` -- and then accumulate. They accumulate the
+# unchained influence matrices and chain afterwards, at the gradient. Distributing
+# a constant over a sum is exact in arithmetic and is not exact in float32, so the
+# gap is a fraction of a last bit per term and compounds along the stream, which
+# is why every worst case below lands at the third step or later rather than the
+# first. ``theta_log`` is the widest of them because its factor is a rotation:
+# ``1j * exp(theta_log) * Lambda`` sends real parts into imaginary ones, so the
+# cancellation it reassociates is the one with the least significance to spare.
+# The readout carries all of this through ``h`` and adds a contraction of its own,
+# an ``einsum`` over a batched time axis where they write a matrix product over a
+# single step. Every allowance is twice the worst of the four seeds, which is
+# headroom for the accumulation rather than a tolerance chosen to pass.
 READOUT = {"y": 8.0, "h": 2.0}
-INFLUENCE = {"gamma_log": 8.0, "B_real": 4.0, "B_imag": 4.0}
+INFLUENCE = {
+    "nu_log": 2.0,
+    "theta_log": 4.0,
+    "gamma_log": 8.0,
+    "B_real": 4.0,
+    "B_imag": 4.0,
+}
 CREDITED = {
+    "nu_log": 8.0,
+    "theta_log": 8.0,
     "gamma_log": 8.0,
     "B_real": 8.0,
     "B_imag": 8.0,
@@ -343,8 +358,9 @@ def test_the_influence_matrices_are_the_papers(seed):
     the parameter each credits. ``expected_sensitivity`` is the map between them,
     and it is arithmetic on their matrices rather than a restatement of ours.
 
-    ``nu_log`` and ``theta_log`` are expected to agree to the last bit, and the
-    whole stream is watched because the first step cannot tell whether they do.
+    The whole stream is watched because the first step cannot judge two of the
+    five: ``nu_log`` and ``theta_log`` are built from the previous carry, which is
+    zero there, so they agree at step zero however either side computes them.
     """
 
     layer, paper_params, paper_carry = paper_side(seed)
