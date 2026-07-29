@@ -9,10 +9,16 @@ and had to be either explained or fixed.
 
 from __future__ import annotations
 
+from functools import partial
+
 import jax
 import jax.numpy as jnp
 import pytest
 from test_blocks import ours, upstream
+
+from memorax.networks.sequence_models.lru import LRUCarry, LRUCell, LRUConfig
+from memorax.networks.sequence_models.memoroid import Memoroid
+from memorax.networks.sequence_models.upstream_lru import OnlineLRULayer
 
 STREAMS = (1, 2, 4, 8)
 
@@ -110,4 +116,123 @@ def test_exact_credit_costs_what_carrying_a_sensitivity_costs(capsys):
     assert 1.0 < ratio < 100.0, (
         f"exact credit costs {ratio:.2f}x truncated, which is outside the range "
         "carrying a per-parameter sensitivity can explain"
+    )
+
+
+# The widths a recorded hopper run used, and a narrower point to read the scaling
+# against. At the widths the parity test compares on -- three hidden units -- a
+# ratio would be fixed overhead rather than arithmetic.
+WIDTHS = ((32, 16), (128, 32))
+
+
+def _ours_at(hidden: int, features: int):
+    """Our LRU under exact credit, one stream, one step, ready to differentiate."""
+
+    core = Memoroid(
+        cell=LRUCell(
+            config=LRUConfig(features=features, hidden_dim=hidden, output_dim=hidden)
+        )
+    )
+    x = jnp.zeros((1, 1, features), jnp.float32)
+    done = jnp.zeros((1, 1), bool)
+    carry = LRUCarry(
+        state=jnp.zeros((1, 1, hidden), jnp.complex64),
+        decay=jnp.ones((1, 1, hidden), jnp.complex64),
+    )
+    credit = {
+        "nu_log": jnp.zeros((1, 1, hidden), jnp.complex64),
+        "theta_log": jnp.zeros((1, 1, hidden), jnp.complex64),
+        "gamma_log": jnp.zeros((1, 1, hidden), jnp.complex64),
+        "B_real": jnp.zeros((1, 1, hidden, features), jnp.complex64),
+        "B_imag": jnp.zeros((1, 1, hidden, features), jnp.complex64),
+    }
+    step = partial(core.apply, method="local_jacobian", sensitivity=credit)
+    params = core.init(
+        jax.random.key(0), x, done, carry, sensitivity=credit, method="local_jacobian"
+    )["params"]
+
+    def loss(p):
+        _, y, _ = step({"params": p}, x, done, carry)
+        return jnp.sum(y.real)
+
+    _, _, advanced = step({"params": params}, x, done, carry)
+    return loss, params, advanced
+
+
+def _theirs_at(hidden: int, features: int):
+    """The published LRU, same widths, same one step."""
+
+    layer = OnlineLRULayer(d_hidden=hidden)
+    x = jnp.zeros((features,), jnp.float32)
+    carry = (
+        jnp.zeros((hidden,), jnp.complex64),
+        (
+            jnp.zeros((hidden,), jnp.complex64),
+            jnp.zeros((hidden,), jnp.complex64),
+            jnp.zeros((hidden, features), jnp.complex64),
+        ),
+    )
+    params = layer.init(jax.random.key(0), carry, x)
+
+    def loss(p):
+        _, y = layer.apply(p, carry, x)
+        return jnp.sum(y)
+
+    advanced, _ = layer.apply(params, carry, x)
+    return loss, params, advanced[1]
+
+
+def _carried(tree) -> int:
+    """How many numbers the real-time credit has to carry between steps."""
+
+    return sum(int(leaf.size) for leaf in jax.tree.leaves(tree))
+
+
+def test_keying_the_sensitivity_by_parameter_costs_a_redundant_accumulator(capsys):
+    """What our contract charges for being a contract, measured not argued.
+
+    Both implementations carry the same real-time credit. They key it by
+    influence matrix -- ``dh/dLambda``, ``dh/dgamma``, ``dh/dB`` -- and chain each
+    parameter's derivative on at the gradient. We key it by parameter, so the
+    Memoroid can pair a sensitivity with the parameter it credits without knowing
+    which cell produced it, and every cell in the package implements that one
+    contract.
+
+    The generality is not free and this measures the bill. Of our five
+    accumulators only three are independent: ``nu_log`` and ``theta_log`` both
+    accumulate the previous carry against a constant, and ``B_imag`` is ``1j``
+    times ``B_real``. So we carry the widest one, ``hidden * features``, twice.
+
+    Reported rather than tightly asserted, because the number is the input to a
+    decision -- whether to key by influence matrix and chain at the phantom, which
+    would keep the contract and drop the redundancy -- and not a property to
+    freeze. The assertion only holds the shape of the claim: we carry more, and
+    not unboundedly more.
+    """
+
+    lines, ratios = [], []
+    for hidden, features in WIDTHS:
+        ours_loss, ours_params, ours_credit = _ours_at(hidden, features)
+        theirs_loss, theirs_params, theirs_credit = _theirs_at(hidden, features)
+
+        ours_flops = flops(jax.grad(ours_loss), ours_params)
+        theirs_flops = flops(jax.grad(theirs_loss), theirs_params)
+        ours_state, theirs_state = _carried(ours_credit), _carried(theirs_credit)
+        ratios.append(ours_state / theirs_state)
+
+        lines.append(
+            f"\n  hidden {hidden:3d}, features {features:2d}:"
+            f"\n    carried   ours {ours_state:8d}   theirs {theirs_state:8d}"
+            f"   ({ours_state / theirs_state:.2f}x)"
+            f"\n    gradient  ours {ours_flops:8.0f}   theirs {theirs_flops:8.0f}"
+            f"   ({ours_flops / theirs_flops:.2f}x)"
+        )
+
+    with capsys.disabled():
+        print("".join(lines))
+
+    assert all(1.0 < ratio < 3.0 for ratio in ratios), (
+        "the sensitivity we carry is not between one and three times the one "
+        f"they carry, which is outside what a duplicated accumulator explains:"
+        f"{''.join(lines)}"
     )

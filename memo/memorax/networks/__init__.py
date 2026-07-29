@@ -54,6 +54,8 @@ from memorax.networks.sequence_models import (
     MinGRUCarry,
     MinGRUCell,
     MinGRUConfig,
+    PublishedLRUCell,
+    RewrittenLRUCell,
     RL2Wrapper,
     RTUCarry,
     RTUCell,
@@ -76,5 +78,10 @@ from memorax.networks.sequence_models import (
     sLSTMCell,
     sLSTMConfig,
 )
-from memorax.networks.torso import RECURRENT_TORSOS, TORSOS, make_torso
+from memorax.networks.torso import (
+    RECURRENT_TORSOS,
+    TORSOS,
+    UPSTREAM_TORSOS,
+    make_torso,
+)
 from memorax.networks.vit import PatchEmbedding, ViT

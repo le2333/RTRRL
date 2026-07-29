@@ -19,12 +19,28 @@ from memorax.networks.sequence_models import (
     Memoroid,
     Memoryless,
     MemorylessConfig,
+    PublishedLRUCell,
+    RewrittenLRUCell,
     RTUCell,
     RTUConfig,
 )
 
 RECURRENT_TORSOS = ("lru", "rtu")
 TORSOS = (*RECURRENT_TORSOS, "mlp")
+
+# The RTRRL authors' two revisions of the LRU, each ours with one line put back
+# the way theirs has it. Deliberately outside ``TORSOS``: they are not torsos to
+# train with, they are arms to compare a reproduction against, and only the entry
+# running that comparison should offer them. What makes them usable as arms is
+# that they take the same config and build the same parameter tree as ``lru``,
+# which is visible below rather than asserted here.
+UPSTREAM_TORSOS = ("lru_published", "lru_rewritten")
+
+_LRU_CELLS = {
+    "lru": LRUCell,
+    "lru_published": PublishedLRUCell,
+    "lru_rewritten": RewrittenLRUCell,
+}
 
 
 def make_torso(name: str, *, features: int, hidden_dim: int, output_dim: int | None):
@@ -34,9 +50,9 @@ def make_torso(name: str, *, features: int, hidden_dim: int, output_dim: int | N
         return RNN(
             cell=RTUCell(config=RTUConfig(features=features, hidden_dim=hidden_dim))
         )
-    if name == "lru":
+    if name in _LRU_CELLS:
         return Memoroid(
-            cell=LRUCell(
+            cell=_LRU_CELLS[name](
                 config=LRUConfig(
                     features=features,
                     hidden_dim=hidden_dim,
@@ -48,4 +64,5 @@ def make_torso(name: str, *, features: int, hidden_dim: int, output_dim: int | N
         return Memoryless(
             config=MemorylessConfig(features=features, hidden_dim=hidden_dim)
         )
-    raise ValueError(f"unknown torso {name!r}; registered: {', '.join(TORSOS)}")
+    registered = ", ".join((*TORSOS, *UPSTREAM_TORSOS))
+    raise ValueError(f"unknown torso {name!r}; registered: {registered}")

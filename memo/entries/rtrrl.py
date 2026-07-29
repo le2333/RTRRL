@@ -25,6 +25,7 @@ from memorax.environments import make
 from memorax.environments.brax import masks
 from memorax.networks import (
     RECURRENT_TORSOS,
+    UPSTREAM_TORSOS,
     FeatureExtractor,
     heads,
     make_torso,
@@ -39,7 +40,9 @@ SPACE: dict[str, Any] = {
     "environment": [f"brax::{task}" for task in sorted(masks)],
     "env_mode": ["F", "P", "V"],
     "env_backend": ["generalized", "spring", "positional", "mjx"],
-    "backbone": list(RECURRENT_TORSOS),
+    # The two published revisions of the LRU are offered here and nowhere else:
+    # this is the entry whose reproduction they are the reference for.
+    "backbone": [*RECURRENT_TORSOS, *UPSTREAM_TORSOS],
     "hidden_dim": {"type": "int", "low": 1, "high": 512},
     "feature_dim": {"type": "int", "low": 1, "high": 512},
     "meta_rl": [False, True],
