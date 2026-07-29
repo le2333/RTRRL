@@ -49,6 +49,7 @@ space:
   meta_rl: [true]
   normalize_observation: [true]
   normalize_reward: [true]
+  normalization_statistics: ["ours"]
   gamma: [0.99]
   # The point this kernel's own search settled on, copied unrounded.
   trace_lambda: [0.5014290509167108]

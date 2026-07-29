@@ -48,6 +48,7 @@ space:
   meta_rl: [true]
   normalize_observation: [true]
   normalize_reward: [true]
+  normalization_statistics: ["ours"]
   gamma: [0.99]
   # The point the reference's own search settled on, copied unrounded.
   trace_lambda: [0.9797411807117462]

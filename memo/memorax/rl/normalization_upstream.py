@@ -38,7 +38,9 @@ attribute to nothing: it could be our framework, or it could be these three. An
 arm that reproduces them separates those, and what the defects cost is then
 measurable against our normaliser rather than mixed into it.
 
-Not a thing to train with. It exists to be compared against.
+Not a thing to train with. It exists to be compared against. Reached by asking
+``make_normalizer`` for ``statistics="upstream"``, which is also how an
+experiment selects it.
 """
 
 from __future__ import annotations
@@ -48,7 +50,6 @@ from dataclasses import replace
 import jax.numpy as jnp
 
 from .normalization import (
-    NormalizationConfig,
     Normalizer,
     NormalizerState,
     RewardStatistics,
@@ -141,9 +142,3 @@ class UpstreamNormalizer(Normalizer):
         return reward / jnp.sqrt(
             self._variance(state.M2, state.count) + self.config.eps
         )
-
-
-def make_upstream_normalizer(config: NormalizationConfig) -> UpstreamNormalizer:
-    """The arm, built from the same config ours is built from."""
-
-    return UpstreamNormalizer(config)

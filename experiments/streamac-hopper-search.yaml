@@ -68,6 +68,7 @@ space:
   meta_rl: [true]
   normalize_observation: [true]
   normalize_reward: [true]
+  normalization_statistics: ["ours"]
   gamma: [0.99]
   bounded_rule: ["obgd"]
   beta2: [0.999]

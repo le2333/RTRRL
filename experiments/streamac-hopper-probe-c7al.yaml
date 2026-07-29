@@ -46,6 +46,7 @@ space:
   meta_rl: [true]
   normalize_observation: [true]
   normalize_reward: [true]
+  normalization_statistics: ["ours"]
   gamma: [0.99]
   trace_lambda: [0.9060749966425912]
   actor_lr: [0.532246925974616]

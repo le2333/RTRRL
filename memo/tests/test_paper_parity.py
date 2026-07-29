@@ -41,6 +41,7 @@ from __future__ import annotations
 import importlib.util
 import os
 import sys
+from dataclasses import replace
 from pathlib import Path
 
 import jax
@@ -57,7 +58,6 @@ from memorax.rl import (
     make_obgd_rule,
     make_td0,
 )
-from memorax.rl.normalization_upstream import make_upstream_normalizer
 
 # What crossing frameworks costs, in float32 last bits. Chosen to be loose
 # enough for two float accumulation orders and tight enough that a misplaced
@@ -419,7 +419,11 @@ def normalizers(kind: str):
         eps=NORM_EPS,
         reward_gamma=NORM_GAMMA,
     )
-    return make_normalizer(config), make_upstream_normalizer(config)
+    # Both through the factory, so that what the experiments select by name is
+    # what gets compared here.
+    return make_normalizer(config), make_normalizer(
+        replace(config, statistics="upstream")
+    )
 
 
 def test_the_upstream_arm_normalises_observations_as_published(

@@ -13,6 +13,12 @@ from memorax.environments.wrappers import (
     NormalizeRewardWrapper,
 )
 
+# Whose running statistics to keep. ``ours`` is this file; ``upstream``
+# reproduces the three things streaming-drl's wrappers do differently, and is an
+# arm to compare against rather than a setting to train with.
+# ``normalization_upstream.py`` says what the three are.
+STATISTICS = ("ours", "upstream")
+
 
 @dataclass(frozen=True)
 class NormalizationConfig:
@@ -22,6 +28,7 @@ class NormalizationConfig:
     reward_gamma: float = 0.99
     reset_on_start: bool = True
     update_during_eval: bool = True
+    statistics: str = "ours"
 
 
 @struct.dataclass
@@ -240,9 +247,20 @@ def make_normalizer(config) -> Normalizer:
             reward_gamma=float(getattr(config, "normalization_reward_gamma", 0.99)),
             reset_on_start=bool(getattr(config, "reset_on_start", True)),
             update_during_eval=bool(getattr(config, "update_during_eval", True)),
+            statistics=str(getattr(config, "normalization_statistics", "ours")),
         )
     if config.reset_on_start and not config.update_during_eval:
         raise ValueError("reset_on_start=True requires update_during_eval=True")
+    if config.statistics not in STATISTICS:
+        raise ValueError(
+            f"unknown statistics {config.statistics!r}; use {', '.join(STATISTICS)}"
+        )
+    if config.statistics == "upstream":
+        # Imported here because that module subclasses this one's normaliser, and
+        # naming it at the top would close the circle.
+        from .normalization_upstream import UpstreamNormalizer
+
+        return UpstreamNormalizer(config)
     return Normalizer(config)
 
 

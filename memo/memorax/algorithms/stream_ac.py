@@ -58,6 +58,10 @@ class StreamACConfig:
     bounded_rule: str = "obgd"
     beta2: float = 0.999
     eps: float = 1e-8
+    # Whose running statistics to normalise with. Read by ``make_normalizer``
+    # when no explicit config is passed, and only meaningful when one of the two
+    # normalisation switches is on.
+    normalization_statistics: str = "ours"
 
 
 @struct.dataclass

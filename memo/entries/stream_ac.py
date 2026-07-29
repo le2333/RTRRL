@@ -42,7 +42,7 @@ from memorax.networks import (
     heads,
     make_torso,
 )
-from memorax.rl import BOUNDED_RULES, CREDITS, NormalizationConfig
+from memorax.rl import BOUNDED_RULES, CREDITS, STATISTICS, NormalizationConfig
 from runner.loop import drive, named_scalars
 
 _UNIT = {"type": "float", "low": 0.0, "high": 1.0}
@@ -70,6 +70,11 @@ SPACE: dict[str, Any] = {
     # unusual one. First in the list is what the cheapest sampled point takes.
     "normalize_observation": [True, False],
     "normalize_reward": [True, False],
+    # Whose running statistics the two switches above keep. ``upstream`` is the
+    # arm reproducing what streaming-drl's wrappers do differently, and is here
+    # so a comparison against their curves can hold it fixed rather than leaving
+    # three unnamed differences inside every gap.
+    "normalization_statistics": list(STATISTICS),
     # Exact online credit, or one step of backpropagation and no sensitivity.
     "credit": list(CREDITS),
     # Independent streams whose updates are averaged. This divides the step
@@ -177,6 +182,7 @@ def build(params: Mapping[str, Any]) -> StreamAC:
             normalize_observation=bool(params["normalize_observation"]),
             normalize_reward=bool(params["normalize_reward"]),
             reward_gamma=gamma,
+            statistics=str(params["normalization_statistics"]),
         ),
     )
 

@@ -51,6 +51,7 @@ space:
   meta_rl: [true]
   normalize_observation: [true]
   normalize_reward: [true]
+  normalization_statistics: ["ours"]
   gamma: [0.99]
   # Trial 4, copied from the search report rather than rounded.
   trace_lambda: [0.9797411807117462]
