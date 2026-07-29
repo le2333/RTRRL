@@ -36,6 +36,20 @@ it: the two float64 runs agree to around 1e-16 while the errors being compared a
 around 1e-7, so either could serve and the answer would not change. That is the
 order the three sit in, and the reason the reference test comes first.
 
+Two formats and no more, which was a decision and not a limit reached. JAX stops
+at float64, and the ways past it -- x86 extended precision through numpy, or
+arbitrary precision through mpmath -- all require running the recurrence outside
+JAX, which means writing it a third time. Every comparison in this repository is
+built to keep a fresh reading of the code out from between the two sides, and a
+reference that is itself a transcription gives that up to buy three or four
+decimal digits. It is also unnecessary, which
+``test_the_disagreement_is_a_fixed_number_of_last_bits`` is here to show: the gap
+is the same one or two last bits in both formats and its absolute size travels
+with the epsilon across 5.4e8. Rounding does that and a difference in what is
+computed does not, so the two points already separate the cases by eight orders
+of magnitude, and a third point three digits below the second would not sharpen
+a distinction that wide.
+
 This module needs ``jax_enable_x64``, which is a process-wide flag JAX will not
 scope to a block, so it is skipped unless the process was started with it. CI
 runs it as its own step; ``memo-ci.yml`` has the invocation.
@@ -86,6 +100,26 @@ SINGLE = 1e-4
 # given host, and eleven orders of magnitude tighter than SINGLE, which is the
 # margin the whole comparison rests on.
 DOUBLE = 4e-15
+
+
+EPSILON = {
+    jnp.complex64: float(jnp.finfo(jnp.float32).eps),
+    jnp.complex128: float(jnp.finfo(jnp.float64).eps),
+}
+
+# How far the absolute gap between the two must move when the format's epsilon
+# moves by 5.4e8. Rounding travels with the epsilon and lands near that ratio;
+# a difference in what is computed does not travel at all and lands near one, so
+# anything above a million separates the two cases with room to spare. The bound
+# is not tighter because the ratio is a quotient of two near-cancellations and one
+# leaf reaches 3.4e7 on a draw where the float32 gap happened to come out at a
+# twentieth of a last bit.
+TRAVELS = 1e6
+
+# And how many last bits of its own format the gap is allowed to be, in either
+# format. The measured spread is 0.0 to 2.2; this is loose enough not to depend on
+# the host and tight enough that a gap growing with the stream would show.
+BITS = 8.0
 
 
 def relative(got, wanted) -> float:
@@ -206,6 +240,53 @@ def test_neither_order_is_meaningfully_more_faithful(seed):
     assert worst < SINGLE, (
         f"a float32 run is {worst:.3g} away from the float64 answer relatively, "
         f"which is past what accumulated single-precision rounding explains:{report}"
+    )
+
+
+@pytest.mark.parametrize("seed", range(4))
+def test_the_disagreement_is_a_fixed_number_of_last_bits(seed):
+    """The same gap in both formats, which is what settles what it is.
+
+    The test above shows the two implementations agreeing far more tightly at
+    float64 than at float32. That is consistent with rounding, but on its own it
+    is two numbers and an interpretation. This is the interpretation made
+    falsifiable: rounding is a property of the format, so the gap should be the
+    same size in last bits of whichever format it happens in, and its absolute
+    size should travel with the epsilon. A difference in what is computed is a
+    property of the arithmetic and would sit at the same absolute size in both.
+
+    Those two predictions are eight orders of magnitude apart -- the epsilons
+    differ by 5.4e8 -- so the measurement is not close to ambiguous. It is also
+    why no format above float64 is used here or needed. JAX has none, and reaching
+    one would mean reimplementing both LRUs outside it, which puts a fresh reading
+    of their code between the two sides and is the thing this comparison is built
+    to avoid. Another point three digits further down would say less than the two
+    already spanning 5.4e8 do.
+    """
+
+    single_ours, single_theirs = run(seed, jnp.complex64)
+    double_ours, double_theirs = run(seed, jnp.complex128)
+
+    lines, failures = [], []
+    for name in sorted(double_theirs):
+        single = relative(single_ours[name], single_theirs[name])
+        double = relative(double_ours[name], double_theirs[name])
+        bits = (single / EPSILON[jnp.complex64], double / EPSILON[jnp.complex128])
+        moved = single / double if double > 0 else float("inf")
+        lines.append(
+            f"  {name:10s} f32 {single:9.3g} ({bits[0]:5.1f} last bits)"
+            f"   f64 {double:9.3g} ({bits[1]:5.1f} last bits)   moved {moved:9.3g}x"
+        )
+        if moved < TRAVELS:
+            failures.append(f"{name} moved only {moved:.3g}x")
+        if max(bits) > BITS:
+            failures.append(f"{name} is {max(bits):.1f} last bits apart")
+
+    print(f"\nseed={seed}, {STEPS} steps:\n" + "\n".join(lines))
+    assert not failures, (
+        "the gap between the two implementations did not behave like rounding "
+        "when the format changed, so it is not only the order of operations that "
+        "separates them: " + "; ".join(failures) + "\n" + "\n".join(lines)
     )
 
 
