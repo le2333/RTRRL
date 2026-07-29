@@ -95,6 +95,9 @@ jobs:
       # in the precision the trainer runs in, and this asks what that precision
       # costs, by rerunning the two LRUs against a double-precision reference.
       - name: Compare the two LRUs against a double-precision reference
+        # Nothing it compares is touched by the suite above, so a failure there is
+        # not a reason to leave this unrun and unreported.
+        if: ${{ !cancelled() }}
         env:
           JAX_ENABLE_X64: "1"
         run: uv run pytest tests/test_lru_precision.py -v -s
