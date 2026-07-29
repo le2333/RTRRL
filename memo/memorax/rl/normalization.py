@@ -70,35 +70,45 @@ class Normalizer:
     def __init__(self, config: NormalizationConfig):
         self.config = config
 
-    def reset(self, observation, state=None, *, update=True):
-        """Normalize reset observations, cold-starting statistics when requested."""
-        observation = jnp.asarray(observation)
+    def _initial_state(self, observation) -> NormalizerState:
+        """Where the statistics start, before any observation is folded in.
+
+        A method so that a normaliser reproducing another implementation can
+        start where that one starts. Ours seeds a pseudo-observation of mean
+        zero and second moment one, which is not what upstream does and is the
+        first of the three differences ``normalization_upstream.py`` sets out.
+        """
+
         num_envs = observation.shape[0]
-        if state is None:
-            observation_stats = (
+        ones = jnp.ones((num_envs,), dtype=jnp.float32)
+        return NormalizerState(
+            observation=(
                 RunningStatistics(
                     mean=jnp.zeros_like(observation),
                     M2=jnp.ones_like(observation),
-                    count=jnp.ones((num_envs,), dtype=jnp.float32),
+                    count=ones,
                 )
                 if self.config.normalize_observation
                 else None
-            )
-            reward_stats = (
+            ),
+            reward=(
                 RewardStatistics(
                     mean=jnp.zeros((num_envs,), dtype=jnp.float32),
-                    M2=jnp.ones((num_envs,), dtype=jnp.float32),
-                    count=jnp.ones((num_envs,), dtype=jnp.float32),
+                    M2=ones,
+                    count=ones,
                     G=jnp.zeros((num_envs,), dtype=jnp.float32),
                 )
                 if self.config.normalize_reward
                 else None
-            )
-            state = NormalizerState(
-                observation=observation_stats,
-                reward=reward_stats,
-                episode_return=jnp.zeros((num_envs,), dtype=jnp.float32),
-            )
+            ),
+            episode_return=jnp.zeros((num_envs,), dtype=jnp.float32),
+        )
+
+    def reset(self, observation, state=None, *, update=True):
+        """Normalize reset observations, cold-starting statistics when requested."""
+        observation = jnp.asarray(observation)
+        if state is None:
+            state = self._initial_state(observation)
 
         observation_stats = state.observation
         normalized = observation
@@ -135,9 +145,7 @@ class Normalizer:
         if reward_stats is not None:
             if update:
                 reward_stats = self._update_reward(reward_stats, reward, done)
-            normalized_reward = reward / jnp.sqrt(
-                reward_stats.M2 / reward_stats.count + self.config.eps
-            )
+            normalized_reward = self._scale_reward(reward_stats, reward)
 
         accumulated_return = state.episode_return + reward
         next_episode_return = jnp.where(done, 0.0, accumulated_return)
@@ -164,6 +172,11 @@ class Normalizer:
     def _normalize_observation(self, state, observation):
         count = _expand_for(state.count, observation)
         return (observation - state.mean) / jnp.sqrt(state.M2 / count + self.config.eps)
+
+    def _scale_reward(self, state, reward):
+        """The spread the reward is divided by. Ours is ``M2 / count``."""
+
+        return reward / jnp.sqrt(state.M2 / state.count + self.config.eps)
 
     def _update_reward(self, state, reward, done):
         G = reward + self.config.reward_gamma * state.G * (1 - done)
