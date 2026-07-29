@@ -16,11 +16,16 @@ that are built from the previous carry are zero on both sides and agree for the
 one reason that proves nothing. They have to be watched for as long as they
 accumulate.
 
-Nothing here initialises either implementation from a seed. Two runtimes and two
-parameter trees spend a key in different orders, so every parameter is drawn once
-and injected into both, and ``_inject`` fails if either side has a parameter the
-draw does not cover. That is the guard against a comparison that quietly comes
-out exact because it compared nothing.
+No comparison against the reference initialises either side from a seed. Two
+runtimes and two parameter trees spend a key in different orders, so every
+parameter is drawn once and injected into both, and ``_inject`` fails if either
+side has a parameter the draw does not cover. That is the guard against a
+comparison that quietly comes out exact because it compared nothing.
+
+The three arms are the exception, and the last test here is about them. They are
+one runtime and one tree, so a seed does buy them a start, and it has to buy all
+three the same one or an end-to-end comparison between them is a comparison of
+different draws rather than of their arithmetic.
 
 Three structural differences between the two are real and are asserted rather
 than tolerated:
@@ -65,6 +70,7 @@ from memorax.networks.sequence_models.lru_upstream import (
 )
 from memorax.networks.sequence_models.memoroid import Memoroid
 from memorax.networks.sequence_models.upstream_lru import OnlineLRULayer
+from memorax.networks.torso import make_torso
 
 # The published layer reads out with one matrix whose row count is the field it
 # was constructed with, so its output width and its hidden width are the same
@@ -195,6 +201,26 @@ def widened(values: dict, dtype) -> dict:
     return {name: value.astype(real) for name, value in values.items()}
 
 
+def cold_start(dtype):
+    """Our carry and sensitivity before any step, which is zeros and a unit decay.
+
+    The influence matrices being zero here is what makes the whole stream worth
+    watching rather than its first step, and it is the reason the module docstring
+    gives for accumulating the worst gap instead of stopping early.
+    """
+
+    return LRUCarry(
+        state=jnp.zeros((1, 1, HIDDEN), dtype),
+        decay=jnp.ones((1, 1, HIDDEN), dtype),
+    ), {
+        "nu_log": jnp.zeros((1, 1, HIDDEN), dtype),
+        "theta_log": jnp.zeros((1, 1, HIDDEN), dtype),
+        "gamma_log": jnp.zeros((1, 1, HIDDEN), dtype),
+        "B_real": jnp.zeros((1, 1, HIDDEN, FEATURES), dtype),
+        "B_imag": jnp.zeros((1, 1, HIDDEN, FEATURES), dtype),
+    }
+
+
 def paper_side(seed: int, *, dtype=jnp.complex64):
     """The published layer, its parameters injected, ready to be stepped."""
 
@@ -237,17 +263,7 @@ def our_side(seed: int, *, skip: float = 0.0, cell=LRUCell, dtype=jnp.complex64)
         )
     )
     real = jnp.finfo(dtype).dtype
-    carry = LRUCarry(
-        state=jnp.zeros((1, 1, HIDDEN), dtype),
-        decay=jnp.ones((1, 1, HIDDEN), dtype),
-    )
-    sensitivity = {
-        "nu_log": jnp.zeros((1, 1, HIDDEN), dtype),
-        "theta_log": jnp.zeros((1, 1, HIDDEN), dtype),
-        "gamma_log": jnp.zeros((1, 1, HIDDEN), dtype),
-        "B_real": jnp.zeros((1, 1, HIDDEN, FEATURES), dtype),
-        "B_imag": jnp.zeros((1, 1, HIDDEN, FEATURES), dtype),
-    }
+    carry, sensitivity = cold_start(dtype)
     values = widened(drawn(seed), dtype)
     values["D"] = jnp.full((HIDDEN, FEATURES), skip, real)
     # Traced through the method that will be applied, not through the plain
@@ -679,3 +695,56 @@ def test_the_skip_connection_would_have_been_seen():
         "a skip term of one half changed no readout, so injecting zeros for the "
         "term the reference lacks was not what made the two agree"
     )
+
+
+# Named as an experiment names them rather than as classes, because a name is
+# what an experiment selects and the registry is the part that has to hold.
+ARMS = ("lru", "lru_published", "lru_rewritten")
+
+
+def test_one_seed_buys_every_arm_the_same_start():
+    """The three arms differ in their arithmetic and not in where they begin.
+
+    Everything above injects one draw into both sides, because ours and the
+    reference are two runtimes whose parameter trees spend a key differently.
+    The three arms are not that: they are one runtime and one tree, so for them a
+    seed does buy a start, and running them against each other at one seed is a
+    comparison of their arithmetic only if it buys all three the same one.
+
+    Today it does, because they subclass one cell and declare no parameters of
+    their own. An arm that added a parameter, or declared the existing ones in
+    another order, would shift every draw after it and turn the comparison into
+    one of three different starting points -- without failing anything, since all
+    three would still run and still produce curves. That is the mistake
+    ``81d3195f`` found between the two StreamAC kernels, where one seed bought
+    two different sets of initial parameters and a thousand-point gap was read as
+    a framework difference.
+    """
+
+    carry, sensitivity = cold_start(jnp.complex64)
+    starts = {}
+    for arm in ARMS:
+        torso = make_torso(arm, features=FEATURES, hidden_dim=HIDDEN, output_dim=HIDDEN)
+        shaped = cast(
+            dict,
+            torso.init(
+                jax.random.key(0),
+                jnp.zeros((1, 1, FEATURES), jnp.float32),
+                jnp.zeros((1, 1), bool),
+                carry,
+                sensitivity=sensitivity,
+                method="local_jacobian",
+            ),
+        )
+        starts[arm] = flattened(shaped["params"])
+
+    ours = starts["lru"]
+    # Eight leaves: five recurrent, two readout matrices and the skip term. A tree
+    # that lost most of itself would compare almost nothing and still agree.
+    assert len(ours) >= 8, f"only {len(ours)} parameters to compare"
+    for arm in ARMS[1:]:
+        apart = deviations(starts[arm], ours, 0.0)
+        assert not apart, (
+            f"{arm} starts somewhere ours does not, so comparing the two end to "
+            f"end at one seed would compare two draws: {apart}"
+        )

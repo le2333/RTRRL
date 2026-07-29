@@ -17,7 +17,7 @@ name `testbench`.
 lines, and it serves all twelve test files. The arithmetic is not the problem.
 The problem is that a comparison cannot be read at the place it is written.
 
-Taking `test_lru_parity.py:398-415` as the example, six things are invisible
+Taking `test_lru_parity.py:387-422` as the example, six things are invisible
 there:
 
 The direction is positional. `watch(worst, A, B, ...)` gives no indication of
@@ -47,7 +47,7 @@ Across the suite the distant-constant problem accounts for about a dozen
 uppercase tables: `READOUT`, `INFLUENCE`, `CREDITED`, `UNROLLED`, `ALLOWED`,
 `FRAMEWORKS`, `SINGLE`, `DOUBLE`, `TRAVELS`, `BITS`, `REASSOCIATED`.
 
-## The verdict: three classes, measured rather than declared
+## The verdict: three classes
 
 Per-leaf tolerance budgets are replaced by three classes.
 
@@ -55,48 +55,160 @@ Per-leaf tolerance budgets are replaced by three classes.
 what most of `test_blocks.py` and the untoleranced sections of the golden
 comparison already assert.
 
-**Rounding.** The gap behaves the way floating-point rounding behaves. Two
-conditions are required and both must hold.
+The name is not a statistical claim, and the statistical reading was considered
+and rejected. Rounding error is zero-mean for reassociated sums and products of
+a sign-symmetric draw, because IEEE arithmetic is exact under negation, but that
+symmetry does not survive a non-odd function, and this algorithm applies `exp`
+to three parameters and divides the bounded step by `sqrt(v_hat) + 1e-6`.
+Differing reduction trees break it too: a tree reduction has systematically
+smaller error than a sequential one, so the difference carries a component tied
+to the data rather than a symmetric one. Separately, testing a mean needs far
+more samples than testing a maximum; four seeds can exclude only a gross bias.
+So bias is a signal worth reporting and not a verdict worth issuing, and a
+genuinely rounding-level gap that happens to be biased must not fail.
 
-The first is that the gap travels with the format's epsilon. Float32's epsilon
-is 1.19e-7 and float64's is 2.22e-16, a factor of 5.4e8, so recomputing at
-double precision must shrink the gap by that order. A difference in what is
-computed does not move at all. The threshold is 1e6, which separates the two
-hypotheses with more than two orders of margin on either side; the worst leaf
-measured in `test_lru_precision.py` reaches 3.4e7.
+**Rounding.** The gap is of the kind that rounding produces. Two conditions are
+required. One is about the size of the gap and is always the same; the other is
+about the nature of the gap and comes in a cheap form and a decisive form, of
+which only the cheap one is built now.
 
-The second is that the gap is only a few last bits within each format, with the
-threshold at 8. This condition is not redundant. An amplified rounding error
-scales with the format and is still enormous, and that is a statement about the
-conditioning of the computation rather than about the two implementations
-agreeing. Without this condition the first one would pass it.
+The first is magnitude: the gap is within a few last bits, with one global
+threshold of 8. This is one number where the suite currently has about a dozen
+per-leaf entries. It is looser than some of them — `INFLUENCE` allows `nu_log`
+2.0 and `READOUT` allows `h` 2.0, so those two leaves lose a factor of four in
+sensitivity. That is the price of removing the tables, and it is worth paying:
+a fourfold regression in rounding on one leaf is a smaller loss than a dozen
+hand-calibrated numbers nobody can check.
+
+The second is growth: the relative gap must grow as the accumulation lengthens.
+Rounding accumulates, so the relative gap grows roughly as the square root of
+the number of accumulated terms. A multiplicative difference in what is computed
+gives a constant relative gap instead — the missing exponential in the published
+influence matrix for `B` scales it by a fixed `gamma_log / exp(gamma_log)`
+whether the stream is five steps or forty. Two independent axes lengthen the
+accumulation and both are used: the stream length, and the width over which each
+contraction reduces.
 
 **Anomalous.** Everything else, and it fails.
 
-Both thresholds are adopted from `test_lru_precision.py:105-122`, where they
-were set from measurement rather than chosen. They are the only two numbers the
-package carries, and their exact placement barely matters because the two
-hypotheses they separate are eight orders of magnitude apart.
+### What the growth condition is and is not
 
-This is what removes the dozen tolerance tables and their justifying prose. A
-comparison stops saying "four last bits are allowed here, and here is a
-paragraph arguing that reassociation is why" and starts saying "the difference
-here must be of the kind that rounding produces", which is then measured.
+It is a weak discriminator and must be described as one. Between five and forty
+steps the square-root model predicts a factor of about three, so the two
+hypotheses are separated by roughly one order of magnitude once both axes are
+used — against the eight orders the precision test below achieves. A threshold
+placed in that window will admit false positives and false negatives.
 
-## The structural consequence
+It is kept because it costs nothing and because it is blind in a different place
+than the magnitude condition is. The magnitude condition cannot see a small
+constant relative difference; the growth condition can see exactly that, which
+is the class the missing exponential belongs to. Neither is decisive; the pair
+covers more than either.
 
-The rounding verdict cannot be applied to two arrays. It requires the same
-computation at two precisions, so what it takes is a pair of
-*precision-parametric computations* — callables that accept a dtype and return
-named leaves — rather than a pair of values.
+### The precision test, deferred
 
-This makes the package's central object a pair of computations, not a pair of
-arrays. `run(seed, dtype)` in `test_lru_precision.py:140-180` is the working
-prototype of that shape: it takes a dtype, drives both implementations over one
-stream, and returns each side flattened to named leaves.
+There is a third condition of the same shape, and where it is available it
+replaces the growth condition rather than joining it. It asks the same question
+— is this gap the kind rounding produces — and answers it decisively, so a
+comparison that can afford it has no use for the weaker screen.
 
-The unbiased and anomalous verdicts still work on plain values, so comparisons
-that never needed a tolerance are unaffected.
+It recomputes the comparison at double precision. Float32's epsilon is 1.19e-7
+and float64's is 2.22e-16, a factor of 5.4e8, so a rounding gap must shrink by
+that order while a difference in what is computed does not move at all.
+`test_lru_precision.py:246-290` implements this with a threshold of 1e6 against
+a worst measured leaf of 3.4e7, which is more than two orders of margin on
+either side.
+
+The magnitude condition is required in every case regardless, because neither
+the growth check nor the precision check can tell an amplified rounding error
+from an ordinary one, and an error that scales correctly while being enormous is
+a statement about the conditioning of the computation rather than about two
+implementations agreeing.
+
+It is deferred because it requires the computation to be precision-parametric
+and `memo/memorax/` names `float32` or `complex64` in 137 places. The fixture
+must accept a dtype from the first day anyway, so resuming it later costs
+nothing beyond threading the dtype through whichever computation is being
+compared.
+
+What is given up meanwhile is recorded rather than forgotten. Same-precision
+multi-case judgement can only see a difference where the draws land in the
+region it manifests. This repository has already been bitten by that class:
+`test_paper_parity.py:13-15` records that the fork moved `eps` out of a square
+root, which "while the second moment is near eps changes the step by a factor,
+not by a rounding" — invisible on any draw that stays away from `eps`. The
+guard `test_the_missing_exponential_is_a_real_difference` exists for the same
+reason. Multi-case lowers the chance that every draw sits at a degenerate point;
+it does not remove it, and sampling coverage becomes a standing assumption of
+the whole scheme.
+
+## Fixture and cases, fixture first
+
+The fixture is what mounts two implementations so they present the same
+interface. The cases are the points it is driven at. They are separate modules,
+and the fixture is designed first.
+
+They are currently one file. `test_lru_parity.py` is 682 lines: the fixture runs
+from line 73 to line 355 and the cases begin at the first parametrize on line
+357, so the seam is already clean and nearly halfway. That the fixture wants to
+be a module is not a hypothesis — `test_lru_precision.py:48-60` imports eleven
+names from `test_lru_parity` to reuse it, which is what reuse looks like when
+there is nowhere to reuse from.
+
+### Why the fixture comes first
+
+Every verdict is a statement about behaviour along an axis, so an axis the
+fixture does not expose is a verdict that cannot be issued. The growth condition
+is impossible without a stream-length axis and a width axis; the precision test
+is impossible without a dtype axis; multi-case is impossible without a seed
+axis. Deciding the axes is therefore the commitment, and it has to be made
+before the cases exist rather than discovered underneath them.
+
+### The axes
+
+`seed`, for multi-case. `steps`, for growth along the stream. `width`, for
+growth along each contraction. `dtype`, for the deferred precision test. `arm`,
+for selecting which implementation is mounted.
+
+Four of these already exist in `test_lru_parity.py`: `inputs` takes `steps`,
+`paper_side` and `our_side` take `dtype`, `our_side` takes `cell`, and every
+entry point takes `seed`. Width does not — `HIDDEN` and `FEATURES` are module
+constants at lines 73 and 74. Adding it is the one axis this design requires
+that is not already there, and it is required because it is the second
+independent way to lengthen an accumulation, which is what makes the growth
+condition worth having at all.
+
+`our_side` also carries `skip`, which is not an axis but a knob one vacuity
+guard needs. Knobs like that belong to the fixture too, but they are named
+separately so that the case modules can tell an axis from a lever.
+
+### What belongs to each
+
+The fixture owns mounting, injection, stepping, probe extraction, and the
+correspondence model. The correspondence model belongs here rather than with the
+cases because making two differently shaped things present the same probe names
+is exactly what a fixture does.
+
+It also owns the shape helpers, because stripping a leading batch axis and a
+leading time axis is this repository's convention rather than a general one.
+
+The cases own which points on the axes to visit, which probes to compare at,
+which verdict each comparison demands, and the vacuity guards.
+
+The package owns the three verdicts, driving a comparison along an axis and
+judging how the relative gap moves, the injection totality check, probe pairing,
+the scoreboard, and the flattening of a pytree to named leaves. None of these
+depend on what this repository's algorithms compute, which is what makes the
+package boundary defensible on a single sample: the correspondence models and
+the shape conventions, the two things that would have been overfitted to the
+LRU, are exactly the two the fixture keeps.
+
+### The risk
+
+Designing a fixture before all its cases exist can overfit it to the cases that
+happen to be at hand. The mitigation is that the axes are the only real
+commitment and they are derived from the verdicts rather than from the current
+tests; everything else in the fixture can move without disturbing a case.
 
 ## Architecture
 
@@ -113,7 +225,7 @@ stimulus side.
 
 The injection must be total in both directions: every leaf of each parameter
 tree is covered by the draw, and every drawn value is used by at least one side.
-`_inject` at `test_lru_parity.py:153-178` already implements exactly this, keyed
+`_inject` at `test_lru_parity.py:157-182` already implements exactly this, keyed
 on the last element of each path so that neither side's module nesting is
 written into the test. It is the equivalent of checking that no port is left
 floating, and it is what prevents a comparison that passes because it compared
@@ -151,7 +263,7 @@ nodes do not correspond even when their endpoints do. In the LRU case ours
 chains each parameter's derivative into the Jacobian before accumulating and the
 reference chains afterwards at the gradient, so the reference's three influence
 matrices have no counterpart on our side at all until they are translated.
-`expected_sensitivity` at `test_lru_parity.py:290-316` is that translation:
+`expected_sensitivity` at `test_lru_parity.py:294-320` is that translation:
 twenty-seven lines of arithmetic on their matrices, producing our five
 sensitivities.
 
@@ -164,7 +276,7 @@ skipped leaf.
 
 Accumulates across the stream, keeping the worst gap each leaf reached and the
 step it reached it at, then issues one verdict per leaf at the end.
-`watch` and `assert_explained` at `test_lru_parity.py:319-350` are the
+`watch` and `assert_explained` at `test_lru_parity.py:323-355` are the
 prototype.
 
 Watching the whole stream rather than stopping at the first disagreement is
@@ -178,28 +290,21 @@ context manager would make the closing impossible to forget, but it moves the
 failure's line number from the step that diverged to the end of the block, and
 the diagnostic value of the line number is worth more than the safety.
 
-## What lives where
-
-The package carries the vocabulary and the machinery: the three verdicts, the
-precision-parametric comparison, the totality check on stimulus injection, probe
-pairing, and the scoreboard. None of these depend on what this repository's
-algorithms compute.
-
-The repository keeps two things. Its shape helpers, because stripping a leading
-batch axis and a leading time axis is a local convention rather than a general
-one. And every correspondence model, because each is a statement about one
-specific pair of implementations.
-
 ## Boundaries
 
-**Golden snapshots cannot use the rounding verdict.** The recorded side of
-`test_stream_ac_golden.py` is a fixed float32 artifact from 2026-07-17. There is
-no double-precision counterpart and none can be made after the fact, because
+**Golden snapshots cannot use the rounding verdict at all.** Both of its
+conditions need the comparison rerun somewhere the recording cannot follow. The
+growth condition needs the accumulation lengthened, and the recorded side of
+`test_stream_ac_golden.py` is a fixed artifact of three steps at one width from
+2026-07-17. The precision condition needs a double-precision counterpart, and
 recomputing the past at higher precision is not something a recording supports.
 That comparison stays on the unbiased verdict plus the five hand-set allowances
-it already carries. A future recording that stores both precisions becomes
-eligible, and recording both should be the default when the snapshot generator
-is rebuilt.
+it already carries, and those five stay hand-set.
+
+This is an argument for what a rebuilt snapshot generator should record. A
+recording taken at two stream lengths, two widths and two precisions makes the
+whole verdict available to the golden comparison; a recording of one point does
+not, whatever tooling is later put around it.
 
 **Bit-identity across environments is not claimed.** It is not achievable in
 float32 under XLA, and this is already the repository's position: the golden
@@ -207,15 +312,20 @@ test asserts the jax version matches the recording, and
 `memo/docs/superpowers/specs/2026-07-20-rtrrl-numerical-modularization-design.md`
 states that snapshots are regression tests rather than proof.
 
-**Precision must be injectable before the rounding verdict applies.**
+**The deferred precision test needs precision to be injectable.**
 `memo/memorax/` names `float32` or `complex64` in 137 places, so precision is
-not currently a free parameter there. The surface that actually needs threading
-is much smaller than that number suggests: the LRU already takes a dtype through
+not a free parameter there today. The surface that actually needs threading is
+much smaller than that number suggests: the LRU already takes a dtype through
 `our_side` and `paper_side`, `test_blocks.py` needs it for the single leaf in
-`REASSOCIATED`, and the torch comparison is per-tensor and therefore easy. Any
-comparison whose double-precision arm silently stays in float32 must be reported
-as vacuous rather than as passing, which means verifying the dtype of every leaf
-on the high-precision side.
+`REASSOCIATED`, and the torch comparison is per-tensor and therefore easy.
+
+Whenever it is resumed, a comparison whose double-precision arm silently stayed
+in float32 must be reported as vacuous rather than as passing, which means
+verifying the dtype of every leaf on the high-precision side. This is the
+failure that looks exactly like success, and the repository has already met it:
+`test_lru_precision.py:151-154` records that a float32 draw held the whole
+comparison at float32 however the two implementations were run, "which is what
+it did at first".
 
 **Cross-process and cross-environment value capture is out of scope.** Both arms
 run in one process. Capturing a reference's values in its own environment and
@@ -224,16 +334,24 @@ needed for a reference whose dependencies cannot coexist with ours.
 
 ## Migration
 
-One file at a time, with the old and new spellings coexisting.
+The fixture is extracted first, because the axes it exposes decide which
+verdicts the cases can ask for. That extraction is mostly a move:
+`test_lru_parity.py:73-355` becomes a fixture module, the eleven names
+`test_lru_precision.py` imports from a test module start coming from it
+instead, and the one addition is the width axis, which means turning `HIDDEN`
+and `FEATURES` from module constants into parameters.
 
-The first target is the `INFLUENCE` comparison in
-`test_lru_parity.py:383-415`. It is the right one to start with because the LRU
-is already precision-parametric, so the rounding verdict can be applied to it
-without changing anything under `memo/memorax/` first, and because its five
-hand-set budgets with eighteen lines of supporting prose are the clearest
-example of what the three verdicts are meant to replace.
+Then one comparison at a time, with the old and new spellings coexisting.
 
-Success for that first conversion is judged by reading the converted file: the
-quantity, the direction, and the kind of agreement being asserted should all be
-visible at the comparison itself, and the eighteen lines should be gone rather
-than relocated.
+The first is `INFLUENCE`, at `test_lru_parity.py:387-422`. It is the right one
+to start with because its five hand-set budgets and eighteen lines of supporting
+prose are the clearest example of what the three verdicts replace, and because
+the accumulation it measures is the one the growth condition was chosen for: the
+influence matrices start at zero and build along the stream, so lengthening the
+stream is guaranteed to move a rounding gap.
+
+Success for that first conversion is judged by reading the converted file. The
+quantity, the direction and the kind of agreement being asserted should all be
+visible at the comparison itself; the eighteen lines should be gone rather than
+relocated; and the case module should contain no mounting, no injection and no
+translation between the two implementations.
