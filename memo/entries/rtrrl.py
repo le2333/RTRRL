@@ -22,7 +22,6 @@ from training_sdk.reporter import Reporter
 
 from memorax.algorithms.rtrrl import RTRRL, RTRRLConfig
 from memorax.environments import make
-from memorax.environments.brax import masks
 from memorax.networks import (
     RECURRENT_TORSOS,
     UPSTREAM_TORSOS,
@@ -35,9 +34,10 @@ from runner.loop import drive, named_scalars
 
 _UNIT = {"type": "float", "low": 0.0, "high": 1.0}
 _RATE = {"type": "float", "low": 1e-9, "high": 10.0, "log": True}
+BRAX_TASKS = ("ant", "halfcheetah", "hopper", "walker2d")
 
 SPACE: dict[str, Any] = {
-    "environment": [f"brax::{task}" for task in sorted(masks)],
+    "environment": [f"brax::{task}" for task in BRAX_TASKS],
     "env_mode": ["F", "P", "V"],
     "env_backend": ["generalized", "spring", "positional", "mjx"],
     # The two published revisions of the LRU are offered here and nowhere else:

@@ -3,31 +3,8 @@ from typing import Any
 import jax.numpy as jnp
 from gymnax.environments import EnvParams, spaces
 
-from memorax.environments.wrappers import GymnaxWrapper, MaskObservationWrapper
+from memorax.environments.wrappers import GymnaxWrapper, SelectObservationWrapper
 from memorax.utils.typing import Array, Key
-
-masks = {
-    "ant": {
-        "F": jnp.ones(27, dtype=jnp.bool),
-        "P": jnp.zeros(27, dtype=jnp.bool).at[:13].set(True),
-        "V": jnp.zeros(27, dtype=jnp.bool).at[13:].set(True),
-    },
-    "halfcheetah": {
-        "F": jnp.ones(17, dtype=jnp.bool),
-        "P": jnp.zeros(17, dtype=jnp.bool).at[jnp.array([0, 1, 2, 3, 8, 9, 10, 11, 12])].set(True),
-        "V": jnp.zeros(17, dtype=jnp.bool).at[jnp.array([4, 5, 6, 7, 13, 14, 15, 16])].set(True),
-    },
-    "hopper": {
-        "F": jnp.ones(11, dtype=jnp.bool),
-        "P": jnp.zeros(11, dtype=jnp.bool).at[:5].set(True),
-        "V": jnp.zeros(11, dtype=jnp.bool).at[5:].set(True),
-    },
-    "walker2d": {
-        "F": jnp.ones(17, dtype=jnp.bool),
-        "P": jnp.zeros(17, dtype=jnp.bool).at[:8].set(True),
-        "V": jnp.zeros(17, dtype=jnp.bool).at[8:].set(True),
-    },
-}
 
 
 class BraxGymnaxWrapper(GymnaxWrapper):
@@ -44,7 +21,9 @@ class BraxGymnaxWrapper(GymnaxWrapper):
         state = self._env.reset(key)
         return state.obs, state
 
-    def step(self, key: Key, state, action: Array, params) -> tuple[Array, Any, Array, Array, dict]:
+    def step(
+        self, key: Key, state, action: Array, params
+    ) -> tuple[Array, Any, Array, Array, dict]:
         next_state = self._env.step(state, action)
         return (
             next_state.obs,
@@ -69,17 +48,16 @@ class BraxGymnaxWrapper(GymnaxWrapper):
         )
 
 
-def make(env_id: str, mode="F", backend="generalized", **kwargs) -> tuple:
+def make(env_id: str, observed=None, backend="generalized", **kwargs) -> tuple:
     from brax import envs
     from brax.envs.wrappers.training import AutoResetWrapper, EpisodeWrapper
 
     env = envs.get_environment(env_name=env_id, backend=backend, **kwargs)
     env = EpisodeWrapper(env, episode_length=1000, action_repeat=1)
     env = AutoResetWrapper(env)
-    env = BraxGymnaxWrapper(
-        env,
-    )
-    env = MaskObservationWrapper(env, mask=masks[env_id][mode])
+    env = BraxGymnaxWrapper(env)
+    if observed is not None:
+        env = SelectObservationWrapper(env, observed)
 
     env_params = env.default_params
     return env, env_params

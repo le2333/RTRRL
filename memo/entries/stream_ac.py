@@ -34,7 +34,6 @@ from training_sdk.reporter import Reporter
 
 from memorax.algorithms.stream_ac import StreamAC, StreamACConfig
 from memorax.environments import make
-from memorax.environments.brax import masks
 from memorax.networks import (
     TORSOS,
     FeatureExtractor,
@@ -47,13 +46,14 @@ from runner.loop import drive, named_scalars
 
 _UNIT = {"type": "float", "low": 0.0, "high": 1.0}
 _RATE = {"type": "float", "low": 1e-9, "high": 10.0, "log": True}
+BRAX_TASKS = ("ant", "halfcheetah", "hopper", "walker2d")
 
 SPACE: dict[str, Any] = {
     # Exactly the Brax tasks a mask has been worked out for, because masking is
     # the point of this recipe and an unmasked task belongs in another file.
     # Taken from the table rather than copied out of it, so the list cannot
     # come to name a task that has no mask.
-    "environment": [f"brax::{task}" for task in sorted(masks)],
+    "environment": [f"brax::{task}" for task in BRAX_TASKS],
     # F is fully observed; P leaves only positions and V only velocities, which
     # is what makes these tasks worth a recurrent policy at all.
     "env_mode": ["F", "P", "V"],

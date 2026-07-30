@@ -42,7 +42,6 @@ from memorax.algorithms.upstream_stream_ac import (
     UpstreamStreamACConfig,
 )
 from memorax.environments import make
-from memorax.environments.brax import masks
 from memorax.environments.wrappers.normalize_observation import (
     NormalizeObservationWrapper,
 )
@@ -58,12 +57,13 @@ from runner.loop import drive, named_scalars
 
 _UNIT = {"type": "float", "low": 0.0, "high": 1.0}
 _RATE = {"type": "float", "low": 1e-9, "high": 10.0, "log": True}
+BRAX_TASKS = ("ant", "halfcheetah", "hopper", "walker2d")
 
 # The same names and the same limits as ``stream_ac``, minus the one parameter
 # upstream does not have, so that one experiment file can be pointed at either
 # entry and mean the same thing.
 SPACE: dict[str, Any] = {
-    "environment": [f"brax::{task}" for task in sorted(masks)],
+    "environment": [f"brax::{task}" for task in BRAX_TASKS],
     "env_mode": ["F", "P", "V"],
     "env_backend": ["generalized", "spring", "positional", "mjx"],
     "backbone": list(TORSOS),
