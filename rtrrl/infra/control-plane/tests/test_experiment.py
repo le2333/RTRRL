@@ -131,6 +131,17 @@ def test_a_budget_must_describe_whole_positive_epochs(
         load_experiment(path)
 
 
+def test_eval_steps_may_be_zero(tmp_path: Path) -> None:
+    document = _document()
+    document["budget"]["eval_steps"] = 0
+    path = tmp_path / "experiment.yaml"
+    path.write_text(yaml.safe_dump(document), encoding="utf-8")
+
+    experiment = load_experiment(path)
+
+    assert experiment.budget.eval_steps == 0
+
+
 @pytest.mark.parametrize(
     "reserved",
     [
