@@ -26,11 +26,24 @@ def flattened(tree) -> dict:
     }
 
 
+def _widened(array) -> np.ndarray:
+    """The same numbers in the widest format that keeps all of them.
+
+    Complex arrays widen to complex128. Widening them to float64 is what numpy
+    does on request and it discards the imaginary part with a warning, which
+    turned every imaginary disagreement into no disagreement.
+    """
+
+    array = np.asarray(array)
+    return array.astype(np.complex128 if np.iscomplexobj(array) else np.float64)
+
+
 def last_bits(wanted, got) -> float:
     """How many float32 last bits apart two arrays are, at their own scale."""
 
+    wanted, got = _widened(wanted), _widened(got)
     scale = max(float(np.abs(wanted).max()), float(np.abs(got).max()), 1e-6)
-    gap = float(np.max(np.abs(got.astype(np.float64) - wanted.astype(np.float64))))
+    gap = float(np.max(np.abs(got - wanted)))
     return gap / float(np.spacing(np.float32(scale)))
 
 
