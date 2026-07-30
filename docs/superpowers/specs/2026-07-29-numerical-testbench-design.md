@@ -47,6 +47,22 @@ Across the suite the distant-constant problem accounts for about a dozen
 uppercase tables: `READOUT`, `INFLUENCE`, `CREDITED`, `UNROLLED`, `ALLOWED`,
 `FRAMEWORKS`, `SINGLE`, `DOUBLE`, `TRAVELS`, `BITS`, `REASSOCIATED`.
 
+The seventh thing is not legibility. `conftest.last_bits:33` subtracts after
+casting both sides with `.astype(np.float64)`, and on complex input numpy
+discards the imaginary part, warns, and continues. A disagreement of exactly
+`1j` is therefore measured as a gap of zero. The quantities `test_lru_parity.py`
+exists to compare are complex — the hidden state and all five sensitivities are
+`complex64` — so its central comparison has been reading real parts only, and
+the run's warning count is where the evidence has been sitting.
+
+That bug is worth more than an argument, because it is exactly the failure this
+design is organised around. It is not a threshold set too loosely. It is a
+comparison that ran, reported nothing, and established nothing, and no
+adjustment to any of the eleven tables above would have revealed it. The library
+answers it in two places: one widening rule, tested on the input that used to
+return zero, in the one function that measures a gap; and probe pairing that
+refuses a comparison rather than quietly passing it.
+
 ## The verdict: three classes
 
 Per-leaf tolerance budgets are replaced by three classes.
@@ -74,11 +90,40 @@ which only the cheap one is built now.
 
 The first is magnitude: the gap is within a few last bits, with one global
 threshold of 8. This is one number where the suite currently has about a dozen
-per-leaf entries. It is looser than some of them — `INFLUENCE` allows `nu_log`
-2.0 and `READOUT` allows `h` 2.0, so those two leaves lose a factor of four in
-sensitivity. That is the price of removing the tables, and it is worth paying:
-a fourfold regression in rounding on one leaf is a smaller loss than a dozen
-hand-calibrated numbers nobody can check.
+per-leaf entries, and it is nominally looser than several of them — `INFLUENCE`
+allows `nu_log` 2.0 and `READOUT` allows `h` 2.0.
+
+Very little detection power is actually lost, because the per-leaf spread is not
+calibration. Three things say so.
+
+`test_lru_parity.py:104` states how the entries were obtained: each is twice the
+worst of four seeds, then rounded to a power of two. The maximum of four samples
+has enormous variance, so the distance between 2.0 and 4.0 is within what a
+different four draws would produce. To use 2.0 as an instrument one would have
+to distinguish a fourfold growth in `nu_log`'s rounding from a change of seed,
+and four samples cannot do that.
+
+The prose accompanying those entries contradicts them. Line 99 says `theta_log`
+is the widest of the group because its chain factor is a rotation; the table
+three lines below gives `theta_log` 4.0 and `gamma_log` 8.0.
+
+The mechanism that prose offers predicts the wrong order. The chain factors are
+`-exp(nu_log) * Lambda` and `1j * exp(theta_log) * Lambda`, both complex, against
+`exp(gamma_log)` and `exp(gamma_log) / gamma_log`, both real. A real scaling
+reassociates more benignly than a complex one and a rotation worst of all, which
+predicts `theta_log` above `nu_log` above `gamma_log`. Measured, `gamma_log` is
+the widest of the three. A mechanism that does fit is visible in the reference's
+recursion at `memo/memorax/networks/sequence_models/upstream_lru.py:127-135`:
+`new_grad_lambda` adds `h_tminus1` with no inner reduction, `new_grad_B` adds an
+outer product with none either, and `new_grad_gamma` adds `inputs @ B.T`, a
+length-`FEATURES` contraction over signed values that carries a reassociation and
+a cancellation of its own. That is a hypothesis from reading the recursion; the
+file establishes neither it nor the one it states.
+
+There is also a precedent inside the same file. `CREDITED` already gives all five
+recurrent parameters 8.0 and both readout matrices 4.0, so at the gradient the
+per-leaf discrimination was already given up in favour of one number per group.
+A global threshold brings `INFLUENCE` to where `CREDITED` already is.
 
 The second is growth: the relative gap must grow as the accumulation lengthens.
 Rounding accumulates, so the relative gap grows roughly as the square root of
@@ -349,6 +394,12 @@ prose are the clearest example of what the three verdicts replace, and because
 the accumulation it measures is the one the growth condition was chosen for: the
 influence matrices start at zero and build along the stream, so lengthening the
 stream is guaranteed to move a rounding gap.
+
+Converting it also settles the contradiction those eighteen lines contain, since
+the claim that `theta_log` is the widest and the table that makes `gamma_log`
+widest cannot both survive into a scheme with one threshold. The contradiction is
+itself the argument for the scheme: numbers set by measurement and justified by
+prose written beside them will drift apart, and nothing in the file can notice.
 
 Success for that first conversion is judged by reading the converted file. The
 quantity, the direction and the kind of agreement being asserted should all be
