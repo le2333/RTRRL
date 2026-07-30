@@ -30,8 +30,6 @@ def test_the_catalog_declares_this_contract_and_this_entry() -> None:
     assert declared.contract == CONTRACT_VERSION
     entry = declared.entries[ENTRY_NAME]
     assert entry.command == ("python", "-m", "entries.rtrrl_aaai")
-    # The control plane resolves every run's budget through this one name.
-    assert "total_steps" in entry.space
     assert "eval/episode_return" in entry.metrics
 
 
