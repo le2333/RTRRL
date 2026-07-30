@@ -34,15 +34,6 @@ RECORDED = {
     "credit": "rtrl",
     "bounded_rule": "obgd",
 }
-CONTROL = {
-    "environment",
-    "env_mode",
-    "env_backend",
-    "num_envs",
-    "total_steps",
-    "epoch_steps",
-    "eval_steps",
-}
 
 
 @pytest.fixture(scope="module")
@@ -65,7 +56,7 @@ def test_the_experiment_names_the_entry_and_the_metric_it_scores(experiment):
 
 
 def test_every_pinned_setting_is_one_the_entry_declares(pinned):
-    assert not set(pinned) - CONTROL - set(stream_ac.SPACE)
+    assert not set(pinned) - set(stream_ac.SPACE)
 
 
 def test_nothing_is_left_for_the_sampler_to_choose(pinned):
@@ -79,13 +70,8 @@ def test_nothing_is_left_for_the_sampler_to_choose(pinned):
 
 
 @pytest.fixture(scope="module")
-def agent(pinned):
-    environment = SimpleNamespace(
-        id=pinned["environment"],
-        backend=pinned["env_backend"],
-        num_envs=pinned["num_envs"],
-        observed=(0, 1, 2, 3, 4),
-    )
+def agent(pinned, experiment):
+    environment = SimpleNamespace(**experiment["environment"])
     return stream_ac.build(pinned, environment)
 
 
@@ -106,6 +92,7 @@ def test_both_normalizers_are_on_as_they_were_when_the_score_was_set(agent):
     assert agent.normalizer.config.reward_gamma == 0.99
 
 
-def test_the_budget_divides_into_whole_epochs(pinned):
-    assert pinned["total_steps"] % pinned["epoch_steps"] == 0
-    assert pinned["epoch_steps"] % pinned["num_envs"] == 0
+def test_the_budget_divides_into_whole_epochs(experiment):
+    budget = experiment["budget"]
+    assert budget["total_steps"] % budget["epoch_steps"] == 0
+    assert budget["epoch_steps"] % experiment["environment"]["num_envs"] == 0
