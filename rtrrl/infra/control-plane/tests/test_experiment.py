@@ -77,13 +77,94 @@ def test_an_experiment_carries_its_environment_and_budget(tmp_path):
     assert experiment.budget.total_steps == 2000
 
 
-def test_a_space_may_not_name_the_environment_or_the_budget(tmp_path):
+@pytest.mark.parametrize(
+    ("field", "value", "message"),
+    [
+        ("num_envs", 0, "num_envs must be positive"),
+        ("num_envs", -1, "num_envs must be positive"),
+        ("observed", [], "observed must name at least one index"),
+        ("observed", [0, 0, 1], "observed must not repeat an index"),
+        ("observed", [-1, 0], "observed indices must not be negative"),
+    ],
+)
+def test_an_environment_must_be_usable(
+    tmp_path: Path, field: str, value: object, message: str
+) -> None:
     document = _document()
-    document["space"]["total_steps"] = [2000]
+    document["environment"][field] = value
+    path = tmp_path / "experiment.yaml"
+    path.write_text(yaml.safe_dump(document), encoding="utf-8")
+
+    with pytest.raises(ValidationError, match=message):
+        load_experiment(path)
+
+
+def test_an_omitted_observed_field_means_fully_observed(tmp_path: Path) -> None:
+    document = _document()
+    document["environment"].pop("observed")
+    path = tmp_path / "experiment.yaml"
+    path.write_text(yaml.safe_dump(document), encoding="utf-8")
+
+    experiment = load_experiment(path)
+
+    assert experiment.environment.observed is None
+
+
+@pytest.mark.parametrize(
+    ("field", "value", "message"),
+    [
+        ("total_steps", 0, "total_steps must be positive"),
+        ("epoch_steps", 0, "epoch_steps must be positive"),
+        ("eval_steps", -1, "eval_steps must not be negative"),
+        ("epoch_steps", 300, "total_steps 2000 is not whole epochs of 300"),
+    ],
+)
+def test_a_budget_must_describe_whole_positive_epochs(
+    tmp_path: Path, field: str, value: int, message: str
+) -> None:
+    document = _document()
+    document["budget"][field] = value
+    path = tmp_path / "experiment.yaml"
+    path.write_text(yaml.safe_dump(document), encoding="utf-8")
+
+    with pytest.raises(ValidationError, match=message):
+        load_experiment(path)
+
+
+@pytest.mark.parametrize(
+    "reserved",
+    [
+        "environment",
+        "env_mode",
+        "env_backend",
+        "observed",
+        "num_envs",
+        "total_steps",
+        "epoch_steps",
+        "eval_steps",
+    ],
+)
+def test_a_space_may_not_name_the_environment_or_the_budget(
+    tmp_path: Path, reserved: str
+) -> None:
+    document = _document()
+    document["space"][reserved] = [2000]
     path = tmp_path / "experiment.yaml"
     path.write_text(yaml.safe_dump(document), encoding="utf-8")
 
     with pytest.raises(ValidationError) as raised:
         load_experiment(path)
 
-    assert "total_steps" in str(raised.value)
+    assert reserved in str(raised.value)
+
+
+def test_epoch_steps_must_be_a_whole_number_of_environment_streams(
+    tmp_path: Path,
+) -> None:
+    document = _document()
+    document["environment"]["num_envs"] = 3
+    path = tmp_path / "experiment.yaml"
+    path.write_text(yaml.safe_dump(document), encoding="utf-8")
+
+    with pytest.raises(ValidationError, match="epoch_steps 1000"):
+        load_experiment(path)
