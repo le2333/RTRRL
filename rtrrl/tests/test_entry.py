@@ -129,3 +129,63 @@ def test_a_seed_of_zero_cannot_be_sampled() -> None:
     """`args.seed or np.random.randint(1e6)` reads zero as `pick one for me`."""
 
     assert SPACE["seed"]["low"] == 1
+
+
+RESERVED = frozenset(
+    {
+        "environment",
+        "env_mode",
+        "env_backend",
+        "observed",
+        "num_envs",
+        "total_steps",
+        "epoch_steps",
+        "eval_steps",
+    }
+)
+
+
+def test_the_entry_declares_neither_the_environment_nor_the_budget():
+    from entries import rtrrl_aaai
+
+    assert not RESERVED & set(rtrrl_aaai.SPACE)
+
+
+def _defaults() -> dict:
+    """One value per declared parameter, taken as the first of each domain."""
+
+    from entries import rtrrl_aaai
+
+    chosen = {}
+    for name, spec in rtrrl_aaai.SPACE.items():
+        chosen[name] = spec[0] if isinstance(spec, list) else spec["low"]
+    return chosen
+
+
+def test_the_kept_indices_reach_their_obs_mask():
+    from entries import rtrrl_aaai
+    from training_sdk.contract import BudgetConfig, EnvironmentConfig
+
+    chosen = rtrrl_aaai.settings(
+        _defaults(),
+        EnvironmentConfig(
+            id="brax::hopper", backend="spring", num_envs=1, observed=(0, 1, 2, 3, 4)
+        ),
+        BudgetConfig(total_steps=2000, epoch_steps=1000, eval_steps=100),
+    )
+
+    assert chosen["environment"]["obs_mask"] == (0, 1, 2, 3, 4)
+    assert chosen["environment"]["batch_size"] == 1
+
+
+def test_a_fully_observed_task_asks_for_no_mask():
+    from entries import rtrrl_aaai
+    from training_sdk.contract import BudgetConfig, EnvironmentConfig
+
+    chosen = rtrrl_aaai.settings(
+        _defaults(),
+        EnvironmentConfig(id="brax::hopper", backend="spring", num_envs=1),
+        BudgetConfig(total_steps=2000, epoch_steps=1000, eval_steps=100),
+    )
+
+    assert chosen["environment"]["obs_mask"] is None
