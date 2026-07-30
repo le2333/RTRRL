@@ -13,9 +13,12 @@ which is the starting point rather than the task.
 
 from __future__ import annotations
 
+from typing import cast
+
 import flax.linen as nn
 import jax
 import jax.numpy as jnp
+from jax import Array
 
 from memorax.environments.brax import masks
 
@@ -44,8 +47,8 @@ def test_a_zeroed_dimension_is_a_deleted_one_to_the_layer_that_reads_it():
     narrow = nn.Dense(7)
     sliced = {"params": {"kernel": kernel[:KEPT], "bias": variables["params"]["bias"]}}
 
-    theirs = narrow.apply(sliced, observation[:KEPT])
-    ours = wide.apply(variables, observation * mask)
+    theirs = cast(Array, narrow.apply(sliced, observation[:KEPT]))
+    ours = cast(Array, wide.apply(variables, observation * mask))
 
     assert jnp.array_equal(ours, theirs), "a zero and a deletion differ at the layer"
 
@@ -65,7 +68,7 @@ def test_a_zeroed_dimension_never_moves_the_weights_that_read_it():
     variables = layer.init(jax.random.key(1), observation)
 
     def loss(params):
-        return jnp.sum(layer.apply(params, observation * mask) ** 2)
+        return jnp.sum(cast(Array, layer.apply(params, observation * mask)) ** 2)
 
     gradient = jax.grad(loss)(variables)["params"]["kernel"]
 
@@ -86,9 +89,12 @@ def test_the_two_shapes_do_not_start_from_the_same_scale():
     alone would not make the two comparable in any sense the rest are not.
     """
 
-    observation = jnp.zeros(WIDTH)
-    wide = nn.Dense(4096).init(jax.random.key(0), observation)["params"]["kernel"]
-    narrow = nn.Dense(4096).init(jax.random.key(0), jnp.zeros(KEPT))["params"]["kernel"]
+    def kernel_of(fan_in: int) -> Array:
+        drawn = nn.Dense(4096).init(jax.random.key(0), jnp.zeros(fan_in))
+        return cast(Array, drawn["params"]["kernel"])
+
+    wide = kernel_of(WIDTH)
+    narrow = kernel_of(KEPT)
 
     ratio = jnp.std(narrow) / jnp.std(wide[:KEPT])
 
