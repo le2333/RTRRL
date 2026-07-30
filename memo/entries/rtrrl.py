@@ -48,6 +48,7 @@ SPACE: dict[str, Any] = {
     "meta_rl": [False, True],
     "normalize_observation": [False, True],
     "normalize_reward": [False, True],
+    "bound_actor": [False, True],
     "num_envs": {"type": "int", "low": 1, "high": 256},
     "total_steps": {"type": "int", "low": 1, "high": 100_000_000},
     "epoch_steps": {"type": "int", "low": 1, "high": 10_000_000},
@@ -176,7 +177,10 @@ def build(params: Mapping[str, Any]) -> RTRRL:
             hidden_dim=int(params["hidden_dim"]),
             output_dim=feature_dim,
         ),
-        heads.Gaussian(action_dim=int(env.action_space(env_params).shape[0])),
+        heads.Gaussian(
+            action_dim=int(env.action_space(env_params).shape[0]),
+            bound=bool(params["bound_actor"]),
+        ),
         heads.VNetwork(),
         activation=jax.nn.silu,
         normalization=NormalizationConfig(

@@ -129,6 +129,7 @@ def test_the_reserved_budget_parameter_is_declared(trained):
 def test_rtrrl_entry_can_reproduce_the_papers_bounded_actor():
     """The paper bounds its actor before clipping its environment action."""
 
-    params = smallest(rtrrl.SPACE) | BUDGET | {"bound_actor": True}
+    params = smallest(rtrrl.SPACE) | BUDGET | {"bound_actor": True, "act_clip": 1.0}
     agent = rtrrl.build(params)
     assert agent.actor_head.bound is True
+    assert agent.cfg.act_clip == 1.0
