@@ -36,7 +36,7 @@ description: >
   being unedited is the point of the arm. It reports returns, their TD and actor
   and critic losses, and their entropy; the attribution is done next door.
 
-image: 007122174918.dkr.ecr.eu-north-1.amazonaws.com/rtrrl@sha256:0000000000000000000000000000000000000000000000000000000000000000
+image: 007122174918.dkr.ecr.eu-north-1.amazonaws.com/rtrrl@sha256:f7a5167b087b21d2e5e261c44bae4b0016fd662461b57ce06a3d6ec79575f7b2
 entry: rtrrl_aaai
 storage: s3://rtrrl-artifacts-007122174918/trainer
 
