@@ -10,7 +10,7 @@ from training_sdk.contract import CONTRACT_VERSION, Catalog, ChoiceSpec, EntryDe
 from training_sdk.contract import SpaceEntry
 
 from trainer_infra.experiment import Experiment
-from trainer_infra.space import distributions, minimum_total_steps, resolve_space
+from trainer_infra.space import distributions, resolve_space
 from trainer_infra.study import check_sampler
 
 
@@ -49,11 +49,10 @@ def check_offline(experiment: Experiment, catalog: Catalog) -> dict[str, SpaceEn
         )
     space = resolve_space(entry, experiment.space)
     check_sampler(experiment.hpo.sampler, distributions(space))
-    budget = minimum_total_steps(space)
-    if experiment.score.window_steps[1] > budget:
+    if experiment.score.window_steps[1] > experiment.budget.total_steps:
         raise PreflightError(
-            f"score window upper bound {experiment.score.window_steps[1]} exceeds the "
-            f"smallest total_steps the space can produce ({budget})"
+            f"score window upper bound {experiment.score.window_steps[1]} exceeds "
+            f"the budget's total_steps ({experiment.budget.total_steps})"
         )
     return space
 

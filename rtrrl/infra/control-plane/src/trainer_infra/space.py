@@ -8,9 +8,6 @@ from optuna.distributions import (
 )
 from training_sdk.contract import ChoiceSpec, EntryDescriptor, FloatSpec, IntSpec, SpaceEntry
 
-TOTAL_STEPS = "total_steps"
-
-
 class SpaceError(ValueError):
     """The resolved search space is not usable."""
 
@@ -25,10 +22,7 @@ def resolve_space(
             f"experiment declares parameters the entry does not accept: "
             f"{', '.join(unknown)}; entry declares: {declared}"
         )
-    resolved = dict(entry.space) | dict(overrides)
-    if TOTAL_STEPS not in resolved:
-        raise SpaceError(f"entry must declare the reserved parameter {TOTAL_STEPS}")
-    return resolved
+    return dict(entry.space) | dict(overrides)
 
 
 def distributions(space: dict[str, SpaceEntry]) -> dict[str, BaseDistribution]:
@@ -45,15 +39,3 @@ def distributions(space: dict[str, SpaceEntry]) -> dict[str, BaseDistribution]:
         else:  # the union is closed
             raise SpaceError(f"unsupported space entry for {key}")
     return built
-
-
-def minimum_total_steps(space: dict[str, SpaceEntry]) -> int:
-    spec = space[TOTAL_STEPS]
-    if isinstance(spec, ChoiceSpec):
-        values = [value for value in spec.choices if type(value) is int]
-        if len(values) != len(spec.choices):
-            raise SpaceError(f"{TOTAL_STEPS} choices must all be integers")
-        return min(values)
-    if isinstance(spec, IntSpec):
-        return spec.low
-    raise SpaceError(f"{TOTAL_STEPS} must be an integer range or an integer choice list")
