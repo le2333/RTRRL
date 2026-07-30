@@ -131,21 +131,27 @@ CREDITED = {
 # the reference.
 UNROLLED = 4.0
 
-# The rewritten arm against their HEAD, in last bits. Zero on purpose, for one
-# run: nothing is allowed, so the run reports every leaf that moved and by how
-# much, and the next commit puts those numbers here with a reason for each the way
-# the three tables above have. Committing a wide number and never returning to it
-# is how a measurement becomes a tolerance, and these are not measured yet.
-REWRITTEN_READOUT = {"h": 0.0, "y": 0.0}
+# The rewritten arm's forward against their HEAD's, in last bits, and there is
+# almost nothing to allow. Three of the four seeds agree on every leaf at every
+# step exactly; the fourth is half a last bit in the state and two in the readout,
+# from the one place the two still differ in shape -- their state is a matrix
+# product over one step and ours is an einsum over a batched time axis with a
+# multiplication by a zero decay in front of it. Twice the worst of the four.
+REWRITTEN_READOUT = {"h": 1.0, "y": 4.0}
+# Their HEAD's gradient is not reachable from here and the table is what says so.
+# The five leaves their backward overwrites are about ten million last bits away,
+# which is not a rounding of anything, while the three that reach the gradient by
+# ordinary backpropagation on both sides are at two. What the arm cannot reproduce
+# is written up on the test that xfails.
 REWRITTEN_CREDITED = {
     "nu_log": 0.0,
     "theta_log": 0.0,
     "gamma_log": 0.0,
     "B_real": 0.0,
     "B_imag": 0.0,
-    "C_real": 0.0,
-    "C_imag": 0.0,
-    "D": 0.0,
+    "C_real": 4.0,
+    "C_imag": 4.0,
+    "D": 4.0,
 }
 
 
@@ -740,36 +746,55 @@ def test_the_rewritten_arm_is_their_heads_state_and_readout(seed):
     assert_explained(worst, REWRITTEN_READOUT, f"rewritten arm's forward seed={seed}")
 
 
+@pytest.mark.xfail(
+    strict=True,
+    reason=(
+        "their HEAD scales every hidden unit's credit by unit zero's cotangent, "
+        "which is a property of how their backward reads a cotangent and not of "
+        "any cell, so no arm reaches it; measured at about ten million last bits"
+    ),
+)
 @pytest.mark.parametrize("seed", range(4))
 def test_the_rewritten_arm_is_their_heads_gradient(seed):
-    """And its credit is one step deep, because theirs is.
+    """And its credit is one step deep like theirs, and still not their gradient.
 
-    The comparison that decides whether the arm reproduces this revision, and the
-    one the arm was failing: it accumulated under ``Lambda`` while their HEAD
-    credits from a zero every step. The arm now reports a decay of zero from
-    ``local_jacobian`` as well, so its sensitivity recursion yields this step's
-    jacobian alone, and that is what their single-step traces come to.
+    The arm reproduces both halves of what their rewrite did to the cell. The
+    forward has no recurrence, asserted above and bit-exact at three of four
+    seeds. The credit is one step deep, since their traces never leave the zero
+    ``initialize_carry`` made, and the arm reports a decay of zero from
+    ``local_jacobian`` to match. No correction is needed on the ``B`` leaves
+    either, because ``0dbd780`` gave this revision the exponential its published
+    one is missing.
 
-    No correction anywhere in the expectation. ``0dbd780`` gave this revision the
-    exponential its published one is missing, so the two ``B`` leaves are ours
-    directly, and the leaf-by-leaf comparison is the whole tree at once.
+    And the gradient is still ten million last bits away on exactly the five
+    leaves their ``bwd`` overwrites, while the three that reach it by ordinary
+    backpropagation on both sides are at two. That locates it inside their
+    backward, and the line is ``d_output_d_h = y_t[1][0]``. At ``b71fd6e`` the
+    primal returned ``(new_carry, new_carry)``, so ``y_t[1]`` was a carry and
+    ``[0]`` took the cotangent of the whole hidden state. The rewrite changed the
+    primal's second output from that carry to the bare state array and left the
+    indexing alone, so ``y_t[1]`` is now an array and ``[0]`` takes hidden unit
+    zero's cotangent -- one scalar, which then scales the credit of every unit.
 
-    Paired with the reverse, since an arm that agreed with their HEAD for the
-    wrong reason would agree here too: our correct cell is required to disagree.
-    It accumulates, so by the end of a stream it is crediting a history their HEAD
-    does not have, and if that came out equal then this comparison is not
-    measuring the accumulation.
+    So this revision has three defects and not two, and the third is not a
+    property of a cell. A ``MemoroidCellBase`` says what a state is and what its
+    jacobians are; which cotangent weights them is the framework's, and reaching
+    this would mean corrupting that for every cell rather than swapping one. The
+    comparison is kept and marked rather than deleted, because it is the thing
+    that measures the claim, and a claim about their gradient with no failing test
+    under it is how the accumulation went unnoticed.
+
+    Strict, so that their gradient becoming reachable is a failure here and not a
+    silent pass.
     """
 
     layer, their_params, their_carry = rewritten_side(seed, skip=0.5)
     core, our_params, our_carry, sensitivity = our_side(
         seed, skip=0.5, cell=RewrittenLRUCell
     )
-    correct, _, correct_carry, correct_credit = our_side(seed, skip=0.5)
     xs, weights = inputs(seed)
 
     worst: dict = {}
-    accumulated: dict = {}
     for step, x in enumerate(xs):
 
         def their_loss(params, carry=their_carry, x=x):
@@ -778,10 +803,6 @@ def test_the_rewritten_arm_is_their_heads_gradient(seed):
 
         def arm_loss(params, carry=our_carry, credit=sensitivity, x=x):
             _, y, _ = our_step(core, params, carry, credit, x)
-            return jnp.sum(weights * y[0, 0])
-
-        def correct_loss(params, carry=correct_carry, credit=correct_credit, x=x):
-            _, y, _ = our_step(correct, params, carry, credit, x)
             return jnp.sum(weights * y[0, 0])
 
         theirs = {
@@ -800,37 +821,19 @@ def test_the_rewritten_arm_is_their_heads_gradient(seed):
             "C_imag": theirs["C_img"],
             "D": theirs["D"],
         }
-        for name, gradient in (("arm", arm_loss), ("correct", correct_loss)):
-            ours = {
-                path[-1]: leaf
-                for path, leaf in traverse_util.flatten_dict(
-                    cast(dict, jax.grad(gradient)(our_params))
-                ).items()
-            }
-            watch(
-                worst if name == "arm" else accumulated,
-                {leaf: ours[leaf] for leaf in expected},
-                expected,
-                f"step={step}",
-            )
+        ours = {
+            path[-1]: leaf
+            for path, leaf in traverse_util.flatten_dict(
+                cast(dict, jax.grad(arm_loss)(our_params))
+            ).items()
+        }
+        watch(worst, {leaf: ours[leaf] for leaf in expected}, expected, f"step={step}")
 
         their_carry, _ = rewritten_step(layer, their_params, their_carry, x)
         our_carry, _, sensitivity = our_step(
             core, our_params, our_carry, sensitivity, x
         )
-        correct_carry, _, correct_credit = our_step(
-            correct, our_params, correct_carry, correct_credit, x
-        )
     assert_explained(worst, REWRITTEN_CREDITED, f"rewritten arm's credit seed={seed}")
-    # The two recurrent leaves are where the accumulation lands: theirs credit a
-    # single step, ours credits every step before it. Whichever of them the draw
-    # makes widest, one of the two has to be far outside what the arm is allowed.
-    apart = max(accumulated.get(leaf, (0.0, ""))[0] for leaf in ("nu_log", "theta_log"))
-    assert apart > 10 * max(REWRITTEN_CREDITED.values()), (
-        f"our correct cell is within {apart:.1f} last bits of their HEAD's "
-        "gradient too, so requiring the arm to match it did not establish that "
-        "the arm stopped accumulating"
-    )
 
 
 def test_the_missing_exponential_is_a_real_difference():

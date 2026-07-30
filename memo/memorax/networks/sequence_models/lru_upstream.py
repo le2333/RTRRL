@@ -95,6 +95,17 @@ class RewrittenLRUCell(LRUCell):
 
     ``0dbd780`` added the missing exponential on top of this, so this revision has
     the input gain right and the recurrence gone. It is their HEAD.
+
+    What the arm cannot reach is a third defect, and it is not in the cell. Their
+    ``bwd`` reads ``d_output_d_h = y_t[1][0]``; at ``b71fd6e`` the primal's second
+    output was a carry, so that took the hidden state's whole cotangent, and the
+    rewrite made it the bare state array without changing the index, so it now
+    takes hidden unit zero's cotangent and scales every unit's credit by that one
+    scalar. Which cotangent weights a jacobian is the framework's business, not a
+    cell's, so reproducing it here would mean corrupting the weighting for every
+    cell. ``test_the_rewritten_arm_is_their_heads_gradient`` measures the gap and
+    xfails on it, so the arm's forward is their forward and its credit is one step
+    deep like theirs, while its gradient is the one this revision should have had.
     """
 
     def __call__(self, x: Array, **kwargs) -> Carry:
