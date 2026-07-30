@@ -35,6 +35,39 @@ CATALOG = Catalog.model_validate(
 )
 
 
+def _document() -> dict:
+    return {
+        "experiment": "demo",
+        "name": "one",
+        "image": "example.invalid/image@sha256:" + "0" * 64,
+        "entry": "demo_entry",
+        "storage": "s3://bucket/prefix",
+        "environment": {
+            "id": "brax::hopper",
+            "backend": "spring",
+            "num_envs": 1,
+            "observed": [0, 1, 2, 3, 4],
+        },
+        "budget": {"total_steps": 2000, "epoch_steps": 1000, "eval_steps": 100},
+        "compute": {"instance_type": "c7a.medium", "timeout_minutes": 60},
+        "hpo": {
+            "sampler": "tpe",
+            "rounds": 1,
+            "trials_per_round": 1,
+            "parallel_jobs": 1,
+        },
+        "space": {"learning_rate": [0.001]},
+        "score": {
+            "metric": "eval/episode_return",
+            "window_steps": [0, 2000],
+            "reduce": "max",
+            "direction": "maximize",
+            "non_finite": "worst",
+        },
+        "logging": {"aim": "aim://127.0.0.1:53801", "every_steps": 1},
+    }
+
+
 def replace_once(content: str, old: str, new: str) -> str:
     """Substitute `old`, refusing to silently leave the text unchanged."""
     if content.count(old) != 1:

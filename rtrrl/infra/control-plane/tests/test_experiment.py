@@ -1,10 +1,11 @@
 from pathlib import Path
 
 import pytest
+import yaml
 from pydantic import ValidationError
 
 from trainer_infra.experiment import load_experiment
-from tests.helpers import EXAMPLE, replace_once
+from tests.helpers import EXAMPLE, _document, replace_once
 
 
 def _modified_example(tmp_path: Path, old: str, new: str) -> Path:
@@ -63,3 +64,26 @@ def test_score_window_steps_must_be_ordered(tmp_path: Path) -> None:
     path = _modified_example(tmp_path, "window_steps: [0, 128]", "window_steps: [128, 0]")
     with pytest.raises(ValidationError, match="window_steps must be ordered"):
         load_experiment(path)
+
+
+def test_an_experiment_carries_its_environment_and_budget(tmp_path):
+    document = _document()
+    path = tmp_path / "experiment.yaml"
+    path.write_text(yaml.safe_dump(document), encoding="utf-8")
+
+    experiment = load_experiment(path)
+
+    assert experiment.environment.observed == (0, 1, 2, 3, 4)
+    assert experiment.budget.total_steps == 2000
+
+
+def test_a_space_may_not_name_the_environment_or_the_budget(tmp_path):
+    document = _document()
+    document["space"]["total_steps"] = [2000]
+    path = tmp_path / "experiment.yaml"
+    path.write_text(yaml.safe_dump(document), encoding="utf-8")
+
+    with pytest.raises(ValidationError) as raised:
+        load_experiment(path)
+
+    assert "total_steps" in str(raised.value)
