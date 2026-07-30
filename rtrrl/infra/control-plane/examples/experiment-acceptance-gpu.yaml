@@ -6,6 +6,17 @@ image: 007122174918.dkr.ecr.eu-north-1.amazonaws.com/rtrrl@sha256:5153ca698521cd
 entry: brax_ppo_acceptance
 storage: s3://rtrrl-artifacts-007122174918/trainer
 
+environment:
+  id: brax::hopper
+  backend: spring
+  num_envs: 1
+  observed: [0, 1, 2, 3, 4]
+
+budget:
+  total_steps: 128
+  epoch_steps: 128
+  eval_steps: 100
+
 compute:
   instance_type: g6.xlarge
   timeout_minutes: 60
@@ -19,7 +30,6 @@ hpo:
 space:
   env: [inverted_pendulum]
   backend: [generalized]
-  total_steps: [128]
   seed: [0]
   learning_rate: [3.0e-4]
 
