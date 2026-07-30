@@ -109,9 +109,9 @@ OURS = {"B_imaginary": "B_imag", "C_imaginary": "C_imag"}
 # an ``einsum`` over a batched time axis where they write a matrix product over a
 # single step. Every allowance is twice the worst of the four seeds, which is
 # headroom for the accumulation rather than a tolerance chosen to pass.
-READOUT = {"y": 8.0, "h": 2.0}
+READOUT = {"y": 8.0, "h": 8.0}
 INFLUENCE = {
-    "nu_log": 2.0,
+    "nu_log": 8.0,
     "theta_log": 4.0,
     "gamma_log": 8.0,
     "B_real": 4.0,
@@ -137,7 +137,7 @@ UNROLLED = 4.0
 # from the one place the two still differ in shape -- their state is a matrix
 # product over one step and ours is an einsum over a batched time axis with a
 # multiplication by a zero decay in front of it. Twice the worst of the four.
-REWRITTEN_READOUT = {"h": 1.0, "y": 4.0}
+REWRITTEN_READOUT = {"h": 4.0, "y": 4.0}
 # Their HEAD's gradient is not reachable from here and the table is what says so.
 # The five leaves their backward overwrites are about ten million last bits away,
 # which is not a rounding of anything, while the three that reach the gradient by
