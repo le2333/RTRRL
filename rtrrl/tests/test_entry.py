@@ -28,7 +28,7 @@ ENVIRONMENT = EnvironmentConfig(
     num_envs=1,
     observed=(0, 1, 2, 3, 4),
 )
-BUDGET = BudgetConfig(total_steps=2_000_000, epoch_steps=100_000, eval_steps=100)
+BUDGET = BudgetConfig(total_steps=2_000_000, epoch_steps=100_000, eval_steps=37)
 
 
 class Recording(dict):
@@ -71,6 +71,7 @@ def test_the_budget_becomes_their_iteration_count() -> None:
     assert chosen["episodes"] == 2000
     assert chosen["steps"] == 1000
     assert chosen["eval_every"] == 100
+    assert chosen["eval_steps"] == 37
 
 
 def test_a_budget_that_does_not_divide_is_refused() -> None:

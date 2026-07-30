@@ -216,13 +216,26 @@ jobs:
           import yaml
           from entries.rtrrl_aaai import parameters
           from envs.environments import make_env
+          from training_sdk.contract import BudgetConfig, EnvironmentConfig
           with open("/opt/experiments/rtrrl-hopper-aaai.yaml", encoding="utf-8") as handle:
-              space = yaml.safe_load(handle)["space"]
+              config = yaml.safe_load(handle)
+          space = config["space"]
           chosen = {
               name: spec[0] if isinstance(spec, list) else spec["low"]
               for name, spec in space.items()
           }
-          args = parameters(chosen)
+          environment = config["environment"]
+          observed = environment.get("observed")
+          args = parameters(
+              chosen,
+              EnvironmentConfig(
+                  id=environment["id"],
+                  backend=environment["backend"],
+                  observed=tuple(observed) if observed is not None else None,
+                  num_envs=environment["num_envs"],
+              ),
+              BudgetConfig(**config["budget"]),
+          )
           assert args.rnn_model == "lru", args.rnn_model
           assert args.gradient_mode == "rtrl", args.gradient_mode
           assert args.patience == 0, args.patience
