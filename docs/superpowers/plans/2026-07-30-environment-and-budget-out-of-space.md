@@ -16,6 +16,8 @@ This is phase 1 of `docs/superpowers/specs/2026-07-30-configuration-surface-desi
 - Never run `docker` here in any form.
 - `memo/**` changes: pushing to any branch runs the `Memo CI` workflow automatically.
 - `training-sdk/**`, `rtrrl/infra/control-plane/**`, `rtrrl/infra/mock-trainer/**` changes: the `Tests` workflow only auto-runs on `main`. On a feature branch trigger it by hand with `gh workflow run tests.yml --ref $(git branch --show-current)`.
+- `workflow_dispatch` runs against the **remote** state of the ref, so commit and `git push` before triggering it, including for the red run. A dispatch on an unpushed commit silently tests the previous state and its green means nothing. To read the result, `gh run list --workflow=tests.yml --branch $(git branch --show-current) --limit 3` and then `gh run view <id> --log-failed`.
+- Work on the current feature branch. Never commit to `main`.
 - `Memo CI` is red at a known baseline of exactly five `test_stream_ac_golden.py` failures caused by a seed-spending change on main, left in place deliberately. A memo task passes when its failure set equals exactly those five and nothing else. Task 6 is the single exception and says so in its own text: it may additionally fail `test_experiments.py`, and nothing else. No other task may exceed the five.
 - Two CI round trips per task: one to watch the new test fail, one to watch it pass. Do not collapse them. A test that was never seen red is not evidence.
 - Do not write rationale into code or configuration files. State what the code does, not why the decision was made or what was measured.
