@@ -18,8 +18,17 @@ from collections.abc import Mapping
 from typing import Any
 
 import pytest
+from training_sdk.contract import BudgetConfig, EnvironmentConfig
 
-from entries.rtrrl_aaai import MASKS, SPACE, iterations, settings
+from entries.rtrrl_aaai import SPACE, iterations, settings
+
+ENVIRONMENT = EnvironmentConfig(
+    id="brax::hopper",
+    backend="spring",
+    num_envs=1,
+    observed=(0, 1, 2, 3, 4),
+)
+BUDGET = BudgetConfig(total_steps=2_000_000, epoch_steps=100_000, eval_steps=100)
 
 
 class Recording(dict):
@@ -47,16 +56,16 @@ def test_every_declared_parameter_is_one_the_entry_reads() -> None:
     """A declared name nothing reads is a knob that does nothing when turned."""
 
     params = defaults()
-    settings(params)
+    settings(params, ENVIRONMENT, BUDGET)
 
     assert params.read == set(SPACE)
 
 
 def test_the_budget_becomes_their_iteration_count() -> None:
     chosen = settings(
-        defaults(
-            total_steps=2_000_000, epoch_steps=100_000, scan_steps=1000, num_envs=1
-        )
+        defaults(scan_steps=1000),
+        ENVIRONMENT,
+        BUDGET,
     )
 
     assert chosen["episodes"] == 2000
@@ -77,18 +86,10 @@ def test_the_environments_share_the_budget_rather_than_multiplying_it() -> None:
     assert iterations(total_steps=2_000_000, scan_steps=1000, num_envs=2) == 1000
 
 
-def test_the_mask_is_the_hopper_position_mask() -> None:
-    """The five indices `memo`'s P mode keeps, out of Hopper's eleven."""
-
-    assert MASKS["brax::hopper"]["P"] == (0, 1, 2, 3, 4)
-    assert MASKS["brax::hopper"]["V"] == (5, 6, 7, 8, 9, 10)
-    assert len(MASKS["brax::hopper"]["F"]) == 11
-
-
 def test_the_environment_is_named_and_configured_the_way_their_factory_reads_it() -> (
     None
 ):
-    chosen = settings(defaults(env_mode="P", env_backend="spring"))["environment"]
+    chosen = settings(defaults(), ENVIRONMENT, BUDGET)["environment"]
 
     # `make_env` splits the name on its first hyphen to find the Brax task.
     assert chosen["env_name"] == "brax-hopper"
@@ -105,11 +106,15 @@ def test_the_mask_is_hashable() -> None:
     failure that waits for whichever of their code paths hashes it first.
     """
 
-    hash(settings(defaults())["environment"]["obs_mask"])
+    hash(settings(defaults(), ENVIRONMENT, BUDGET)["environment"]["obs_mask"])
 
 
 def test_the_learning_rates_reach_the_two_optimisers_separately() -> None:
-    chosen = settings(defaults(td_lr=1e-4, rnn_lr=2e-4, rnn_grad_clip=1.0))
+    chosen = settings(
+        defaults(td_lr=1e-4, rnn_lr=2e-4, rnn_grad_clip=1.0),
+        ENVIRONMENT,
+        BUDGET,
+    )
 
     assert chosen["td"] == {"opt_name": "adam", "learning_rate": 1e-4}
     # No clip on the TD side: their own comment says clipping that update makes
@@ -163,8 +168,9 @@ def _defaults() -> dict:
 
 
 def test_the_kept_indices_reach_their_obs_mask():
-    from entries import rtrrl_aaai
     from training_sdk.contract import BudgetConfig, EnvironmentConfig
+
+    from entries import rtrrl_aaai
 
     chosen = rtrrl_aaai.settings(
         _defaults(),
@@ -179,8 +185,9 @@ def test_the_kept_indices_reach_their_obs_mask():
 
 
 def test_a_fully_observed_task_asks_for_no_mask():
-    from entries import rtrrl_aaai
     from training_sdk.contract import BudgetConfig, EnvironmentConfig
+
+    from entries import rtrrl_aaai
 
     chosen = rtrrl_aaai.settings(
         _defaults(),

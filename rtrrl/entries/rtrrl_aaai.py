@@ -44,21 +44,6 @@ from typing import TYPE_CHECKING, Any
 if TYPE_CHECKING:
     from rtrrl import RTRRLParams
 
-# The observation masks, as index lists over the full observation. This is the
-# same partition `memo/memorax/environments/brax.py` applies as a boolean keep
-# mask -- theirs deletes the dimensions it drops where ours zeroes them, and
-# `memo/tests/test_masking.py` is where the two were shown to pose the same
-# problem to a recurrent agent. Only Hopper is here because only Hopper is what
-# this image was built to run; the mask for another task is a fact about that
-# task, not something to derive.
-MASKS: dict[str, dict[str, tuple[int, ...]]] = {
-    "brax::hopper": {
-        "F": tuple(range(11)),
-        "P": tuple(range(5)),
-        "V": tuple(range(5, 11)),
-    },
-}
-
 # Their episode limit, matching the `EpisodeWrapper` length `memo` fixes at 1000
 # for every Brax task. It is not offered as a parameter for the same reason it
 # is not one there: a truncation length is part of what the task is.
@@ -68,9 +53,6 @@ _UNIT = {"type": "float", "low": 0.0, "high": 1.0}
 _RATE = {"type": "float", "low": 1e-9, "high": 10.0, "log": True}
 
 SPACE: dict[str, Any] = {
-    "environment": list(MASKS),
-    "env_mode": ["F", "P", "V"],
-    "env_backend": ["generalized", "spring", "positional", "mjx"],
     # Their two cells, under the name `memo` gives the published one. `rflo` is
     # absent from `gradient_mode` on purpose: it is their default and the LRU
     # rejects it, so offering it would let a sampler suggest a run that cannot
@@ -88,18 +70,12 @@ SPACE: dict[str, Any] = {
     "f_align": [False, True],
     "mlp_actor": [False, True],
     "layer_norm": [False, True],
-    "num_envs": {"type": "int", "low": 1, "high": 256},
-    "total_steps": {"type": "int", "low": 1, "high": 100_000_000},
-    "epoch_steps": {"type": "int", "low": 1, "high": 10_000_000},
     # Theirs alone. Their loop is a Python loop over `episodes` iterations, each
     # of which scans `steps` transitions inside one compiled call, so this is
     # how much of the run happens between two returns to Python. It divides the
     # budget rather than setting it, which is why it is named for what it is
     # instead of borrowing a name from a vocabulary that has no such thing.
     "scan_steps": {"type": "int", "low": 1, "high": 100_000},
-    # An evaluation is what this entry is scored on, so unlike `memo`'s the
-    # bound starts at one: a run that never evaluates reports no score at all.
-    "eval_steps": {"type": "int", "low": 1, "high": 100_000},
     "eval_envs": {"type": "int", "low": 1, "high": 1_000},
     # Their early stop, in evaluations without an improvement. Zero disables it.
     "patience": {"type": "int", "low": 0, "high": 100_000},
@@ -151,27 +127,19 @@ def iterations(*, total_steps: int, scan_steps: int, num_envs: int) -> int:
     return total_steps // per_iteration
 
 
-def settings(params: Mapping[str, Any]) -> dict[str, Any]:
-    """Every field of theirs this entry sets, as plain values.
+def settings(params: Mapping[str, Any], environment, budget) -> dict[str, Any]:
+    """Every field of theirs this entry sets, as plain values."""
 
-    Kept separate from the dataclasses it feeds so that the translation can be
-    read, and tested, without importing a training framework: the mapping from
-    one vocabulary to another is the part of this file most likely to be wrong,
-    and the part least worth a GPU to check.
-    """
-
-    environment = str(params["environment"])
-    num_envs = int(params["num_envs"])
     scan_steps = int(params["scan_steps"])
     total = iterations(
-        total_steps=int(params["total_steps"]),
+        total_steps=budget.total_steps,
         scan_steps=scan_steps,
-        num_envs=num_envs,
+        num_envs=environment.num_envs,
     )
     per_epoch = iterations(
-        total_steps=int(params["epoch_steps"]),
+        total_steps=budget.epoch_steps,
         scan_steps=scan_steps,
-        num_envs=num_envs,
+        num_envs=environment.num_envs,
     )
     return {
         "seed": int(params["seed"]),
@@ -181,7 +149,7 @@ def settings(params: Mapping[str, Any]) -> dict[str, Any]:
         # Their evaluation cadence is counted in outer iterations, so an epoch
         # of environment steps becomes the number of iterations it takes.
         "eval_every": per_epoch,
-        "eval_steps": int(params["eval_steps"]),
+        "eval_steps": budget.eval_steps,
         "eval_batch_size": int(params["eval_envs"]),
         "rnn_model": str(params["backbone"]),
         "gradient_mode": str(params["gradient_mode"]),
@@ -203,18 +171,12 @@ def settings(params: Mapping[str, Any]) -> dict[str, Any]:
         "update_period": float(params["update_period"]),
         "update_trace_before_td": bool(params["update_trace_before_td"]),
         "environment": {
-            # `make_env` splits on the first hyphen and hands the rest to
-            # `brax.envs.get_environment`, so the vocabulary's `brax::hopper`
-            # has to be respelled on the way in.
-            "env_name": environment.replace("::", "-"),
-            "batch_size": num_envs,
+            "env_name": environment.id.replace("::", "-"),
+            "batch_size": environment.num_envs,
             "max_ep_length": MAX_EPISODE_LENGTH,
             "render": False,
-            # A tuple, not a list: `RTRRLParams` is declared with
-            # `unsafe_hash=True` and its environment parameters are frozen, so
-            # an unhashable field in there makes the whole dataclass unhashable.
-            "obs_mask": MASKS[environment][str(params["env_mode"])],
-            "env_kwargs": {"backend": str(params["env_backend"])},
+            "obs_mask": tuple(environment.observed) if environment.observed else None,
+            "env_kwargs": {"backend": environment.backend},
         },
         # No gradient clip on the TD optimiser. Their comment beside the default
         # says clipping the TD update makes the eligibility traces explode, and
@@ -228,14 +190,14 @@ def settings(params: Mapping[str, Any]) -> dict[str, Any]:
     }
 
 
-def parameters(params: Mapping[str, Any]) -> RTRRLParams:
+def parameters(params: Mapping[str, Any], environment, budget) -> RTRRLParams:
     """Assemble the dataclass their training function takes."""
 
     from envs.environments import EnvironmentParams
     from optimizers import OptimizerConfig
     from rtrrl import RTRRLParams
 
-    chosen = dict(settings(params))
+    chosen = dict(settings(params, environment, budget))
     return RTRRLParams(
         env_params=EnvironmentParams(**chosen.pop("environment")),
         optimizer_params_td=OptimizerConfig(**chosen.pop("td")),
@@ -244,7 +206,7 @@ def parameters(params: Mapping[str, Any]) -> RTRRLParams:
     )
 
 
-def run(reporter, params: Mapping[str, Any]) -> None:
+def run(reporter, config) -> None:
     from entries.reporting import ReporterLogger
     from rtrrl import train_rtrrl
 
@@ -255,7 +217,7 @@ def run(reporter, params: Mapping[str, Any]) -> None:
     # system would pull PIL, plotly and flax into a module the catalog imports
     # on a machine that has none of them.
     logger: Any = ReporterLogger(reporter)
-    train_rtrrl(parameters(params), logger)
+    train_rtrrl(parameters(config.params, config.environment, config.budget), logger)
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -263,7 +225,7 @@ def main(argv: list[str] | None = None) -> int:
     from training_sdk.reporter import Reporter
 
     with Reporter.from_env() as reporter:
-        run(reporter, reporter.config.params)
+        run(reporter, reporter.config)
     return 0
 
 

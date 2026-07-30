@@ -16,6 +16,7 @@ from typing import Any
 
 import pytest
 import yaml
+from training_sdk.contract import BudgetConfig, EnvironmentConfig
 
 from entries.rtrrl_aaai import METRICS, SPACE, settings
 
@@ -92,7 +93,16 @@ def test_the_file_configures_the_run_the_comparison_was_designed_around(
     scan length multiply to it.
     """
 
-    resolved = settings(chosen(experiment["space"]))
+    resolved = settings(
+        chosen(experiment["space"]),
+        EnvironmentConfig(
+            id="brax::hopper",
+            backend="spring",
+            num_envs=1,
+            observed=(0, 1, 2, 3, 4),
+        ),
+        BudgetConfig(total_steps=2_000_000, epoch_steps=100_000, eval_steps=1000),
+    )
 
     assert resolved["rnn_model"] == "lru"
     assert resolved["gradient_mode"] == "rtrl"

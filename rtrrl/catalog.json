@@ -1,5 +1,5 @@
 {
-  "contract": 2,
+  "contract": 3,
   "entries": {
     "rtrrl_aaai": {
       "command": [
@@ -10,7 +10,7 @@
       "metrics": [
         "eval/episode_return"
       ],
-      "source_hash": "sha256:76eb2f682493cc645d071d3b1288524c7b46b4191597634926b0172152a30b1f",
+      "source_hash": "sha256:8dc52e42aad6380a3c9c1630717187c35ddb601c74d68ee81fd09ca245b9e7cf",
       "space": {
         "backbone": {
           "choices": [
@@ -23,33 +23,6 @@
           "log": true,
           "low": 1e-08,
           "type": "float"
-        },
-        "env_backend": {
-          "choices": [
-            "generalized",
-            "spring",
-            "positional",
-            "mjx"
-          ]
-        },
-        "env_mode": {
-          "choices": [
-            "F",
-            "P",
-            "V"
-          ]
-        },
-        "environment": {
-          "choices": [
-            "brax::hopper"
-          ]
-        },
-        "epoch_steps": {
-          "high": 10000000,
-          "log": false,
-          "low": 1,
-          "step": 1,
-          "type": "int"
         },
         "eta_f": {
           "high": 10.0,
@@ -65,13 +38,6 @@
         },
         "eval_envs": {
           "high": 1000,
-          "log": false,
-          "low": 1,
-          "step": 1,
-          "type": "int"
-        },
-        "eval_steps": {
-          "high": 100000,
           "log": false,
           "low": 1,
           "step": 1,
@@ -150,13 +116,6 @@
             true
           ]
         },
-        "num_envs": {
-          "high": 256,
-          "log": false,
-          "low": 1,
-          "step": 1,
-          "type": "int"
-        },
         "patience": {
           "high": 100000,
           "log": false,
@@ -195,13 +154,6 @@
           "log": true,
           "low": 1e-09,
           "type": "float"
-        },
-        "total_steps": {
-          "high": 100000000,
-          "log": false,
-          "low": 1,
-          "step": 1,
-          "type": "int"
         },
         "trace_mode": {
           "choices": [
