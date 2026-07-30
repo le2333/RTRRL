@@ -4,7 +4,7 @@ from typing import Annotated, Literal, TypeAlias
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
-CONTRACT_VERSION = 2
+CONTRACT_VERSION = 3
 
 Scalar: TypeAlias = int | float | str | bool
 
@@ -84,6 +84,48 @@ class Catalog(_Frozen):
     entries: dict[str, EntryDescriptor]
 
 
+class EnvironmentConfig(_Frozen):
+    id: str
+    backend: str
+    num_envs: int
+    observed: tuple[int, ...] | None = None
+
+    @model_validator(mode="after")
+    def _usable(self) -> "EnvironmentConfig":
+        if self.num_envs < 1:
+            raise ValueError("num_envs must be positive")
+        if self.observed is None:
+            return self
+        if not self.observed:
+            raise ValueError("observed must name at least one index")
+        if len(set(self.observed)) != len(self.observed):
+            raise ValueError("observed must not repeat an index")
+        if any(index < 0 for index in self.observed):
+            raise ValueError("observed indices must not be negative")
+        return self
+
+
+class BudgetConfig(_Frozen):
+    total_steps: int
+    epoch_steps: int
+    eval_steps: int
+
+    @model_validator(mode="after")
+    def _whole(self) -> "BudgetConfig":
+        if self.total_steps < 1:
+            raise ValueError("total_steps must be positive")
+        if self.epoch_steps < 1:
+            raise ValueError("epoch_steps must be positive")
+        if self.eval_steps < 0:
+            raise ValueError("eval_steps must not be negative")
+        if self.total_steps % self.epoch_steps:
+            raise ValueError(
+                f"total_steps {self.total_steps} is not whole epochs of "
+                f"{self.epoch_steps}"
+            )
+        return self
+
+
 class LoggingConfig(_Frozen):
     aim: str
     every_steps: int
@@ -115,7 +157,18 @@ class RunConfig(_Frozen):
     trial: int
     entry: str
     digest: str
+    environment: EnvironmentConfig
+    budget: BudgetConfig
     source_hash: str
     params: dict[str, Scalar]
     logging: LoggingConfig
     score: ScoreConfig
+
+    @model_validator(mode="after")
+    def _epochs_hold_whole_rounds_of_streams(self) -> "RunConfig":
+        if self.budget.epoch_steps % self.environment.num_envs:
+            raise ValueError(
+                f"epoch_steps {self.budget.epoch_steps} is not "
+                f"{self.environment.num_envs} streams' worth"
+            )
+        return self

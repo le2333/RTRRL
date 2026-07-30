@@ -10,7 +10,7 @@ from training_sdk.reporter import METRICS_FILENAME, Reporter
 def make_config(*, every_steps: int = 1) -> RunConfig:
     return RunConfig.model_validate(
         {
-            "contract": 2,
+            "contract": 3,
             "run_id": "smoke-20260725-000000-t0",
             "experiment": "infra-acceptance",
             "name": "smoke",
@@ -18,6 +18,12 @@ def make_config(*, every_steps: int = 1) -> RunConfig:
             "trial": 0,
             "entry": "e",
             "digest": "registry.example/trainer@sha256:" + "a" * 64,
+            "environment": {
+                "id": "brax::hopper",
+                "backend": "spring",
+                "num_envs": 1,
+            },
+            "budget": {"total_steps": 100, "epoch_steps": 100, "eval_steps": 0},
             "source_hash": "sha256:smoke",
             "params": {"total_steps": 4},
             "logging": {"aim": "aim://127.0.0.1:1", "every_steps": every_steps},

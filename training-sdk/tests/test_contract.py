@@ -15,8 +15,8 @@ from training_sdk.contract import (
 )
 
 
-def test_contract_version_is_two() -> None:
-    assert CONTRACT_VERSION == 2
+def test_contract_version_is_three() -> None:
+    assert CONTRACT_VERSION == 3
 
 
 def test_catalog_parses_float_int_and_choice_entries() -> None:
@@ -133,7 +133,7 @@ def test_choice_spec_rejects_non_scalar_choices() -> None:
 
 def test_run_config_round_trips() -> None:
     payload = {
-        "contract": 2,
+        "contract": 3,
         "run_id": "sweep-20260725-051400-t7",
         "experiment": "locomotion",
         "name": "sweep",
@@ -141,6 +141,12 @@ def test_run_config_round_trips() -> None:
         "trial": 7,
         "entry": "brax_ppo",
         "digest": "registry.example/trainer@sha256:" + "a" * 64,
+        "environment": {
+            "id": "brax::hopper",
+            "backend": "spring",
+            "num_envs": 1,
+        },
+        "budget": {"total_steps": 100, "epoch_steps": 100, "eval_steps": 0},
         "source_hash": "sha256:41b0",
         "params": {"total_steps": 128, "learning_rate": 0.0003},
         "logging": {"aim": "aim://127.0.0.1:53801", "every_steps": 1},
