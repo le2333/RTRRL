@@ -1,8 +1,11 @@
 """Our LRU and its exact credit, against the LRU the RTRRL paper published.
 
-The reference is ``memorax.networks.sequence_models.upstream_lru``, which is
-``RTRRL-AAAI25`` at ``b71fd6e`` with its arithmetic untouched; why that revision
-rather than the repository's HEAD is written at the head of that file. Both sides
+There are two references and they are two revisions of one file, transcribed with
+their arithmetic untouched: ``upstream_lru`` is ``RTRRL-AAAI25`` at ``b71fd6e``,
+the revision the paper was published at, and ``upstream_lru_rewritten`` is the
+same file at ``4301943``, their HEAD. Our correct LRU answers to the published
+one, since that is the revision with a recurrence in it to agree with, and each of
+the two arms answers to the revision it reproduces. Both sides
 are driven one transition at a time, because that is the granularity the
 reference computes at: its ``custom_vjp`` is a single-step rule, and comparing a
 scan against it would fold our reassociation into every leaf at once instead of
@@ -70,6 +73,9 @@ from memorax.networks.sequence_models.lru_upstream import (
 )
 from memorax.networks.sequence_models.memoroid import Memoroid
 from memorax.networks.sequence_models.upstream_lru import OnlineLRULayer
+from memorax.networks.sequence_models.upstream_lru_rewritten import (
+    OnlineLRULayer as RewrittenLayer,
+)
 from memorax.networks.torso import make_torso
 
 # The published layer reads out with one matrix whose row count is the field it
@@ -124,6 +130,23 @@ CREDITED = {
 # the recurrence itself, which is the one gap here that has nothing to do with
 # the reference.
 UNROLLED = 4.0
+
+# The rewritten arm against their HEAD, in last bits. Zero on purpose, for one
+# run: nothing is allowed, so the run reports every leaf that moved and by how
+# much, and the next commit puts those numbers here with a reason for each the way
+# the three tables above have. Committing a wide number and never returning to it
+# is how a measurement becomes a tolerance, and these are not measured yet.
+REWRITTEN_READOUT = {"h": 0.0, "y": 0.0}
+REWRITTEN_CREDITED = {
+    "nu_log": 0.0,
+    "theta_log": 0.0,
+    "gamma_log": 0.0,
+    "B_real": 0.0,
+    "B_imag": 0.0,
+    "C_real": 0.0,
+    "C_imag": 0.0,
+    "D": 0.0,
+}
 
 
 def drawn(seed: int) -> dict:
@@ -243,6 +266,56 @@ def paper_step(layer, params, carry, x) -> tuple[Any, Any]:
     """One transition of theirs, which is the only granularity theirs has."""
 
     return cast(tuple[Any, Any], layer.apply(params, carry, x))
+
+
+def rewritten_side(seed: int, *, skip: float = 0.0, dtype=jnp.complex64):
+    """Their HEAD layer, its parameters injected, ready to be stepped.
+
+    A second reference, because the two revisions compute different things and
+    each arm answers to its own. Two settings are chosen rather than defaulted.
+
+    ``plasticity`` is anything other than ``"bptt"``: that string is the branch
+    that returns the plain cell and never reaches their online rule, and every
+    other value reaches it, including the ``"rflo"`` their own default asks for.
+
+    ``activation`` is off. The same rewrite that removed the recurrence gave the
+    layer a ``silu`` and a skip term, and ours reads out linearly. The skip is
+    injected on both sides and compared; the nonlinearity is switched off, so what
+    these comparisons measure is the recurrence and the credit rather than a
+    difference in where an activation sits. That the arm has no ``silu`` either is
+    a gap between the arm and their HEAD, and it is a gap in the readout, which is
+    the one block here whose behaviour does not depend on it.
+
+    The carry is theirs. The published revision's ``initialize_carry`` sizes the
+    influence matrix for ``B`` by the batch axis instead of the input width, which
+    is why ``paper_side`` builds one by hand; this revision fixed that, and using
+    the fixed one is part of what is being reproduced.
+    """
+
+    # Their ``__init__`` annotates none of its parameters, so the default makes
+    # ``activation`` read as ``str`` while the field it assigns is ``str | None``.
+    # The cast says which of the two is meant, without editing a transcription.
+    layer = RewrittenLayer(HIDDEN, plasticity="rtrl", activation=cast(str, None))
+    real = jnp.finfo(dtype).dtype
+    carry = layer.initialize_carry(jax.random.key(0), (FEATURES,))
+    shaped = layer.init(jax.random.key(0), carry, jnp.zeros((FEATURES,), real))
+    values = widened(drawn(seed), dtype)
+    values["D"] = jnp.full((HIDDEN, FEATURES), skip, real)
+    return layer, {"params": _inject(shaped["params"], values, PAPER)}, carry
+
+
+def rewritten_step(layer, params, carry, x) -> tuple[Any, Any]:
+    """One transition of their HEAD, through the rule a gradient would take.
+
+    Differentiated rather than merely applied. Their online rule is a
+    ``custom_vjp``, so applying it runs the primal and taking a gradient runs the
+    forward, and it is the forward that computes an influence matrix at all. RTRRL
+    drives it the second way, and so does this, or the traces this file reasons
+    about would never be computed.
+    """
+
+    (carry, y), _ = jax.vjp(lambda p: cast(Any, layer.apply(p, carry, x)), params)
+    return carry, y
 
 
 def our_side(seed: int, *, skip: float = 0.0, cell=LRUCell, dtype=jnp.complex64):
@@ -587,73 +660,176 @@ def test_the_published_arm_needs_no_correction(seed):
     assert_explained(worst, INFLUENCE, f"published arm seed={seed}")
 
 
-def test_the_rewritten_arm_forgets_while_crediting_as_though_it_had_not():
-    """The other arm, and the disagreement it exists to hold open.
+@pytest.mark.parametrize("seed", range(4))
+def test_their_head_carries_no_credit_from_one_step_to_the_next(seed):
+    """What the other arm is shaped by, asserted against their code and not read.
 
-    Their HEAD reshapes to a length-one sequence before an associative scan, so
-    the scan is the identity and the previous carry reaches the new state only to
-    supply its width. The influence matrices were not rewritten with it and still
-    accumulate under ``Lambda``. ``RewrittenLRUCell`` reproduces that by reporting
-    a decay of zero from the forward while ``local_jacobian`` keeps reporting
-    ``Lambda``, and both halves of that are asserted here, because an arm that
-    reproduced only the forgetting would be a different defect than theirs.
+    ``_trace_update`` at their HEAD reads ``Lambda * grad_memory[i] + <this
+    step>``, so reading it says the influence matrices accumulate, and the arm was
+    built to that reading. They do not. ``grad_memory`` is the carry's, the primal
+    returns the traces it was handed unless ``force_trace_compute`` -- a parameter
+    with no caller in their repository -- and the traces their forward computes go
+    into a residual that one step's gradient consumes and drops. So the carry's
+    traces are the zeros their ``initialize_carry`` made, at every step, and the
+    accumulation term is always a multiplication by zero.
 
-    The forgetting is asserted by driving it from two different carries and
-    requiring the same state and readout. That is only worth asserting if the
-    carry could have mattered, so ours is driven from the same two and required to
-    differ. The credit is asserted against our correct cell stepped along the
-    rewritten carry sequence: same jacobians, same decay, so bit-exact and not
-    approximately, and if the rewrite ever reached the sensitivities that equality
-    is what breaks.
+    Asserted here rather than argued, because the arm's shape follows from it and
+    an argument about someone else's control flow is exactly the thing that was
+    wrong before. Exactly zero, not nearly: nothing writes to them at all.
+
+    The state is required to be nonzero in the same breath. Traces that stayed at
+    zero because the whole layer output zero would satisfy the above and establish
+    nothing.
     """
 
-    xs, _ = inputs(0)
-    core, params, empty, zeros = our_side(0, cell=RewrittenLRUCell)
-    correct, _, _, _ = our_side(0)
+    layer, params, carry = rewritten_side(seed)
+    xs, _ = inputs(seed)
 
-    elsewhere = LRUCarry(
-        state=jnp.full_like(empty.state, 0.5 + 0.25j),
-        decay=jnp.full_like(empty.decay, 0.5),
+    reached = []
+    for step, x in enumerate(xs):
+        carry, _ = rewritten_step(layer, params, carry, x)
+        state, traces = carry
+        reached.append(float(jnp.max(jnp.abs(state))))
+        for name, trace in zip(("z_lambda", "z_gamma", "z_B"), traces):
+            moved = float(jnp.max(jnp.abs(trace)))
+            assert moved == 0.0, (
+                f"step={step}: their HEAD's {name} left zero, reaching {moved:.3g}. "
+                "Its influence matrices accumulate after all, and the arm that "
+                "reproduces this revision must accumulate with them"
+            )
+    assert min(reached) > 1e-3, (
+        f"their HEAD's state never left zero either, closest {min(reached):.3g}, "
+        "so the traces holding at zero says nothing about what they accumulate"
     )
 
-    forgotten: dict = {}
-    carry, credit = empty, zeros
-    other, other_credit = elsewhere, zeros
-    correct_credit = zeros
-    remembered, from_empty, from_elsewhere = [], empty, elsewhere
+
+@pytest.mark.parametrize("seed", range(4))
+def test_the_rewritten_arm_is_their_heads_state_and_readout(seed):
+    """The arm's forward is the one their rewrite left behind.
+
+    Their HEAD reshapes to a length-one sequence before its associative scan, so
+    the scan is the identity, the previous carry reaches the new state only to
+    supply its width, and the state is ``B_norm x_t``. The arm reports a decay of
+    zero from ``__call__``, which is how a scan that does accumulate is made to
+    yield the same thing.
+
+    The skip term is injected nonzero here. It is theirs as much as ours at this
+    revision -- the same rewrite added it -- so unlike the published comparison
+    there is no reason to zero it, and leaving it in means the readout comparison
+    covers the path that carries most of the output once the recurrence is gone.
+    """
+
+    layer, their_params, their_carry = rewritten_side(seed, skip=0.5)
+    core, our_params, our_carry, sensitivity = our_side(
+        seed, skip=0.5, cell=RewrittenLRUCell
+    )
+    xs, _ = inputs(seed)
+
+    worst: dict = {}
     for step, x in enumerate(xs):
-        from_empty, _, _ = our_step(correct, params, from_empty, zeros, x)
-        from_elsewhere, _, _ = our_step(correct, params, from_elsewhere, zeros, x)
-        remembered.append(
-            float(jnp.max(jnp.abs(from_empty.state - from_elsewhere.state)))
+        their_carry, their_y = rewritten_step(layer, their_params, their_carry, x)
+        our_carry, our_y, sensitivity = our_step(
+            core, our_params, our_carry, sensitivity, x
         )
-
-        # Ours, at the state theirs is in, credited by the machinery neither arm
-        # overrides. Its carry is discarded: the recurrence is in it, and the next
-        # step's jacobians have to come from the state the rewrite arrives at.
-        _, _, correct_credit = our_step(correct, params, carry, correct_credit, x)
-
-        carry, y, credit = our_step(core, params, carry, credit, x)
-        other, other_y, other_credit = our_step(core, params, other, other_credit, x)
         watch(
-            forgotten,
-            flattened({"h": other.state, "y": other_y}),
-            flattened({"h": carry.state, "y": y}),
+            worst,
+            flattened({"h": our_carry.state[0, 0], "y": our_y[0, 0]}),
+            flattened({"h": their_carry[0], "y": their_y}),
             f"step={step}",
         )
-        assert not deviations(credit, correct_credit), (
-            f"step={step}: the rewritten arm's sensitivities are not the ones our "
-            "correct cell accumulates from the same states, so the rewrite reached "
-            "the credit assignment, which at their HEAD it does not"
-        )
+    assert_explained(worst, REWRITTEN_READOUT, f"rewritten arm's forward seed={seed}")
 
-    assert_explained(forgotten, {}, "the rewritten arm's state, from two carries")
-    # Ours keeps them apart at every step, by a margin that decays as |lambda|^t
-    # and has not reached the float noise the comparison above lives in.
-    assert min(remembered) > 1e-3, (
-        "our LRU driven from those same two carries also ended up in the same "
-        f"state, closest {min(remembered):.3g} apart, so requiring the rewritten "
-        "arm's states to agree did not establish that it has no memory"
+
+@pytest.mark.parametrize("seed", range(4))
+def test_the_rewritten_arm_is_their_heads_gradient(seed):
+    """And its credit is one step deep, because theirs is.
+
+    The comparison that decides whether the arm reproduces this revision, and the
+    one the arm was failing: it accumulated under ``Lambda`` while their HEAD
+    credits from a zero every step. The arm now reports a decay of zero from
+    ``local_jacobian`` as well, so its sensitivity recursion yields this step's
+    jacobian alone, and that is what their single-step traces come to.
+
+    No correction anywhere in the expectation. ``0dbd780`` gave this revision the
+    exponential its published one is missing, so the two ``B`` leaves are ours
+    directly, and the leaf-by-leaf comparison is the whole tree at once.
+
+    Paired with the reverse, since an arm that agreed with their HEAD for the
+    wrong reason would agree here too: our correct cell is required to disagree.
+    It accumulates, so by the end of a stream it is crediting a history their HEAD
+    does not have, and if that came out equal then this comparison is not
+    measuring the accumulation.
+    """
+
+    layer, their_params, their_carry = rewritten_side(seed, skip=0.5)
+    core, our_params, our_carry, sensitivity = our_side(
+        seed, skip=0.5, cell=RewrittenLRUCell
+    )
+    correct, _, correct_carry, correct_credit = our_side(seed, skip=0.5)
+    xs, weights = inputs(seed)
+
+    worst: dict = {}
+    accumulated: dict = {}
+    for step, x in enumerate(xs):
+
+        def their_loss(params, carry=their_carry, x=x):
+            _, y = cast(Any, layer.apply(params, carry, x))
+            return jnp.sum(weights * y)
+
+        def arm_loss(params, carry=our_carry, credit=sensitivity, x=x):
+            _, y, _ = our_step(core, params, carry, credit, x)
+            return jnp.sum(weights * y[0, 0])
+
+        def correct_loss(params, carry=correct_carry, credit=correct_credit, x=x):
+            _, y, _ = our_step(correct, params, carry, credit, x)
+            return jnp.sum(weights * y[0, 0])
+
+        theirs = {
+            path[-1]: leaf
+            for path, leaf in traverse_util.flatten_dict(
+                cast(dict, jax.grad(their_loss)(their_params))
+            ).items()
+        }
+        expected = {
+            "nu_log": theirs["nu_log"],
+            "theta_log": theirs["theta_log"],
+            "gamma_log": theirs["gamma_log"],
+            "B_real": theirs["B_real"],
+            "B_imag": theirs["B_img"],
+            "C_real": theirs["C_real"],
+            "C_imag": theirs["C_img"],
+            "D": theirs["D"],
+        }
+        for name, gradient in (("arm", arm_loss), ("correct", correct_loss)):
+            ours = {
+                path[-1]: leaf
+                for path, leaf in traverse_util.flatten_dict(
+                    cast(dict, jax.grad(gradient)(our_params))
+                ).items()
+            }
+            watch(
+                worst if name == "arm" else accumulated,
+                {leaf: ours[leaf] for leaf in expected},
+                expected,
+                f"step={step}",
+            )
+
+        their_carry, _ = rewritten_step(layer, their_params, their_carry, x)
+        our_carry, _, sensitivity = our_step(
+            core, our_params, our_carry, sensitivity, x
+        )
+        correct_carry, _, correct_credit = our_step(
+            correct, our_params, correct_carry, correct_credit, x
+        )
+    assert_explained(worst, REWRITTEN_CREDITED, f"rewritten arm's credit seed={seed}")
+    # The two recurrent leaves are where the accumulation lands: theirs credit a
+    # single step, ours credits every step before it. Whichever of them the draw
+    # makes widest, one of the two has to be far outside what the arm is allowed.
+    apart = max(accumulated.get(leaf, (0.0, ""))[0] for leaf in ("nu_log", "theta_log"))
+    assert apart > 10 * max(REWRITTEN_CREDITED.values()), (
+        f"our correct cell is within {apart:.1f} last bits of their HEAD's "
+        "gradient too, so requiring the arm to match it did not establish that "
+        "the arm stopped accumulating"
     )
 
 

@@ -62,7 +62,7 @@ class PublishedLRUCell(LRUCell):
 
 
 class RewrittenLRUCell(LRUCell):
-    """Their ``4301943``: the input gain, and no recurrence at all.
+    """Their ``4301943``: the input gain, no recurrence, and one step of credit.
 
     After publication, ``8d27f18`` rewrote their forward pass around
     ``jax.lax.associative_scan`` with a ``reshape(-1, input_dim)`` before it.
@@ -70,16 +70,28 @@ class RewrittenLRUCell(LRUCell):
     length one, the scan over it is the identity, and ``h_tminus1`` survives only
     to supply ``hidden_dim``. Their state is ``B_norm x_t`` with no history in it.
 
-    The influence matrices were not rewritten with it. They still accumulate
-    under ``Lambda``, as though the carry they credit still decayed into the next
-    one. So this arm is a forward pass with no memory and a credit assignment
-    that believes there is memory -- which is reproduced here the only way it can
-    be, by having the two disagree: ``__call__`` reports a decay of zero, so the
-    scan yields ``B_norm x_t``, while ``local_jacobian`` keeps reporting
-    ``Lambda`` and the sensitivities accumulate under it.
+    Their credit lost its history in the same rewrite, which is less visible.
+    ``_trace_update`` there reads ``Lambda * grad_memory[i] + <this step>`` and so
+    looks like an accumulation, but ``grad_memory`` comes from the carry and
+    nothing writes an updated trace back into one: the primal returns the traces
+    it was handed unless ``force_trace_compute``, a parameter with no caller in
+    their repository, and the fresh traces ``fwd`` computes go to the residual for
+    one step's gradient and are dropped. Every step therefore credits from the
+    zero their ``initialize_carry`` made, and the influence matrices are one step
+    deep.
 
-    Zero and not one. A decay of one would accumulate the states undamped, which
-    is a third thing that neither implementation computes.
+    So both halves lost their history, and the arm is our cell reporting a decay
+    of zero twice: from ``__call__``, so the scan yields ``B_norm x_t``, and from
+    ``local_jacobian``, so the sensitivity recursion yields this step's jacobian
+    alone. Zero and not one, in both. A decay of one would accumulate undamped,
+    which is a third thing neither revision computes.
+
+    Two of the jacobians are then worth reading twice, because they are not zero.
+    ``nu_log`` and ``theta_log`` are credited through ``carry.state``, which is
+    ``B_norm x_{t-1}``: a dependence on the previous input that their forward pass
+    no longer has. Their ``z_lambda = h_{t-1}`` is the same quantity. The arm
+    keeps that rather than tidying it, because it is what their revision trains
+    on.
 
     ``0dbd780`` added the missing exponential on top of this, so this revision has
     the input gain right and the recurrence gone. It is their HEAD.
@@ -88,3 +100,7 @@ class RewrittenLRUCell(LRUCell):
     def __call__(self, x: Array, **kwargs) -> Carry:
         carry = super().__call__(x, **kwargs)
         return carry.replace(decay=jnp.zeros_like(carry.decay))
+
+    def local_jacobian(self, carry: Carry, z: Carry, inputs: Array, **kwargs):
+        decay, jacobians = super().local_jacobian(carry, z, inputs, **kwargs)
+        return jnp.zeros_like(decay), jacobians

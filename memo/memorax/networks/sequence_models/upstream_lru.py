@@ -8,15 +8,19 @@ is where it gets quietly changed, so this file is the version ours answers to,
 driven beside it and compared leaf by leaf in ``tests/test_lru_parity.py``.
 
 Source: ``RTRRL-AAAI25`` commit ``b71fd6e``, file ``models/online_lru.py`` --
-the revision the paper was published at. Not the repository's HEAD
-(``4301943``): the commit ``8d27f18`` after publication rewrote the forward pass
-around ``jax.lax.associative_scan``, and since RTRRL steps one transition at a
-time, ``reshape(-1, input_dim)`` there makes a length-one sequence, the scan
-becomes the identity, and ``h_tminus1`` survives only to supply ``hidden_dim``.
-The recurrence ``Lambda * h_tminus1`` is therefore absent at HEAD while the
-influence matrices below still accumulate as though it were present. There is
-nothing for our LRU to agree with in that, so the published revision is the
-reference and the divergence is recorded rather than reproduced.
+the revision the paper was published at. Their HEAD (``4301943``) is transcribed
+separately, in ``upstream_lru_rewritten.py``, because the two revisions compute
+different things and one file cannot be faithful to both: ``8d27f18`` after
+publication rewrote the forward pass around ``jax.lax.associative_scan``, and
+since RTRRL steps one transition at a time, ``reshape(-1, input_dim)`` there
+makes a length-one sequence, the scan becomes the identity, and ``h_tminus1``
+survives only to supply ``hidden_dim``. So the recurrence ``Lambda * h_tminus1``
+below is absent there, and so -- for a different reason, given in that file -- is
+the accumulation in the influence matrices.
+
+What is below therefore accumulates and their HEAD does not. Both are reproduced,
+by an arm each in ``lru_upstream.py``, and each arm is checked against its own
+transcription rather than against a reading of the other's.
 
 The arithmetic is untouched, down to the spelling of ``B_img`` and the order of
 every multiplication, and the layout is upstream's rather than this repository's
