@@ -19,7 +19,7 @@ description: >
   The two are a grid rather than a search. The score is not expected to mean
   anything at a fortieth of a budget and is not read.
 
-image: 007122174918.dkr.ecr.eu-north-1.amazonaws.com/rtrrl@sha256:3a7d9946c4d659db7fdd105e86d6a541359d83aa204e1b161ef137e9bde2e6d2
+image: 007122174918.dkr.ecr.eu-north-1.amazonaws.com/rtrrl@sha256:aa3411a27ec1ea4f3b8225ffc8a9a1ebcbfebee7eef03376c7d34bab0fa74687
 entry: rtrrl
 storage: s3://rtrrl-artifacts-007122174918/trainer
 
