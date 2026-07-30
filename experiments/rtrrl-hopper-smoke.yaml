@@ -7,17 +7,11 @@ description: >
   experiment has ever pointed at it, so every number a budget would be built from
   is missing.
 
-  It asks one question the streamac files cannot answer for this entry: what a
-  step costs at each of two parallel widths. The reference implementation this is
-  going to be compared against steps one environment at a time, so matching it
-  means num_envs 1, and RTRRL updates every parameter once per step rather than
-  once per batch -- so at a fixed step budget, num_envs 1 does sixteen times the
-  updates that num_envs 16 does. Whether that is sixteen times the wall clock or
-  nearly none of it decides whether the comparison can afford to match them, and
-  it is a measurement rather than a guess.
-
-  The two are a grid rather than a search. The score is not expected to mean
-  anything at a fortieth of a budget and is not read.
+  The reference implementation steps one environment and updates its parameters
+  after every transition. num_envs is therefore fixed at one: increasing it
+  changes the optimisation process rather than merely parallelising the same
+  run. The score is not expected to mean anything at a fortieth of a budget and
+  is not read.
 
 image: 007122174918.dkr.ecr.eu-north-1.amazonaws.com/rtrrl@sha256:aa3411a27ec1ea4f3b8225ffc8a9a1ebcbfebee7eef03376c7d34bab0fa74687
 entry: rtrrl
@@ -37,22 +31,19 @@ compute:
 hpo:
   sampler: grid
   rounds: 1
-  trials_per_round: 2
-  # Both at once, so the two widths are priced on two machines rather than one
-  # after the other. Each job pays the Batch overhead separately, which is about
-  # three minutes here and is the part of the number that does not scale.
-  parallel_jobs: 2
+  trials_per_round: 1
+  parallel_jobs: 1
 
 space:
   environment: [brax::hopper]
   env_mode: [P]
   env_backend: [spring]
   backbone: [lru]
-  # The one dimension this file exists to vary.
-  num_envs: [1, 16]
+  # Part of the algorithm, not a throughput knob: the paper updates after every
+  # transition from one environment.
+  num_envs: [1]
   total_steps: [50000]
-  # Divides the budget, and is divisible by both widths above, which the runner
-  # requires of every epoch.
+  # Divides the budget into reporting epochs.
   epoch_steps: [10000]
   eval_steps: [1000]
   seed: [1]
