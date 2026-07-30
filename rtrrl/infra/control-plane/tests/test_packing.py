@@ -51,7 +51,7 @@ def test_configs_and_manifests_are_uploaded(s3_base: str, tmp_path: Path) -> Non
     second = json.loads(objects.get_bytes(plans[1].manifest_uri))
     assert len(first["runs"]) == 2 and len(second["runs"]) == 1
     for uri in first["runs"] + second["runs"]:
-        assert json.loads(objects.get_bytes(uri))["contract"] == 2
+        assert json.loads(objects.get_bytes(uri))["contract"] == 3
 
 
 def test_every_trial_appears_exactly_once_in_manifests(

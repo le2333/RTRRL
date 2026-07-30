@@ -1,4 +1,4 @@
-"""Build the contract v2 catalog baked into the acceptance image."""
+"""Build the current contract catalog baked into the acceptance image."""
 
 from __future__ import annotations
 

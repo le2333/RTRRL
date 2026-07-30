@@ -6,7 +6,7 @@ from training_sdk.contract import CONTRACT_VERSION, Catalog
 CATALOG = Path("catalog.json")
 
 
-def test_catalog_declares_contract_two_and_the_reserved_parameter() -> None:
+def test_catalog_declares_current_contract_and_the_reserved_parameter() -> None:
     catalog = Catalog.model_validate(json.loads(CATALOG.read_text()))
     assert catalog.contract == CONTRACT_VERSION
     entry = catalog.entries["brax_ppo_acceptance"]

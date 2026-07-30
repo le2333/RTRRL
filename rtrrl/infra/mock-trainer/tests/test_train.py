@@ -97,7 +97,7 @@ def make_run_config(
     trial_prefix = f"s3://bucket/trials/t{params.get('trial', 0)}"
     return RunConfig.model_validate(
         {
-            "contract": 2,
+            "contract": 3,
             "run_id": "run-1",
             "experiment": "brax-acceptance",
             "name": "acceptance",
@@ -105,6 +105,16 @@ def make_run_config(
             "trial": 0,
             "entry": "brax_ppo_acceptance",
             "digest": "registry.example/trainer@sha256:" + "a" * 64,
+            "environment": {
+                "id": "brax::inverted_pendulum",
+                "backend": "generalized",
+                "num_envs": 4,
+            },
+            "budget": {
+                "total_steps": int(params["total_steps"]),
+                "epoch_steps": int(params["total_steps"]),
+                "eval_steps": 0,
+            },
             "source_hash": "sha256:test",
             "params": params,
             "logging": {

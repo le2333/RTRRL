@@ -26,7 +26,7 @@ def test_installed_module_runs_real_cpu_ppo_in_subprocess(tmp_path: Path) -> Non
     config_path.write_text(
         json.dumps(
             {
-                "contract": 2,
+                "contract": 3,
                 "run_id": "runtime-cpu-1",
                 "experiment": "brax-runtime-cpu",
                 "name": "runtime",
@@ -34,6 +34,16 @@ def test_installed_module_runs_real_cpu_ppo_in_subprocess(tmp_path: Path) -> Non
                 "trial": 0,
                 "entry": "brax_ppo_acceptance",
                 "digest": "registry.example/trainer@sha256:" + "a" * 64,
+                "environment": {
+                    "id": "brax::inverted_pendulum",
+                    "backend": "generalized",
+                    "num_envs": 4,
+                },
+                "budget": {
+                    "total_steps": 128,
+                    "epoch_steps": 128,
+                    "eval_steps": 0,
+                },
                 "source_hash": "sha256:test",
                 "params": {
                     "env": "inverted_pendulum",

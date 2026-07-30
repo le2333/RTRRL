@@ -47,7 +47,7 @@ def test_launch_metadata_is_written_to_archive_and_s3(s3_base: str, tmp_path: Pa
     archived = json.loads((launch.archive / "launch.json").read_text())
     assert archived["digest"] == "sha256:" + "a" * 64
     assert archived["source_hash"] == "sha256:0"
-    assert archived["contract"] == 2
+    assert archived["contract"] == 3
     remote = json.loads(objects.get_bytes(f"{launch.prefix}/launch.json"))
     assert remote == archived
     assert json.loads(objects.get_bytes(f"{launch.prefix}/space.json"))["total_steps"] == [128]

@@ -16,7 +16,7 @@ push a test failure; `tests/test_examples.py` keeps them honest instead.
 
 CATALOG = Catalog.model_validate(
     {
-        "contract": 2,
+        "contract": 3,
         "entries": {
             "brax_ppo_acceptance": {
                 "command": ["python", "-m", "brax_ppo_acceptance"],

@@ -9,6 +9,8 @@ from pathlib import Path
 from training_sdk import objects
 from training_sdk.contract import (
     CONTRACT_VERSION,
+    BudgetConfig,
+    EnvironmentConfig,
     LoggingConfig,
     RunConfig,
     Scalar,
@@ -51,6 +53,8 @@ def create_launch(
         "description": experiment.description,
         "launch_id": launch_id,
         "entry": plan.entry_name,
+        "environment": experiment.environment.model_dump(mode="json"),
+        "budget": experiment.budget.model_dump(mode="json"),
         "digest": plan.digest,
         "source_hash": plan.entry.source_hash,
         "queue": plan.queue,
@@ -94,6 +98,17 @@ def build_run_config(
         trial=trial,
         entry=launch.plan.entry_name,
         digest=launch.plan.digest,
+        environment=EnvironmentConfig(
+            id=experiment.environment.id,
+            backend=experiment.environment.backend,
+            num_envs=experiment.environment.num_envs,
+            observed=experiment.environment.observed,
+        ),
+        budget=BudgetConfig(
+            total_steps=experiment.budget.total_steps,
+            epoch_steps=experiment.budget.epoch_steps,
+            eval_steps=experiment.budget.eval_steps,
+        ),
         source_hash=launch.plan.entry.source_hash,
         params=dict(params),
         logging=LoggingConfig(
