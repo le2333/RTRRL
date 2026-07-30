@@ -15,6 +15,27 @@ def tree_norm(tree):
     return jnp.sqrt(sum(jnp.sum(jnp.abs(leaf) ** 2) for leaf in leaves))
 
 
+def tree_cosine(left, right):
+    """The cosine of the angle between two trees, or NaN if either is zero.
+
+    Both trees are flattened into one vector, so the reading is about the whole
+    tree's direction and not any leaf's, and every axis is flattened with the
+    rest: a leading axis of parallel environments is folded in rather than
+    reported per stream, which is what ``tree_norm`` beside this does too.
+
+    NaN and not zero when a side vanishes, because zero has no direction and
+    reporting a right angle would invent one. Epoch averages are ``nanmean``, so
+    an undefined step drops out instead of pulling the average sideways.
+    """
+
+    pairs = list(zip(jax.tree.leaves(left), jax.tree.leaves(right)))
+    if not pairs:
+        return jnp.asarray(jnp.nan)
+    dot = sum(jnp.sum(one * other) for one, other in pairs)
+    scale = tree_norm(left) * tree_norm(right)
+    return jnp.where(scale > 0, dot / jnp.where(scale > 0, scale, 1.0), jnp.nan)
+
+
 def subtree_norms(tree, *, streams: bool = False) -> dict:
     """One L2 norm per top-level subtree, keyed by its name.
 
