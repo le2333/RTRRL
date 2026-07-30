@@ -19,6 +19,7 @@ from typing import Any
 import pytest
 from training_sdk.episode import Episode
 
+from entries import rtrrl
 from runner.catalog import discover
 
 # The few settings a run cannot be given arbitrarily: it has to end quickly,
@@ -123,3 +124,11 @@ def test_the_reserved_budget_parameter_is_declared(trained):
     # The control plane refuses an entry without it, since a run with no
     # budget has nothing to stop it.
     assert "total_steps" in entry.SPACE
+
+
+def test_rtrrl_entry_can_reproduce_the_papers_bounded_actor():
+    """The paper bounds its actor before clipping its environment action."""
+
+    params = smallest(rtrrl.SPACE) | BUDGET | {"bound_actor": True}
+    agent = rtrrl.build(params)
+    assert agent.actor_head.bound is True
