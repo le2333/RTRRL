@@ -65,11 +65,11 @@ def test_it_is_scored_on_something_the_entry_reports(experiment) -> None:
 
 
 def test_the_score_window_is_the_budget(experiment) -> None:
-    """Preflight refuses a window wider than the smallest budget in the space."""
+    """Preflight refuses a window wider than the run budget."""
 
     assert experiment["score"]["window_steps"] == [
         0,
-        experiment["space"]["total_steps"][0],
+        experiment["budget"]["total_steps"],
     ]
 
 
