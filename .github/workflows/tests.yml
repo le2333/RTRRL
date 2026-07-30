@@ -5,13 +5,12 @@ name: Tests
 
 on:
   push:
-    branches:
-      - main
     paths:
       - .github/workflows/tests.yml
       - training-sdk/**
       - rtrrl/infra/control-plane/**
       - rtrrl/infra/mock-trainer/**
+      - testbench/**
   workflow_dispatch:
 
 permissions:
@@ -33,6 +32,9 @@ jobs:
             target: ""
           - name: mock-trainer
             project: rtrrl/infra/mock-trainer
+            target: ""
+          - name: testbench
+            project: testbench
             target: ""
     steps:
       - uses: actions/checkout@v4
