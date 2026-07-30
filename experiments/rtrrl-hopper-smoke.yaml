@@ -17,6 +17,20 @@ image: 007122174918.dkr.ecr.eu-north-1.amazonaws.com/rtrrl@sha256:aa3411a27ec1ea
 entry: rtrrl
 storage: s3://rtrrl-artifacts-007122174918/trainer
 
+environment:
+  id: brax::hopper
+  backend: spring
+  observed: [0, 1, 2, 3, 4]
+  # Part of the algorithm, not a throughput knob: the paper updates after every
+  # transition from one environment.
+  num_envs: 1
+
+budget:
+  total_steps: 50000
+  # Divides the budget into reporting epochs.
+  epoch_steps: 10000
+  eval_steps: 1000
+
 compute:
   # The streamac runs on this entry's sibling drew 3.4 to 6 cores and about
   # 1.8 GiB, and a c7a.medium could not finish a trial inside its 1600 MiB. This
@@ -35,17 +49,7 @@ hpo:
   parallel_jobs: 1
 
 space:
-  environment: [brax::hopper]
-  env_mode: [P]
-  env_backend: [spring]
   backbone: [lru]
-  # Part of the algorithm, not a throughput knob: the paper updates after every
-  # transition from one environment.
-  num_envs: [1]
-  total_steps: [50000]
-  # Divides the budget into reporting epochs.
-  epoch_steps: [10000]
-  eval_steps: [1000]
   seed: [1]
   # Their defaults at 4301943, so that the thing being priced is the thing that
   # will be run. hidden_dim is their hidden_size, and feature_dim is ours: their

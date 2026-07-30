@@ -11,6 +11,19 @@ image: 007122174918.dkr.ecr.eu-north-1.amazonaws.com/rtrrl@sha256:67a47ccde6dddf
 entry: stream_ac
 storage: s3://rtrrl-artifacts-007122174918/trainer
 
+environment:
+  id: brax::hopper
+  backend: spring
+  observed: [0, 1, 2, 3, 4]
+  num_envs: 16
+
+budget:
+  # Two epochs of 1600 iterations each. Short enough to be cheap, long enough
+  # that the second epoch proves the loop repeats rather than merely starts.
+  total_steps: 51200
+  epoch_steps: 25600
+  eval_steps: 1000
+
 compute:
   instance_type: c7a.xlarge
   timeout_minutes: 30
@@ -22,17 +35,8 @@ hpo:
   parallel_jobs: 1
 
 space:
-  environment: [brax::hopper]
-  env_mode: [P]
-  env_backend: [spring]
   backbone: [rtu]
   seed: [0]
-  num_envs: [16]
-  # Two epochs of 1600 iterations each. Short enough to be cheap, long enough
-  # that the second epoch proves the loop repeats rather than merely starts.
-  total_steps: [51200]
-  epoch_steps: [25600]
-  eval_steps: [1000]
   hidden_dim: [128]
   feature_dim: [32]
   meta_rl: [true]

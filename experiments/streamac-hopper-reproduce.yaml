@@ -16,6 +16,26 @@ image: 007122174918.dkr.ecr.eu-north-1.amazonaws.com/rtrrl@sha256:efb23664a53747
 entry: stream_ac
 storage: s3://rtrrl-artifacts-007122174918/trainer
 
+environment:
+  id: brax::hopper
+  backend: spring
+  observed: [0, 1, 2, 3, 4]
+  # Sixteen independent streams, each with its own trace, TD error and OBGD
+  # bound, whose updates are averaged. This is not the paper's single stream:
+  # it was the shared harness default that every algorithm inherited, and it
+  # divides the step budget, so this run makes 125k updates rather than 2M.
+  # It is kept because it is what produced the score being reproduced.
+  num_envs: 16
+
+budget:
+  total_steps: 2000000
+  # Twenty epochs with an evaluation after each, which is the shape the
+  # recorded run used (num_epochs 20, eval_every 1, eval_steps 1000). The epoch
+  # is only where training leaves JIT to report: state, traces and the
+  # normalisers carry across the boundary, so the stream is unbroken.
+  epoch_steps: 100000
+  eval_steps: 1000
+
 compute:
   # Four cores and 7 GiB, which is what the recorded runs used: they drew 3.4
   # to 6 cores and held about 1.8 GiB. A c7a.medium would run out of memory on
@@ -32,24 +52,8 @@ hpo:
   parallel_jobs: 1
 
 space:
-  environment: [brax::hopper]
-  env_mode: [P]
-  env_backend: [spring]
   backbone: [rtu]
   seed: [0]
-  # Sixteen independent streams, each with its own trace, TD error and OBGD
-  # bound, whose updates are averaged. This is not the paper's single stream:
-  # it was the shared harness default that every algorithm inherited, and it
-  # divides the step budget, so this run makes 125k updates rather than 2M.
-  # It is kept because it is what produced the score being reproduced.
-  num_envs: [16]
-  total_steps: [2000000]
-  # Twenty epochs with an evaluation after each, which is the shape the
-  # recorded run used (num_epochs 20, eval_every 1, eval_steps 1000). The epoch
-  # is only where training leaves JIT to report: state, traces and the
-  # normalisers carry across the boundary, so the stream is unbroken.
-  epoch_steps: [100000]
-  eval_steps: [1000]
   hidden_dim: [128]
   feature_dim: [32]
   meta_rl: [true]

@@ -23,6 +23,17 @@ image: 007122174918.dkr.ecr.eu-north-1.amazonaws.com/rtrrl@sha256:b33d69821d4dd8
 entry: upstream_stream_ac
 storage: s3://rtrrl-artifacts-007122174918/trainer
 
+environment:
+  id: brax::hopper
+  backend: spring
+  observed: [0, 1, 2, 3, 4]
+  num_envs: 16
+
+budget:
+  total_steps: 2000000
+  epoch_steps: 100000
+  eval_steps: 1000
+
 compute:
   # What the search ran on: two cores and 3.5 GiB, about 19 minutes for these
   # two million steps, and 40% cheaper per trial than the xlarge that was 21%
@@ -37,15 +48,8 @@ hpo:
   parallel_jobs: 1
 
 space:
-  environment: [brax::hopper]
-  env_mode: [P]
-  env_backend: [spring]
   backbone: [rtu]
   seed: [0]
-  num_envs: [16]
-  total_steps: [2000000]
-  epoch_steps: [100000]
-  eval_steps: [1000]
   hidden_dim: [128]
   feature_dim: [32]
   meta_rl: [true]

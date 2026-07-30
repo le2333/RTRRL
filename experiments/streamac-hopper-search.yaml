@@ -28,6 +28,17 @@ image: 007122174918.dkr.ecr.eu-north-1.amazonaws.com/rtrrl@sha256:0beb5f44302f3b
 entry: stream_ac
 storage: s3://rtrrl-artifacts-007122174918/trainer
 
+environment:
+  id: brax::hopper
+  backend: spring
+  observed: [0, 1, 2, 3, 4]
+  num_envs: 16
+
+budget:
+  total_steps: 2000000
+  epoch_steps: 100000
+  eval_steps: 1000
+
 compute:
   # Measured, not assumed: the three probe files beside this one ran one tenth of
   # a trial on each CPU queue. A c7a.medium never finished it in 45 minutes, which
@@ -53,16 +64,9 @@ hpo:
   parallel_jobs: 4
 
 space:
-  environment: [brax::hopper]
-  env_mode: [P]
-  env_backend: [spring]
   backbone: [rtu]
   credit: [rtrl]
   seed: [0]
-  num_envs: [16]
-  total_steps: [2000000]
-  epoch_steps: [100000]
-  eval_steps: [1000]
   hidden_dim: [128]
   feature_dim: [32]
   meta_rl: [true]

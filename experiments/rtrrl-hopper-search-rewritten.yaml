@@ -5,6 +5,17 @@ image: 007122174918.dkr.ecr.eu-north-1.amazonaws.com/rtrrl@sha256:5bf83b80df2d22
 entry: rtrrl
 storage: s3://rtrrl-artifacts-007122174918/trainer
 
+environment:
+  id: brax::hopper
+  backend: spring
+  observed: [0, 1, 2, 3, 4]
+  num_envs: 1
+
+budget:
+  total_steps: 2000000
+  epoch_steps: 100000
+  eval_steps: 1000
+
 compute:
   instance_type: c7a.medium
   timeout_minutes: 60
@@ -17,17 +28,6 @@ hpo:
 
 space:
   seed: [1]
-
-  # environment
-  environment: [brax::hopper]
-  env_mode: [P]
-  env_backend: [spring]
-  num_envs: [1]
-
-  # budget
-  total_steps: [2000000]
-  epoch_steps: [100000]
-  eval_steps: [1000]
 
   # structure
   backbone: [lru_rewritten]
