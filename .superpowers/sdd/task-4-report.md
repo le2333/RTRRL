@@ -1,350 +1,200 @@
-# Task 4 Report: Parity-Verified Heads
+# Task 4 报告：RunConfig 环境与预算贯通
 
-## Status
+## 状态
 
-Implemented only the isolated strict AAAI25 dense, TD, and policy-head behavior
-in the new `memorax.algorithms.rtrrl.heads` module. The legacy facade and
-training builders remain unchanged; no LRU or state-machine work was started.
+`DONE_WITH_CONCERNS`
 
-## TDD RED Evidence
+`build_run_config` 现在逐字段把实验的 `environment` 与 `budget` 映射成
+contract v3 的 `EnvironmentConfig` 和 `BudgetConfig`，`launch.json` 同时归档这两个
+section。control-plane 与 mock-trainer 的 contract 夹具已经迁移到 v3，mock-trainer
+catalog 已由生成器重建。最终 CI 的 training-sdk、control-plane、mock-trainer
+三个 job 全部通过。
 
-Before production implementation, the generic Memorax Gaussian was exercised
-against the strict contract:
+## 提交
 
-```text
-$ cd memo
-$ uv run pytest tests/rtrrl_parity/test_heads_parity.py -q
-FFF
+- `0e01f76 test(launch): require environment and budget propagation`
+- `cc00861 test(launch): use the suite object store`
+- `0e3b8a9 feat(launch): hand the worker its environment and its budget`
+- `d446f55 test(control-plane): align fixtures with contract three`
 
-test_strict_actor_has_no_bias:
-  generic Dense contained bias shape (4,)
-test_strict_kernel_uses_aaai25_initializer:
-  8/8 elements differed; max absolute difference 0.25715518
-test_strict_distribution_is_per_dimension_and_reduces_by_mean:
-  MultivariateNormalDiag was not distrax.Normal
-```
+## CI 运行（按时间顺序）
 
-These failures demonstrated all required intended differences before the
-strict implementation: actor bias, initializer, and distribution/reduction
-semantics.
+1. [30582383465](https://github.com/le2333/RTRRL-AAAI25/actions/runs/30582383465)
+   - RED 尝试。
+   - training-sdk 通过；control-plane 与 mock-trainer 失败。
+   - 两个新增测试在 `_launch` 设置阶段因 `NoSuchBucket` 失败，未到达目标断言；
+     因此该运行不作为有效 RED，随后只修正测试对象存储设置。
+2. [30582481892](https://github.com/le2333/RTRRL-AAAI25/actions/runs/30582481892)
+   - 有效 RED。
+   - training-sdk 通过；control-plane 为 54 failed、94 passed、10 errors；
+     mock-trainer 为 11 failed、90 passed。
+   - 新增的 RunConfig 测试按要求在 `build_run_config` 内失败，错误明确列出
+     `environment` 与 `budget` 缺失；归档测试以 `KeyError: 'environment'` 失败。
+3. [30582797715](https://github.com/le2333/RTRRL-AAAI25/actions/runs/30582797715)
+   - 第一轮实现验证。
+   - training-sdk 76 passed；mock-trainer 101 passed；control-plane
+     154 passed、4 failed。
+   - 剩余四项都是 contract 3 与 catalog 默认 `total_steps` spec 的旧断言：
+     `tests/test_cli.py::test_validate_catalog_exits_zero_and_prints_resolved_space`、
+     `tests/test_launch.py::test_launch_metadata_is_written_to_archive_and_s3`、
+     `tests/test_preflight_aws.py::test_image_catalog_disagreeing_with_offline_catalog_is_rejected`、
+     `tests/test_preflight_offline.py::test_example_passes_offline_checks`。
+4. [30583741280](https://github.com/le2333/RTRRL-AAAI25/actions/runs/30583741280)
+   - 最终 GREEN。
+   - training-sdk：76 passed。
+   - control-plane：158 passed。
+   - mock-trainer：101 passed。
+   - 三个 job 全部通过。
 
-The final wished-for module tests were then installed before production code:
-
-```text
-$ uv run pytest tests/rtrrl_parity/test_heads_parity.py -q
-ERROR collecting tests/rtrrl_parity/test_heads_parity.py
-ModuleNotFoundError: No module named 'memorax.algorithms.rtrrl.heads'
-```
-
-The first implementation run additionally exposed two relevant compatibility
-issues rather than hiding them:
-
-- JAX 0.10 defaults to partitionable Threefry, while the fixture records JAX
-  0.4.38 sampling. The test now scopes `jax.threefry_partitionable(False)` to
-  reconstruct the pinned oracle key split and sample.
-- Current Flax/JAX custom-VJP validation requires the module cotangent to retain
-  the exact outer mapping and inner `FrozenDict` structure. The backward rule
-  now preserves that structure while keeping the AAAI25 equations unchanged.
-
-## Implementation
-
-- `FADense`
-  - defaults to AAAI25
-    `glorot_normal(in_axis=-1, out_axis=-2)`;
-  - preserves ordinary dense forward values;
-  - stores feedback matrices at `falign/B`;
-  - routes input VJPs through `B`, parameter VJPs through the forward input;
-  - preserves actor/critic bias behavior.
-- `RTRRLTDHead`
-  - strict linear actor at `params/actor/kernel`, without bias;
-  - critic at `params/critic/{kernel,bias}`;
-  - continuous actor width is exactly `2 * action_dim`.
-- `make_action_distribution`
-  - discrete output is `distrax.Categorical`;
-  - continuous output splits loc/log-scale, applies AAAI25 sigmoid bounds and
-    softplus, and remains a per-dimension `distrax.Normal`;
-  - consequently log-probability and entropy retain action dimensions and the
-    strict objective convention is `.mean()` across those dimensions.
-
-No new heads are wired into training.
-
-## Fixture Leaves and Explicit Parameters
-
-Used committed leaves:
-
-- `heads/input`
-- `heads/actor_loc`
-- `heads/actor_scale`
-- `heads/value`
-- `init/action`
-
-The forward test supplies an explicit float32 variable tree rather than
-depending on random initialization:
-
-- `params/actor/kernel`: `(2, 4)`, no actor bias;
-- `params/critic/kernel`: `(2, 1)`;
-- `params/critic/bias`: `(1,)`.
-
-The explicit replay values are chosen to reproduce the committed fixture at
-`heads/input`. Initializer identity is tested separately and exactly by
-evaluating the strict default and AAAI25 initializer with the same key, shape,
-and dtype. Parameter paths, shapes, and dtypes are checked before float values.
-
-The feedback-alignment VJP test uses the committed `heads/input` leaf and
-explicitly distinct forward and feedback matrices. Its forward output is exact,
-and the input VJP is exactly `[[11.0, 15.0]]`, proving that `B`, not the forward
-kernel, controls the input cotangent.
-
-## Tolerances and Differences
-
-Forward/distribution policy: `rtol=2e-6`, `atol=2e-7`, after exact path, shape,
-and dtype checks.
-
-Measured maximum absolute differences:
+## 有效 RED 的精确失败消息
 
 ```text
-loc:      0
-scale:    1.192092896e-07
-value:    0
-sample:   1.788139343e-07
-log_prob: 0
-entropy:  2.980232239e-07
+pydantic_core._pydantic_core.ValidationError: 2 validation errors for RunConfig
+environment
+  Field required [type=missing, input_value={'contract': 3, 'run_id':.../trials/t0/score.json')}, input_type=dict]
+  For further information visit https://errors.pydantic.dev/2.13/v/missing
+budget
+  Field required [type=missing, input_value={'contract': 3, 'run_id':.../trials/t0/score.json')}, input_type=dict]
+  For further information visit https://errors.pydantic.dev/2.13/v/missing
 ```
 
-The initializer and feedback-alignment forward/VJP assertions are exact.
-Per-dimension fixture-derived log probabilities are
-`[[-0.9792221, -0.40963465]]`; their strict mean is `-0.6944284`.
-Per-dimension entropies are `[[0.64159447, 0.452748]]`; their strict mean is
-`0.54717124`.
+## 开始前的失败集合
 
-## GREEN and Compatibility Evidence
+来源：Task 4 开始前最近一次 CI
+[30581864897](https://github.com/le2333/RTRRL-AAAI25/actions/runs/30581864897)。
+共 73 个失败/错误 node ID。
 
-Focused GREEN:
+### control-plane（62）
 
-```text
-$ uv run pytest tests/rtrrl_parity/test_heads_parity.py -q
-....                                                                     [100%]
-4 passed
+- `tests/test_cli.py::test_errors_use_stderr_and_nonzero_exit`
+- `tests/test_cli.py::test_validate_catalog_exits_zero_and_prints_resolved_space`
+- `tests/test_cli.py::test_validate_catalog_rejects_unsupported_contract`
+- `tests/test_cli.py::test_validate_catalog_rejects_unknown_score_metric`
+- `tests/test_cli.py::test_validate_catalog_rejects_score_window_beyond_budget`
+- `tests/test_cli.py::test_validate_catalog_rejects_unknown_space_override`
+- `tests/test_cli.py::test_validate_catalog_rejects_grid_sampler_with_continuous_space`
+- `tests/test_cli.py::test_validate_batch_backend_never_submits`
+- `tests/test_cli.py::test_validate_batch_backend_warns_for_dev_queues`
+- `tests/test_cli.py::test_run_batch_backend_exits_zero_on_success`
+- `tests/test_cli.py::test_run_local_backend_exits_zero_on_success`
+- `tests/test_cli.py::test_run_local_backend_exits_nonzero_on_failure`
+- `tests/test_end_to_end_local.py::test_two_round_study_completes_and_reports`
+- `tests/test_end_to_end_local.py::test_failing_run_stops_the_launch_and_prints_the_log`
+- `tests/test_end_to_end_local.py::test_missing_score_names_the_object_and_writes_failed_report`
+- `tests/test_examples.py::test_example_loads_and_passes_offline_checks[experiment-acceptance-gpu.yaml]`
+- `tests/test_examples.py::test_example_loads_and_passes_offline_checks[experiment-acceptance.yaml]`
+- `tests/test_examples.py::test_example_loads_and_passes_offline_checks[experiment-dev-smoke.yaml]`
+- `tests/test_launch.py::test_launch_id_is_a_utc_timestamp`
+- `tests/test_launch.py::test_launch_metadata_is_written_to_archive_and_s3`
+- `tests/test_launch.py::test_run_config_uses_trial_params_verbatim[3]`
+- `tests/test_launch.py::test_run_config_uses_trial_params_verbatim[7]`
+- `tests/test_launch.py::test_trial_s3_subtrees_are_disjoint`
+- `tests/test_launch.py::test_run_config_disables_rerun_when_not_configured`
+- `tests/test_local_backend.py::test_successful_worker_is_reported`
+- `tests/test_local_backend.py::test_terminate_stops_a_running_job`
+- `tests/test_local_backend.py::test_wait_returns_early_when_a_sibling_fails`
+- `tests/test_packing.py::test_configs_and_manifests_are_uploaded`
+- `tests/test_packing.py::test_every_trial_appears_exactly_once_in_manifests`
+- `tests/test_preflight_aws.py::test_plan_carries_digest_queue_and_job_definition`
+- `tests/test_preflight_aws.py::test_dev_tier_selects_the_dev_queue`
+- `tests/test_preflight_aws.py::test_loopback_aim_endpoint_is_rejected[127.0.0.1]`
+- `tests/test_preflight_aws.py::test_loopback_aim_endpoint_is_rejected[127.0.1.5]`
+- `tests/test_preflight_aws.py::test_loopback_aim_endpoint_is_rejected[localhost]`
+- `tests/test_preflight_aws.py::test_loopback_aim_endpoint_is_rejected[::1]`
+- `tests/test_preflight_aws.py::test_a_routable_aim_endpoint_is_accepted`
+- `tests/test_preflight_aws.py::test_unreachable_aim_endpoint_is_rejected`
+- `tests/test_preflight_aws.py::test_missing_queue_is_rejected`
+- `tests/test_preflight_aws.py::test_disabled_queue_is_rejected`
+- `tests/test_preflight_aws.py::test_invalid_queue_is_rejected`
+- `tests/test_preflight_aws.py::test_missing_s3_bucket_is_rejected`
+- `tests/test_preflight_aws.py::test_forbidden_s3_bucket_is_rejected`
+- `tests/test_preflight_aws.py::test_image_without_a_registered_job_definition_is_rejected`
+- `tests/test_preflight_aws.py::test_image_catalog_disagreeing_with_offline_catalog_is_rejected`
+- `tests/test_preflight_aws.py::test_image_source_hash_drift_is_rejected`
+- `tests/test_preflight_aws.py::test_image_parameter_space_drift_is_rejected`
+- `tests/test_preflight_aws.py::test_non_ecr_image_reference_is_rejected`
+- `tests/test_preflight_offline.py::test_example_passes_offline_checks`
+- `tests/test_preflight_offline.py::test_unknown_entry_is_rejected`
+- `tests/test_preflight_offline.py::test_metric_not_reported_by_entry_is_rejected`
+- `tests/test_preflight_offline.py::test_window_beyond_smallest_total_steps_is_rejected`
+- `tests/test_preflight_offline.py::test_format_space_lists_every_key`
+- `tests/test_batch_backend.py::test_submit_passes_manifest_and_timeout`
+- `tests/test_batch_backend.py::test_submit_tells_the_container_which_region_it_is_in`
+- `tests/test_batch_backend.py::test_wait_polls_until_every_job_is_terminal`
+- `tests/test_batch_backend.py::test_failed_job_exposes_its_log_tail`
+- `tests/test_batch_backend.py::test_terminate_calls_batch_for_every_job`
+- `tests/test_batch_backend.py::test_terminate_tolerates_already_finished_jobs`
+- `tests/test_batch_backend.py::test_wait_returns_early_when_a_sibling_is_still_running`
+- `tests/test_batch_backend.py::test_log_tail_without_stream_returns_empty_string`
+- `tests/test_batch_backend.py::test_successful_job_has_no_reason`
+- `tests/test_loop.py::test_partial_submit_failure_terminates_already_submitted_jobs`
+
+### mock-trainer（11）
+
+- `tests/test_catalog.py::test_catalog_declares_contract_two_and_the_reserved_parameter`
+- `tests/test_runtime_cpu.py::test_installed_module_runs_real_cpu_ppo_in_subprocess`
+- `tests/test_train.py::test_fast_train_retains_rollout_sdk_and_checkpoint_lifecycle`
+- `tests/test_train.py::test_train_rejects_checkpoint_mismatch_before_registration`
+- `tests/test_train.py::test_normal_path_calls_real_brax_entry_point_with_fixed_micro_parameters`
+- `tests/test_train.py::test_launcher_fails_once_and_preserves_pre_failure_artifacts[before_training-False-False]`
+- `tests/test_train.py::test_launcher_fails_once_and_preserves_pre_failure_artifacts[after_training-False-False]`
+- `tests/test_train.py::test_launcher_fails_once_and_preserves_pre_failure_artifacts[after_checkpoint-True-True]`
+- `tests/test_train.py::test_finalization_failure_is_rethrown_without_double_terminal`
+- `tests/test_train.py::test_successful_launcher_uses_reporter_from_env_and_prints_runtime_summary`
+- `tests/test_train.py::test_reported_step_matches_the_environment_step_budget`
+
+## 最终失败集合与差异
+
+最终运行 30583741280 的失败 node ID：无。
+
+差异：开始前 73 个失败/错误 node ID 全部消除；新增的两个 Task 4 测试也通过，
+最终三个项目共 335 个测试通过（76 + 158 + 101），失败数从 73 降为 0。
+
+## mock-trainer catalog 生成证据
+
+执行了要求的生成命令。由于本机新建的 uv 环境首先复用了同版本
+`training-sdk==0.1.0` 的旧 wheel，第一次生成没有 diff；随后以
+`uv sync --reinstall-package training-sdk` 刷新本地 path dependency，再次执行同一
+生成命令。最终 diff：
+
+```diff
+ {
+-  "contract": 2,
++  "contract": 3,
+   "entries": {
 ```
 
-Final fresh related suite:
+只有 contract 数字改变，source hash 与 catalog 其余内容未变。
 
-```text
-$ uv run pytest \
-    tests/rtrrl_parity/test_heads_parity.py \
-    tests/rtrrl_parity/test_public_api.py \
-    tests/rtrrl_parity/test_config_compat.py -q
-...................................                                      [100%]
-35 passed
+## mock-trainer 脚本 YAML 的前后 section
+
+`rtrrl/infra/mock-trainer/scripts/brax_ppo_acceptance.yaml` 的实际内容不是实验配置，
+而是旧版 trainer script descriptor；它没有顶层 `space`，也没有实验模型所需的
+顶层 `environment`、`budget`。前后均为：
+
+```yaml
+defaults:
+  environment:
+    name: inverted_pendulum
+    options: {backend: generalized}
+  training_budget: {env_steps: 128}
+fields:
+  num_envs:
+    path: algorithm.num_envs
+    type: int
+    default: 4
+    choices: [4]
 ```
 
-The only warning is the pre-existing TensorFlow Probability use of deprecated
-`jax.core.pytype_aval_mappings`.
+因此没有可从 `space` 搬出的七/八个实验键；文件中也没有 `env_mode`，无需判断
+F/P/V。为避免把 descriptor 改成一个无法由其现有消费者解析的混合格式，本任务
+没有修改该文件。
 
-Static checks:
+## 关注事项
 
-```text
-$ uv run ruff check \
-    memorax/algorithms/rtrrl/heads.py \
-    tests/rtrrl_parity/test_heads_parity.py
-All checks passed!
-
-$ uv run pyright \
-    memorax/algorithms/rtrrl/heads.py \
-    tests/rtrrl_parity/test_heads_parity.py
-0 errors, 0 warnings, 0 informations
-
-$ uv run python -m compileall -q \
-    memorax/algorithms/rtrrl/heads.py \
-    tests/rtrrl_parity/test_heads_parity.py
-# exit 0
-
-$ git diff --check
-# exit 0
-```
-
-## Batch and Oracle Provenance
-
-No new Batch job was needed for Task 4: the committed fixture and tiny isolated
-head/VJP checks fit local resources, and no full RL environment ran.
-
-The numerical oracle remains the committed fixture generated from
-`RTRRL-AAAI25` commit
-`4301943c349171d828d0fcf3e40944c286451415`, Python 3.12.13, JAX/JAXLIB
-0.4.38, CPU, seed 7. Its prior successful regeneration provenance is AWS Batch
-job `210bc314-30ec-4639-9ffb-48d25e9181d1` on the authorized
-`rtrrl-cpu-queue` / `c7a.xlarge` compute environment (4 vCPU instance, 8 GiB;
-4 vCPU and 7168 MiB assigned). The oracle environment was separate from the
-Memorax runtime.
-
-## Files
-
-- Added `memo/memorax/algorithms/rtrrl/heads.py`
-- Added `memo/tests/rtrrl_parity/test_heads_parity.py`
-- Added `.superpowers/sdd/task-4-report.md`
-
-## Concerns
-
-- The committed fixture contains head inputs/outputs and sampled action, but not
-  the oracle actor/critic parameter tree or VJP leaves. Therefore the test uses
-  explicit replay parameters for the committed input and an independently
-  explicit feedback-alignment VJP characterization; it does not claim that
-  those replay parameter values are the original oracle initialization.
-- Exact sampled-action replay depends on the fixture's JAX 0.4.38 Threefry
-  partitioning behavior. The test scopes the old setting and documents it;
-  without that setting JAX 0.10 produces a different deterministic sample for
-  the same key.
-- The existing TensorFlow Probability deprecation warning remains unrelated to
-  these heads.
-
-## Review Blocker Follow-Up: Oracle-Backed Parameters and VJPs
-
-The original Task 4 tests did not establish parameter or VJP parity: they
-constructed a kernel to fit one committed output and hand-wrote distribution
-and feedback-gradient expectations. This follow-up replaces every such value
-with leaves generated by the pinned AAAI25 implementation.
-
-### RED
-
-The required fixture paths and tests were added before changing the capture
-contract or fixture:
-
-```text
-$ uv run pytest \
-    tests/rtrrl_parity/test_public_api.py::test_oracle_fixture_has_required_sections \
-    tests/rtrrl_parity/test_heads_parity.py -q
-FFF.F
-4 failed, 1 passed
-```
-
-The failures were the intended old-fixture failures:
-
-- the manifest/archive exposed only the original four head output leaves;
-- `heads/params/actor/kernel` and all other real parameter leaves were absent;
-- sampled-action, log-probability, entropy, reduction, and sample-key leaves
-  were absent; and
-- no cotangent, input VJP, parameter VJP, or zero feedback-matrix cotangent
-  existed.
-
-This directly demonstrated that the artificial replay approach could not
-satisfy the reviewed contract.
-
-### Extended Oracle Contract
-
-The standalone capture now initializes a separate strict linear AAAI25 head
-with feedback alignment enabled, without changing the original end-to-end LRU
-transition leaves. It records exactly 24 `heads/` leaves:
-
-- input and raw actor output;
-- actor loc/scale, critic value, sample key and sampled action;
-- per-dimension log-probability and entropy plus their mean reductions;
-- actual actor kernel, critic kernel/bias, actor feedback matrix and critic
-  feedback matrix;
-- the documented nontrivial output cotangent
-  (`actor=[[0.25,-0.5,0.75,-1.25]]`, `value=[[0.625]]`);
-- input VJP;
-- actor/critic kernel VJPs, critic bias VJP; and
-- exact zero cotangents for both feedback matrices.
-
-The manifest's `head_vjp` section documents the differentiated function,
-cotangent output order, cotangent leaves, input-VJP leaf and differentiated
-variable collections. Required-section tests assert that the `heads/` path set
-is exact, not merely a subset. Existing metadata tests continue to validate
-every one of the fixture's 33 total paths, shapes, dtypes and finite values.
-
-Task 4 tests now construct the Flax variable tree solely from committed oracle
-leaves. Forward, sampling, per-dimension distribution metrics, mean reductions,
-complete variable VJP tree and input VJP all compare path/shape/dtype before
-values. No constructed-to-fit or handwritten numerical expectation remains.
-
-### Batch Regeneration Provenance
-
-The fixture was regenerated from a clean clone of
-`https://github.com/FranzKnut/RTRRL-AAAI25.git` at exact commit
-`4301943c349171d828d0fcf3e40944c286451415` in a runtime separate from Memorax.
-
-- AWS Batch job: `6d69891a-ce03-4e69-95ac-a6fb45f258ec`
-- Job name: `rtrrl-oracle-task4-review-fix-20260720`
-- Queue/job definition: `rtrrl-cpu-queue` / `rtrrl-cpu-job:14`
-- Status: `SUCCEEDED`
-- Resources: 4 vCPU, 7168 MiB container allocation on the authorized
-  `c7a.xlarge` compute environment (8 GiB instance)
-- Runtime: Python 3.12.13, JAX 0.4.38, JAXLIB 0.4.38, Flax 0.10.2,
-  Distrax 0.1.5, CPU
-- Seed: 7
-- `aaai25_lru.npz`: 9444 bytes
-- NPZ SHA-256:
-  `1ad7dc9eebd0b181d84aee5e0552333e953e5de4e536e4b8bc4e95182d0a6071`
-- `manifest.json`: 5120 bytes
-
-No full RL environment was run locally. Local work loaded only the committed
-NPZ/JSON fixture; AAAI25 generation and its dependency environment remained in
-Batch.
-
-### Numerical Differences and GREEN
-
-Under exact comparisons, all measured maximum absolute differences between the
-current isolated head and committed AAAI25 leaves are zero:
-
-```text
-forward:
-  actor_output 0
-  actor_loc 0
-  actor_scale 0
-  value 0
-  sampled_action 0
-  log_prob 0
-  entropy 0
-  log_prob_mean 0
-  entropy_mean 0
-vjp:
-  input 0
-  params/actor/kernel 0
-  params/critic/kernel 0
-  params/critic/bias 0
-  falign/actor/B 0
-  falign/critic/B 0
-```
-
-The previous `(rtol=2e-6, atol=2e-7)` policy is no longer needed for these
-leaves; forward and complete VJP parity are asserted exactly after exact tree,
-shape and dtype checks.
-
-Focused and related GREEN:
-
-```text
-$ uv run pytest \
-    tests/rtrrl_parity/test_public_api.py \
-    tests/rtrrl_parity/test_heads_parity.py \
-    tests/rtrrl_parity/test_config_compat.py -q
-...................................                                      [100%]
-35 passed
-```
-
-Static checks:
-
-```text
-$ uv run ruff check \
-    tests/rtrrl_parity/oracle_capture.py \
-    tests/rtrrl_parity/test_public_api.py \
-    tests/rtrrl_parity/test_heads_parity.py \
-    memorax/algorithms/rtrrl/heads.py
-All checks passed!
-
-$ uv run pyright \
-    tests/rtrrl_parity/oracle_capture.py \
-    tests/rtrrl_parity/test_public_api.py \
-    tests/rtrrl_parity/test_heads_parity.py \
-    memorax/algorithms/rtrrl/heads.py
-0 errors, 0 warnings, 0 informations
-
-$ uv run python -m compileall -q <same four Python files>
-# exit 0
-
-$ git diff --check
-# exit 0
-```
-
-The only test warning remains the pre-existing TensorFlow Probability
-`jax.core.pytype_aval_mappings` deprecation. Exact sample replay intentionally
-scopes the JAX 0.4.38 Threefry partitioning mode recorded by the oracle.
+- brief 把 `scripts/brax_ppo_acceptance.yaml` 称为实验文件，但仓库中的该路径是
+  script descriptor，且不存在 `space`。这项迁移要求与实际文件结构不一致；
+  需要计划维护者确认目标路径或另行定义 descriptor 到 contract v3 的迁移。
+- CI 只有 GitHub Actions 执行 pytest；本机未运行 pytest 或 docker。
+- 最终 CI 的唯一提示是 GitHub Actions 对 Node.js 20 action runtime 的弃用提示，
+  与本任务代码无关。
