@@ -16,8 +16,10 @@ TRIAL_PARAMS = {"total_steps": 128, "learning_rate": 0.0003}
 
 
 def _launch(tmp_path):
+    document = _document()
+    document["storage"] = "s3://trainer-test"
     source = tmp_path / "experiment.yaml"
-    source.write_text(json.dumps(_document()), encoding="utf-8")
+    source.write_text(json.dumps(document), encoding="utf-8")
     experiment = load_experiment(source)
     plan = LaunchPlan(
         experiment=experiment,
