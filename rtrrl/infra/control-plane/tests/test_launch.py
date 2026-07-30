@@ -50,7 +50,8 @@ def test_launch_metadata_is_written_to_archive_and_s3(s3_base: str, tmp_path: Pa
     assert archived["contract"] == 3
     remote = json.loads(objects.get_bytes(f"{launch.prefix}/launch.json"))
     assert remote == archived
-    assert json.loads(objects.get_bytes(f"{launch.prefix}/space.json"))["total_steps"] == [128]
+    space = json.loads(objects.get_bytes(f"{launch.prefix}/space.json"))
+    assert space["total_steps"]["type"] == "int"
 
 
 @pytest.mark.parametrize("trial", [3, 7])

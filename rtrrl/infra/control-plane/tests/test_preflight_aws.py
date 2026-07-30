@@ -348,7 +348,7 @@ def test_image_catalog_disagreeing_with_offline_catalog_is_rejected() -> None:
         return wrong_blob
 
     experiment, catalog, space = plan_arguments()
-    with pytest.raises(PreflightError, match=r"contract differs \(image 99, offline 2\)"):
+    with pytest.raises(PreflightError, match=r"contract differs \(image 99, offline 3\)"):
         check_aws(
             experiment,
             catalog,

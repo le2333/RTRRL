@@ -68,7 +68,7 @@ def test_validate_catalog_exits_zero_and_prints_resolved_space(
     lines = captured.out.strip().splitlines()
     assert lines[0] == "resolved search space:"
     assert len(lines) == 1 + len(space)
-    assert "  total_steps: 128" in captured.out
+    assert '  total_steps: {"type":"int","low":1,"high":100000' in captured.out
 
 
 def test_validate_catalog_rejects_unsupported_contract(

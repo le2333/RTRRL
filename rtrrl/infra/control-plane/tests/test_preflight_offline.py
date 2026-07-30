@@ -65,7 +65,13 @@ def test_a_score_window_inside_the_budget_is_accepted(tmp_path):
 
 def test_example_passes_offline_checks() -> None:
     space = check_offline(load_experiment(EXAMPLE), CATALOG)
-    assert space["total_steps"].choices == (128,)
+    assert space["total_steps"].model_dump() == {
+        "type": "int",
+        "low": 1,
+        "high": 100000,
+        "step": 1,
+        "log": False,
+    }
 
 
 def test_unknown_entry_is_rejected(tmp_path: Path) -> None:
