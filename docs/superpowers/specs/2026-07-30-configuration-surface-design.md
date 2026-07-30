@@ -2,7 +2,7 @@
 
 范围:实验配置文件的分段、观测的指定方式、算法侧的参数声明、结构的表达与采样、OBGD 的分解。
 
-不在本范围:数值偏差判据(见 `2026-07-29-numerical-testbench-design.md`)、金快照重录、具体实验的取值选择。
+不在本范围:数值偏差判据(见 `2026-07-29-numerical-testbench-design.md`)、金快照重录、具体实验的取值选择、按环境拆解奖励分量(见 §6 末)。
 
 取代 `2026-07-26-algorithm-config-contract-design.md`。
 
@@ -112,18 +112,51 @@ optimizer.base:  sgd  | adam
 
 `freeze_gamma` 在有界时报错的现状(`memorax/algorithms/rtrrl.py:200-205`)保留:界按组整体缩放,无法单独按住一个叶子。
 
-## 6. 迁移
+## 6. 指标面
 
-`EntryDescriptor` 去掉 `source_hash` 字段,连同三个 catalog 构建脚本里的计算(`memo/runner/catalog.py:38-56`、`rtrrl/scripts/build_catalog.py`、`rtrrl/infra/mock-trainer/scripts/build_catalog.py`)、`preflight.py:135` 的比对、`launch.py` 与 `loop.py` 写进 study 属性的引用一并删除。镜像 digest 已经回答"跑的是哪个镜像"。
+### 两个粒度
+
+记录的量分两类,由 Aim 的 context 区分:
+
+- **环境步采样**:每个环境步取一次、在 epoch 内聚合后上报。训练侧的全部诊断量、`eval/reward` 属于此类。
+- **回合级**:每个完成的回合取一次。`eval/episode_return`、`eval/episode_length` 属于此类。
+
+现状两类都存在但不区分:`AimSink.report` 调 `run.track(value, name, step)` 不带 context(`training-sdk/src/training_sdk/sinks/aim.py:39-40`),全部量共用一个平铺命名空间、共用累计环境步这一个横轴,`train/` 与 `eval/` 前缀标的是阶段而非粒度。改为在 `track` 上带 `context={"scope": "step"}` 或 `{"scope": "episode"}`,横轴仍是累计环境步。
+
+`AimSink.log_episode` 当前是空实现(`:42-43`),回合级明细不进 Aim,只有聚合后的两个标量进。是否让单个回合进 Aim 与本设计的两类划分独立,不在本轮改动内。
+
+### 奖励
+
+训练侧当前不报告任何奖励量,`TRAINING_METRICS` 中一条都没有。补两条:
+
+- `train/reward`,环境步采样类,epoch 内每步奖励的均值。
+- `train/episode_return`,回合级,epoch 内 `sum(reward) / max(1, sum(done))`。对应 AAAI 的 `mean_reward = sum(reward) / num_episodes`(`RTRRL-AAAI25/rtrrl.py:843-845`)。
+
+两条所需的 `reward` 与 `done` 已经逐步记录在 `RTRRLStepMetrics`(`memo/memorax/algorithms/rtrrl.py:288-289`),只是没有上报。第一条把名字加进 `TRAINING_METRICS` 即可;第二条是两个字段的比值而非某一字段的均值,`named_scalars` 的形状(`memo/runner/loop.py:138-152`)表达不了,需要在 `training_report` 内单独算一条。
+
+评估侧 `eval/reward` 与 `eval/episode_return`、`eval/episode_length` 已经齐备(`memo/runner/loop.py:73-77`)。这一组的意义在于回报与长度可以相除:在 Hopper 上一个不动作但不摔倒的策略靠存活奖励拿到高回报,而每步奖励会把它和真正前进的策略分开。训练侧补上这两条之后,同样的读法在训练过程中也成立。
+
+### 按环境拆解,后续
+
+Hopper 的奖励是存活、前进、控制代价三项之和,Brax 在 `info` 中分别给出。分别记录比只看总和更有意义,并且对不同环境该拆法不同。这需要指标声明能随环境变化,与本设计的参数声明是同一类问题但不是同一件事,留待后续。
+
+## 7. 迁移
+
+`EntryDescriptor` 与 `RunConfig` 去掉 `source_hash` 字段,连同以下引用一并删除:三个 catalog 构建脚本里的计算(`memo/runner/catalog.py:38-56`、`rtrrl/scripts/build_catalog.py`、`rtrrl/infra/mock-trainer/scripts/build_catalog.py`)、`preflight.py:135` 的比对、`launch.py` 与 `loop.py` 写进 launch.json 与 study 属性的引用、`sinks/aim.py:26` 写进 Aim 运行属性的引用,以及控制面测试里的相关夹具与 `test_preflight_aws.py` 中那条漂移检测用例。镜像 digest 已经回答"跑的是哪个镜像"。
+
+`images.py:172` 的 `hashlib.sha256` 不在此列。它校验从 ECR 下载的 config blob 字节是否等于清单声明的摘要,是内容寻址的完整性检查,决定读到的 catalog 标签是否可信。
+
+归档目录 `rtrrl/infra/control-plane/archive/` 下历史 launch.json 中的该字段不动。
 
 `CONTRACT_VERSION` 递增。catalog 结构改变,旧镜像的 catalog 不再被接受,memo 与 rtrrl 两个镜像都要重建。
 
 `experiments/` 下现存的 20 个 streamac YAML 与 5 个 rtrrl YAML 一并迁移到新格式,旧格式不保留,控制面不同时接受两种语义。
 
-实施分三个阶段,顺序固定,每阶段自身可验证:
+实施分四个阶段,每阶段自身可验证:
 
 1. 环境与预算分段、`observed` 与删维度。不触碰参数声明。
 2. `param()` 三件套、结构树、条件采样、移除 `source_hash`。
 3. OBGD 分解为 bound 与 base 两轴。
+4. 指标面:两个粒度的 context、训练侧的两条奖励。
 
-阶段 3 依赖阶段 2 的结构树来表达两条轴,阶段 2 依赖阶段 1 腾空 space。
+阶段 3 依赖阶段 2 的结构树来表达两条轴,阶段 2 依赖阶段 1 腾空 space。阶段 4 与前三个阶段无依赖,排在末尾只是因为它与 `source_hash` 的移除同时改到 `sinks/aim.py`。
