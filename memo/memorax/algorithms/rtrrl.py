@@ -28,7 +28,7 @@ from memorax.rl import (
     make_td0,
     normalization_metrics,
 )
-from memorax.utils import Timestep, find_leaf, tree_norm
+from memorax.utils import Timestep, find_leaf, tree_cosine, tree_norm
 from memorax.utils.axes import (
     add_time_axis,
     remove_feature_axis,
@@ -297,6 +297,11 @@ class RTRRLStepMetrics:
     diag_grad_rnn: Any = None
     diag_grad_actor: Any = None
     diag_grad_critic: Any = None
+    # The same two heads read in the one space they share, where a norm apiece
+    # is comparable and an angle between them exists at all.
+    diag_grad_actor_rnn: Any = None
+    diag_grad_critic_rnn: Any = None
+    diag_grad_cosine: Any = None
     diag_upd_rnn: Any = None
     diag_p_torso: Any = None
     diag_p_actor: Any = None
@@ -620,6 +625,15 @@ class RTRRL:
                 name: traced_by_domain["recurrent"][name] for name in recurrent_keys
             },
         }
+        # What each head asks of the shared recurrent parameters, kept apart.
+        # The objective hands the recurrent domain their sum, so the conflict
+        # between them is not recoverable from it; these come from jacobians the
+        # call above already produced, and reading them costs nothing. They are
+        # what the head would push, so a closed gate leaves them meaningful.
+        head_pull = {
+            head: {name: traced_by_domain[head][name] for name in recurrent_keys}
+            for head in ("actor", "critic")
+        }
         incoming_domains = {
             "actor": state.traces["actor"],
             "critic": state.traces["critic"],
@@ -749,6 +763,9 @@ class RTRRL:
             diag_grad_rnn=tree_norm(trace_gradients["recurrent"]),
             diag_grad_actor=tree_norm(trace_gradients["actor"]),
             diag_grad_critic=tree_norm(trace_gradients["critic"]),
+            diag_grad_actor_rnn=tree_norm(head_pull["actor"]),
+            diag_grad_critic_rnn=tree_norm(head_pull["critic"]),
+            diag_grad_cosine=tree_cosine(head_pull["actor"], head_pull["critic"]),
             diag_upd_rnn=tree_norm({name: updates[name] for name in recurrent_keys}),
             diag_p_torso=tree_norm(fast_params["torso"]),
             diag_p_actor=tree_norm(fast_params["actor"]),
