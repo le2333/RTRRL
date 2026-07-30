@@ -133,3 +133,23 @@ def test_rtrrl_entry_can_reproduce_the_papers_bounded_actor():
     agent = rtrrl.build(params)
     assert agent.actor_head.bound is True
     assert agent.cfg.act_clip == 1.0
+
+
+RESERVED = frozenset(
+    {
+        "environment",
+        "env_mode",
+        "env_backend",
+        "observed",
+        "num_envs",
+        "total_steps",
+        "epoch_steps",
+        "eval_steps",
+    }
+)
+
+
+def test_no_entry_declares_the_environment_or_the_budget():
+    for name, module in ENTRIES.items():
+        taken = RESERVED & set(module.SPACE)
+        assert not taken, f"{name} still declares {sorted(taken)}"
