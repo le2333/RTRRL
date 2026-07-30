@@ -21,7 +21,7 @@ def test_example_file_loads() -> None:
     assert experiment.entry == "brax_ppo_acceptance"
     assert experiment.compute.instance_type == "c7a.medium"
     assert experiment.hpo.trials_per_round >= experiment.hpo.parallel_jobs
-    assert experiment.space["total_steps"].choices == (128,)
+    assert experiment.budget.total_steps == 128
 
 
 def test_unknown_top_level_key_is_rejected(tmp_path: Path) -> None:

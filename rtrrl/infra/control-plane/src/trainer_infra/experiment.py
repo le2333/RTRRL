@@ -65,6 +65,62 @@ class LoggingSpec(_Frozen):
     rerun_every_episodes: int | None = None
 
 
+RESERVED = frozenset(
+    {
+        "environment",
+        "env_mode",
+        "env_backend",
+        "observed",
+        "num_envs",
+        "total_steps",
+        "epoch_steps",
+        "eval_steps",
+    }
+)
+
+
+class Environment(_Frozen):
+    id: str
+    backend: str
+    num_envs: int
+    observed: tuple[int, ...] | None = None
+
+    @model_validator(mode="after")
+    def _usable(self) -> "Environment":
+        if self.num_envs < 1:
+            raise ValueError("num_envs must be positive")
+        if self.observed is None:
+            return self
+        if not self.observed:
+            raise ValueError("observed must name at least one index")
+        if len(set(self.observed)) != len(self.observed):
+            raise ValueError("observed must not repeat an index")
+        if any(index < 0 for index in self.observed):
+            raise ValueError("observed indices must not be negative")
+        return self
+
+
+class Budget(_Frozen):
+    total_steps: int
+    epoch_steps: int
+    eval_steps: int
+
+    @model_validator(mode="after")
+    def _whole(self) -> "Budget":
+        if self.total_steps < 1:
+            raise ValueError("total_steps must be positive")
+        if self.epoch_steps < 1:
+            raise ValueError("epoch_steps must be positive")
+        if self.eval_steps < 0:
+            raise ValueError("eval_steps must not be negative")
+        if self.total_steps % self.epoch_steps:
+            raise ValueError(
+                f"total_steps {self.total_steps} is not whole epochs of "
+                f"{self.epoch_steps}"
+            )
+        return self
+
+
 class Experiment(_Frozen):
     experiment: str
     name: str
@@ -72,11 +128,28 @@ class Experiment(_Frozen):
     image: str
     entry: str
     storage: str
+    environment: Environment
+    budget: Budget
     compute: Compute
     hpo: Hpo
     space: dict[str, SpaceEntry]
     score: ScoreSpec
     logging: LoggingSpec
+
+    @model_validator(mode="after")
+    def _space_is_only_algorithm(self) -> "Experiment":
+        taken = sorted(RESERVED & set(self.space))
+        if taken:
+            raise ValueError(
+                f"space names {', '.join(taken)}, which belong to the environment "
+                "and budget sections and are not searched"
+            )
+        if self.budget.epoch_steps % self.environment.num_envs:
+            raise ValueError(
+                f"epoch_steps {self.budget.epoch_steps} is not "
+                f"{self.environment.num_envs} streams' worth"
+            )
+        return self
 
 
 def load_experiment(path: Path) -> Experiment:
