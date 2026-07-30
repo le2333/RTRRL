@@ -14,6 +14,7 @@ entry that grows a parameter is covered the moment it declares one.
 from __future__ import annotations
 
 from collections.abc import Iterator, Mapping
+from types import SimpleNamespace
 from typing import Any
 
 import pytest
@@ -22,23 +23,21 @@ from training_sdk.episode import Episode
 from entries import rtrrl
 from runner.catalog import discover
 
-# The few settings a run cannot be given arbitrarily: it has to end quickly,
-# on a task that exists, in whole epochs.
-BUDGET: dict[str, Any] = {
-    "environment": "brax::hopper",
-    "env_mode": "P",
-    "env_backend": "generalized",
+PARAM_OVERRIDES: dict[str, Any] = {
     # The cell the recorded runs used. Taking whichever one happens to sort
     # first would test a pairing nobody runs.
     "backbone": "rtu",
     "hidden_dim": 2,
     "feature_dim": 3,
-    "num_envs": 2,
-    "total_steps": 8,
-    "epoch_steps": 4,
-    "eval_steps": 4,
     "seed": 0,
 }
+ENVIRONMENT = SimpleNamespace(
+    id="brax::hopper",
+    backend="generalized",
+    num_envs=2,
+    observed=(0, 1, 2, 3, 4),
+)
+BUDGET = SimpleNamespace(total_steps=8, epoch_steps=4, eval_steps=4)
 
 
 def smallest(space: Mapping[str, Any]) -> dict[str, Any]:
@@ -48,7 +47,9 @@ def smallest(space: Mapping[str, Any]) -> dict[str, Any]:
         name: spec[0] if isinstance(spec, list) else spec["low"]
         for name, spec in space.items()
     }
-    return values | {name: BUDGET[name] for name in BUDGET if name in space}
+    return values | {
+        name: PARAM_OVERRIDES[name] for name in PARAM_OVERRIDES if name in space
+    }
 
 
 class Watched(Mapping):
@@ -90,7 +91,8 @@ ENTRIES = discover()
 def trained(request) -> tuple[Any, Collector, Watched]:
     entry = ENTRIES[request.param]
     collector, params = Collector(), Watched(smallest(entry.SPACE))
-    entry.run(collector, params)
+    config = SimpleNamespace(params=params, environment=ENVIRONMENT, budget=BUDGET)
+    entry.run(collector, config)
     return entry, collector, params
 
 
@@ -119,18 +121,11 @@ def test_the_scalars_it_names_are_scalars_it_sends(trained):
     assert not sent - named - {"eval/reward", *entry.METRICS}
 
 
-def test_the_reserved_budget_parameter_is_declared(trained):
-    entry, _, _ = trained
-    # The control plane refuses an entry without it, since a run with no
-    # budget has nothing to stop it.
-    assert "total_steps" in entry.SPACE
-
-
 def test_rtrrl_entry_can_reproduce_the_papers_bounded_actor():
     """The paper bounds its actor before clipping its environment action."""
 
-    params = smallest(rtrrl.SPACE) | BUDGET | {"bound_actor": True, "act_clip": 1.0}
-    agent = rtrrl.build(params)
+    params = smallest(rtrrl.SPACE) | {"bound_actor": True, "act_clip": 1.0}
+    agent = rtrrl.build(params, ENVIRONMENT)
     assert agent.actor_head.bound is True
     assert agent.cfg.act_clip == 1.0
 

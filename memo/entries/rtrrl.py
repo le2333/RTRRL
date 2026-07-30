@@ -6,8 +6,7 @@ entry exists for -- ``actor_to_recurrent`` and ``critic_to_recurrent`` cut
 either path independently, which is how a collapse gets attributed to one head
 conflicting with the other rather than to the algorithm as a whole.
 
-Everything else, task and mask and cell and width and budget and every
-hyperparameter, is in ``SPACE`` next to the constructor call that reads it.
+Every hyperparameter is in ``SPACE`` next to the constructor call that reads it.
 """
 
 from __future__ import annotations
@@ -34,12 +33,8 @@ from runner.loop import drive, named_scalars
 
 _UNIT = {"type": "float", "low": 0.0, "high": 1.0}
 _RATE = {"type": "float", "low": 1e-9, "high": 10.0, "log": True}
-BRAX_TASKS = ("ant", "halfcheetah", "hopper", "walker2d")
 
 SPACE: dict[str, Any] = {
-    "environment": [f"brax::{task}" for task in BRAX_TASKS],
-    "env_mode": ["F", "P", "V"],
-    "env_backend": ["generalized", "spring", "positional", "mjx"],
     # The two published revisions of the LRU are offered here and nowhere else:
     # this is the entry whose reproduction they are the reference for.
     "backbone": [*RECURRENT_TORSOS, *UPSTREAM_TORSOS],
@@ -49,10 +44,6 @@ SPACE: dict[str, Any] = {
     "normalize_observation": [False, True],
     "normalize_reward": [False, True],
     "bound_actor": [False, True],
-    "num_envs": {"type": "int", "low": 1, "high": 256},
-    "total_steps": {"type": "int", "low": 1, "high": 100_000_000},
-    "epoch_steps": {"type": "int", "low": 1, "high": 10_000_000},
-    "eval_steps": {"type": "int", "low": 0, "high": 100_000},
     "seed": {"type": "int", "low": 0, "high": 1_000_000},
     "gamma": {"type": "float", "low": 0.5, "high": 0.9999},
     "lambda_pi": _UNIT,
@@ -123,13 +114,13 @@ TRAINING_METRICS: tuple[str, ...] = (
 )
 
 
-def build(params: Mapping[str, Any]) -> RTRRL:
+def build(params: Mapping[str, Any], environment) -> RTRRL:
     """Assemble the agent this file is about."""
 
     env, env_params = make(
-        str(params["environment"]),
-        mode=str(params["env_mode"]),
-        backend=str(params["env_backend"]),
+        environment.id,
+        observed=environment.observed,
+        backend=environment.backend,
     )
     gamma = float(params["gamma"])
     feature_dim = int(params["feature_dim"])
@@ -139,7 +130,7 @@ def build(params: Mapping[str, Any]) -> RTRRL:
         return nn.Sequential((nn.Dense(feature_dim), nn.relu))
 
     config = RTRRLConfig(
-        num_envs=int(params["num_envs"]),
+        num_envs=environment.num_envs,
         gamma=gamma,
         lambda_pi=float(params["lambda_pi"]),
         lambda_v=float(params["lambda_v"]),
@@ -200,18 +191,18 @@ def training_report(metrics) -> dict[str, float]:
     return named_scalars(metrics, TRAINING_METRICS, prefix="train/")
 
 
-def run(reporter, params: Mapping[str, Any]) -> None:
-    agent = build(params)
+def run(reporter, config) -> None:
+    agent = build(config.params, config.environment)
     drive(
         reporter,
         init_fn=agent.init,
         train_fn=agent.train,
         evaluate_fn=agent.evaluate,
-        total_steps=int(params["total_steps"]),
-        epoch_steps=int(params["epoch_steps"]),
-        eval_steps=int(params["eval_steps"]),
-        num_envs=int(params["num_envs"]),
-        seed=int(params["seed"]),
+        total_steps=config.budget.total_steps,
+        epoch_steps=config.budget.epoch_steps,
+        eval_steps=config.budget.eval_steps,
+        num_envs=config.environment.num_envs,
+        seed=int(config.params["seed"]),
         training_report=training_report,
     )
 
@@ -219,7 +210,7 @@ def run(reporter, params: Mapping[str, Any]) -> None:
 def main(argv: list[str] | None = None) -> int:
     del argv
     with Reporter.from_env() as reporter:
-        run(reporter, reporter.config.params)
+        run(reporter, reporter.config)
     return 0
 
 

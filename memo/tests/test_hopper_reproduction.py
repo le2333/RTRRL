@@ -9,6 +9,7 @@ parameter shows up here rather than as a number that fails to reproduce.
 from __future__ import annotations
 
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 import yaml
@@ -33,6 +34,15 @@ RECORDED = {
     "credit": "rtrl",
     "bounded_rule": "obgd",
 }
+CONTROL = {
+    "environment",
+    "env_mode",
+    "env_backend",
+    "num_envs",
+    "total_steps",
+    "epoch_steps",
+    "eval_steps",
+}
 
 
 @pytest.fixture(scope="module")
@@ -55,7 +65,7 @@ def test_the_experiment_names_the_entry_and_the_metric_it_scores(experiment):
 
 
 def test_every_pinned_setting_is_one_the_entry_declares(pinned):
-    assert not set(pinned) - set(stream_ac.SPACE)
+    assert not set(pinned) - CONTROL - set(stream_ac.SPACE)
 
 
 def test_nothing_is_left_for_the_sampler_to_choose(pinned):
@@ -70,7 +80,13 @@ def test_nothing_is_left_for_the_sampler_to_choose(pinned):
 
 @pytest.fixture(scope="module")
 def agent(pinned):
-    return stream_ac.build(pinned)
+    environment = SimpleNamespace(
+        id=pinned["environment"],
+        backend=pinned["env_backend"],
+        num_envs=pinned["num_envs"],
+        observed=(0, 1, 2, 3, 4),
+    )
+    return stream_ac.build(pinned, environment)
 
 
 def test_the_recorded_hyperparameters_survive_into_the_kernel(agent):
@@ -80,9 +96,7 @@ def test_the_recorded_hyperparameters_survive_into_the_kernel(agent):
 
 
 def test_the_masked_partially_observed_hopper_is_what_gets_built(agent):
-    # Hopper reports 11 numbers; mode P zeroes the six velocities, so a
-    # recurrent policy is the only thing that can recover them.
-    assert agent.env.observation_space(agent.env_params).shape == (11,)
+    assert agent.env.observation_space(agent.env_params).shape == (5,)
     assert agent.env.action_space(agent.env_params).shape == (3,)
 
 

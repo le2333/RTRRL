@@ -3,9 +3,8 @@
 What this file fixes is the wiring: the actor and the critic get their own
 feature extractor, their own torso and their own head, sharing nothing. Change
 that and it is a different algorithm, which is why it is written here rather
-than exposed. Everything else -- which task, which cell, how wide, how long,
-how the recurrence is credited, every hyperparameter -- is in ``SPACE``, and an
-experiment file narrows it by pinning single values.
+than exposed. Every hyperparameter is in ``SPACE``, and an experiment file
+narrows it by pinning single values.
 
 ``credit`` is what makes one entry enough for what used to be two. Under
 ``rtrl`` a sensitivity is carried forward and recurrent parameters are credited
@@ -46,18 +45,8 @@ from runner.loop import drive, named_scalars
 
 _UNIT = {"type": "float", "low": 0.0, "high": 1.0}
 _RATE = {"type": "float", "low": 1e-9, "high": 10.0, "log": True}
-BRAX_TASKS = ("ant", "halfcheetah", "hopper", "walker2d")
 
 SPACE: dict[str, Any] = {
-    # Exactly the Brax tasks a mask has been worked out for, because masking is
-    # the point of this recipe and an unmasked task belongs in another file.
-    # Taken from the table rather than copied out of it, so the list cannot
-    # come to name a task that has no mask.
-    "environment": [f"brax::{task}" for task in BRAX_TASKS],
-    # F is fully observed; P leaves only positions and V only velocities, which
-    # is what makes these tasks worth a recurrent policy at all.
-    "env_mode": ["F", "P", "V"],
-    "env_backend": ["generalized", "spring", "positional", "mjx"],
     "backbone": list(TORSOS),
     "hidden_dim": {"type": "int", "low": 1, "high": 512},
     "feature_dim": {"type": "int", "low": 1, "high": 512},
@@ -77,15 +66,6 @@ SPACE: dict[str, Any] = {
     "normalization_statistics": list(STATISTICS),
     # Exact online credit, or one step of backpropagation and no sensitivity.
     "credit": list(CREDITS),
-    # Independent streams whose updates are averaged. This divides the step
-    # budget: sixteen streams over two million steps make 125k updates.
-    "num_envs": {"type": "int", "low": 1, "high": 256},
-    "total_steps": {"type": "int", "low": 1, "high": 100_000_000},
-    "epoch_steps": {"type": "int", "low": 1, "high": 10_000_000},
-    # Iterations rather than environment steps, unlike the two budgets above:
-    # the evaluation rollout is this long in each of ``num_envs`` streams.
-    # Zero skips evaluation, which leaves the run without a score.
-    "eval_steps": {"type": "int", "low": 0, "high": 100_000},
     "seed": {"type": "int", "low": 0, "high": 1_000_000},
     "gamma": {"type": "float", "low": 0.5, "high": 0.9999},
     "trace_lambda": _UNIT,
@@ -127,13 +107,13 @@ TRAINING_METRICS: tuple[str, ...] = (
 )
 
 
-def build(params: Mapping[str, Any]) -> StreamAC:
+def build(params: Mapping[str, Any], environment) -> StreamAC:
     """Assemble the agent this file is about."""
 
     env, env_params = make(
-        str(params["environment"]),
-        mode=str(params["env_mode"]),
-        backend=str(params["env_backend"]),
+        environment.id,
+        observed=environment.observed,
+        backend=environment.backend,
     )
     gamma = float(params["gamma"])
     feature_dim = int(params["feature_dim"])
@@ -161,7 +141,7 @@ def build(params: Mapping[str, Any]) -> StreamAC:
     action_dim = int(env.action_space(env_params).shape[0])
     return StreamAC(
         StreamACConfig(
-            num_envs=int(params["num_envs"]),
+            num_envs=environment.num_envs,
             gamma=gamma,
             trace_lambda=float(params["trace_lambda"]),
             actor_lr=float(params["actor_lr"]),
@@ -193,18 +173,18 @@ def training_report(metrics) -> dict[str, float]:
     return named_scalars(metrics, TRAINING_METRICS, prefix="train/")
 
 
-def run(reporter, params: Mapping[str, Any]) -> None:
-    agent = build(params)
+def run(reporter, config) -> None:
+    agent = build(config.params, config.environment)
     drive(
         reporter,
         init_fn=agent.init,
         train_fn=agent.train,
         evaluate_fn=agent.evaluate,
-        total_steps=int(params["total_steps"]),
-        epoch_steps=int(params["epoch_steps"]),
-        eval_steps=int(params["eval_steps"]),
-        num_envs=int(params["num_envs"]),
-        seed=int(params["seed"]),
+        total_steps=config.budget.total_steps,
+        epoch_steps=config.budget.epoch_steps,
+        eval_steps=config.budget.eval_steps,
+        num_envs=config.environment.num_envs,
+        seed=int(config.params["seed"]),
         training_report=training_report,
     )
 
@@ -212,7 +192,7 @@ def run(reporter, params: Mapping[str, Any]) -> None:
 def main(argv: list[str] | None = None) -> int:
     del argv
     with Reporter.from_env() as reporter:
-        run(reporter, reporter.config.params)
+        run(reporter, reporter.config)
     return 0
 
 
