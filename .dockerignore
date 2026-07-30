@@ -7,6 +7,21 @@
 !rtrrl/infra
 !rtrrl/infra/mock-trainer
 !rtrrl/infra/mock-trainer/**
+# The forked AAAI implementation, named file by file rather than as a directory.
+# What it does not name is as deliberate as what it does: its `infra` holds the
+# control plane, which never ships inside a trainer, and the rest of it is a
+# hundred megabytes of configs, figures and a PDF that no image runs.
+!rtrrl/*.py
+!rtrrl/pyproject.toml
+!rtrrl/uv.lock
+!rtrrl/README.md
+!rtrrl/catalog.json
+!rtrrl/entries
+!rtrrl/entries/**
+!rtrrl/envs
+!rtrrl/envs/**
+!rtrrl/models
+!rtrrl/models/**
 
 # Never send local environments, VCS/worktree metadata, caches, or run state.
 .git

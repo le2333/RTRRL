@@ -1,0 +1,358 @@
+name: Build AAAI training image
+
+# The fifth arm of the Hopper comparison, built from the authors' forked
+# repository rather than from memo. It is a separate image because their pins
+# and ours cannot share a virtual environment: jax 0.5.0 against jax 0.7, brax
+# below 0.11 against brax 0.12, and popjym from a git revision.
+#
+# Unlike the memo builder this one runs on `push` rather than only on a manual
+# dispatch. A workflow_dispatch workflow is not invocable until its file exists
+# on the default branch, this arm is being built on a feature branch, and main
+# is not being touched to make a builder invocable. The dispatch trigger is kept
+# for later, when this file has reached main and someone wants to rebuild
+# without committing.
+
+on:
+  push:
+    branches:
+      - main
+      - feature/**
+    paths:
+      - .github/workflows/build-aaai-image.yml
+      - .dockerignore
+      - experiments/rtrrl-hopper-aaai.yaml
+      - training-sdk/**
+      # Named the way the image's context is named. `rtrrl/**` would rebuild the
+      # trainer whenever the control plane, which lives under `rtrrl/infra` and
+      # ships in no image, changed a line.
+      - rtrrl/*.py
+      - rtrrl/pyproject.toml
+      - rtrrl/uv.lock
+      - rtrrl/catalog.json
+      - rtrrl/docker/**
+      - rtrrl/entries/**
+      - rtrrl/envs/**
+      - rtrrl/models/**
+      - rtrrl/scripts/**
+      - rtrrl/tests/**
+  workflow_dispatch:
+    inputs:
+      push:
+        description: Push the image to the existing ECR repository
+        required: true
+        type: boolean
+        default: false
+      confirm_account:
+        description: "Required only for push: enter the exact AWS account ID"
+        required: false
+        type: string
+        default: ""
+
+permissions:
+  contents: read
+
+concurrency:
+  group: build-aaai-image-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  IMAGE: aaai-trainer:cpu
+  DOCKERFILE: rtrrl/docker/Dockerfile.cpu
+
+jobs:
+  checks:
+    name: Static checks and tests
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    defaults:
+      run:
+        working-directory: rtrrl
+    env:
+      # Ours, and only ours. The fork's own files are deliberately left
+      # unformatted and unchecked: reformatting the authors' code would make
+      # every future diff against their repository unreadable, and that
+      # readability is the whole value of running their implementation rather
+      # than a tidied copy of it.
+      CHECKED: entries scripts tests
+    steps:
+      - name: Check out source
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@d0cc045d04ccac9d8b7881df0226f9e82c39688e
+        with:
+          version: "0.11.25"
+          enable-cache: true
+          cache-dependency-glob: rtrrl/uv.lock
+
+      - name: Install dependencies
+        run: uv sync --frozen --group dev
+
+      - name: Type check
+        run: uv run --frozen pyright $CHECKED
+
+      - name: Check formatting
+        run: uv run --frozen black --check $CHECKED
+
+      - name: Check import order
+        run: uv run --frozen isort --check-only --profile=black $CHECKED
+
+      - name: Lint
+        run: uv run --frozen ruff check $CHECKED
+
+      - name: Test
+        run: uv run --frozen pytest tests -q
+
+  build:
+    name: Build and verify
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    steps:
+      - name: Check out source
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@d0cc045d04ccac9d8b7881df0226f9e82c39688e
+        with:
+          version: "0.11.25"
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f
+
+      - name: Build the catalog by scanning the entries
+        id: catalog
+        shell: bash
+        working-directory: rtrrl
+        run: |
+          set -euo pipefail
+          # Without the project environment, which is the point. An entry
+          # declares its space in plain data and imports the training framework
+          # only inside the functions that run it, so the catalog the control
+          # plane reads can be produced anywhere -- including on the micro
+          # instance the control plane itself runs on, which cannot hold jax.
+          # Building it that way here is what keeps that true.
+          export PYTHONPATH="$PWD:$PWD/../training-sdk/src"
+          CATALOG="$(uv run --no-project --with 'pydantic>=2.8,<3' \
+            python scripts/build_catalog.py --print-label)"
+          echo "value=$CATALOG" >> "$GITHUB_OUTPUT"
+          git diff --exit-code catalog.json
+
+      - name: Build local image
+        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8
+        with:
+          context: .
+          file: ${{ env.DOCKERFILE }}
+          platforms: linux/amd64
+          load: true
+          push: false
+          tags: ${{ env.IMAGE }}
+          build-args: |
+            TRAINER_CATALOG_V2=${{ steps.catalog.outputs.value }}
+
+      - name: Verify the image is the one the control plane will read
+        shell: bash
+        env:
+          EXPECTED_LABEL: ${{ steps.catalog.outputs.value }}
+        run: |
+          set -euo pipefail
+          ACTUAL_LABEL="$(docker image inspect --format '{{ index .Config.Labels "org.rtrrl.trainer.catalog.v2" }}' "$IMAGE")"
+          test "$ACTUAL_LABEL" = "$EXPECTED_LABEL"
+          docker run --rm "$IMAGE" test -f /opt/trainer/catalog.json
+
+          # A Batch job overrides nothing, so the image's own command is what
+          # runs. Without a manifest the worker must refuse and say why: that
+          # message is all CloudWatch would show.
+          CMD="$(docker image inspect --format '{{ join .Config.Cmd " " }}' "$IMAGE")"
+          test "$CMD" = 'python -m training_sdk.worker'
+          if docker run --rm "$IMAGE" >worker-start.log 2>&1; then
+            echo "the worker exited 0 without a manifest" >&2
+            exit 1
+          fi
+          grep -q 'TRAINER_MANIFEST is not set' worker-start.log
+
+          # The control plane never ships inside a trainer, and every entry the
+          # catalog advertises has to be reachable the way the catalog spells
+          # it. Asking the catalog rather than naming an entry here is the
+          # point: a job that reaches Batch only to find its module missing
+          # costs an instance to discover.
+          docker run --rm "$IMAGE" python -c '
+          import importlib, importlib.util, json
+          import training_sdk
+          assert importlib.util.find_spec("trainer_infra") is None
+          with open("/opt/trainer/catalog.json", encoding="utf-8") as handle:
+              catalog = json.load(handle)
+          assert catalog["entries"], "the image advertises no entry at all"
+          for name, entry in sorted(catalog["entries"].items()):
+              command = entry["command"]
+              assert command[:2] == ["python", "-m"], (name, command)
+              importlib.import_module(command[2])
+              print("entry", name, "->", command[2])
+          '
+
+      - name: Verify the CPU image stays on the CPU
+        shell: bash
+        run: |
+          set -euo pipefail
+          docker run --rm "$IMAGE" python -c '
+          import jax
+          assert jax.default_backend() == "cpu", jax.default_backend()
+          print("jax", jax.__version__)
+          '
+
+      - name: Verify the experiment's own configuration reaches their dataclass
+        shell: bash
+        run: |
+          set -euo pipefail
+          # The translation from our parameter names onto theirs is tested
+          # without their code, in rtrrl/tests. What that cannot reach is
+          # whether the fields it names are fields they have, and whether the
+          # environment those values describe is the one the other four arms
+          # run. Both are cheap here and neither needs a step of training.
+          #
+          # The mask is checked by size rather than by shape alone: a partially
+          # observed Hopper that quietly hands back its velocities is still a
+          # Hopper that trains, and the run would look healthy and mean nothing.
+          docker run --rm -v "$PWD/experiments:/opt/experiments:ro" "$IMAGE" python -c '
+          import yaml
+          from entries.rtrrl_aaai import parameters
+          from envs.environments import make_env
+          with open("/opt/experiments/rtrrl-hopper-aaai.yaml", encoding="utf-8") as handle:
+              space = yaml.safe_load(handle)["space"]
+          chosen = {
+              name: spec[0] if isinstance(spec, list) else spec["low"]
+              for name, spec in space.items()
+          }
+          args = parameters(chosen)
+          assert args.rnn_model == "lru", args.rnn_model
+          assert args.gradient_mode == "rtrl", args.gradient_mode
+          assert args.patience == 0, args.patience
+          assert args.episodes * args.steps == 2_000_000, (args.episodes, args.steps)
+          assert args.eval_every == 100, args.eval_every
+          assert args.env_params.env_kwargs == {"backend": "spring"}
+          _, info, _ = make_env(args.env_params, make_eval=True)
+          assert info["obs_size"] == 5, info["obs_size"]
+          assert info["act_size"] == 3, info["act_size"]
+          print("configured:", args.env_params.env_name, info["obs_size"], "of 11 observed")
+          '
+
+  push:
+    name: Rebuild and push
+    # Two ways in, and neither of them is every commit.
+    #
+    # A dispatch is the deliberate path: an explicit input and the account ID
+    # typed out by hand. It is also unusable until this file reaches main, which
+    # is why it cannot be the only path.
+    #
+    # A push counts too, but only when the commit message says so. Keeping the
+    # marker in the message keeps the decision with the commit that made it: the
+    # log then says which revision was published, and every commit that does not
+    # say it is built and verified without being published.
+    if: >-
+      ${{ (github.event_name == 'workflow_dispatch' && inputs.push == true)
+          || (github.event_name == 'push'
+              && contains(github.event.head_commit.message, '[push-image]')) }}
+    needs: [checks, build]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    permissions:
+      contents: read
+      id-token: write
+    env:
+      # The digest is what an experiment pins, so the tag only has to be unique
+      # enough that a rebuild never needs to overwrite one. The commit is that.
+      ECR_TAG: aaai-trainer-cpu-${{ github.sha }}
+    steps:
+      - name: Check out source
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@d0cc045d04ccac9d8b7881df0226f9e82c39688e
+        with:
+          version: "0.11.25"
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f
+
+      - name: Rebuild catalog
+        id: catalog
+        shell: bash
+        working-directory: rtrrl
+        run: |
+          set -euo pipefail
+          export PYTHONPATH="$PWD:$PWD/../training-sdk/src"
+          CATALOG="$(uv run --no-project --with 'pydantic>=2.8,<3' \
+            python scripts/build_catalog.py --print-label)"
+          echo "value=$CATALOG" >> "$GITHUB_OUTPUT"
+
+      - name: Rebuild local image
+        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8
+        with:
+          context: .
+          file: ${{ env.DOCKERFILE }}
+          platforms: linux/amd64
+          load: true
+          push: false
+          tags: ${{ env.IMAGE }}
+          build-args: |
+            TRAINER_CATALOG_V2=${{ steps.catalog.outputs.value }}
+
+      - name: Confirm account and role boundary
+        shell: bash
+        env:
+          AWS_ROLE_ARN: ${{ vars.INFRA_ACCEPTANCE_AWS_ROLE_ARN }}
+          CONFIRM_ACCOUNT: ${{ inputs.confirm_account }}
+          EVENT: ${{ github.event_name }}
+        run: |
+          set -euo pipefail
+          # On the dispatch path the account is typed out and has to match. On
+          # the push path there is no field to type it into and the marker in
+          # the commit message is the deliberate act instead; the boundary is
+          # still enforced, by the role's ARN here and by the identity that role
+          # actually assumes in the step after next, both before anything moves.
+          if [ "$EVENT" = "workflow_dispatch" ]; then
+            test "$CONFIRM_ACCOUNT" = "007122174918"
+          fi
+          case "$AWS_ROLE_ARN" in
+            arn:aws:iam::007122174918:role/*) ;;
+            *)
+              echo "INFRA_ACCEPTANCE_AWS_ROLE_ARN is outside the approved boundary" >&2
+              exit 1
+              ;;
+          esac
+
+      - name: Configure push-only AWS credentials
+        uses: aws-actions/configure-aws-credentials@61815dcd50bd041e203e49132bacad1fd04d2708
+        with:
+          role-to-assume: ${{ vars.INFRA_ACCEPTANCE_AWS_ROLE_ARN }}
+          aws-region: eu-north-1
+
+      - name: Verify authenticated AWS account
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(aws sts get-caller-identity --query Account --output text)" = "007122174918"
+
+      - name: Log in to existing ECR
+        id: ecr
+        uses: aws-actions/amazon-ecr-login@d539f0932e70871a027e9d5a9d8fc38589180a64
+
+      - name: Push and report the immutable digest
+        shell: bash
+        env:
+          REGISTRY: ${{ steps.ecr.outputs.registry }}
+          TAG: ${{ env.ECR_TAG }}
+        run: |
+          set -euo pipefail
+          REMOTE="$REGISTRY/rtrrl:$TAG"
+          docker tag "$IMAGE" "$REMOTE"
+          OUTPUT="$(docker push "$REMOTE" 2>&1)"
+          printf '%s\n' "$OUTPUT"
+          DIGEST="$(printf '%s\n' "$OUTPUT" | awk '/digest: sha256:/ {print $3}' | tail -n 1)"
+          [[ "$DIGEST" =~ ^sha256:[0-9a-f]{64}$ ]]
+          # This is what the experiment file's image: field must be set to.
+          {
+            echo "### Immutable image (cpu)"
+            echo '```'
+            echo "$REGISTRY/rtrrl@$DIGEST"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"

@@ -1,0 +1,227 @@
+{
+  "contract": 2,
+  "entries": {
+    "rtrrl_aaai": {
+      "command": [
+        "python",
+        "-m",
+        "entries.rtrrl_aaai"
+      ],
+      "metrics": [
+        "eval/episode_return"
+      ],
+      "source_hash": "sha256:76eb2f682493cc645d071d3b1288524c7b46b4191597634926b0172152a30b1f",
+      "space": {
+        "backbone": {
+          "choices": [
+            "lru",
+            "ctrnn"
+          ]
+        },
+        "entropy_rate": {
+          "high": 1.0,
+          "log": true,
+          "low": 1e-08,
+          "type": "float"
+        },
+        "env_backend": {
+          "choices": [
+            "generalized",
+            "spring",
+            "positional",
+            "mjx"
+          ]
+        },
+        "env_mode": {
+          "choices": [
+            "F",
+            "P",
+            "V"
+          ]
+        },
+        "environment": {
+          "choices": [
+            "brax::hopper"
+          ]
+        },
+        "epoch_steps": {
+          "high": 10000000,
+          "log": false,
+          "low": 1,
+          "step": 1,
+          "type": "int"
+        },
+        "eta_f": {
+          "high": 10.0,
+          "log": false,
+          "low": 0.0,
+          "type": "float"
+        },
+        "eta_pi": {
+          "high": 10.0,
+          "log": false,
+          "low": 0.0,
+          "type": "float"
+        },
+        "eval_envs": {
+          "high": 1000,
+          "log": false,
+          "low": 1,
+          "step": 1,
+          "type": "int"
+        },
+        "eval_steps": {
+          "high": 100000,
+          "log": false,
+          "low": 1,
+          "step": 1,
+          "type": "int"
+        },
+        "f_align": {
+          "choices": [
+            false,
+            true
+          ]
+        },
+        "gamma": {
+          "high": 0.9999,
+          "log": false,
+          "low": 0.5,
+          "type": "float"
+        },
+        "gradient_mode": {
+          "choices": [
+            "rtrl",
+            "bptt"
+          ]
+        },
+        "hidden_dim": {
+          "high": 512,
+          "log": false,
+          "low": 1,
+          "step": 1,
+          "type": "int"
+        },
+        "lambda_pi": {
+          "high": 1.0,
+          "log": false,
+          "low": 0.0,
+          "type": "float"
+        },
+        "lambda_rnn": {
+          "high": 1.0,
+          "log": false,
+          "low": 0.0,
+          "type": "float"
+        },
+        "lambda_v": {
+          "high": 1.0,
+          "log": false,
+          "low": 0.0,
+          "type": "float"
+        },
+        "layer_norm": {
+          "choices": [
+            false,
+            true
+          ]
+        },
+        "meta_rl": {
+          "choices": [
+            false,
+            true
+          ]
+        },
+        "mlp_actor": {
+          "choices": [
+            false,
+            true
+          ]
+        },
+        "normalize_observation": {
+          "choices": [
+            false,
+            true
+          ]
+        },
+        "normalize_reward": {
+          "choices": [
+            false,
+            true
+          ]
+        },
+        "num_envs": {
+          "high": 256,
+          "log": false,
+          "low": 1,
+          "step": 1,
+          "type": "int"
+        },
+        "patience": {
+          "high": 100000,
+          "log": false,
+          "low": 0,
+          "step": 1,
+          "type": "int"
+        },
+        "rnn_grad_clip": {
+          "high": 10000.0,
+          "log": false,
+          "low": 0.0,
+          "type": "float"
+        },
+        "rnn_lr": {
+          "high": 10.0,
+          "log": true,
+          "low": 1e-09,
+          "type": "float"
+        },
+        "scan_steps": {
+          "high": 100000,
+          "log": false,
+          "low": 1,
+          "step": 1,
+          "type": "int"
+        },
+        "seed": {
+          "high": 1000000,
+          "log": false,
+          "low": 1,
+          "step": 1,
+          "type": "int"
+        },
+        "td_lr": {
+          "high": 10.0,
+          "log": true,
+          "low": 1e-09,
+          "type": "float"
+        },
+        "total_steps": {
+          "high": 100000000,
+          "log": false,
+          "low": 1,
+          "step": 1,
+          "type": "int"
+        },
+        "trace_mode": {
+          "choices": [
+            "accumulate",
+            "dutch"
+          ]
+        },
+        "update_period": {
+          "high": 1.0,
+          "log": false,
+          "low": 0.0,
+          "type": "float"
+        },
+        "update_trace_before_td": {
+          "choices": [
+            false,
+            true
+          ]
+        }
+      }
+    }
+  }
+}

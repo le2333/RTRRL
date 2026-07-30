@@ -65,6 +65,29 @@ EXPECTED_PATHS = {
     "/opt/trainer/catalog.json",
     "/opt/acceptance",
 }
+# Every image built from this root context, by what it is allowed to carry.
+# memo joined when it became the real training image and the forked AAAI
+# implementation joined as the fifth arm of the Hopper comparison; each addition
+# widens the context for all of them, which is why the widening is written down.
+TRAINER_CONTEXT_PREFIXES = (
+    "memo/",
+    "training-sdk/",
+    "rtrrl/infra/mock-trainer/",
+    "rtrrl/entries/",
+    "rtrrl/envs/",
+    "rtrrl/models/",
+)
+# The fork keeps its algorithm in loose modules beside those packages rather
+# than under a source root, so its image copies them by glob and the context has
+# to carry them individually.
+AAAI_ROOT_FILES = {"pyproject.toml", "uv.lock", "README.md", "catalog.json"}
+
+
+def _permitted_in_context(path: str) -> bool:
+    if path.startswith(TRAINER_CONTEXT_PREFIXES):
+        return True
+    parent, _, name = path.rpartition("/")
+    return parent == "rtrrl" and (name.endswith(".py") or name in AAAI_ROOT_FILES)
 
 
 def _image_inputs(contents: str) -> tuple[list[str], list[str]]:
@@ -261,6 +284,17 @@ def test_dockerignore_rules_apply_allowlist_before_runtime_and_secret_exclusions
         "!rtrrl/infra",
         "!rtrrl/infra/mock-trainer",
         "!rtrrl/infra/mock-trainer/**",
+        "!rtrrl/*.py",
+        "!rtrrl/pyproject.toml",
+        "!rtrrl/uv.lock",
+        "!rtrrl/README.md",
+        "!rtrrl/catalog.json",
+        "!rtrrl/entries",
+        "!rtrrl/entries/**",
+        "!rtrrl/envs",
+        "!rtrrl/envs/**",
+        "!rtrrl/models",
+        "!rtrrl/models/**",
     )
     exclusions = (
         ".git",
@@ -295,6 +329,11 @@ def test_dockerignore_rules_apply_allowlist_before_runtime_and_secret_exclusions
         "memo/.env",
         "memo/__pycache__/runner.cpython-312.pyc",
         "memo/aws-credentials.json",
+        # The fork is named file by file, so its configs, its figures and the
+        # appendix PDF stay out of every build.
+        "rtrrl/config/brax.yml",
+        "rtrrl/RTRRL_AAAI25_Appendix.pdf",
+        "rtrrl/entries/__pycache__/rtrrl_aaai.cpython-312.pyc",
         "rtrrl/infra/control-plane/src/trainer_infra/cli.py",
         ".git",
         ".git/worktrees/task/HEAD",
@@ -321,13 +360,10 @@ def test_dockerignore_actual_root_context_contains_only_required_inputs() -> Non
     assert included
     assert any(path.startswith("training-sdk/") for path in included)
     assert any(path.startswith("rtrrl/infra/mock-trainer/") for path in included)
-    # memo joined the context when it became the real training image. The
-    # control plane never belongs in a trainer, and the rest is what must never
-    # reach a build daemon regardless of which image is being built.
-    assert all(
-        path.startswith(("memo/", "training-sdk/", "rtrrl/infra/mock-trainer/"))
-        for path in included
-    )
+    assert "rtrrl/rtrrl.py" in included
+    # The control plane never belongs in a trainer, and the rest is what must
+    # never reach a build daemon regardless of which image is being built.
+    assert all(_permitted_in_context(path) for path in included)
     assert not any(
         forbidden in path
         for path in included
