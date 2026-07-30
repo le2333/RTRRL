@@ -289,3 +289,30 @@ All checks passed!
 ```
 
 The failure and error node IDs in run `30580862844` are identical to the baseline and final Task 2 lists above, so the new tests introduced no additional failure or error.
+
+## Fix round 2
+
+### Commit
+
+- `8ed25fd` `test(experiment): accept eval_steps of zero`
+
+### CI verification
+
+- Run: `30581334973`
+- URL: https://github.com/le2333/RTRRL-AAAI25/actions/runs/30581334973
+- Head: `8ed25fd`
+- Commands used to read the run:
+
+```text
+gh run list --workflow=tests.yml --branch feature/rtrrl-lru-paper-parity --limit 3
+gh run view 30581334973 --log-failed
+gh run view 30581334973 --log | rg "test_eval_steps_may_be_zero|52 failed|99 passed"
+```
+
+The control-plane job shows Ruff passed and the passing count rose from 98 to 99 with the failure and error counts unchanged:
+
+```text
+52 failed, 99 passed, 1 warning, 10 errors in 21.34s
+```
+
+Pytest ran with `-q`, so individual test names are not printed; the unchanged 52 failures and 10 errors confirm `test_eval_steps_may_be_zero` is the sole new passing case.
