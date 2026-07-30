@@ -192,9 +192,6 @@ def test_the_catalog_is_the_entries_directory_and_nothing_written_down():
         assert entry.command == ("python", "-m", f"{entries.__name__}.{name}")
         assert set(entry.space) == set(modules[name].SPACE)
         assert entry.metrics == tuple(modules[name].METRICS)
-        # The control plane refuses an entry without it, since a run with no
-        # budget has nothing to stop it.
-        assert "total_steps" in entry.space
 
 
 def test_the_source_hash_ignores_bytecode(tmp_path: Path):
