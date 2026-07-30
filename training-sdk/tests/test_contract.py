@@ -2,10 +2,12 @@ import pytest
 from pydantic import ValidationError
 
 from training_sdk.contract import (
+    BudgetConfig,
     CONTRACT_VERSION,
     Catalog,
     ChoiceSpec,
     EntryDescriptor,
+    EnvironmentConfig,
     FloatSpec,
     IntSpec,
     RunConfig,
@@ -156,3 +158,38 @@ def test_run_config_round_trips() -> None:
     assert config.model_dump(mode="json", exclude_none=True) == payload
     assert config.digest == "registry.example/trainer@sha256:" + "a" * 64
     assert config.source_hash == "sha256:41b0"
+
+
+def test_an_environment_names_a_task_and_how_many_copies_of_it():
+    environment = EnvironmentConfig(
+        id="brax::hopper", backend="spring", num_envs=1, observed=(0, 1, 2, 3, 4)
+    )
+
+    assert environment.observed == (0, 1, 2, 3, 4)
+
+
+def test_an_environment_without_observed_is_fully_observed():
+    environment = EnvironmentConfig(id="brax::hopper", backend="spring", num_envs=1)
+
+    assert environment.observed is None
+
+
+@pytest.mark.parametrize(
+    "observed", [(), (0, 0, 1), (-1, 0)], ids=["empty", "repeated", "negative"]
+)
+def test_an_index_list_that_selects_nothing_usable_is_refused(observed):
+    with pytest.raises(ValidationError):
+        EnvironmentConfig(
+            id="brax::hopper", backend="spring", num_envs=1, observed=observed
+        )
+
+
+def test_a_budget_must_divide_into_whole_epochs():
+    with pytest.raises(ValidationError):
+        BudgetConfig(total_steps=1000, epoch_steps=300, eval_steps=0)
+
+
+def test_a_budget_of_whole_epochs_is_accepted():
+    budget = BudgetConfig(total_steps=900, epoch_steps=300, eval_steps=0)
+
+    assert budget.total_steps == 900
