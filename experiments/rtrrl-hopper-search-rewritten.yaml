@@ -1,122 +1,76 @@
 experiment: rtrrl-hopper
 name: search-rewritten-20
-description: >
-  Twenty trials of RTRRL on masked Brax Hopper over our transcription of their
-  4301943, the revision at their HEAD. It is the arm that answers whether a
-  reproduction of their arithmetic performs as their own code does, which is a
-  different question from whether either is correct.
-
-  The cell here reports a decay of zero twice, from its forward pass and from
-  its local jacobian, so the scan yields the input gain alone and the
-  sensitivity recursion yields one step of credit. That is what their revision
-  computes, verified leaf by leaf against a transcription of their file in
-  test_lru_parity.py. One defect of theirs is deliberately not reproduced: an
-  indexing fault in their backward pass scales every unit's gradient by a scalar
-  taken from unit zero, and the parity test for it is xfail rather than a third
-  arm. So a gap between this arm and the forked implementation beside it is
-  where that fault should show up, and this pair is the only place it can be
-  priced.
-
-  Six hyperparameters are searched and every other one is pinned to their
-  default at 4301943, so the search is over a slice centred on the setting the
-  paper ran. Twenty TPE trials over six dimensions is not a converged search and
-  the point it lands on should not be read as tuned; it is a point every arm can
-  be asked about on equal terms. The six and their ranges are identical in all
-  five files for that reason -- an arm searched over a different slice would be
-  compared on its search rather than on its arithmetic.
-
-  The seed is fixed. Two runs of one setting under different seeds differ by
-  more than the arms are expected to, and a comparison that cannot separate the
-  two would answer nothing.
-
-  Beside the returns this collects the reading the whole comparison turns on.
-  The actor and the critic write the same recurrent parameters, and a collapse
-  there is either the two disagreeing about direction or agreeing about it and
-  differing by orders of magnitude. diag_grad_cosine answers the first;
-  diag_grad_actor_rnn against diag_grad_critic_rnn answers the second. Both are
-  read before the gates, so the two ablation files beside this one report what
-  their silenced head would have asked for.
-
+description: ""
 image: 007122174918.dkr.ecr.eu-north-1.amazonaws.com/rtrrl@sha256:5bf83b80df2d22771601a368f6ce72233de7b2f49869da90ca1bd76b5ebaec8e
 entry: rtrrl
 storage: s3://rtrrl-artifacts-007122174918/trainer
 
 compute:
-  # Measured on this entry, not inherited: the smoke file beside this one ran a
-  # fortieth of this budget on a c7a.large in 41 seconds at 45% of its memory.
-  # A c7a.medium is ruled out for the same reason it was ruled out for streamac,
-  # its 1600 MiB.
-  instance_type: c7a.large
-  # Forty times that smoke run is 14 to 24 minutes depending on how much of the
-  # 41 seconds was compilation, so this is between two and four times the
-  # estimate. A trial that hangs should be cut off rather than billed to the
-  # timeout.
+  instance_type: c7a.medium
   timeout_minutes: 60
 
 hpo:
   sampler: tpe
   rounds: 5
   trials_per_round: 4
-  # Four at a time, so a round costs one trial in wall clock and the sampler
-  # still has four results to learn from before suggesting the next four.
   parallel_jobs: 4
 
 space:
+  seed: [1]
+
+  # environment
   environment: [brax::hopper]
   env_mode: [P]
   env_backend: [spring]
-  # Their HEAD's arithmetic: no recurrence in the state, one step of credit in
-  # the sensitivity. The repaired cell is the arm beside this one.
-  backbone: [lru_rewritten]
-  # Part of the algorithm, not a throughput knob: the paper updates after every
-  # transition from one environment.
   num_envs: [1]
+
+  # budget
   total_steps: [2000000]
   epoch_steps: [100000]
   eval_steps: [1000]
-  seed: [1]
-  # Their defaults at 4301943. hidden_dim is their hidden_size; feature_dim is
-  # ours alone, since their LRU reads the raw observation where ours reads an
-  # encoder, so there is no value of theirs to copy for it.
+
+  # structure
+  backbone: [lru_rewritten]
   hidden_dim: [32]
   feature_dim: [32]
   meta_rl: [true]
-  normalize_observation: [false]
-  normalize_reward: [false]
-  # The paper constrains actor loc to [-1, 1] and log-scale to [-2, 2], then
-  # clips the sampled environment action once more to Hopper's [-1, 1]. Without
-  # both, this entry reached NaN within one epoch.
   bound_actor: [true]
-  gamma: [0.99]
-  eta_pi: [1.0]
-  eta_f: [1.0]
-  update_period: [1.0]
-  b1: [0.9]
-  b2: [0.999]
-  eps: [1.0e-8]
-  rnn_grad_clip: [1.0]
   act_clip: [1.0]
-  freeze_gamma: [false]
-  update_trace_before_td: [false]
-  logprob_scale: [1.0]
-  update_rule: [adam]
-  # Adam is the rule above, so these three are read and ignored. They are pinned
-  # because an unpinned parameter keeps the whole domain the entry declared.
-  kappa: [2.0]
-  obgd_beta2: [0.999]
-  obgd_rule: [obgd]
-  # Both heads reach the torso here. The two ablation files cut one path each.
   actor_to_recurrent: [true]
   critic_to_recurrent: [true]
-  # The six, each bracketing their default by about a decade either side. Wider
-  # would spend twenty trials on regions their own choice already argues
-  # against, and these must stay identical across all five arms.
-  td_lr: {type: float, low: 1.0e-5, high: 1.0e-3, log: true}
-  rnn_lr: {type: float, low: 1.0e-5, high: 1.0e-3, log: true}
+
+  # normalization
+  normalize_observation: [false]
+  normalize_reward: [false]
+
+  # td(lambda)
+  gamma: [0.99]
+  freeze_gamma: [false]
   lambda_pi: {type: float, low: 0.5, high: 0.99}
   lambda_v: {type: float, low: 0.5, high: 0.99}
   lambda_rnn: {type: float, low: 0.5, high: 0.99}
+  eta_pi: [1.0]
+  eta_f: [1.0]
   entropy_rate: {type: float, low: 1.0e-6, high: 1.0e-3, log: true}
+  update_period: [1.0]
+  update_trace_before_td: [false]
+  logprob_scale: [1.0]
+
+  # optimizer
+  update_rule: [adam]
+  td_lr: {type: float, low: 1.0e-5, high: 1.0e-3, log: true}
+  rnn_lr: {type: float, low: 1.0e-5, high: 1.0e-3, log: true}
+  eps: [1.0e-8]
+
+  # optimizer/adam
+  b1: [0.9]
+  b2: [0.999]
+  rnn_grad_clip: [1.0]
+
+  # optimizer/obgd
+  kappa: [2.0]
+  obgd_beta2: [0.999]
+  obgd_rule: [obgd]
 
 score:
   metric: eval/episode_return

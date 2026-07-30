@@ -41,16 +41,7 @@ def test_a_part_with_no_parameters_reads_zero_rather_than_failing():
 
 
 def test_a_cosine_says_which_way_two_trees_point():
-    """Direction, which no pair of norms can recover.
-
-    Two heads writing the same shared parameters can disagree about where to go
-    or only about how far, and a norm apiece cannot tell those apart: the same
-    two norms describe agreement and opposition alike. Scale invariance is part
-    of the reading, so doubling one side must not move it.
-
-    Leaves are flattened into one vector per tree, the whole tree being the
-    direction in question rather than any leaf of it.
-    """
+    """Parallel reads 1, opposed -1, orthogonal 0, and scale does not move it."""
 
     left = {"torso": {"kernel": jnp.asarray([[3.0, 4.0]])}, "bias": jnp.asarray([0.0])}
     longer = jax.tree.map(lambda leaf: leaf * 2.0, left)
@@ -66,12 +57,7 @@ def test_a_cosine_says_which_way_two_trees_point():
 
 
 def test_a_cosine_against_nothing_is_undefined_rather_than_orthogonal():
-    """Zero points nowhere, and 0.0 would report that it pointed sideways.
-
-    NaN rather than zero because the epoch average is a ``nanmean``: a step
-    where one side vanished drops out of the reading instead of dragging it
-    toward a right angle nothing measured.
-    """
+    """A zero side gives NaN, not 0.0."""
 
     left = {"kernel": jnp.asarray([3.0, 4.0])}
 

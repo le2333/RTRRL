@@ -1,118 +1,66 @@
 experiment: rtrrl-hopper
 name: search-aaai-20
-description: >
-  Twenty trials of RTRRL on masked Brax Hopper over the authors' own
-  implementation, forked at its HEAD and otherwise untouched. This is the arm
-  the other four answer to. Our repaired cell, our transcription of their
-  arithmetic and the two head ablations are all things we wrote; if none of them
-  reaches what their code reaches, the difference is ours and not the
-  algorithm's, and that is only knowable with their code run on the same task
-  under the same budget over the same six dimensions.
-
-  It runs from a different image than the other four. Their repository pins jax
-  0.5.0, brax below 0.11 and popjym from a git revision, none of which the memo
-  image can hold at the same time as its own, so this arm has its own project,
-  its own lock file and its own catalog. What it shares is the contract: one
-  entry module declaring a space, one metric to be scored on, and the SDK worker
-  as the image's command.
-
-  Six hyperparameters are searched and every other one is pinned to their
-  default at their HEAD, so the search is over a slice centred on the setting
-  the paper ran. The six and their ranges are identical in all five files -- an
-  arm searched over a different slice would be compared on its search rather
-  than on its arithmetic -- and the names are memo's, translated onto their
-  `RTRRLParams` inside the entry, so that the five files can be diffed against
-  each other.
-
-  Two of their defaults are overridden and both would otherwise change what this
-  arm is. `gradient_mode` defaults to `rflo`, which their LRU raises on rather
-  than implements, so the run would not start. `patience` defaults to 100
-  evaluations without an improvement, which would give this arm a budget the
-  other four do not have.
-
-  What this arm cannot report is the reading the comparison of the other four
-  turns on. Their loop computes no angle between the actor's and the critic's
-  pull on the shared torso, and adding one would mean editing the code whose
-  being unedited is the point of the arm. It reports returns, their TD and actor
-  and critic losses, and their entropy; the attribution is done next door.
-
+description: ""
 image: 007122174918.dkr.ecr.eu-north-1.amazonaws.com/rtrrl@sha256:f7a5167b087b21d2e5e261c44bae4b0016fd662461b57ce06a3d6ec79575f7b2
 entry: rtrrl_aaai
 storage: s3://rtrrl-artifacts-007122174918/trainer
 
 compute:
-  # Inherited from the four memo arms rather than measured: this implementation
-  # has never been run under this control plane, so there is no smoke run of it
-  # to extrapolate from. Their loop scans a thousand transitions per compiled
-  # call over a thirty-two unit cell, which is the same shape of work at the
-  # same width, and a trial that is nevertheless slower than that will be cut
-  # off here rather than run to a bill.
-  instance_type: c7a.large
+  instance_type: c7a.medium
   timeout_minutes: 60
 
 hpo:
   sampler: tpe
   rounds: 5
   trials_per_round: 4
-  # Four at a time, so a round costs one trial in wall clock and the sampler
-  # still has four results to learn from before suggesting the next four.
   parallel_jobs: 4
 
 space:
+  seed: [1]
+
+  # environment
   environment: [brax::hopper]
-  # Their masking deletes the dimensions it drops where memo's zeroes them.
-  # memo/tests/test_masking.py is where the two were shown to pose the same
-  # problem, so this is the same partially observed Hopper the other four run.
   env_mode: [P]
   env_backend: [spring]
-  # Their LRU, as published. The repaired cell and the transcription of this one
-  # are the two memo arms beside this file.
-  backbone: [lru]
-  # Load-bearing. Their default is rflo, which the LRU path rejects with
-  # ValueError before the first step.
-  gradient_mode: [rtrl]
-  hidden_dim: [32]
-  meta_rl: [true]
-  normalize_observation: [false]
-  normalize_reward: [false]
-  # Three variations of theirs the paper's Brax results do not use. Pinned
-  # rather than omitted: an omitted parameter keeps the whole domain the entry
-  # declared and the sampler is free to pick from it.
-  f_align: [false]
-  mlp_actor: [false]
-  layer_norm: [false]
-  # Part of the algorithm, not a throughput knob: the paper updates after every
-  # transition from one environment.
   num_envs: [1]
+
+  # budget
   total_steps: [2000000]
   epoch_steps: [100000]
-  # Their inner scan length, which divides the budget into 2000 iterations of
-  # 1000 transitions and the epoch into an evaluation every 100 of them.
   scan_steps: [1000]
   eval_steps: [1000]
   eval_envs: [10]
-  # Their early stop, disabled. At its default of 100 this arm would stop when
-  # its evaluation stopped improving and the other four would not.
   patience: [0]
-  seed: [1]
+
+  # structure
+  backbone: [lru]
+  gradient_mode: [rtrl]
+  hidden_dim: [32]
+  meta_rl: [true]
+  f_align: [false]
+  mlp_actor: [false]
+  layer_norm: [false]
+
+  # normalization
+  normalize_observation: [false]
+  normalize_reward: [false]
+
+  # td(lambda)
   gamma: [0.99]
-  eta_pi: [1.0]
-  eta_f: [1.0]
-  update_period: [1.0]
-  update_trace_before_td: [false]
-  # On the recurrent optimiser only. Their comment beside the TD optimiser says
-  # clipping that update makes the eligibility traces explode.
-  rnn_grad_clip: [1.0]
   trace_mode: [accumulate]
-  # The six, each bracketing their default by about a decade either side. Wider
-  # would spend twenty trials on regions their own choice already argues
-  # against, and these must stay identical across all five arms.
-  td_lr: {type: float, low: 1.0e-5, high: 1.0e-3, log: true}
-  rnn_lr: {type: float, low: 1.0e-5, high: 1.0e-3, log: true}
   lambda_pi: {type: float, low: 0.5, high: 0.99}
   lambda_v: {type: float, low: 0.5, high: 0.99}
   lambda_rnn: {type: float, low: 0.5, high: 0.99}
+  eta_pi: [1.0]
+  eta_f: [1.0]
   entropy_rate: {type: float, low: 1.0e-6, high: 1.0e-3, log: true}
+  update_period: [1.0]
+  update_trace_before_td: [false]
+
+  # optimizer/adam
+  td_lr: {type: float, low: 1.0e-5, high: 1.0e-3, log: true}
+  rnn_lr: {type: float, low: 1.0e-5, high: 1.0e-3, log: true}
+  rnn_grad_clip: [1.0]
 
 score:
   metric: eval/episode_return

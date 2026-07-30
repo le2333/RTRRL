@@ -235,21 +235,7 @@ def test_one_gate_still_reaches_the_shared_torso():
 
 
 def test_the_two_heads_report_how_they_pull_on_the_shared_torso():
-    """Scale and direction separately, because they call for different cures.
-
-    A collapse where the two heads want opposite things from the shared
-    representation is a conflict no learning rate settles; one where they agree
-    on direction but differ by orders of magnitude is a scaling problem. The
-    cosine answers the first. The two norms answer the second, and they are
-    taken in the recurrent parameters because that is the only space both heads
-    write to: ``diag_grad_actor`` and ``diag_grad_critic`` are each in their own
-    head's parameters and so cannot be held against each other at all.
-
-    Both gates are open here, which is the topology the readings exist to
-    diagnose. They are computed off jacobians the kernel already has, so a
-    closed gate does not silence them -- what a head would push is still worth
-    knowing when it is not being allowed to push it.
-    """
+    """The cosine and the two shared-torso norms are reported and in range."""
 
     init, train, _ = rtrrl_program()
     state = jax.jit(init)(jax.random.key(0))
@@ -257,8 +243,6 @@ def test_the_two_heads_report_how_they_pull_on_the_shared_torso():
 
     assert finite(metrics.diag_grad_cosine), "the angle went non-finite"
     assert jnp.all(jnp.abs(metrics.diag_grad_cosine) <= 1.0 + 1e-5)
-    # Zero would make the cosine above undefined, so this says the reading it
-    # reports is one it was in a position to take.
     assert jnp.all(metrics.diag_grad_actor_rnn > 0.0)
     assert jnp.all(metrics.diag_grad_critic_rnn > 0.0)
 

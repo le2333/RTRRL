@@ -1,11 +1,13 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Literal
+from typing import Annotated, Literal
 
 import yaml
-from pydantic import BaseModel, ConfigDict, model_validator
+from pydantic import BaseModel, BeforeValidator, ConfigDict, model_validator
 from training_sdk.contract import SpaceEntry
+
+Blank = Annotated[str, BeforeValidator(lambda value: "" if value is None else value)]
 
 
 class _Frozen(BaseModel):
@@ -66,7 +68,7 @@ class LoggingSpec(_Frozen):
 class Experiment(_Frozen):
     experiment: str
     name: str
-    description: str
+    description: Blank = ""
     image: str
     entry: str
     storage: str

@@ -1,15 +1,4 @@
-"""What a zeroed observation dimension is, to the network that reads it.
-
-We mask a partially observed task by multiplying the observation by zero. The
-reference implementation deletes the dimension instead, so its network reads a
-five-vector where ours reads an eleven-vector with six zeros in it, and whether
-those are the same task is a precondition for comparing the two at all: if the
-agent can still see the velocities through a zero, our Hopper is not partially
-observed and no curve drawn against theirs means anything.
-
-These say it is the same task and name the one place the two do part company,
-which is the starting point rather than the task.
-"""
+"""Zeroing an observation dimension against deleting it."""
 
 from __future__ import annotations
 
@@ -27,13 +16,7 @@ WIDTH = 11
 
 
 def test_a_zeroed_dimension_is_a_deleted_one_to_the_layer_that_reads_it():
-    """The masked columns multiply zero, so they contribute exactly nothing.
-
-    Not approximately nothing: a dense layer is a sum of columns weighted by
-    the input, and a weight times zero is zero before any rounding. So the wide
-    layer over a masked observation computes the narrow layer's function of the
-    surviving dimensions, and the network is as blind either way.
-    """
+    """A wide layer over a masked input equals a narrow one over the survivors."""
 
     mask = masks["hopper"]["P"]
     assert int(mask.sum()) == KEPT and mask.size == WIDTH
@@ -54,13 +37,7 @@ def test_a_zeroed_dimension_is_a_deleted_one_to_the_layer_that_reads_it():
 
 
 def test_a_zeroed_dimension_never_moves_the_weights_that_read_it():
-    """And it stays deleted, rather than being learned around later.
-
-    The gradient of a weight on a zeroed input is that input times the incoming
-    error, so it is exactly zero at every step. The columns behind the mask are
-    dead for the whole run: they cost memory and initialisation draws and they
-    never enter the function.
-    """
+    """The masked columns take exactly zero gradient."""
 
     mask = masks["hopper"]["P"]
     observation = jax.random.normal(jax.random.key(0), (WIDTH,))
@@ -77,17 +54,7 @@ def test_a_zeroed_dimension_never_moves_the_weights_that_read_it():
 
 
 def test_the_two_shapes_do_not_start_from_the_same_scale():
-    """The one real difference, and it is an initialisation and not a task.
-
-    Flax draws a dense kernel with a standard deviation of one over the root of
-    its fan-in, and the fan-in is eleven for us and five for them. So the
-    surviving columns start about ``sqrt(11/5)`` times smaller here even though
-    they compute the same function of the same inputs.
-
-    This is worth stating rather than fixing: it is the same kind of difference
-    as every other initialisation gap between the two codebases, and closing it
-    alone would not make the two comparable in any sense the rest are not.
-    """
+    """Fan-in differs, so the surviving columns are drawn sqrt(11/5) apart."""
 
     def kernel_of(fan_in: int) -> Array:
         drawn = nn.Dense(4096).init(jax.random.key(0), jnp.zeros(fan_in))

@@ -108,10 +108,6 @@ TRAINING_METRICS: tuple[str, ...] = (
     "diag_grad_rnn",
     "diag_grad_actor",
     "diag_grad_critic",
-    # Whether a collapse is the two heads disagreeing about direction or only
-    # about magnitude. These two norms are in the shared recurrent parameters,
-    # so unlike the pair above they can be divided by one another, and the
-    # cosine is the direction the ratio says nothing about.
     "diag_grad_actor_rnn",
     "diag_grad_critic_rnn",
     "diag_grad_cosine",
