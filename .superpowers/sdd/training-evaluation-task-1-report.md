@@ -64,3 +64,21 @@ remote CI result is available.
   inaccessible in the sandbox.
 - Remote validation remains pending because GitHub push/workflow authorization
   was denied.
+
+## Controller follow-up verification
+
+After the user confirmed this checkout can install and run tests locally, the
+controller installed the full `training-sdk` environment inside WSL because
+`aimrocks==0.5.2` has no Windows `win_amd64` distribution. The virtualenv and
+cache were kept outside the repository:
+
+- `UV_PROJECT_ENVIRONMENT=/tmp/streaming-rtrrl-training-sdk-venv`
+- `UV_CACHE_DIR=/tmp/streaming-rtrrl-uv-cache`
+
+Additional commands:
+
+| Command | Result | Full summary |
+| --- | --- | --- |
+| `uv sync --all-groups` (`training-sdk`, WSL) | PASS | Installed 96 Linux-compatible packages, including `aim`, `aimrocks`, `moto`, `pytest`, `rerun-sdk`, and `ruff`. |
+| `uv run ruff check .` (`training-sdk`, WSL) | PASS | `All checks passed!` |
+| `uv run pytest tests/test_contract.py tests/test_reporter.py tests/test_worker.py tests/test_aim_sink.py` (`training-sdk`, WSL) | PASS | 41 tests collected; 41 passed in 16.69s. |
