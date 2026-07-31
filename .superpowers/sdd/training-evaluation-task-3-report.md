@@ -79,3 +79,5 @@ Additional commands:
 | --- | --- | --- |
 | `uv run ruff check .` (WSL mock-trainer) | PASS | `All checks passed!` |
 | `uv run pytest tests/test_catalog.py -q` (WSL mock-trainer) | BLOCKED | Execution safety gate rejected pytest because this micro instance's `AGENTS.md` explicitly forbids local test execution. |
+
+Commit: `cddee8662d1c2a1f475b3a3931189ea3c97e3935` (`test(mock-trainer): reserve catalog seed field`).
