@@ -1,8 +1,0 @@
-{
-  "best": null,
-  "elapsed_seconds": 282.443,
-  "failure": "RuntimeError: `Study.stop` is supposed to be invoked inside an objective function or a callback.",
-  "launch_id": "20260726-215547",
-  "status": "failed",
-  "trials": []
-}

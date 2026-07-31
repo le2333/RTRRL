@@ -10,6 +10,7 @@
 /.venv/
 /wandb/
 /logs/
+/archive/
 /__pycache__/
 
 # Ephemeral Aim "test" repo for debug runs (AIM_SCRATCH_REPO, see logging_util).
