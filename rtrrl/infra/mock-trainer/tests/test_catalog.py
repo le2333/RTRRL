@@ -1,4 +1,5 @@
 import json
+from pathlib import Path
 
 from training_sdk.contract import CONTRACT_VERSION, Catalog
 
