@@ -18,17 +18,23 @@ from collections.abc import Mapping
 from typing import Any
 
 import pytest
-from training_sdk.contract import BudgetConfig, EnvironmentConfig
+from training_sdk.contract import EvaluationConfig, EnvironmentConfig, TrainingConfig
 
 from entries.rtrrl_aaai import SPACE, iterations, settings
 
 ENVIRONMENT = EnvironmentConfig(
     id="brax::hopper",
     backend="spring",
-    num_envs=1,
+    seed=1,
     observed=(0, 1, 2, 3, 4),
 )
-BUDGET = BudgetConfig(total_steps=2_000_000, epoch_steps=100_000, eval_steps=37)
+TRAINING = TrainingConfig(
+    num_envs=1,
+    total_steps=2_000_000,
+    epoch_steps=100_000,
+    chunk_steps=1000,
+)
+EVALUATION = EvaluationConfig(steps=37, num_envs=1)
 
 
 class Recording(dict):
@@ -56,16 +62,17 @@ def test_every_declared_parameter_is_one_the_entry_reads() -> None:
     """A declared name nothing reads is a knob that does nothing when turned."""
 
     params = defaults()
-    settings(params, ENVIRONMENT, BUDGET)
+    settings(params, ENVIRONMENT, TRAINING, EVALUATION)
 
     assert params.read == set(SPACE)
 
 
 def test_the_budget_becomes_their_iteration_count() -> None:
     chosen = settings(
-        defaults(scan_steps=1000),
+        defaults(),
         ENVIRONMENT,
-        BUDGET,
+        TRAINING,
+        EVALUATION,
     )
 
     assert chosen["episodes"] == 2000
@@ -90,7 +97,7 @@ def test_the_environments_share_the_budget_rather_than_multiplying_it() -> None:
 def test_the_environment_is_named_and_configured_the_way_their_factory_reads_it() -> (
     None
 ):
-    chosen = settings(defaults(), ENVIRONMENT, BUDGET)["environment"]
+    chosen = settings(defaults(), ENVIRONMENT, TRAINING, EVALUATION)["environment"]
 
     # `make_env` splits the name on its first hyphen to find the Brax task.
     assert chosen["env_name"] == "brax-hopper"
@@ -107,14 +114,15 @@ def test_the_mask_is_hashable() -> None:
     failure that waits for whichever of their code paths hashes it first.
     """
 
-    hash(settings(defaults(), ENVIRONMENT, BUDGET)["environment"]["obs_mask"])
+    hash(settings(defaults(), ENVIRONMENT, TRAINING, EVALUATION)["environment"]["obs_mask"])
 
 
 def test_the_learning_rates_reach_the_two_optimisers_separately() -> None:
     chosen = settings(
         defaults(td_lr=1e-4, rnn_lr=2e-4, rnn_grad_clip=1.0),
         ENVIRONMENT,
-        BUDGET,
+        TRAINING,
+        EVALUATION,
     )
 
     assert chosen["td"] == {"opt_name": "adam", "learning_rate": 1e-4}
@@ -131,27 +139,25 @@ def test_rflo_is_not_offered() -> None:
     assert "rflo" not in SPACE["gradient_mode"]
 
 
-def test_a_seed_of_zero_cannot_be_sampled() -> None:
-    """`args.seed or np.random.randint(1e6)` reads zero as `pick one for me`."""
-
-    assert SPACE["seed"]["low"] == 1
-
-
 RESERVED = frozenset(
     {
         "environment",
         "env_mode",
         "env_backend",
         "observed",
+        "seed",
         "num_envs",
         "total_steps",
         "epoch_steps",
         "eval_steps",
+        "chunk_steps",
+        "early_stop_patience",
+        "eval_envs",
     }
 )
 
 
-def test_the_entry_declares_neither_the_environment_nor_the_budget():
+def test_aaai_entry_declares_no_injected_runtime_fields():
     from entries import rtrrl_aaai
 
     assert not RESERVED & set(rtrrl_aaai.SPACE)
@@ -169,16 +175,17 @@ def _defaults() -> dict:
 
 
 def test_the_kept_indices_reach_their_obs_mask():
-    from training_sdk.contract import BudgetConfig, EnvironmentConfig
+    from training_sdk.contract import EvaluationConfig, EnvironmentConfig, TrainingConfig
 
     from entries import rtrrl_aaai
 
     chosen = rtrrl_aaai.settings(
         _defaults(),
         EnvironmentConfig(
-            id="brax::hopper", backend="spring", num_envs=1, observed=(0, 1, 2, 3, 4)
+            id="brax::hopper", backend="spring", seed=1, observed=(0, 1, 2, 3, 4)
         ),
-        BudgetConfig(total_steps=2000, epoch_steps=1000, eval_steps=100),
+        TrainingConfig(num_envs=1, total_steps=2000, epoch_steps=1000),
+        EvaluationConfig(steps=100, num_envs=1),
     )
 
     assert chosen["environment"]["obs_mask"] == (0, 1, 2, 3, 4)
@@ -186,14 +193,15 @@ def test_the_kept_indices_reach_their_obs_mask():
 
 
 def test_a_fully_observed_task_asks_for_no_mask():
-    from training_sdk.contract import BudgetConfig, EnvironmentConfig
+    from training_sdk.contract import EvaluationConfig, EnvironmentConfig, TrainingConfig
 
     from entries import rtrrl_aaai
 
     chosen = rtrrl_aaai.settings(
         _defaults(),
-        EnvironmentConfig(id="brax::hopper", backend="spring", num_envs=1),
-        BudgetConfig(total_steps=2000, epoch_steps=1000, eval_steps=100),
+        EnvironmentConfig(id="brax::hopper", backend="spring", seed=1),
+        TrainingConfig(num_envs=1, total_steps=2000, epoch_steps=1000),
+        EvaluationConfig(steps=100, num_envs=1),
     )
 
     assert chosen["environment"]["obs_mask"] is None

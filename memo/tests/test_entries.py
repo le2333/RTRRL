@@ -29,15 +29,15 @@ PARAM_OVERRIDES: dict[str, Any] = {
     "backbone": "rtu",
     "hidden_dim": 2,
     "feature_dim": 3,
-    "seed": 0,
 }
 ENVIRONMENT = SimpleNamespace(
     id="brax::hopper",
     backend="generalized",
-    num_envs=2,
+    seed=0,
     observed=(0, 1, 2, 3, 4),
 )
-BUDGET = SimpleNamespace(total_steps=8, epoch_steps=4, eval_steps=4)
+TRAINING = SimpleNamespace(num_envs=2, total_steps=8, epoch_steps=4)
+EVALUATION = SimpleNamespace(steps=4, num_envs=2)
 
 
 def smallest(space: Mapping[str, Any]) -> dict[str, Any]:
@@ -91,7 +91,12 @@ ENTRIES = discover()
 def trained(request) -> tuple[Any, Collector, Watched]:
     entry = ENTRIES[request.param]
     collector, params = Collector(), Watched(smallest(entry.SPACE))
-    config = SimpleNamespace(params=params, environment=ENVIRONMENT, budget=BUDGET)
+    config = SimpleNamespace(
+        params=params,
+        environment=ENVIRONMENT,
+        training=TRAINING,
+        evaluation=EVALUATION,
+    )
     entry.run(collector, config)
     return entry, collector, params
 
@@ -125,7 +130,7 @@ def test_rtrrl_entry_can_reproduce_the_papers_bounded_actor():
     """The paper bounds its actor before clipping its environment action."""
 
     params = smallest(rtrrl.SPACE) | {"bound_actor": True, "act_clip": 1.0}
-    agent = rtrrl.build(params, ENVIRONMENT)
+    agent = rtrrl.build(params, ENVIRONMENT, TRAINING)
     assert agent.actor_head.bound is True
     assert agent.cfg.act_clip == 1.0
 
@@ -136,10 +141,14 @@ RESERVED = frozenset(
         "env_mode",
         "env_backend",
         "observed",
+        "seed",
         "num_envs",
         "total_steps",
         "epoch_steps",
         "eval_steps",
+        "chunk_steps",
+        "early_stop_patience",
+        "eval_envs",
     }
 )
 
