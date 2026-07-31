@@ -63,7 +63,7 @@ now reads `training.total_steps` from the v5 run configuration.
 
 ### Commit
 
-- Pending.
+- `7cc05e5 fix(control-plane): migrate example experiment configs`
 
 ### Concerns
 
