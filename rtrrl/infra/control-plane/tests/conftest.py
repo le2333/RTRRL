@@ -96,7 +96,7 @@ import json, os
 from training_sdk.reporter import Reporter
 config_path = os.environ["TRAINER_RUN_CONFIG"]
 config = json.loads(open(config_path).read())
-total = int(config["budget"]["total_steps"])
+total = int(config["training"]["total_steps"])
 rate = float(config["params"]["learning_rate"])
 with Reporter.from_env() as reporter:
     for step in range(0, total + 1, max(total // 4, 1)):

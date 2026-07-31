@@ -9,12 +9,16 @@ storage: s3://rtrrl-artifacts-007122174918/trainer
 environment:
   id: brax::inverted_pendulum
   backend: generalized
-  num_envs: 4
+  seed: 0
 
-budget:
+training:
+  num_envs: 4
   total_steps: 128
   epoch_steps: 128
-  eval_steps: 100
+
+evaluation:
+  steps: 100
+  num_envs: 4
 
 compute:
   instance_type: c7a.medium
@@ -27,7 +31,6 @@ hpo:
   parallel_jobs: 1
 
 space:
-  seed: [0]
   learning_rate: {type: float, low: 1.0e-4, high: 1.0e-3, log: true}
 
 score:
