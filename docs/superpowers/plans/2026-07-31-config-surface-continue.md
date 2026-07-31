@@ -66,12 +66,40 @@
 
 目标（规格 §4）：结构选择 + 分支子参数；未激活分支参数塌缩为 `placeholder`；`ask_round` 改为 `study.ask()` 后按树 `suggest_*`；含未钉死结构时拒绝 grid。
 
-依赖调查（本地会话已做完，摘要）：
+依赖调查（已完成；调查里关于 `source_hash` 的段落作废，该字段已删）：
 
-- 当前采样：`space.py` 一次造全分布 → `study.ask(dict(distributions))`，**无条件能力**。
-- `resolve_space` **只查键名，不查取值是否落在 catalog 区间内**——实验可把 `gamma` 盖成 `[2,3]`。
-- 条件参数很多且会烧钱：`freeze_gamma=True` + OBGD 在**容器内、作业已启动后**硬报错（`memorax/algorithms/rtrrl.py:200-205`）；结构树把 `freeze_gamma` 挂到 adam 分支后该组合无法表达。
-- **结构树解决不了：** `rtrrl_aaai` 的 `total_steps % (scan_steps × num_envs) == 0`（跨节算术）；`upstream_stream_ac` 的 `eps` 一名两义（自适应 eps 兼 reward 归一化 eps）。
+**声明与导出现状**
+
+- 四入口 `SPACE: dict[str, Any]`，三种形态：`list` → `ChoiceSpec`；`{type:float/...}` → `FloatSpec`/`IntSpec`。校验只在 `EntryDescriptor.model_validate`。
+- Catalog：`discover()` → validate → `model_dump`；签入的只有 `rtrrl/catalog.json` 与 mock-trainer 的；memo 的 catalog 不签入。
+- `_UNIT` / `_RATE` 是**同一 dict 对象多处引用**（不是拷贝），四入口各自复制了一份。
+
+**采样现状（无条件）**
+
+- 链路：YAML → `Experiment.space` → `resolve_space` → `distributions` → `ask_round` → `trial.params`。
+- `ask_round`：`study.ask(dict(distributions))`，每个 trial **拿到 space 全部键**；未用 `trial.suggest_*`。
+- `resolve_space`：**只查键名**，override 可无阻碍越过 catalog 区间（如 `gamma` 盖成 `[2,3]`）。今日「数学有效」与「搜索区间」是同一件事。
+- `check_sampler` 只拦非法采样器名，以及 grid + 非 categorical。
+
+**条件参数（结构树要挂的）**
+
+| 入口 | 条件 | 参数 |
+|------|------|------|
+| rtrrl | `update_rule==adam` | `b1`, `b2`, `rnn_grad_clip`, `freeze_gamma` |
+| rtrrl | `update_rule==obgd` | `kappa`, `obgd_beta2`, `obgd_rule` |
+| rtrrl | `obgd` 且 `obgd_rule==obgd` | `obgd_beta2`/`eps` 二次失效（无二阶矩） |
+| rtrrl | `freeze_gamma`+obgd | **容器内硬报错**（`rtrrl.py:200-205`），会烧钱 |
+| stream_ac | `bounded_rule!=obgd` | `beta2`, `eps` |
+| stream_ac | 任一归一化开 | `normalization_statistics` |
+| upstream | `bounded_rule!=obgd` | `beta2`；`eps` 另兼 reward 归一化 |
+| aaai | LRU 拒 `rflo` | `gradient_mode` 现靠砍掉候选表达 |
+
+无分支参数的结构（归一化开关、梯度门控）规格说与普通离散参数一致，不特判。
+
+**结构树解决不了 / 需另议**
+
+- `rtrrl_aaai`：`total_steps % (scan_steps × num_envs) == 0`（跨节算术，采样可抽出必崩配置）。
+- `upstream_stream_ac`：`eps` 一名两义（自适应规则 eps 兼 `NormalizeRewardWrapper` eps）。
 
 ### 待用户拍板（上次问卷被中断）
 
