@@ -15,6 +15,36 @@ from training_sdk.contract import (
 )
 
 
+def run_config_kwargs() -> dict:
+    return {
+        "contract": 3,
+        "run_id": "sweep-20260725-051400-t7",
+        "experiment": "locomotion",
+        "name": "sweep",
+        "launch_id": "20260725-051400",
+        "trial": 7,
+        "entry": "brax_ppo",
+        "digest": "registry.example/trainer@sha256:" + "a" * 64,
+        "environment": {
+            "id": "brax::hopper",
+            "backend": "spring",
+            "num_envs": 1,
+        },
+        "budget": {"total_steps": 100, "epoch_steps": 100, "eval_steps": 0},
+        "source_hash": "sha256:41b0",
+        "params": {"total_steps": 128, "learning_rate": 0.0003},
+        "logging": {"aim": "aim://127.0.0.1:53801", "every_steps": 1},
+        "score": {
+            "metric": "episode_return",
+            "window_steps": [0, 128],
+            "reduce": "mean",
+            "direction": "maximize",
+            "non_finite": "worst",
+            "s3": "s3://bucket/score.json",
+        },
+    }
+
+
 def test_contract_version_is_three() -> None:
     assert CONTRACT_VERSION == 3
 
@@ -131,34 +161,26 @@ def test_choice_spec_rejects_non_scalar_choices() -> None:
         )
 
 
+def test_an_entry_descriptor_has_no_source_hash() -> None:
+    """The image digest answers which code ran; a source digest also failed on
+    edits that changed no behaviour."""
+
+    with pytest.raises(ValidationError):
+        EntryDescriptor(
+            command=("train",),
+            metrics=("eval/episode_return",),
+            space={},
+            source_hash="sha256:0",
+        )
+
+
+def test_a_run_config_has_no_source_hash() -> None:
+    with pytest.raises(ValidationError):
+        RunConfig(**(run_config_kwargs() | {"source_hash": "sha256:0"}))
+
+
 def test_run_config_round_trips() -> None:
-    payload = {
-        "contract": 3,
-        "run_id": "sweep-20260725-051400-t7",
-        "experiment": "locomotion",
-        "name": "sweep",
-        "launch_id": "20260725-051400",
-        "trial": 7,
-        "entry": "brax_ppo",
-        "digest": "registry.example/trainer@sha256:" + "a" * 64,
-        "environment": {
-            "id": "brax::hopper",
-            "backend": "spring",
-            "num_envs": 1,
-        },
-        "budget": {"total_steps": 100, "epoch_steps": 100, "eval_steps": 0},
-        "source_hash": "sha256:41b0",
-        "params": {"total_steps": 128, "learning_rate": 0.0003},
-        "logging": {"aim": "aim://127.0.0.1:53801", "every_steps": 1},
-        "score": {
-            "metric": "episode_return",
-            "window_steps": [0, 128],
-            "reduce": "mean",
-            "direction": "maximize",
-            "non_finite": "worst",
-            "s3": "s3://bucket/score.json",
-        },
-    }
+    payload = run_config_kwargs()
     config = RunConfig.model_validate(payload)
     assert RunConfig.model_validate(config.model_dump(mode="json")) == config
     assert config.model_dump(mode="json", exclude_none=True) == payload
