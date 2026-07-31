@@ -1,41 +1,45 @@
 # Working agreements
 
-## What this machine is for
+## Two machines, two sets of limits
 
-It is a permanently-on micro instance — the only size that stays free — and its
-job is to *host* things, not to compute:
+This repository is worked on from two places, and what may be run locally
+depends on which one you are sitting in. Establish which before running
+anything heavier than `git`.
+
+**The permanently-on micro instance** — the only size that stays free. Its job
+is to *host*, not to compute:
 
 - the `trainerctl` control plane and its Optuna study,
 - the Aim server,
 - Rerun.
 
-All of those are small and IO-bound. Everything else — training, container
-builds, test suites — happens elsewhere. Treat any local workload heavier than
-polling and bookkeeping as a mistake in the making.
+It has 911 MiB of total memory, ~250 MiB free, and 2 cores. Running the test
+suite there has already exhausted memory and killed the editor session more than
+once. On that box do not run `pytest` — not the full suite, not one module, not
+one test — and nothing else that spawns real servers or subprocesses: `moto`, an
+Aim server, a worker subprocess, a training framework. Do not run `docker` in
+any form; a single GPU image does not fit on the disk. Static checks that read
+files without executing them are fine: `ruff check`, `git`, reading and editing
+sources.
 
-## Never run tests on this machine
+**A development checkout** with real memory. Run `ruff check` and `pytest`
+locally here; that is the fast loop and it is worth using. Keep virtualenvs and
+caches outside the repository (`UV_PROJECT_ENVIRONMENT`, `UV_CACHE_DIR`) so a
+local run never shows up in `git status`.
 
-This box is a micro instance: 911 MiB of total memory, ~250 MiB free, 2 cores.
-Running the test suite here has already exhausted memory and killed the editor
-session more than once.
+## What is remote regardless of the machine
 
-Do not run `pytest` here — not the full suite, not one module, not one test.
-The same goes for anything else that spawns real servers or subprocesses:
-`moto`, an Aim server, a worker subprocess, a training framework.
+AWS Batch is not reachable from either checkout. Anything that needs a
+container, a GPU, or a real training framework runs on the `dev-*` queues, and
+getting there means commit, push, and dispatch against the remote ref —
+`workflow_dispatch` tests the remote state, so a dispatch on an unpushed commit
+silently tests the previous one and its green means nothing.
 
-Do not run `docker` in any form. A single GPU image does not fit on the disk.
+If the Batch round trip becomes the bottleneck, a local mock Batch backend is
+worth building rather than working around.
 
-Tests are **written** here and **executed** remotely:
-
-- Python suites run in GitHub Actions.
-- Anything needing a container, a GPU, or a real training framework runs on the
-  `dev-*` AWS Batch queues.
-
-Static checks that read files without executing them are fine: `ruff check`,
-`git`, reading and editing sources.
-
-A change is not verified because it was reasoned about carefully. It is verified
-when a remote run reports it green.
+A change is not verified because it was reasoned about carefully. A local pass
+is evidence for the code it ran; the merge gate is still a green remote run.
 
 ## When two implementations have to agree
 

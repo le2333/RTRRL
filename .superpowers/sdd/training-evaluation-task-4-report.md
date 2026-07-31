@@ -47,3 +47,24 @@
   prescribed remote red/green checks.
 - Local pytest/Ruff/catalog generation could not execute on this Windows micro
   instance for the reasons recorded above.
+
+## Controller follow-up verification
+
+After the user confirmed this checkout can install and run tests locally, the
+controller ran Task 4 checks in WSL. Virtualenvs and cache were kept outside the
+repository:
+
+- `UV_PROJECT_ENVIRONMENT=/tmp/streaming-rtrrl-memo-venv`
+- `UV_CACHE_DIR=/tmp/streaming-rtrrl-uv-cache`
+
+Additional commands:
+
+| Command | Result | Full summary |
+| --- | --- | --- |
+| `uv sync --group development` (`memo`, WSL) | PASS | Installed the memo development environment and local `training-sdk` dependency. |
+| `uv run --group development ruff check entries tests/test_entries.py` (`memo`, WSL) | PASS | `All checks passed!` |
+| `uv run --group development pytest tests/test_entries.py -q` (`memo`, WSL) | PASS | 14 tests passed with dependency warnings. |
+| `uv sync --group dev` (`rtrrl`, WSL) | BLOCKED | `pytinyrenderer==0.0.14` failed to build because WSL lacks `x86_64-linux-gnu-g++`; this is a full fork dependency, not needed by the lightweight entry mapping tests. |
+| `PYTHONPATH='.:../training-sdk/src' uv run --project ../memo --group development pytest tests/test_entry.py -q` (`rtrrl`, WSL) | PASS | 11 tests passed in 0.60s using the memo development environment plus rtrrl/training-sdk import paths. |
+| `PYTHONPATH='.:../training-sdk/src' uv run --project ../memo --group development ruff check entries/rtrrl_aaai.py tests/test_entry.py scripts/build_catalog.py` (`rtrrl`, WSL) | PASS | `All checks passed!` |
+| `PYTHONPATH='.:../training-sdk/src' uv run --project ../memo --group development python scripts/build_catalog.py` (`rtrrl`, WSL) | PASS | Regenerated `catalog.json`; Windows `git diff --ignore-cr-at-eol` showed no content diff. |
