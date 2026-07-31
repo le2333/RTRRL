@@ -88,3 +88,36 @@ Additional commands:
 | `uv sync --all-groups` (`rtrrl/infra/control-plane`, WSL) | PASS | Installed 99 Linux-compatible packages, including `trainer-infra`, `training-sdk`, `aim`, `aimrocks`, `optuna`, `pytest`, and `ruff`. |
 | `uv run ruff check .` (`rtrrl/infra/control-plane`, WSL) | PASS | `All checks passed!` |
 | `uv run pytest tests/test_experiment.py tests/test_preflight_offline.py tests/test_launch.py` (`rtrrl/infra/control-plane`, WSL) | PASS | 47 tests collected; 47 passed with 1 Aim/SQLAlchemy deprecation warning in 2.29s. |
+
+## Review fix (second pass)
+
+### Files changed
+
+- `rtrrl/infra/control-plane/tests/conftest.py`
+- `rtrrl/infra/control-plane/tests/test_cli.py`
+- `rtrrl/infra/control-plane/tests/test_local_backend.py`
+- `rtrrl/infra/control-plane/tests/test_packing.py`
+- `rtrrl/infra/control-plane/tests/test_preflight_aws.py`
+
+The worker-facing local catalog builders now declare contract 5. The remaining
+control-plane assertions expect v5, and the CLI unknown-override case adds its
+rogue key beside the existing algorithm-space `learning_rate` key.
+
+### Commands and results
+
+- `uv run ruff check .` (WSL): passed (`All checks passed!`).
+- Requested selected `uv run pytest ...` (WSL): not run. The escalation was
+  rejected by the host safety policy because `AGENTS.md` prohibits pytest on
+  this micro instance.
+- `rg` scan for stale targeted v4 catalog/assertion references: passed (no
+  matches).
+- `git diff --check`: passed (exit 0).
+
+### Commit
+
+- `c5fcf8c fix(control-plane): align test catalogs with contract v5`
+
+### Concerns
+
+- The requested full non-Task-5 pytest selection remains unverified locally;
+  remote CI or an explicitly authorized non-micro runner should run it.
