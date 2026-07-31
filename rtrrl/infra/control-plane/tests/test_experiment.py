@@ -21,7 +21,7 @@ def test_example_file_loads() -> None:
     assert experiment.entry == "brax_ppo_acceptance"
     assert experiment.compute.instance_type == "c7a.medium"
     assert experiment.hpo.trials_per_round >= experiment.hpo.parallel_jobs
-    assert experiment.budget.total_steps == 128
+    assert experiment.training.total_steps == 128
 
 
 def test_unknown_top_level_key_is_rejected(tmp_path: Path) -> None:
@@ -66,15 +66,17 @@ def test_score_window_steps_must_be_ordered(tmp_path: Path) -> None:
         load_experiment(path)
 
 
-def test_an_experiment_carries_its_environment_and_budget(tmp_path):
+def test_an_experiment_carries_environment_training_and_evaluation(tmp_path):
     document = _document()
     path = tmp_path / "experiment.yaml"
     path.write_text(yaml.safe_dump(document), encoding="utf-8")
 
     experiment = load_experiment(path)
 
+    assert experiment.environment.seed == 0
     assert experiment.environment.observed == (0, 1, 2, 3, 4)
-    assert experiment.budget.total_steps == 2000
+    assert experiment.training.total_steps == 2000
+    assert experiment.evaluation.steps == 100
 
 
 @pytest.mark.parametrize(
@@ -149,13 +151,17 @@ def test_eval_steps_may_be_zero(tmp_path: Path) -> None:
         "env_mode",
         "env_backend",
         "observed",
+        "seed",
         "num_envs",
         "total_steps",
         "epoch_steps",
         "eval_steps",
+        "chunk_steps",
+        "early_stop_patience",
+        "eval_envs",
     ],
 )
-def test_a_space_may_not_name_the_environment_or_the_budget(
+def test_a_space_may_not_name_non_algorithm_fields(
     tmp_path: Path, reserved: str
 ) -> None:
     document = _document()
