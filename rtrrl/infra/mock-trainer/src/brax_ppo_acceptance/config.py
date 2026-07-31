@@ -113,15 +113,15 @@ class AcceptanceConfig:
         logging = {"aim_every_env_steps": 1, "rerun_every_episodes": 1}
         algorithm = {
             "learning_rate": params["learning_rate"],
-            "num_envs": config.environment.num_envs,
+            "num_envs": config.training.num_envs,
             "episode_length": params.get("episode_length", 32),
             "failure_mode": params.get("failure_mode", "none"),
         }
         parameters = {
-            "runtime": {"seed": params["seed"]},
+            "runtime": {"seed": config.environment.seed},
             "algorithm": algorithm,
         }
-        training_budget = {"env_steps": config.budget.total_steps}
+        training_budget = {"env_steps": config.training.total_steps}
 
         _exact_keys(
             {"environment": environment, "logging": logging, "parameters": parameters, "training_budget": training_budget},
