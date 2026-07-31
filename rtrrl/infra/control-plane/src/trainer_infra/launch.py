@@ -9,12 +9,13 @@ from pathlib import Path
 from training_sdk import objects
 from training_sdk.contract import (
     CONTRACT_VERSION,
-    BudgetConfig,
+    EvaluationConfig,
     EnvironmentConfig,
     LoggingConfig,
     RunConfig,
     Scalar,
     ScoreConfig,
+    TrainingConfig,
 )
 
 from trainer_infra.preflight import LaunchPlan
@@ -54,7 +55,8 @@ def create_launch(
         "launch_id": launch_id,
         "entry": plan.entry_name,
         "environment": experiment.environment.model_dump(mode="json"),
-        "budget": experiment.budget.model_dump(mode="json"),
+        "training": experiment.training.model_dump(mode="json"),
+        "evaluation": experiment.evaluation.model_dump(mode="json"),
         "digest": plan.digest,
         "queue": plan.queue,
         "job_definition": plan.job_definition,
@@ -100,13 +102,19 @@ def build_run_config(
         environment=EnvironmentConfig(
             id=experiment.environment.id,
             backend=experiment.environment.backend,
-            num_envs=experiment.environment.num_envs,
+            seed=experiment.environment.seed,
             observed=experiment.environment.observed,
         ),
-        budget=BudgetConfig(
-            total_steps=experiment.budget.total_steps,
-            epoch_steps=experiment.budget.epoch_steps,
-            eval_steps=experiment.budget.eval_steps,
+        training=TrainingConfig(
+            num_envs=experiment.training.num_envs,
+            total_steps=experiment.training.total_steps,
+            epoch_steps=experiment.training.epoch_steps,
+            chunk_steps=experiment.training.chunk_steps,
+            early_stop_patience=experiment.training.early_stop_patience,
+        ),
+        evaluation=EvaluationConfig(
+            steps=experiment.evaluation.steps,
+            num_envs=experiment.evaluation.num_envs,
         ),
         params=dict(params),
         logging=LoggingConfig(

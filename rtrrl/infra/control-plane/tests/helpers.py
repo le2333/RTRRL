@@ -16,7 +16,7 @@ push a test failure; `tests/test_examples.py` keeps them honest instead.
 
 CATALOG = Catalog.model_validate(
     {
-        "contract": 4,
+        "contract": 5,
         "entries": {
             "brax_ppo_acceptance": {
                 "command": ["python", "-m", "brax_ppo_acceptance"],
@@ -44,10 +44,11 @@ def _document() -> dict:
         "environment": {
             "id": "brax::hopper",
             "backend": "spring",
-            "num_envs": 1,
+            "seed": 0,
             "observed": [0, 1, 2, 3, 4],
         },
-        "budget": {"total_steps": 2000, "epoch_steps": 1000, "eval_steps": 100},
+        "training": {"num_envs": 1, "total_steps": 2000, "epoch_steps": 1000},
+        "evaluation": {"steps": 100, "num_envs": 1},
         "compute": {"instance_type": "c7a.medium", "timeout_minutes": 60},
         "hpo": {
             "sampler": "tpe",

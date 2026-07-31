@@ -71,10 +71,14 @@ RESERVED = frozenset(
         "env_mode",
         "env_backend",
         "observed",
+        "seed",
         "num_envs",
         "total_steps",
         "epoch_steps",
         "eval_steps",
+        "chunk_steps",
+        "early_stop_patience",
+        "eval_envs",
     }
 )
 
@@ -82,13 +86,13 @@ RESERVED = frozenset(
 class Environment(_Frozen):
     id: str
     backend: str
-    num_envs: int
+    seed: int
     observed: tuple[int, ...] | None = None
 
     @model_validator(mode="after")
     def _usable(self) -> "Environment":
-        if self.num_envs < 1:
-            raise ValueError("num_envs must be positive")
+        if self.seed < 0:
+            raise ValueError("seed must not be negative")
         if self.observed is None:
             return self
         if not self.observed:
@@ -100,24 +104,55 @@ class Environment(_Frozen):
         return self
 
 
-class Budget(_Frozen):
+class Training(_Frozen):
+    num_envs: int
     total_steps: int
     epoch_steps: int
-    eval_steps: int
+    chunk_steps: int | None = None
+    early_stop_patience: int | None = None
 
     @model_validator(mode="after")
-    def _whole(self) -> "Budget":
+    def _whole(self) -> "Training":
+        if self.num_envs < 1:
+            raise ValueError("num_envs must be positive")
         if self.total_steps < 1:
             raise ValueError("total_steps must be positive")
         if self.epoch_steps < 1:
             raise ValueError("epoch_steps must be positive")
-        if self.eval_steps < 0:
-            raise ValueError("eval_steps must not be negative")
         if self.total_steps % self.epoch_steps:
             raise ValueError(
                 f"total_steps {self.total_steps} is not whole epochs of "
                 f"{self.epoch_steps}"
             )
+        if self.epoch_steps % self.num_envs:
+            raise ValueError(
+                f"epoch_steps {self.epoch_steps} is not "
+                f"{self.num_envs} streams' worth"
+            )
+        if self.chunk_steps is not None:
+            if self.chunk_steps < 1:
+                raise ValueError("chunk_steps must be positive")
+            per_chunk = self.chunk_steps * self.num_envs
+            if self.total_steps % per_chunk or self.epoch_steps % per_chunk:
+                raise ValueError(
+                    f"chunk_steps {self.chunk_steps} over {self.num_envs} streams "
+                    "must divide total_steps and epoch_steps"
+                )
+        if self.early_stop_patience is not None and self.early_stop_patience < 0:
+            raise ValueError("early_stop_patience must not be negative")
+        return self
+
+
+class Evaluation(_Frozen):
+    steps: int
+    num_envs: int
+
+    @model_validator(mode="after")
+    def _usable(self) -> "Evaluation":
+        if self.steps < 0:
+            raise ValueError("evaluation steps must not be negative")
+        if self.num_envs < 1:
+            raise ValueError("evaluation num_envs must be positive")
         return self
 
 
@@ -129,7 +164,8 @@ class Experiment(_Frozen):
     entry: str
     storage: str
     environment: Environment
-    budget: Budget
+    training: Training
+    evaluation: Evaluation
     compute: Compute
     hpo: Hpo
     space: dict[str, SpaceEntry]
@@ -142,12 +178,7 @@ class Experiment(_Frozen):
         if taken:
             raise ValueError(
                 f"space names {', '.join(taken)}, which belong to the environment "
-                "and budget sections and are not searched"
-            )
-        if self.budget.epoch_steps % self.environment.num_envs:
-            raise ValueError(
-                f"epoch_steps {self.budget.epoch_steps} is not "
-                f"{self.environment.num_envs} streams' worth"
+                "and training or evaluation sections and are not searched"
             )
         return self
 

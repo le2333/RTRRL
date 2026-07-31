@@ -46,7 +46,7 @@ def test_launch_metadata_is_written_to_archive_and_s3(s3_base: str, tmp_path: Pa
     assert objects.get_bytes(f"{launch.prefix}/experiment.yaml") == source_bytes
     archived = json.loads((launch.archive / "launch.json").read_text())
     assert archived["digest"] == "sha256:" + "a" * 64
-    assert archived["contract"] == 4
+    assert archived["contract"] == 5
     remote = json.loads(objects.get_bytes(f"{launch.prefix}/launch.json"))
     assert remote == archived
     space = json.loads(objects.get_bytes(f"{launch.prefix}/space.json"))
@@ -97,14 +97,15 @@ def test_run_config_disables_rerun_when_not_configured(
     assert config.score.s3 == f"{launch.prefix}/trials/t7/score.json"
 
 
-def test_the_run_config_carries_the_environment_and_the_budget(tmp_path):
+def test_the_run_config_carries_environment_training_and_evaluation(tmp_path):
     launch = _launch(tmp_path)
 
     config = build_run_config(launch, trial=0, params={"learning_rate": 0.001})
 
     assert config.environment.id == "brax::hopper"
     assert config.environment.observed == (0, 1, 2, 3, 4)
-    assert config.budget.total_steps == 2000
+    assert config.training.total_steps == 2000
+    assert config.evaluation.steps == 100
 
 
 def test_the_archived_launch_records_both_sections(tmp_path):
@@ -113,4 +114,5 @@ def test_the_archived_launch_records_both_sections(tmp_path):
     archived = json.loads((launch.archive / "launch.json").read_text(encoding="utf-8"))
 
     assert archived["environment"]["observed"] == [0, 1, 2, 3, 4]
-    assert archived["budget"]["epoch_steps"] == 1000
+    assert archived["training"]["epoch_steps"] == 1000
+    assert archived["evaluation"]["steps"] == 100

@@ -82,8 +82,7 @@ def test_an_experiment_carries_environment_training_and_evaluation(tmp_path):
 @pytest.mark.parametrize(
     ("field", "value", "message"),
     [
-        ("num_envs", 0, "num_envs must be positive"),
-        ("num_envs", -1, "num_envs must be positive"),
+        ("seed", -1, "seed must not be negative"),
         ("observed", [], "observed must name at least one index"),
         ("observed", [0, 0, 1], "observed must not repeat an index"),
         ("observed", [-1, 0], "observed indices must not be negative"),
@@ -117,15 +116,14 @@ def test_an_omitted_observed_field_means_fully_observed(tmp_path: Path) -> None:
     [
         ("total_steps", 0, "total_steps must be positive"),
         ("epoch_steps", 0, "epoch_steps must be positive"),
-        ("eval_steps", -1, "eval_steps must not be negative"),
         ("epoch_steps", 300, "total_steps 2000 is not whole epochs of 300"),
     ],
 )
-def test_a_budget_must_describe_whole_positive_epochs(
+def test_training_must_describe_whole_positive_epochs(
     tmp_path: Path, field: str, value: int, message: str
 ) -> None:
     document = _document()
-    document["budget"][field] = value
+    document["training"][field] = value
     path = tmp_path / "experiment.yaml"
     path.write_text(yaml.safe_dump(document), encoding="utf-8")
 
@@ -133,15 +131,15 @@ def test_a_budget_must_describe_whole_positive_epochs(
         load_experiment(path)
 
 
-def test_eval_steps_may_be_zero(tmp_path: Path) -> None:
+def test_evaluation_steps_may_be_zero(tmp_path: Path) -> None:
     document = _document()
-    document["budget"]["eval_steps"] = 0
+    document["evaluation"]["steps"] = 0
     path = tmp_path / "experiment.yaml"
     path.write_text(yaml.safe_dump(document), encoding="utf-8")
 
     experiment = load_experiment(path)
 
-    assert experiment.budget.eval_steps == 0
+    assert experiment.evaluation.steps == 0
 
 
 @pytest.mark.parametrize(
@@ -179,7 +177,7 @@ def test_epoch_steps_must_be_a_whole_number_of_environment_streams(
     tmp_path: Path,
 ) -> None:
     document = _document()
-    document["environment"]["num_envs"] = 3
+    document["training"]["num_envs"] = 3
     path = tmp_path / "experiment.yaml"
     path.write_text(yaml.safe_dump(document), encoding="utf-8")
 

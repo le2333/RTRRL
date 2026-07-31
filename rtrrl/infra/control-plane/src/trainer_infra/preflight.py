@@ -49,10 +49,10 @@ def check_offline(experiment: Experiment, catalog: Catalog) -> dict[str, SpaceEn
         )
     space = resolve_space(entry, experiment.space)
     check_sampler(experiment.hpo.sampler, distributions(space))
-    if experiment.score.window_steps[1] > experiment.budget.total_steps:
+    if experiment.score.window_steps[1] > experiment.training.total_steps:
         raise PreflightError(
             f"score window upper bound {experiment.score.window_steps[1]} exceeds "
-            f"the budget's total_steps ({experiment.budget.total_steps})"
+            f"the training total_steps ({experiment.training.total_steps})"
         )
     return space
 

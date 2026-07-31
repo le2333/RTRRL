@@ -41,13 +41,13 @@ def _catalog() -> Catalog:
 def _written(tmp_path, *, window, total_steps):
     document = _document()
     document["score"]["window_steps"] = list(window)
-    document["budget"]["total_steps"] = total_steps
+    document["training"]["total_steps"] = total_steps
     path = tmp_path / "experiment.yaml"
     path.write_text(yaml.safe_dump(document), encoding="utf-8")
     return load_experiment(path)
 
 
-def test_a_score_window_past_the_budget_is_refused(tmp_path):
+def test_a_score_window_past_training_is_refused(tmp_path):
     experiment = _written(tmp_path, window=(0, 4000), total_steps=2000)
 
     with pytest.raises(PreflightError) as raised:
@@ -56,7 +56,7 @@ def test_a_score_window_past_the_budget_is_refused(tmp_path):
     assert "4000" in str(raised.value)
 
 
-def test_a_score_window_inside_the_budget_is_accepted(tmp_path):
+def test_a_score_window_inside_training_is_accepted(tmp_path):
     experiment = _written(tmp_path, window=(0, 2000), total_steps=2000)
 
     assert "learning_rate" in check_offline(experiment, _catalog())

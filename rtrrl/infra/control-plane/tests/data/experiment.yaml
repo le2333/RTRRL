@@ -9,13 +9,17 @@ storage: s3://rtrrl-artifacts-007122174918/trainer
 environment:
   id: brax::hopper
   backend: spring
-  num_envs: 1
+  seed: 0
   observed: [0, 1, 2, 3, 4]
 
-budget:
+training:
+  num_envs: 1
   total_steps: 128
   epoch_steps: 128
-  eval_steps: 100
+
+evaluation:
+  steps: 100
+  num_envs: 1
 
 compute:
   instance_type: c7a.medium
@@ -30,7 +34,6 @@ hpo:
 space:
   env: [inverted_pendulum]
   backend: [generalized]
-  seed: [0]
   learning_rate: {type: float, low: 1.0e-4, high: 1.0e-3, log: true}
 
 score:
