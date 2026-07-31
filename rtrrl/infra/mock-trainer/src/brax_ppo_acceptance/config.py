@@ -9,6 +9,7 @@ from types import MappingProxyType
 from typing import Any, Literal, cast
 
 import yaml
+from training_sdk.contract import RunConfig
 
 FailureMode = Literal["none", "before_training", "after_training", "after_checkpoint"]
 type FrozenValue = (
@@ -88,25 +89,31 @@ class AcceptanceConfig:
         raise TypeError("AcceptanceConfig instances must be created with AcceptanceConfig.load()")
 
     @classmethod
-    def from_params(
+    def from_run_config(
         cls,
-        params: Mapping[str, Any],
+        config: RunConfig,
         *,
         environ: Mapping[str, str] = os.environ,
     ) -> AcceptanceConfig:
+        params = config.params
         if not isinstance(params, Mapping):
             raise TypeError("params must be a mapping")
         if not all(type(key) is str for key in params):
             raise ValueError("params keys must be strings")
 
+        namespace, separator, environment_name = config.environment.id.partition("::")
+        if separator != "::" or namespace != "brax" or not environment_name:
+            raise ValueError("environment.id must be a qualified Brax environment")
+        if config.environment.observed is not None:
+            raise ValueError("environment.observed is not supported")
         environment = {
-            "name": params["env"],
-            "options": {"backend": params["backend"]},
+            "name": environment_name,
+            "options": {"backend": config.environment.backend},
         }
         logging = {"aim_every_env_steps": 1, "rerun_every_episodes": 1}
         algorithm = {
             "learning_rate": params["learning_rate"],
-            "num_envs": params.get("num_envs", 4),
+            "num_envs": config.environment.num_envs,
             "episode_length": params.get("episode_length", 32),
             "failure_mode": params.get("failure_mode", "none"),
         }
@@ -114,7 +121,7 @@ class AcceptanceConfig:
             "runtime": {"seed": params["seed"]},
             "algorithm": algorithm,
         }
-        training_budget = {"env_steps": params["total_steps"]}
+        training_budget = {"env_steps": config.budget.total_steps}
 
         _exact_keys(
             {"environment": environment, "logging": logging, "parameters": parameters, "training_budget": training_budget},

@@ -12,16 +12,6 @@
         "episode_length"
       ],
       "space": {
-        "backend": {
-          "choices": [
-            "generalized"
-          ]
-        },
-        "env": {
-          "choices": [
-            "inverted_pendulum"
-          ]
-        },
         "episode_length": {
           "choices": [
             32
@@ -38,22 +28,10 @@
           "low": 1e-06,
           "type": "float"
         },
-        "num_envs": {
-          "choices": [
-            4
-          ]
-        },
         "seed": {
           "high": 1000,
           "log": false,
           "low": 0,
-          "step": 1,
-          "type": "int"
-        },
-        "total_steps": {
-          "high": 100000,
-          "log": false,
-          "low": 1,
           "step": 1,
           "type": "int"
         }

@@ -23,12 +23,8 @@ def build_entry() -> EntryDescriptor:
             "command": ["python", "-m", "brax_ppo_acceptance"],
             "metrics": ["episode_return", "episode_length"],
             "space": {
-                "env": ["inverted_pendulum"],
-                "backend": ["generalized"],
-                "total_steps": {"type": "int", "low": 1, "high": 100_000},
                 "seed": {"type": "int", "low": 0, "high": 1000},
                 "learning_rate": {"type": "float", "low": 1e-6, "high": 1e-2},
-                "num_envs": [4],
                 "episode_length": [32],
                 "failure_mode": ["none"],
             },

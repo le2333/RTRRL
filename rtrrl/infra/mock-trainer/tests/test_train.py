@@ -44,12 +44,8 @@ VALID: dict[str, Any] = {
 
 def default_params(**overrides: Any) -> dict[str, Any]:
     params = {
-        "env": "inverted_pendulum",
-        "backend": "generalized",
-        "total_steps": 128,
         "seed": 7,
         "learning_rate": 0.0003,
-        "num_envs": 4,
         "episode_length": 32,
         "failure_mode": "none",
     }
@@ -93,6 +89,7 @@ def make_run_config(
     params: dict[str, Any],
     *,
     include_rerun: bool = True,
+    total_steps: int = 128,
 ) -> RunConfig:
     trial_prefix = f"s3://bucket/trials/t{params.get('trial', 0)}"
     return RunConfig.model_validate(
@@ -111,8 +108,8 @@ def make_run_config(
                 "num_envs": 4,
             },
             "budget": {
-                "total_steps": int(params["total_steps"]),
-                "epoch_steps": int(params["total_steps"]),
+                "total_steps": total_steps,
+                "epoch_steps": total_steps,
                 "eval_steps": 0,
             },
             "params": params,
@@ -124,7 +121,7 @@ def make_run_config(
             },
             "score": {
                 "metric": "episode_return",
-                "window_steps": [0, int(params["total_steps"])],
+                "window_steps": [0, total_steps],
                 "reduce": "mean",
                 "direction": "maximize",
                 "non_finite": "worst",
@@ -148,7 +145,7 @@ def make_reporter(
     rerun_sink = rerun or RecordingRerun()
     config = make_run_config(tmp_path, params)
     reporter = Reporter(config, scratch, sinks=[rerun_sink, *(extra_sinks or [])])
-    acceptance = AcceptanceConfig.from_params(params, environ=test_environ(fast=fast))
+    acceptance = AcceptanceConfig.from_run_config(config, environ=test_environ(fast=fast))
     return reporter, acceptance, rerun_sink, scratch
 
 
@@ -159,13 +156,16 @@ def write_run_env(
     failure_mode: str = "none",
     fast: bool = True,
     params_overrides: dict[str, Any] | None = None,
+    total_steps: int = 128,
 ) -> tuple[Path, Path]:
     params = default_params(failure_mode=failure_mode, **(params_overrides or {}))
     scratch = tmp_path / "scratch"
     scratch.mkdir()
     config_path = tmp_path / "run-config.json"
     config_path.write_text(
-        json.dumps(make_run_config(tmp_path, params).model_dump(mode="json")),
+        json.dumps(
+            make_run_config(tmp_path, params, total_steps=total_steps).model_dump(mode="json")
+        ),
         encoding="utf-8",
     )
     environ = test_environ(fast=fast)
@@ -513,15 +513,7 @@ def test_launcher_uses_run_budget_instead_of_total_steps_param(
     params = default_params(total_steps=16)
     scratch = tmp_path / "scratch"
     scratch.mkdir()
-    config = make_run_config(tmp_path, params).model_copy(
-        update={
-            "budget": {
-                "total_steps": 8,
-                "epoch_steps": 8,
-                "eval_steps": 0,
-            }
-        }
-    )
+    config = make_run_config(tmp_path, params, total_steps=8)
     config_path = tmp_path / "run-config.json"
     config_path.write_text(config.model_dump_json(), encoding="utf-8")
     monkeypatch.setenv("TRAINER_RUN_CONFIG", str(config_path))
@@ -557,7 +549,7 @@ def test_reported_step_matches_the_environment_step_budget(
     write_run_env(
         tmp_path,
         monkeypatch,
-        params_overrides={"total_steps": 8},
+        total_steps=8,
     )
     monkeypatch.setenv("TRAINER_RUN_CONFIG", str(tmp_path / "run-config.json"))
     config_path = tmp_path / "run-config.json"

@@ -7,10 +7,9 @@ entry: brax_ppo_acceptance
 storage: s3://rtrrl-artifacts-007122174918/trainer
 
 environment:
-  id: brax::hopper
-  backend: spring
-  num_envs: 1
-  observed: [0, 1, 2, 3, 4]
+  id: brax::inverted_pendulum
+  backend: generalized
+  num_envs: 4
 
 budget:
   total_steps: 128
@@ -28,8 +27,6 @@ hpo:
   parallel_jobs: 1
 
 space:
-  env: [inverted_pendulum]
-  backend: [generalized]
   seed: [0]
   learning_rate: [3.0e-4]
 

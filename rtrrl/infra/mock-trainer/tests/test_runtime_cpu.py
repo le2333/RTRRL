@@ -45,12 +45,8 @@ def test_installed_module_runs_real_cpu_ppo_in_subprocess(tmp_path: Path) -> Non
                     "eval_steps": 0,
                 },
                 "params": {
-                    "env": "inverted_pendulum",
-                    "backend": "generalized",
-                    "total_steps": 128,
                     "seed": 7,
                     "learning_rate": 0.0003,
-                    "num_envs": 4,
                     "episode_length": 32,
                     "failure_mode": "none",
                 },

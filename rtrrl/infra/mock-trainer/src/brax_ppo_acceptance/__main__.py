@@ -47,7 +47,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser.parse_args(argv)
 
     with Reporter.from_env() as reporter:
-        config = AcceptanceConfig.from_params(reporter.config.params)
+        config = AcceptanceConfig.from_run_config(reporter.config)
         _verify_device_contract(_infer_profile())
         result = train(config, reporter)
         print(
