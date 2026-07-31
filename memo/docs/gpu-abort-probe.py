@@ -20,6 +20,7 @@ from __future__ import annotations
 import faulthandler
 import os
 import time
+from types import SimpleNamespace
 
 faulthandler.enable()
 
@@ -32,13 +33,16 @@ def mark(what: str) -> None:
 
 # The settings the CPU probe ran to completion on, so a difference here is the
 # platform and not the configuration.
+ENVIRONMENT = SimpleNamespace(
+    id="brax::hopper",
+    backend="spring",
+    observed=(0, 1, 2, 3, 4),
+    num_envs=16,
+)
+
 PARAMS = {
-    "environment": "brax::hopper",
-    "env_mode": "P",
-    "env_backend": "spring",
     "backbone": "rtu",
     "credit": "rtrl",
-    "num_envs": 16,
     "hidden_dim": 128,
     "feature_dim": 32,
     "meta_rl": True,
@@ -61,18 +65,21 @@ def main() -> int:
     params = dict(PARAMS)
     params["credit"] = os.environ.get("PROBE_CREDIT", params["credit"])
     params["backbone"] = os.environ.get("PROBE_BACKBONE", params["backbone"])
-    params["num_envs"] = int(os.environ.get("PROBE_ENVS", params["num_envs"]))
+    environment = SimpleNamespace(
+        **vars(ENVIRONMENT)
+        | {"num_envs": int(os.environ.get("PROBE_ENVS", ENVIRONMENT.num_envs))}
+    )
     steps = int(os.environ.get("PROBE_STEPS", "16"))
 
     import jax
 
     mark(f"jax {jax.__version__} on {jax.default_backend()} {jax.devices()}")
     mark(f"credit={params['credit']} backbone={params['backbone']} "
-         f"envs={params['num_envs']} steps={steps}")
+         f"envs={environment.num_envs} steps={steps}")
 
     from entries import stream_ac
 
-    agent = stream_ac.build(params)
+    agent = stream_ac.build(params, environment)
     mark("agent built")
 
     state = jax.block_until_ready(jax.jit(agent.init)(jax.random.key(0)))
