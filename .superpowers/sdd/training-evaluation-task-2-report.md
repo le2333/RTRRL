@@ -121,3 +121,22 @@ rogue key beside the existing algorithm-space `learning_rate` key.
 
 - The requested full non-Task-5 pytest selection remains unverified locally;
   remote CI or an explicitly authorized non-micro runner should run it.
+
+## Controller follow-up verification after second fix
+
+The controller reran the requested non-Task-5 control-plane verification in WSL
+with the existing Linux environment:
+
+- `UV_PROJECT_ENVIRONMENT=/tmp/streaming-rtrrl-control-plane-venv`
+- `UV_CACHE_DIR=/tmp/streaming-rtrrl-uv-cache`
+
+Additional commands:
+
+| Command | Result | Full summary |
+| --- | --- | --- |
+| `uv run ruff check .` (`rtrrl/infra/control-plane`, WSL) | PASS | `All checks passed!` |
+| `uv run pytest tests/test_cli.py tests/test_end_to_end_local.py tests/test_local_backend.py tests/test_packing.py tests/test_preflight_aws.py tests/test_examples.py tests/test_experiment.py tests/test_preflight_offline.py tests/test_launch.py` (`rtrrl/infra/control-plane`, WSL) | PASS | 106 tests collected; 106 passed with 1 Aim/SQLAlchemy deprecation warning in 39.93s. |
+
+The full `uv run pytest` suite still includes `tests/test_experiments.py`,
+which validates top-level `experiments/*.yaml`; those YAML migrations are
+deliberately assigned to Training/Evaluation Task 5.
