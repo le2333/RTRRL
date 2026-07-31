@@ -897,7 +897,7 @@ evaluation:
 
 using the existing `training.total_steps`, `training.epoch_steps`, and `evaluation.steps` values in that file.
 
-For seed sweep files such as `experiments/streamac-hopper-seeds-ours-point-on-ours.yaml`, do not keep multiple seeds in `space`. Create one YAML per seed by copying the file and suffixing `-seed0` through `-seed4`, each with one `environment.seed`. Delete the original multi-seed file after the copies exist. This plan deliberately does not define multi-seed aggregation.
+The seed is one value per experiment and is never searched. The four `experiments/streamac-hopper-seeds-*.yaml` files existed only to sweep it: their `space` was eighteen pinned values plus `seed: [0, 1, 2, 3, 4]`, and they used the grid sampler's trial count as a repeat loop. With the seed injected there is nothing left for them to search, and this plan does not replace the capability — multi-seed aggregation is out of the spec's scope. Delete all four rather than reproducing the sweep by copying files, which would rebuild the same mechanism out of filenames.
 
 - [ ] **Step 4: Update docs**
 
