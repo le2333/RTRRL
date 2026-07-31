@@ -44,7 +44,6 @@ VALID: dict[str, Any] = {
 
 def default_params(**overrides: Any) -> dict[str, Any]:
     params = {
-        "seed": 7,
         "learning_rate": 0.0003,
         "episode_length": 32,
         "failure_mode": "none",
@@ -94,7 +93,7 @@ def make_run_config(
     trial_prefix = f"s3://bucket/trials/t{params.get('trial', 0)}"
     return RunConfig.model_validate(
         {
-            "contract": 4,
+            "contract": 5,
             "run_id": "run-1",
             "experiment": "brax-acceptance",
             "name": "acceptance",
@@ -105,13 +104,14 @@ def make_run_config(
             "environment": {
                 "id": "brax::inverted_pendulum",
                 "backend": "generalized",
-                "num_envs": 4,
+                "seed": 7,
             },
-            "budget": {
+            "training": {
+                "num_envs": 4,
                 "total_steps": total_steps,
                 "epoch_steps": total_steps,
-                "eval_steps": 0,
             },
+            "evaluation": {"steps": 0, "num_envs": 1},
             "params": params,
             "logging": {
                 "aim": str(tmp_path / "aim"),
@@ -129,6 +129,19 @@ def make_run_config(
             },
         }
     )
+
+
+@pytest.fixture
+def run_config(tmp_path: Path) -> RunConfig:
+    return make_run_config(tmp_path, default_params())
+
+
+def test_acceptance_config_reads_seed_and_budget_from_run_sections(run_config: RunConfig) -> None:
+    config = AcceptanceConfig.from_run_config(run_config)
+
+    assert config.seed == run_config.environment.seed
+    assert config.num_envs == run_config.training.num_envs
+    assert config.num_timesteps == run_config.training.total_steps
 
 
 def make_reporter(
