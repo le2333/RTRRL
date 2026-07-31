@@ -7,7 +7,6 @@ the arrows go where they should and much faster than the real thing.
 
 from __future__ import annotations
 
-from pathlib import Path
 from typing import Any, NamedTuple
 
 import jax.numpy as jnp
