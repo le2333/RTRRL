@@ -69,6 +69,25 @@ def declared_spaces() -> dict[str, set[str]]:
 
 
 SPACES = declared_spaces()
+# What the control plane injects rather than samples. An experiment naming one
+# of these under `space` is asking the sampler for a value the manifest already
+# carries, and the two would not have to agree.
+RESERVED = frozenset(
+    {
+        "environment",
+        "env_mode",
+        "env_backend",
+        "observed",
+        "seed",
+        "num_envs",
+        "total_steps",
+        "epoch_steps",
+        "eval_steps",
+        "chunk_steps",
+        "early_stop_patience",
+        "eval_envs",
+    }
+)
 
 
 @pytest.fixture(
@@ -107,3 +126,23 @@ def test_it_asks_for_nothing_its_entry_does_not_declare(declared, named):
     """The control plane refuses this one, but it refuses it after submission."""
 
     assert not named - declared
+
+
+def test_it_has_training_and_evaluation_sections(experiment):
+    assert "budget" not in experiment
+    assert experiment["environment"]["seed"] >= 0
+    assert experiment["training"]["total_steps"] > 0
+    assert experiment["training"]["num_envs"] > 0
+    assert experiment["evaluation"]["num_envs"] > 0
+
+
+def test_it_leaves_the_injected_fields_out_of_its_space(named):
+    taken = RESERVED & named
+    assert not taken, f"space still names {sorted(taken)}"
+
+
+def test_its_environment_names_no_training_stream_count(experiment):
+    """`num_envs` describes the run, not the task, and now lives beside the
+    budget it has to divide into."""
+
+    assert "num_envs" not in experiment["environment"]
