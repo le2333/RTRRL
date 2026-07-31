@@ -1,5 +1,5 @@
 experiment: streamac-hopper
-name: seeds-upstream-point-on-ours
+name: seeds-upstream-point-on-ours-seed3
 description: >
   This kernel, truncated credit, at the point the upstream search found, at five seeds.
 
@@ -25,12 +25,16 @@ environment:
   id: brax::hopper
   backend: spring
   observed: [0, 1, 2, 3, 4]
-  num_envs: 16
+  seed: 3
 
-budget:
+training:
+  num_envs: 16
   total_steps: 2000000
   epoch_steps: 100000
-  eval_steps: 1000
+
+evaluation:
+  steps: 1000
+  num_envs: 16
 
 compute:
   # What the search ran on: two cores and 3.5 GiB, about 19 minutes for these
@@ -42,12 +46,11 @@ compute:
 hpo:
   sampler: grid
   rounds: 1
-  trials_per_round: 5
-  parallel_jobs: 3
+  trials_per_round: 1
+  parallel_jobs: 1
 
 space:
   backbone: [rtu]
-  seed: [0, 1, 2, 3, 4]
   hidden_dim: [128]
   feature_dim: [32]
   meta_rl: [true]

@@ -35,9 +35,9 @@ first part; read the others when you need them.
 no defaults file, no groups. Everything a launch needs is in the one YAML you pass on
 the command line, and the file is archived verbatim alongside the results.
 
-**One trial is one training run.** The environment and budget are fixed for the study.
+**One trial is one training run.** The task, the budget and the seed are fixed for the study.
 Optuna proposes a complete algorithm parameter dictionary; that dictionary is handed to
-your script unchanged alongside the environment and budget; the script trains once and
+your script unchanged alongside those sections; the script trains once and
 reports metrics. A Batch job may carry several trials, but a trial is never split across
 jobs. Within the algorithm parameters there is no separate notion of "fixed" versus
 "searched" — a parameter pinned to one value is just a distribution with one option.
@@ -96,7 +96,7 @@ prints the resolved space:
 ```
 resolved search space:
   learning_rate: {"type":"float","low":0.0001,"high":0.001,"log":true}
-  seed: 0
+  episode_length: {"choices":[32]}
 ```
 
 Then run the study:
@@ -125,13 +125,19 @@ storage: s3://rtrrl-artifacts-007122174918/trainer
 environment:
   id: brax::hopper
   backend: spring
-  num_envs: 1
+  seed: 0
   observed: [0, 1, 2, 3, 4]          # optional; omit for full observability
 
-budget:
+training:
+  num_envs: 1
   total_steps: 128
   epoch_steps: 128
-  eval_steps: 100
+  chunk_steps: 64                    # optional; the loop's internal scan length
+  early_stop_patience: null          # optional; null or absent never stops early
+
+evaluation:
+  steps: 100
+  num_envs: 1
 
 compute:
   instance_type: c7a.medium
@@ -144,7 +150,6 @@ hpo:
   parallel_jobs: 1
 
 space:
-  seed: [0]
   learning_rate: {type: float, low: 1.0e-4, high: 1.0e-3, log: true}
 
 score:
@@ -174,23 +179,36 @@ preflight resolves it and the moment a job pulls it.
 | --- | --- |
 | `id` | Environment identifier passed to the entry, such as `brax::hopper` |
 | `backend` | Environment physics backend, such as `spring` |
-| `num_envs` | Number of parallel environment streams; must be positive |
+| `seed` | Seeds this study's environment and initialisation stream; must not be negative |
 | `observed` | Optional observation dimension indices visible to the agent |
 
 `observed` selects dimensions rather than zeroing the rest, so the observation space and
 the network's input layer genuinely shrink. Omit it for full observability. The list may
 not be empty, repeat an index, or contain a negative index.
 
-**`budget`.**
+`seed` is one value, not a list. A study is one seed; to run several, write one experiment
+file per seed.
+
+**`training`.**
 
 | Field | Meaning |
 | --- | --- |
+| `num_envs` | Number of parallel training streams; must be positive |
 | `total_steps` | Total training budget; must be positive |
 | `epoch_steps` | Steps per epoch; must be positive and divide `total_steps` |
-| `eval_steps` | Evaluation steps; may be zero |
+| `chunk_steps` | Optional internal scan length of the training loop |
+| `early_stop_patience` | Optional; omit or `null` to never stop early |
 
-`epoch_steps` must also contain a whole number of environment streams: it must be divisible
-by `environment.num_envs`.
+`epoch_steps` must also contain a whole number of training streams: it must be divisible
+by `training.num_envs`. When `chunk_steps` is given, `chunk_steps * num_envs` must divide
+both `total_steps` and `epoch_steps`.
+
+**`evaluation`.**
+
+| Field | Meaning |
+| --- | --- |
+| `steps` | Length of each evaluation rollout; may be zero to skip evaluation |
+| `num_envs` | Number of parallel evaluation streams; must be positive |
 
 **`compute`.**
 
@@ -236,7 +254,7 @@ is used.
 Three ways to write a parameter:
 
 ```yaml
-seed: [1]                                              # pinned: one option
+trace_mode: [accumulate]                               # pinned: one option
 backbone: [lru, ctrnn]                                 # categorical: several options
 entropy_rate: {type: float, low: 1.0e-8, high: 1.0, log: true}
 hidden_dim:    {type: int,   low: 1,      high: 512, step: 1}
@@ -246,12 +264,14 @@ Pinning is not a special case: a one-element list is a categorical distribution 
 option, so the trial's recorded parameters always contain the complete configuration
 rather than only the parts that varied.
 
-The environment and budget are not algorithm parameters. Catalog entries must not declare
-them, and an experiment may not put their reserved names under `space`: `environment`,
-`env_mode`, `env_backend`, `observed`, `num_envs`, `total_steps`, `epoch_steps`, or
-`eval_steps`. Their values belong in the top-level `environment` and `budget` sections.
-The `step` value your script passes to `report()` must use the same unit as
-`budget.total_steps`, so comparing a score window against the budget is pure arithmetic.
+The task, the run shape and the evaluation shape are not algorithm parameters. Catalog
+entries must not declare them, and an experiment may not put their reserved names under
+`space`: `environment`, `env_mode`, `env_backend`, `observed`, `seed`, `num_envs`,
+`total_steps`, `epoch_steps`, `eval_steps`, `chunk_steps`, `early_stop_patience`, or
+`eval_envs`. Their values belong in the top-level `environment`, `training` and
+`evaluation` sections, and reach the worker through the manifest rather than through a
+sampled trial. The `step` value your script passes to `report()` must use the same unit as
+`training.total_steps`, so comparing a score window against the budget is pure arithmetic.
 
 ### Scoring
 
@@ -261,12 +281,12 @@ your script reported, not by your script.
 | Field | Values |
 | --- | --- |
 | `metric` | Must be one of the metrics the entry declares |
-| `window_steps` | `[low, high]`, inclusive, in the same unit as `budget.total_steps` |
+| `window_steps` | `[low, high]`, inclusive, in the same unit as `training.total_steps` |
 | `reduce` | `mean`, `median`, `min`, `max`, `last` |
 | `direction` | `maximize` or `minimize` |
 | `non_finite` | `worst`, or a number |
 
-The window's upper bound may not exceed `budget.total_steps`; otherwise the run could never
+The window's upper bound may not exceed `training.total_steps`; otherwise the run could never
 fill it, and preflight says so with both numbers.
 
 `non_finite: worst` substitutes an ordered-worst value for NaN or infinity, which keeps a
@@ -340,7 +360,7 @@ Locally, under `--archive-dir`:
 archive/{experiment}/{name}/{launch_id}/
     experiment.yaml   # byte-for-byte copy of what you passed
     space.json        # the space after merging with the catalog
-    launch.json       # image digest, environment, budget, queue, job definition, hpo settings
+    launch.json       # image digest, environment, training, evaluation, queue, job definition, hpo settings
     study.db          # the Optuna study
     report.json
 ```
@@ -368,9 +388,9 @@ the field and, where a fix exists, the fix. Common ones:
 | --- | --- |
 | `image does not declare entry '...'` | `entry` does not match the image's catalog |
 | `experiment declares parameters the entry does not accept: ...` | A `space` key the catalog does not have |
-| `space names {keys}, which belong to the environment and budget sections and are not searched` | Reserved environment or budget keys appear under `space` |
-| `epoch_steps {N} is not {M} streams' worth` | `budget.epoch_steps` is not divisible by `environment.num_envs` |
-| `score window upper bound {N} exceeds the budget's total_steps ({M})` | The window cannot be filled |
+| `space names {keys}, which belong to the environment, training and evaluation sections and are not searched` | Reserved injected keys appear under `space` |
+| `epoch_steps {N} is not {M} streams' worth` | `training.epoch_steps` is not divisible by `training.num_envs` |
+| `score window upper bound {N} exceeds the training total_steps ({M})` | The window cannot be filled |
 | `entry ... does not report metric '...'` | `score.metric` is not among the entry's declared metrics |
 | `job definition '...' is not registered` | The image was never deployed; see Part 3 |
 | `logging aim '...' is a loopback address` | Batch workers would resolve it to themselves |

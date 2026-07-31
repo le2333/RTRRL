@@ -27,12 +27,16 @@ environment:
   id: brax::hopper
   backend: spring
   observed: [0, 1, 2, 3, 4]
-  num_envs: 16
+  seed: 0
 
-budget:
+training:
+  num_envs: 16
   total_steps: 2000000
   epoch_steps: 100000
-  eval_steps: 1000
+
+evaluation:
+  steps: 1000
+  num_envs: 16
 
 compute:
   # Measured, not assumed: the three probe files beside this one ran one tenth of
@@ -63,7 +67,6 @@ hpo:
 space:
   backbone: [rtu]
   credit: [tbptt]
-  seed: [0]
   hidden_dim: [128]
   feature_dim: [32]
   meta_rl: [true]

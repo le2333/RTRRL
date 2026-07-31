@@ -1,7 +1,7 @@
 experiment: streamac-hopper
-name: seeds-upstream-point-on-upstream
+name: seeds-ours-point-on-upstream-seed4
 description: >
-  The reference, at the point the upstream search found, at five seeds.
+  The reference, at the point the ours search found, at five seeds.
 
   One run per cell could not be read. The same point that scored 1025 under this
   kernel scored 261 once the seed was spent the reference's way -- same code, same
@@ -25,12 +25,16 @@ environment:
   id: brax::hopper
   backend: spring
   observed: [0, 1, 2, 3, 4]
-  num_envs: 16
+  seed: 4
 
-budget:
+training:
+  num_envs: 16
   total_steps: 2000000
   epoch_steps: 100000
-  eval_steps: 1000
+
+evaluation:
+  steps: 1000
+  num_envs: 16
 
 compute:
   # What the search ran on: two cores and 3.5 GiB, about 19 minutes for these
@@ -42,25 +46,24 @@ compute:
 hpo:
   sampler: grid
   rounds: 1
-  trials_per_round: 5
-  parallel_jobs: 3
+  trials_per_round: 1
+  parallel_jobs: 1
 
 space:
   backbone: [rtu]
-  seed: [0, 1, 2, 3, 4]
   hidden_dim: [128]
   feature_dim: [32]
   meta_rl: [true]
   normalize_observation: [true]
   normalize_reward: [true]
   gamma: [0.99]
-  # The point the reference's own search settled on, copied unrounded.
-  trace_lambda: [0.9797411807117462]
-  actor_lr: [0.05499866812307019]
-  critic_lr: [0.0010141983465261348]
-  actor_kappa: [9.247649246034655]
+  # The point this kernel's own search settled on, copied unrounded.
+  trace_lambda: [0.5014290509167108]
+  actor_lr: [2.3394441409547566]
+  critic_lr: [0.9979263168875795]
+  actor_kappa: [9.245115418549931]
   critic_kappa: [9.826203892009069]
-  entropy_coefficient: [1.6264746914214218e-06]
+  entropy_coefficient: [1.365306936124691e-06]
   bounded_rule: ["obgd"]
   beta2: [0.999]
   eps: [1.0e-8]

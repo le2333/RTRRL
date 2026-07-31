@@ -1,30 +1,31 @@
 experiment: streamac-hopper
-name: cell-upstream-point-on-upstream
+name: seeds-upstream-point-on-ours-seed4
 description: >
-  One cell of a two-by-two: the reference, at the point the upstream search found.
+  This kernel, truncated credit, at the point the upstream search found, at five seeds.
 
-  Each search's best point is run under both implementations, so the four cells
-  differ in exactly two things and a row of them can be read. The earlier attempt
-  at this could not be read, because the two kernels spent one seed differently --
-  seven keys against three -- and so began from different parameters and different
-  environment resets. They now begin from the same ones, asserted leaf by leaf at
-  zero last bits, which is what makes a single run per cell worth anything on a
-  task whose seed spread is a thousand points wide.
+  One run per cell could not be read. The same point that scored 1025 under this
+  kernel scored 261 once the seed was spent the reference's way -- same code, same
+  parameters, a different draw -- and that spread is wider than any gap between
+  the cells it was meant to measure. So the cells are drawn five times each, which
+  is affordable now that truncated credit runs a two-million-step trial in five
+  minutes rather than the twenty exact credit takes.
 
-  What the columns answer: whether a point that one implementation found good is
-  good under the other, from the same start. What is left over after that is the
-  frameworks' own difference, and the one candidate still uncontrolled is where
-  normalisation lives -- inside this kernel, around the reference's environment.
+  Read down a column for what a framework does with a point across draws, and
+  across a row for whether the two frameworks differ by more than the draw does.
+  Both kernels now begin each seed from the same parameters and the same
+  environment resets, asserted leaf by leaf at zero last bits, so a row is a
+  matched pair rather than two independent experiments that happen to share a
+  number.
 
 image: 007122174918.dkr.ecr.eu-north-1.amazonaws.com/rtrrl@sha256:db44f57d2a09848e3bd75908a8a43bec196bc478f45c8593b2064fc7822eaa7e
-entry: upstream_stream_ac
+entry: stream_ac
 storage: s3://rtrrl-artifacts-007122174918/trainer
 
 environment:
   id: brax::hopper
   backend: spring
   observed: [0, 1, 2, 3, 4]
-  seed: 0
+  seed: 4
 
 training:
   num_envs: 16
@@ -55,6 +56,7 @@ space:
   meta_rl: [true]
   normalize_observation: [true]
   normalize_reward: [true]
+  normalization_statistics: ["ours"]
   gamma: [0.99]
   # The point the reference's own search settled on, copied unrounded.
   trace_lambda: [0.9797411807117462]
@@ -64,6 +66,7 @@ space:
   critic_kappa: [9.826203892009069]
   entropy_coefficient: [1.6264746914214218e-06]
   bounded_rule: ["obgd"]
+  credit: [tbptt]
   beta2: [0.999]
   eps: [1.0e-8]
 

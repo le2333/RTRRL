@@ -72,7 +72,8 @@ def test_nothing_is_left_for_the_sampler_to_choose(pinned):
 @pytest.fixture(scope="module")
 def agent(pinned, experiment):
     environment = SimpleNamespace(**experiment["environment"])
-    return stream_ac.build(pinned, environment)
+    training = SimpleNamespace(**experiment["training"])
+    return stream_ac.build(pinned, environment, training)
 
 
 def test_the_recorded_hyperparameters_survive_into_the_kernel(agent):
@@ -93,6 +94,6 @@ def test_both_normalizers_are_on_as_they_were_when_the_score_was_set(agent):
 
 
 def test_the_budget_divides_into_whole_epochs(experiment):
-    budget = experiment["budget"]
-    assert budget["total_steps"] % budget["epoch_steps"] == 0
-    assert budget["epoch_steps"] % experiment["environment"]["num_envs"] == 0
+    training = experiment["training"]
+    assert training["total_steps"] % training["epoch_steps"] == 0
+    assert training["epoch_steps"] % training["num_envs"] == 0

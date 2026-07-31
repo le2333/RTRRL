@@ -9,12 +9,16 @@ environment:
   id: brax::hopper
   backend: spring
   observed: [0, 1, 2, 3, 4]
-  num_envs: 1
+  seed: 1
 
-budget:
+training:
+  num_envs: 1
   total_steps: 2000000
   epoch_steps: 100000
-  eval_steps: 1000
+
+evaluation:
+  steps: 1000
+  num_envs: 1
 
 compute:
   instance_type: c7a.medium
@@ -27,8 +31,6 @@ hpo:
   parallel_jobs: 4
 
 space:
-  seed: [1]
-
   # structure
   backbone: [lru]
   hidden_dim: [32]

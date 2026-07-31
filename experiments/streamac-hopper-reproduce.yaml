@@ -20,21 +20,25 @@ environment:
   id: brax::hopper
   backend: spring
   observed: [0, 1, 2, 3, 4]
+  seed: 0
+
+training:
   # Sixteen independent streams, each with its own trace, TD error and OBGD
   # bound, whose updates are averaged. This is not the paper's single stream:
   # it was the shared harness default that every algorithm inherited, and it
   # divides the step budget, so this run makes 125k updates rather than 2M.
   # It is kept because it is what produced the score being reproduced.
   num_envs: 16
-
-budget:
   total_steps: 2000000
   # Twenty epochs with an evaluation after each, which is the shape the
   # recorded run used (num_epochs 20, eval_every 1, eval_steps 1000). The epoch
   # is only where training leaves JIT to report: state, traces and the
   # normalisers carry across the boundary, so the stream is unbroken.
   epoch_steps: 100000
-  eval_steps: 1000
+
+evaluation:
+  steps: 1000
+  num_envs: 16
 
 compute:
   # Four cores and 7 GiB, which is what the recorded runs used: they drew 3.4
@@ -53,7 +57,6 @@ hpo:
 
 space:
   backbone: [rtu]
-  seed: [0]
   hidden_dim: [128]
   feature_dim: [32]
   meta_rl: [true]

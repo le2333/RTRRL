@@ -15,14 +15,18 @@ environment:
   id: brax::hopper
   backend: spring
   observed: [0, 1, 2, 3, 4]
-  num_envs: 16
+  seed: 0
 
-budget:
+training:
+  num_envs: 16
   # Two epochs of 1600 iterations each. Short enough to be cheap, long enough
   # that the second epoch proves the loop repeats rather than merely starts.
   total_steps: 51200
   epoch_steps: 25600
-  eval_steps: 1000
+
+evaluation:
+  steps: 1000
+  num_envs: 16
 
 compute:
   instance_type: c7a.xlarge
@@ -36,7 +40,6 @@ hpo:
 
 space:
   backbone: [rtu]
-  seed: [0]
   hidden_dim: [128]
   feature_dim: [32]
   meta_rl: [true]
