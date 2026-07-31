@@ -2,32 +2,48 @@
 
 范围:实验配置文件的分段、观测的指定方式、算法侧的参数声明、结构的表达与采样、OBGD 的分解。
 
-不在本范围:数值偏差判据(见 `2026-07-29-numerical-testbench-design.md`)、金快照重录、具体实验的取值选择、按环境拆解奖励分量(见 §6 末)。
+不在本范围:数值偏差判据(见 `2026-07-29-numerical-testbench-design.md`)、金快照重录、具体实验的取值选择、多 seed 聚合语义、按环境拆解奖励分量(见 §6 末)。
 
 取代 `2026-07-26-algorithm-config-contract-design.md`。
 
 ## 1. 配置文件的分段
 
-实验 YAML 顶层分三段:
+实验 YAML 的配置面按四段组织:
 
 ```yaml
 environment:
   id: brax::hopper
   backend: spring
   observed: [0, 1, 2, 3, 4]
-  num_envs: 1
+  seed: 0
 
-budget:
+training:
+  num_envs: 1
   total_steps: 2000000
   epoch_steps: 100000
-  eval_steps: 1000
+  chunk_steps: 1000
+  early_stop_patience: null
+
+evaluation:
+  steps: 1000
+  num_envs: 1
 
 space: {}
 ```
 
-`environment` 与 `budget` 的取值定义任务与开销本身,不同取值之间的 trial 不可比,因此不进入搜索。控制面直接读取它们,不经过采样器。`score.window_steps` 与 `budget.total_steps` 直接比较,`minimum_total_steps`(`space.py:50`)不再需要。
+`environment` 只描述任务本身:环境 id、后端、观测列与随机种子。`seed` 定义这一条随机环境流与初始化流,由控制面写进 manifest 后注入给 entry,不作为算法参数声明,也不进入 HPO。
+
+`training` 描述训练流与训练预算:`num_envs` 是并行训练流数,`total_steps` 是总环境步预算,`epoch_steps` 是报告和评估间隔。`evaluation` 描述测试流:`steps` 是每次评估 rollout 长度,`num_envs` 是评估并行环境数。
+
+`chunk_steps` 是训练循环的内部切块长度,对应 AAAI entry 旧 `scan_steps`:作者代码外层循环每次进入一个编译后的 scan,scan 内跑 `chunk_steps` 个 transition。它影响运行组织和编译形状,不改变环境、预算或算法定义。memo 系 entry 的循环已由 `memo.runner.loop.drive()` 管理,不需要声明该字段;AAAI adapter 从 `training.chunk_steps` 把 `training.total_steps` 与 `training.epoch_steps` 翻译成作者代码的 `episodes` 与 `eval_every`。
+
+`early_stop_patience` 是训练停止策略,对应 AAAI entry 旧 `patience`。公平比较的实验应设为 `null` 或足够大的值使其不触发;它仍属于训练执行策略,不属于算法搜索空间。
+
+`environment`、`training` 与 `evaluation` 的取值定义任务、开销与评估方式,不同取值之间的 trial 不可比,因此不进入搜索。控制面直接读取它们,不经过采样器。`score.window_steps` 与 `training.total_steps` 直接比较,`minimum_total_steps`(`space.py:50`)不再需要。
 
 `space` 只放两类东西:要固定的结构选择,以及要覆盖默认搜索范围的参数。常态是空的。
+
+`training.total_steps % training.epoch_steps == 0`、`training.epoch_steps % training.num_envs == 0` 是 `TrainingConfig` 自身的合法性。若声明了 `chunk_steps`,则 `training.total_steps` 与 `training.epoch_steps` 也必须整除 `chunk_steps * training.num_envs`。这不是 HPO 的跨参数约束机制,而是同一训练配置对象内的运行形状校验;失败时 preflight 拒绝,不提交作业。
 
 ## 2. 观测的指定与实现
 
@@ -44,7 +60,7 @@ space: {}
 ```python
 lambda_v: float = param(valid=(0.0, 1.0),    search=(0.5, 0.99),  placeholder=0.9)
 meta_rl:  bool  = param(valid=[False, True], search=[False, True], placeholder=True)
-seed:     int   = param(valid=(0, None),                           placeholder=0)
+eta_pi:   float = param(valid=(0.0, None),                         placeholder=0.0)
 ```
 
 - **`valid`** 是硬边界,只用于校验。二元组为数值边界,`None` 表示该侧无界;列表为允许取值的集合。实验请求的单值或范围越界时 preflight 拒绝,并指出参数名与越界的一侧。
@@ -57,9 +73,20 @@ seed:     int   = param(valid=(0, None),                           placeholder=0
 
 `search` 与 `placeholder` 都必须落在 `valid` 内,导出 catalog 时检查。`log=True` 时 `valid` 的下界必须严格大于零。
 
-catalog 从这些声明导出,不手写字面量,覆盖算法的全部配置面。实验 YAML 未提及的参数按其 `search` 搜索;`search` 缺省的取 `placeholder`。
+catalog 从这些声明导出,不手写字面量,覆盖算法的全部配置面。`EntryDescriptor` 中该字段命名为 `parameters`,因为它是入口声明的完整参数面,不等同于一次实验要搜索的空间。实验 YAML 顶层仍叫 `space`,表示本次实验固定结构选择或覆盖默认搜索范围。实验 YAML 未提及的参数按其 `search` 搜索;`search` 缺省的取 `placeholder`。
 
 manifest 携带全部参数,算法一律 `params["x"]` 取值。禁止 `params.get("x", v)` 这类 Python 端兜底,缺键即报错。
+
+`seed` 不在这里声明。entry 需要随机种子时从 manifest 的 `environment.seed` 读取并传给算法构造或训练循环;算法内部仍可把它当作输入参数使用,但 catalog 与 HPO 不把它视作算法搜索维度。
+
+运行、预算、观测与评估字段同样不在这里声明。`training.num_envs`、`training.total_steps`、`training.epoch_steps`、`training.chunk_steps`、`training.early_stop_patience`、`evaluation.steps`、`evaluation.num_envs` 都由对应配置段持有,不在 catalog 的参数树中出现。
+
+`eps` 不作为跨算法统一参数名。AAAI 版 RTRRL 不暴露 optimizer eps,entry 不声明它,继续使用作者代码/Optax 的默认值。StreamAC 与 upstream StreamAC 统一拆成两个名字:
+
+- `optimizer_eps`:优化器/Adaptive OBGD 的 eps,只在自适应有界规则下有意义,保留默认搜索范围。
+- `normalization_eps`:观测或奖励归一化的 eps,只影响 normalization wrapper/config,默认不搜索,实验需要改时用单值覆盖。
+
+两个值可以有相同 placeholder,但不共享一个参数名,也不由一个采样维度同时驱动。
 
 ## 4. 结构与条件空间
 
@@ -90,6 +117,8 @@ catalog 导出这棵树。控制面按树逐层采样:先定结构分支,再只�
 现状 `ask_round` 调用 `study.ask(dict(distributions))`,一次给出固定分布集(`study.py:79`),`distributions` 由整个 space 一次性构造(`space.py:34`)。改为 `study.ask()` 取得 trial 后按结构树逐层调用 `trial.suggest_*`。条件性在控制面解析完毕,作业提交前参数已全部确定,worker 不受影响。
 
 TPE 支持条件空间。`GridSampler` 要求预先给出完整网格,给不出条件空间,`check_sampler`(`study.py:14`)增加一条:空间含未钉死的结构时拒绝 grid。
+
+本轮不引入通用跨参数约束语言。算法参数之间若存在"某选择下该参数才有意义",用结构树表达;训练循环的整除性归 `TrainingConfig` 校验;除此之外,参数声明保持独立。preflight 可以拒绝显然不成立的固定结构组合,但不把这类检查扩展成一套任意布尔/算术约束系统。
 
 ## 5. OBGD 的分解
 
@@ -146,6 +175,12 @@ Hopper 的奖励是存活、前进、控制代价三项之和,Brax 在 `info` �
 
 ## 7. 迁移
 
+`BudgetConfig` 不再作为实验与 manifest 的独立字段。契约改为 `EnvironmentConfig(seed, id, backend, observed)`、`TrainingConfig(num_envs, total_steps, epoch_steps, chunk_steps?, early_stop_patience?)`、`EvaluationConfig(steps, num_envs)`。memo 系 entry 从 `training` 与 `evaluation` 读循环参数;AAAI entry 从 `training.chunk_steps` 计算作者代码的 `episodes` 与 `eval_every`,从 `evaluation.num_envs` 设置作者代码的 `eval_batch_size`。
+
+`EntryDescriptor.space` 改名为 `EntryDescriptor.parameters`,内容从平铺 `FloatSpec | IntSpec | ChoiceSpec` 扩展为参数树与结构树。实验 YAML 顶层 `space` 保留该名字,但它只是实验覆盖,不是 catalog 字段。控制面的 reserved 名增加 `seed`、`num_envs`、`total_steps`、`epoch_steps`、`chunk_steps`、`early_stop_patience`、`eval_steps`、`eval_envs`,旧实验若把这些名字放在 `space` 下必须迁出。
+
+入口参数声明删除 `seed`、AAAI 的 `scan_steps`、`eval_envs`、`patience`。AAAI 不新增 `eps`。StreamAC 与 upstream StreamAC 同时把旧 `eps` 拆成 `optimizer_eps` 与 `normalization_eps`,旧实验 YAML 中的 `eps` 必须按语义改名;若只是复现实验里钉死的 `1e-8`,两个字段都写 `1e-8`。
+
 `EntryDescriptor` 与 `RunConfig` 去掉 `source_hash` 字段,连同以下引用一并删除:三个 catalog 构建脚本里的计算(`memo/runner/catalog.py:38-56`、`rtrrl/scripts/build_catalog.py`、`rtrrl/infra/mock-trainer/scripts/build_catalog.py`)、`preflight.py:135` 的比对、`launch.py` 与 `loop.py` 写进 launch.json 与 study 属性的引用、`sinks/aim.py:26` 写进 Aim 运行属性的引用,以及控制面测试里的相关夹具与 `test_preflight_aws.py` 中那条漂移检测用例。镜像 digest 已经回答"跑的是哪个镜像"。
 
 `images.py:172` 的 `hashlib.sha256` 不在此列。它校验从 ECR 下载的 config blob 字节是否等于清单声明的摘要,是内容寻址的完整性检查,决定读到的 catalog 标签是否可信。
@@ -158,9 +193,9 @@ Hopper 的奖励是存活、前进、控制代价三项之和,Brax 在 `info` �
 
 实施分四个阶段,每阶段自身可验证:
 
-1. 环境与预算分段、`observed` 与删维度。不触碰参数声明。
-2. `param()` 三件套、结构树、条件采样、移除 `source_hash`。
+1. 环境、训练、评估分段,`seed`/预算/循环/评估参数出 `space`,`observed` 与删维度。
+2. `param()` 三件套、catalog `parameters`、结构树、条件采样、移除 `source_hash`。
 3. OBGD 分解为 bound 与 base 两轴。
 4. 指标面:两个粒度的 context、训练侧的两条奖励。
 
-阶段 3 依赖阶段 2 的结构树来表达两条轴,阶段 2 依赖阶段 1 腾空 space。阶段 4 与前三个阶段无依赖,排在末尾只是因为它与 `source_hash` 的移除同时改到 `sinks/aim.py`。
+阶段 3 依赖阶段 2 的结构树来表达两条轴,阶段 2 依赖阶段 1 腾空 space。阶段 4 与前三个阶段无依赖,排在末尾只是因为它与参数迁移同样会改到 entry 的报告面。
