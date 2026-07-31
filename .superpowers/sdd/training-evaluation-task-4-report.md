@@ -28,7 +28,7 @@
 ## Commits
 
 - `99290f8a88efbc841cfa3706037c22c435c10151` — `test(entries): injected run fields are not parameters`
-- Implementation commit follows this report.
+- `2df1f3b15c70b6f329baf74dec0995df351d6409` — `feat(entries): consume injected seed and run shape`
 
 ## Self-review
 
