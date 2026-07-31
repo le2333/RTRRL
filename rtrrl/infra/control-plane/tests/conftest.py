@@ -154,7 +154,7 @@ def _catalog(tmp_path: Path, command: list[str]) -> Path:
     path.write_text(
         json.dumps(
             {
-                "contract": 4,
+                "contract": 5,
                 "entries": {
                     "brax_ppo_acceptance": {
                         "command": command,

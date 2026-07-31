@@ -83,7 +83,7 @@ def test_validate_catalog_rejects_unsupported_contract(
     assert code == 1
     assert captured.out == ""
     assert "contract 99" in captured.err
-    assert "contract 4" in captured.err
+    assert "contract 5" in captured.err
 
 
 def test_validate_catalog_rejects_unknown_score_metric(
@@ -119,8 +119,8 @@ def test_validate_catalog_rejects_unknown_space_override(
 ) -> None:
     modified(
         tmp_path,
-        "  seed: [0]",
-        "  seed: [0]\n  rogue: [1]",
+        "  learning_rate: {type: float, low: 1.0e-4, high: 1.0e-3, log: true}",
+        "  learning_rate: {type: float, low: 1.0e-4, high: 1.0e-3, log: true}\n  rogue: [1]",
     )
     catalog_path = write_catalog(tmp_path)
 

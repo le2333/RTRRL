@@ -23,7 +23,7 @@ def write_catalog(tmp_path: Path, body: str) -> Path:
     catalog.write_text(
         json.dumps(
             {
-                "contract": 4,
+                "contract": 5,
                 "entries": {
                     ENTRY: {
                         "command": [sys.executable, str(child)],
