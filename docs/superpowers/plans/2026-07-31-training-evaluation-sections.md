@@ -777,12 +777,15 @@ Expected: entry and AAAI checks pass, except for the already sanctioned memo gol
 **Files:**
 - Modify: `experiments/*.yaml`
 - Modify: `memo/tests/test_experiments.py`
+- Modify: `memo/tests/test_hopper_reproduction.py`
 - Modify: `rtrrl/infra/control-plane/tests/test_experiments.py`
 - Modify: `docs/trainerctl-manual.md`
 
 **Interfaces:**
 - Consumes: Experiment schema from Task 2 and entry spaces from Task 4.
 - Produces: every trainerctl experiment file uses `environment.seed`, `training`, and `evaluation`; no `space.seed`, `budget`, `scan_steps`, `eval_envs`, or `patience` remains in `experiments/*.yaml`.
+
+`memo/tests/test_hopper_reproduction.py` reads `experiments/streamac-hopper-reproduce.yaml` and is the last caller of `build()` on the old two-argument signature. It has four not-passing cases entering this task: one assertion on `seed`, and three fixture errors from `build(pinned, environment)`. Both close here because the training object the call now needs is what this task moves `num_envs` into.
 
 - [ ] **Step 1: Write failing YAML tests**
 
