@@ -68,7 +68,6 @@ SPACE: dict[str, Any] = {
     "meta_rl": [False, True],
     "normalize_observation": [True, False],
     "normalize_reward": [True, False],
-    "seed": {"type": "int", "low": 0, "high": 1_000_000},
     "gamma": {"type": "float", "low": 0.5, "high": 0.9999},
     "trace_lambda": _UNIT,
     "actor_lr": _RATE,
@@ -97,7 +96,7 @@ TRAINING_METRICS: tuple[str, ...] = (
 )
 
 
-def build(params: Mapping[str, Any], environment) -> UpstreamStreamAC:
+def build(params: Mapping[str, Any], environment, training) -> UpstreamStreamAC:
     """The other entry's wiring, upstream's algorithm, wrapped normalisation."""
 
     env, env_params = make(
@@ -137,7 +136,7 @@ def build(params: Mapping[str, Any], environment) -> UpstreamStreamAC:
     action_dim = int(env.action_space(env_params).shape[0])
     return UpstreamStreamAC(
         UpstreamStreamACConfig(
-            num_envs=environment.num_envs,
+            num_envs=training.num_envs,
             gamma=gamma,
             trace_lambda=float(params["trace_lambda"]),
             actor_lr=float(params["actor_lr"]),
@@ -161,18 +160,18 @@ def training_report(metrics) -> dict[str, float]:
 
 
 def run(reporter, config) -> None:
-    agent = build(config.params, config.environment)
+    agent = build(config.params, config.environment, config.training)
     scaled = bool(config.params["normalize_reward"])
     drive(
         reporter,
         init_fn=agent.init,
         train_fn=agent.train,
         evaluate_fn=agent.evaluate,
-        total_steps=config.budget.total_steps,
-        epoch_steps=config.budget.epoch_steps,
-        eval_steps=config.budget.eval_steps,
-        num_envs=config.environment.num_envs,
-        seed=int(config.params["seed"]),
+        total_steps=config.training.total_steps,
+        epoch_steps=config.training.epoch_steps,
+        eval_steps=config.evaluation.steps,
+        num_envs=config.training.num_envs,
+        seed=config.environment.seed,
         training_report=training_report,
         # The wrapper replaced the reward the algorithm sees, and the algorithm
         # put that into the summary. The one the environment paid is beside it,

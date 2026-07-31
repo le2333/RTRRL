@@ -44,7 +44,6 @@ SPACE: dict[str, Any] = {
     "normalize_observation": [False, True],
     "normalize_reward": [False, True],
     "bound_actor": [False, True],
-    "seed": {"type": "int", "low": 0, "high": 1_000_000},
     "gamma": {"type": "float", "low": 0.5, "high": 0.9999},
     "lambda_pi": _UNIT,
     "lambda_v": _UNIT,
@@ -114,7 +113,7 @@ TRAINING_METRICS: tuple[str, ...] = (
 )
 
 
-def build(params: Mapping[str, Any], environment) -> RTRRL:
+def build(params: Mapping[str, Any], environment, training) -> RTRRL:
     """Assemble the agent this file is about."""
 
     env, env_params = make(
@@ -130,7 +129,7 @@ def build(params: Mapping[str, Any], environment) -> RTRRL:
         return nn.Sequential((nn.Dense(feature_dim), nn.relu))
 
     config = RTRRLConfig(
-        num_envs=environment.num_envs,
+        num_envs=training.num_envs,
         gamma=gamma,
         lambda_pi=float(params["lambda_pi"]),
         lambda_v=float(params["lambda_v"]),
@@ -192,17 +191,17 @@ def training_report(metrics) -> dict[str, float]:
 
 
 def run(reporter, config) -> None:
-    agent = build(config.params, config.environment)
+    agent = build(config.params, config.environment, config.training)
     drive(
         reporter,
         init_fn=agent.init,
         train_fn=agent.train,
         evaluate_fn=agent.evaluate,
-        total_steps=config.budget.total_steps,
-        epoch_steps=config.budget.epoch_steps,
-        eval_steps=config.budget.eval_steps,
-        num_envs=config.environment.num_envs,
-        seed=int(config.params["seed"]),
+        total_steps=config.training.total_steps,
+        epoch_steps=config.training.epoch_steps,
+        eval_steps=config.evaluation.steps,
+        num_envs=config.training.num_envs,
+        seed=config.environment.seed,
         training_report=training_report,
     )
 

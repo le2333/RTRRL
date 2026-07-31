@@ -14,16 +14,16 @@ The parameter names in `SPACE` are `memo`'s, not theirs. Five arms searched over
 cannot be diffed against each other, and the six searched dimensions have to be
 recognisably the same six in all five files or the comparison is over the
 searches rather than over the algorithms. Where a knob of theirs has no name in
-that vocabulary -- `gradient_mode`, `scan_steps`, `f_align` -- it keeps theirs.
+that vocabulary -- `gradient_mode`, `f_align` -- it keeps theirs. The run shape
+belongs to the control plane, which injects it separately from the sampler.
 
 Two of their defaults would quietly make this arm a different experiment and are
 worth naming here rather than only in the experiment file. `gradient_mode`
 defaults to `rflo`, which the LRU path does not implement: it raises
 `ValueError("Unknown plasticity for LRU: rflo")` before the first step, so a run
-left on the default does not start at all. `patience` defaults to 100, which
-stops a run whose evaluation has not improved for a hundred evaluations, and an
-arm that stops early has not been asked the same question as four arms that run
-to two million steps.
+left on the default does not start at all. The control plane sets `patience`
+from its early-stop policy, so an arm that stops early does so by the same rule
+as the other four arms.
 
 Their code is imported inside the functions that need it rather than at the top
 of this file. What is above `SPACE` is what the catalog is built from, and the
@@ -70,18 +70,6 @@ SPACE: dict[str, Any] = {
     "f_align": [False, True],
     "mlp_actor": [False, True],
     "layer_norm": [False, True],
-    # Theirs alone. Their loop is a Python loop over `episodes` iterations, each
-    # of which scans `steps` transitions inside one compiled call, so this is
-    # how much of the run happens between two returns to Python. It divides the
-    # budget rather than setting it, which is why it is named for what it is
-    # instead of borrowing a name from a vocabulary that has no such thing.
-    "scan_steps": {"type": "int", "low": 1, "high": 100_000},
-    "eval_envs": {"type": "int", "low": 1, "high": 1_000},
-    # Their early stop, in evaluations without an improvement. Zero disables it.
-    "patience": {"type": "int", "low": 0, "high": 100_000},
-    # One, not zero: `train_rtrrl` reads `args.seed or np.random.randint(1e6)`,
-    # so a seed of zero is a seed nobody chose and nobody recorded.
-    "seed": {"type": "int", "low": 1, "high": 1_000_000},
     "gamma": {"type": "float", "low": 0.5, "high": 0.9999},
     "lambda_pi": _UNIT,
     "lambda_v": _UNIT,
@@ -127,30 +115,36 @@ def iterations(*, total_steps: int, scan_steps: int, num_envs: int) -> int:
     return total_steps // per_iteration
 
 
-def settings(params: Mapping[str, Any], environment, budget) -> dict[str, Any]:
+def settings(
+    params: Mapping[str, Any], environment, training, evaluation
+) -> dict[str, Any]:
     """Every field of theirs this entry sets, as plain values."""
 
-    scan_steps = int(params["scan_steps"])
+    chunk_steps = int(training.chunk_steps or training.epoch_steps)
     total = iterations(
-        total_steps=budget.total_steps,
-        scan_steps=scan_steps,
-        num_envs=environment.num_envs,
+        total_steps=training.total_steps,
+        scan_steps=chunk_steps,
+        num_envs=training.num_envs,
     )
     per_epoch = iterations(
-        total_steps=budget.epoch_steps,
-        scan_steps=scan_steps,
-        num_envs=environment.num_envs,
+        total_steps=training.epoch_steps,
+        scan_steps=chunk_steps,
+        num_envs=training.num_envs,
     )
     return {
-        "seed": int(params["seed"]),
+        "seed": environment.seed,
         "episodes": total,
-        "steps": scan_steps,
-        "patience": int(params["patience"]),
+        "steps": chunk_steps,
+        "patience": (
+            0
+            if training.early_stop_patience is None
+            else training.early_stop_patience
+        ),
         # Their evaluation cadence is counted in outer iterations, so an epoch
         # of environment steps becomes the number of iterations it takes.
         "eval_every": per_epoch,
-        "eval_steps": budget.eval_steps,
-        "eval_batch_size": int(params["eval_envs"]),
+        "eval_steps": evaluation.steps,
+        "eval_batch_size": evaluation.num_envs,
         "rnn_model": str(params["backbone"]),
         "gradient_mode": str(params["gradient_mode"]),
         "hidden_size": int(params["hidden_dim"]),
@@ -172,7 +166,7 @@ def settings(params: Mapping[str, Any], environment, budget) -> dict[str, Any]:
         "update_trace_before_td": bool(params["update_trace_before_td"]),
         "environment": {
             "env_name": environment.id.replace("::", "-"),
-            "batch_size": environment.num_envs,
+            "batch_size": training.num_envs,
             "max_ep_length": MAX_EPISODE_LENGTH,
             "render": False,
             "obs_mask": tuple(environment.observed) if environment.observed else None,
@@ -190,14 +184,16 @@ def settings(params: Mapping[str, Any], environment, budget) -> dict[str, Any]:
     }
 
 
-def parameters(params: Mapping[str, Any], environment, budget) -> RTRRLParams:
+def parameters(
+    params: Mapping[str, Any], environment, training, evaluation
+) -> RTRRLParams:
     """Assemble the dataclass their training function takes."""
 
     from envs.environments import EnvironmentParams
     from optimizers import OptimizerConfig
     from rtrrl import RTRRLParams
 
-    chosen = dict(settings(params, environment, budget))
+    chosen = dict(settings(params, environment, training, evaluation))
     return RTRRLParams(
         env_params=EnvironmentParams(**chosen.pop("environment")),
         optimizer_params_td=OptimizerConfig(**chosen.pop("td")),
@@ -217,7 +213,12 @@ def run(reporter, config) -> None:
     # system would pull PIL, plotly and flax into a module the catalog imports
     # on a machine that has none of them.
     logger: Any = ReporterLogger(reporter)
-    train_rtrrl(parameters(config.params, config.environment, config.budget), logger)
+    train_rtrrl(
+        parameters(
+            config.params, config.environment, config.training, config.evaluation
+        ),
+        logger,
+    )
 
 
 def main(argv: list[str] | None = None) -> int:
