@@ -2,22 +2,23 @@ import pytest
 from pydantic import ValidationError
 
 from training_sdk.contract import (
-    BudgetConfig,
     CONTRACT_VERSION,
     Catalog,
     ChoiceSpec,
     EntryDescriptor,
     EnvironmentConfig,
+    EvaluationConfig,
     FloatSpec,
     IntSpec,
     RunConfig,
     ScoreConfig,
+    TrainingConfig,
 )
 
 
 def run_config_kwargs() -> dict:
     return {
-        "contract": 4,
+        "contract": 5,
         "run_id": "sweep-20260725-051400-t7",
         "experiment": "locomotion",
         "name": "sweep",
@@ -28,10 +29,11 @@ def run_config_kwargs() -> dict:
         "environment": {
             "id": "brax::hopper",
             "backend": "spring",
-            "num_envs": 1,
+            "seed": 0,
         },
-        "budget": {"total_steps": 100, "epoch_steps": 100, "eval_steps": 0},
-        "params": {"total_steps": 128, "learning_rate": 0.0003},
+        "training": {"num_envs": 1, "total_steps": 100, "epoch_steps": 100},
+        "evaluation": {"steps": 0, "num_envs": 1},
+        "params": {"learning_rate": 0.0003},
         "logging": {"aim": "aim://127.0.0.1:53801", "every_steps": 1},
         "score": {
             "metric": "episode_return",
@@ -44,8 +46,8 @@ def run_config_kwargs() -> dict:
     }
 
 
-def test_contract_version_is_four() -> None:
-    assert CONTRACT_VERSION == 4
+def test_contract_version_is_five() -> None:
+    assert CONTRACT_VERSION == 5
 
 
 def test_catalog_parses_float_int_and_choice_entries() -> None:
@@ -182,16 +184,18 @@ def test_run_config_round_trips() -> None:
     assert config.digest == "registry.example/trainer@sha256:" + "a" * 64
 
 
-def test_an_environment_names_a_task_and_how_many_copies_of_it():
+def test_environment_carries_seed_but_not_training_streams() -> None:
     environment = EnvironmentConfig(
-        id="brax::hopper", backend="spring", num_envs=1, observed=(0, 1, 2, 3, 4)
+        id="brax::hopper", backend="spring", seed=7, observed=(0, 1, 2, 3, 4)
     )
 
+    assert environment.seed == 7
     assert environment.observed == (0, 1, 2, 3, 4)
+    assert "num_envs" not in environment.model_dump()
 
 
 def test_an_environment_without_observed_is_fully_observed():
-    environment = EnvironmentConfig(id="brax::hopper", backend="spring", num_envs=1)
+    environment = EnvironmentConfig(id="brax::hopper", backend="spring", seed=0)
 
     assert environment.observed is None
 
@@ -202,16 +206,30 @@ def test_an_environment_without_observed_is_fully_observed():
 def test_an_index_list_that_selects_nothing_usable_is_refused(observed):
     with pytest.raises(ValidationError):
         EnvironmentConfig(
-            id="brax::hopper", backend="spring", num_envs=1, observed=observed
+            id="brax::hopper", backend="spring", seed=0, observed=observed
         )
 
 
-def test_a_budget_must_divide_into_whole_epochs():
-    with pytest.raises(ValidationError):
-        BudgetConfig(total_steps=1000, epoch_steps=300, eval_steps=0)
+def test_training_must_divide_into_whole_epochs_and_stream_rounds() -> None:
+    with pytest.raises(ValidationError, match="total_steps 1000"):
+        TrainingConfig(total_steps=1000, epoch_steps=300, num_envs=1)
+
+    with pytest.raises(ValidationError, match="epoch_steps 1000"):
+        TrainingConfig(total_steps=2000, epoch_steps=1000, num_envs=3)
 
 
-def test_a_budget_of_whole_epochs_is_accepted():
-    budget = BudgetConfig(total_steps=900, epoch_steps=300, eval_steps=0)
+def test_chunk_steps_must_divide_total_and_epoch_when_present() -> None:
+    with pytest.raises(ValidationError, match="chunk_steps"):
+        TrainingConfig(total_steps=2000, epoch_steps=1000, num_envs=1, chunk_steps=300)
 
-    assert budget.total_steps == 900
+    training = TrainingConfig(
+        total_steps=2000, epoch_steps=1000, num_envs=1, chunk_steps=1000
+    )
+    assert training.chunk_steps == 1000
+
+
+def test_evaluation_names_rollout_length_and_parallel_streams() -> None:
+    evaluation = EvaluationConfig(steps=1000, num_envs=10)
+
+    assert evaluation.steps == 1000
+    assert evaluation.num_envs == 10
