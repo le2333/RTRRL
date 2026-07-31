@@ -83,7 +83,7 @@ def test_validate_catalog_rejects_unsupported_contract(
     assert code == 1
     assert captured.out == ""
     assert "contract 99" in captured.err
-    assert "contract 3" in captured.err
+    assert "contract 4" in captured.err
 
 
 def test_validate_catalog_rejects_unknown_score_metric(

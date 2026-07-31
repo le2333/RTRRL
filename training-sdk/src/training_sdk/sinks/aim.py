@@ -23,7 +23,6 @@ class AimSink:
         self._run["trial"] = config.trial
         self._run["entry"] = config.entry
         self._run["digest"] = config.digest
-        self._run["source_hash"] = config.source_hash
         self._run["params"] = dict(config.params)
         self._every = config.logging.every_steps
         self._last: int | None = None

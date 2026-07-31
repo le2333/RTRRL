@@ -30,7 +30,6 @@ def _catalog() -> Catalog:
             "entries": {
                 "demo_entry": {
                     "command": ["run"],
-                    "source_hash": "sha256:0",
                     "metrics": ("eval/episode_return",),
                     "space": {"learning_rate": ChoiceSpec(choices=(0.001,))},
                 }

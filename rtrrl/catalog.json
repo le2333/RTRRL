@@ -1,5 +1,5 @@
 {
-  "contract": 3,
+  "contract": 4,
   "entries": {
     "rtrrl_aaai": {
       "command": [
@@ -10,7 +10,6 @@
       "metrics": [
         "eval/episode_return"
       ],
-      "source_hash": "sha256:1c4fad5d46793f0eefbbbce95ea343045ee27f82618c9722e591c8a018735429",
       "space": {
         "backbone": {
           "choices": [

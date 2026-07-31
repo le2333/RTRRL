@@ -154,11 +154,10 @@ def _catalog(tmp_path: Path, command: list[str]) -> Path:
     path.write_text(
         json.dumps(
             {
-                "contract": 3,
+                "contract": 4,
                 "entries": {
                     "brax_ppo_acceptance": {
                         "command": command,
-                        "source_hash": "sha256:0",
                         "metrics": ["episode_return", "episode_length"],
                         "space": {
                             "env": ["inverted_pendulum"],

@@ -16,11 +16,10 @@ push a test failure; `tests/test_examples.py` keeps them honest instead.
 
 CATALOG = Catalog.model_validate(
     {
-        "contract": 3,
+        "contract": 4,
         "entries": {
             "brax_ppo_acceptance": {
                 "command": ["python", "-m", "brax_ppo_acceptance"],
-                "source_hash": "sha256:0",
                 "metrics": ["episode_return", "episode_length"],
                 "space": {
                     "env": ["inverted_pendulum"],

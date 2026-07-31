@@ -26,7 +26,7 @@ def test_installed_module_runs_real_cpu_ppo_in_subprocess(tmp_path: Path) -> Non
     config_path.write_text(
         json.dumps(
             {
-                "contract": 3,
+                "contract": 4,
                 "run_id": "runtime-cpu-1",
                 "experiment": "brax-runtime-cpu",
                 "name": "runtime",
@@ -44,7 +44,6 @@ def test_installed_module_runs_real_cpu_ppo_in_subprocess(tmp_path: Path) -> Non
                     "epoch_steps": 128,
                     "eval_steps": 0,
                 },
-                "source_hash": "sha256:test",
                 "params": {
                     "env": "inverted_pendulum",
                     "backend": "generalized",

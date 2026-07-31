@@ -4,7 +4,7 @@ from typing import Annotated, Literal, TypeAlias
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
-CONTRACT_VERSION = 3
+CONTRACT_VERSION = 4
 
 Scalar: TypeAlias = int | float | str | bool
 
@@ -66,7 +66,6 @@ SpaceEntry: TypeAlias = Annotated[
 
 class EntryDescriptor(_Frozen):
     command: tuple[str, ...]
-    source_hash: str
     metrics: tuple[str, ...]
     space: dict[str, SpaceEntry]
 
@@ -159,7 +158,6 @@ class RunConfig(_Frozen):
     digest: str
     environment: EnvironmentConfig
     budget: BudgetConfig
-    source_hash: str
     params: dict[str, Scalar]
     logging: LoggingConfig
     score: ScoreConfig

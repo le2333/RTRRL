@@ -97,7 +97,7 @@ def make_run_config(
     trial_prefix = f"s3://bucket/trials/t{params.get('trial', 0)}"
     return RunConfig.model_validate(
         {
-            "contract": 3,
+            "contract": 4,
             "run_id": "run-1",
             "experiment": "brax-acceptance",
             "name": "acceptance",
@@ -115,7 +115,6 @@ def make_run_config(
                 "epoch_steps": int(params["total_steps"]),
                 "eval_steps": 0,
             },
-            "source_hash": "sha256:test",
             "params": params,
             "logging": {
                 "aim": str(tmp_path / "aim"),

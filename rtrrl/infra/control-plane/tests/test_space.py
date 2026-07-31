@@ -15,7 +15,6 @@ def make_entry(space: dict) -> EntryDescriptor:
     return EntryDescriptor.model_validate(
         {
             "command": ["run"],
-            "source_hash": "sha256:0",
             "metrics": ["episode_return"],
             "space": space,
         }

@@ -46,8 +46,7 @@ def test_launch_metadata_is_written_to_archive_and_s3(s3_base: str, tmp_path: Pa
     assert objects.get_bytes(f"{launch.prefix}/experiment.yaml") == source_bytes
     archived = json.loads((launch.archive / "launch.json").read_text())
     assert archived["digest"] == "sha256:" + "a" * 64
-    assert archived["source_hash"] == "sha256:0"
-    assert archived["contract"] == 3
+    assert archived["contract"] == 4
     remote = json.loads(objects.get_bytes(f"{launch.prefix}/launch.json"))
     assert remote == archived
     space = json.loads(objects.get_bytes(f"{launch.prefix}/space.json"))
@@ -63,7 +62,6 @@ def test_run_config_uses_trial_params_verbatim(
     assert config.run_id == f"brax-ppo-smoke-20260725-051400-t{trial}"
     assert config.params == TRIAL_PARAMS
     assert config.digest == "sha256:" + "a" * 64
-    assert config.source_hash == "sha256:0"
     assert config.score.s3 == f"{launch.prefix}/trials/t{trial}/score.json"
     assert config.logging.rerun_s3 == f"{launch.prefix}/trials/t{trial}/episodes/"
     assert config_uri(launch, trial) == f"{launch.prefix}/trials/t{trial}/config.json"

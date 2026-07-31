@@ -16,7 +16,7 @@ import pytest
 from training_sdk.contract import Catalog
 
 import entries
-from runner.catalog import build_catalog, discover, source_hash
+from runner.catalog import build_catalog, discover
 from runner.episodes import complete_episodes
 from runner.loop import drive, named_scalars, whole_epochs
 
@@ -192,17 +192,6 @@ def test_the_catalog_is_the_entries_directory_and_nothing_written_down():
         assert entry.command == ("python", "-m", f"{entries.__name__}.{name}")
         assert set(entry.space) == set(modules[name].SPACE)
         assert entry.metrics == tuple(modules[name].METRICS)
-
-
-def test_the_source_hash_ignores_bytecode(tmp_path: Path):
-    root = tmp_path / "pkg"
-    (root / "__pycache__").mkdir(parents=True)
-    (root / "kernel.py").write_text("x = 1\n")
-    before = source_hash((root,))
-    (root / "__pycache__" / "kernel.pyc").write_bytes(b"\x00compiled")
-    assert source_hash((root,)) == before
-    (root / "kernel.py").write_text("x = 2\n")
-    assert source_hash((root,)) != before
 
 
 class Summary:

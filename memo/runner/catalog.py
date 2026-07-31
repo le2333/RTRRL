@@ -15,7 +15,6 @@ from __future__ import annotations
 import argparse
 import base64
 import gzip
-import hashlib
 import importlib
 import json
 import pkgutil
@@ -28,32 +27,6 @@ import entries
 
 PACKAGE_ROOT = Path(__file__).resolve().parents[1]
 CATALOG_PATH = PACKAGE_ROOT / "catalog.json"
-SOURCE_ROOTS = (
-    PACKAGE_ROOT / "memorax",
-    PACKAGE_ROOT / "runner",
-    PACKAGE_ROOT / "entries",
-)
-
-
-def source_hash(roots: tuple[Path, ...] = SOURCE_ROOTS) -> str:
-    """Identify the algorithm sources, and nothing else.
-
-    Only ``.py`` files count. Bytecode caches come and go with whoever
-    imported the package last, so hashing every file would give a checkout and
-    the image built from it different answers -- the one thing this value must
-    never do, since it is what tells the control plane the algorithm changed.
-    """
-
-    digest = hashlib.sha256()
-    for root in roots:
-        paths = sorted(
-            path for path in root.rglob("*.py") if "__pycache__" not in path.parts
-        )
-        for path in paths:
-            name = f"{root.name}/{path.relative_to(root).as_posix()}"
-            digest.update(name.encode("utf-8"))
-            digest.update(path.read_bytes())
-    return f"sha256:{digest.hexdigest()}"
 
 
 def discover() -> dict[str, Any]:
@@ -79,14 +52,12 @@ def discover() -> dict[str, Any]:
 
 
 def build_catalog() -> Catalog:
-    revision = source_hash()
     return Catalog(
         contract=CONTRACT_VERSION,
         entries={
             name: EntryDescriptor.model_validate(
                 {
                     "command": ["python", "-m", module.__name__],
-                    "source_hash": revision,
                     "metrics": list(module.METRICS),
                     "space": dict(module.SPACE),
                 }

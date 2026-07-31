@@ -144,7 +144,6 @@ def test_user_attrs_survive_sqlite_round_trip(tmp_path: Path) -> None:
         "launch_id": "20260725-120000",
         "entry": "default",
         "digest": "sha256:abc",
-        "source_hash": "sha256:def",
     }
     create_study(
         "sweep-attrs",

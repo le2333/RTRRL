@@ -10,12 +10,11 @@ what makes that a failure here instead.
 from __future__ import annotations
 
 import json
-from pathlib import Path
 
 from training_sdk.contract import CONTRACT_VERSION, Catalog
 
 from entries import rtrrl_aaai
-from scripts.build_catalog import CATALOG_PATH, source_hash
+from scripts.build_catalog import CATALOG_PATH
 
 ENTRY_NAME = "rtrrl_aaai"
 
@@ -40,51 +39,3 @@ def test_the_catalog_on_disk_is_the_one_the_entry_would_produce() -> None:
 
     assert set(entry.space) == set(rtrrl_aaai.SPACE)
     assert entry.metrics == tuple(rtrrl_aaai.METRICS)
-    assert entry.source_hash == source_hash()
-
-
-def test_the_source_hash_ignores_bytecode_caches(tmp_path: Path) -> None:
-    """The same sources must hash the same whether or not they have been run.
-
-    Otherwise the image and the checkout it was built from disagree, and the
-    control plane reads that as an algorithm change.
-    """
-
-    (tmp_path / "algorithm.py").write_text("value = 1\n", encoding="utf-8")
-    clean = source_hash(tmp_path)
-
-    cache = tmp_path / "__pycache__"
-    cache.mkdir()
-    (cache / "algorithm.cpython-312.pyc").write_bytes(b"\x00compiled")
-    (tmp_path / "notes.txt").write_text("not source\n", encoding="utf-8")
-
-    assert source_hash(tmp_path) == clean
-
-
-def test_the_source_hash_follows_a_source_edit(tmp_path: Path) -> None:
-    source = tmp_path / "algorithm.py"
-    source.write_text("value = 1\n", encoding="utf-8")
-    before = source_hash(tmp_path)
-    source.write_text("value = 2\n", encoding="utf-8")
-
-    assert source_hash(tmp_path) != before
-
-
-def test_the_source_hash_leaves_out_the_projects_this_image_does_not_carry(
-    tmp_path: Path,
-) -> None:
-    """`infra` holds the control plane, which never ships inside a trainer.
-
-    It also holds a virtual environment with several thousand files in it, so
-    walking into it would make the hash both wrong and slow.
-    """
-
-    (tmp_path / "algorithm.py").write_text("value = 1\n", encoding="utf-8")
-    alone = source_hash(tmp_path)
-
-    (tmp_path / "infra" / "control-plane").mkdir(parents=True)
-    (tmp_path / "infra" / "control-plane" / "cli.py").write_text(
-        "value = 2\n", encoding="utf-8"
-    )
-
-    assert source_hash(tmp_path) == alone

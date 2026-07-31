@@ -131,12 +131,6 @@ def _describe_catalog_mismatch(image_catalog: Catalog, offline_catalog: Catalog)
     for name in sorted(image_entries & offline_entries):
         image_entry = image_catalog.entries[name]
         offline_entry = offline_catalog.entries[name]
-        if image_entry.source_hash != offline_entry.source_hash:
-            parts.append(
-                f"entry {name!r} source_hash differs "
-                f"(image {image_entry.source_hash!r}, "
-                f"offline {offline_entry.source_hash!r})"
-            )
         if image_entry.command != offline_entry.command:
             parts.append(f"entry {name!r} command differs")
         if image_entry.metrics != offline_entry.metrics:

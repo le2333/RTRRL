@@ -17,7 +17,7 @@ from training_sdk.contract import (
 
 def run_config_kwargs() -> dict:
     return {
-        "contract": 3,
+        "contract": 4,
         "run_id": "sweep-20260725-051400-t7",
         "experiment": "locomotion",
         "name": "sweep",
@@ -31,7 +31,6 @@ def run_config_kwargs() -> dict:
             "num_envs": 1,
         },
         "budget": {"total_steps": 100, "epoch_steps": 100, "eval_steps": 0},
-        "source_hash": "sha256:41b0",
         "params": {"total_steps": 128, "learning_rate": 0.0003},
         "logging": {"aim": "aim://127.0.0.1:53801", "every_steps": 1},
         "score": {
@@ -45,8 +44,8 @@ def run_config_kwargs() -> dict:
     }
 
 
-def test_contract_version_is_three() -> None:
-    assert CONTRACT_VERSION == 3
+def test_contract_version_is_four() -> None:
+    assert CONTRACT_VERSION == 4
 
 
 def test_catalog_parses_float_int_and_choice_entries() -> None:
@@ -56,7 +55,6 @@ def test_catalog_parses_float_int_and_choice_entries() -> None:
             "entries": {
                 "brax_ppo": {
                     "command": ["python", "-m", "brax_ppo.train"],
-                    "source_hash": "sha256:41b0",
                     "metrics": ["episode_return"],
                     "space": {
                         "total_steps": [128],
@@ -111,7 +109,6 @@ def test_entry_descriptor_rejects_empty_command() -> None:
         EntryDescriptor.model_validate(
             {
                 "command": [],
-                "source_hash": "sha256:0",
                 "metrics": ["m"],
                 "space": {},
             }
@@ -123,7 +120,6 @@ def test_entry_descriptor_rejects_empty_metrics() -> None:
         EntryDescriptor.model_validate(
             {
                 "command": ["run"],
-                "source_hash": "sha256:0",
                 "metrics": [],
                 "space": {},
             }
@@ -152,7 +148,6 @@ def test_choice_spec_rejects_non_scalar_choices() -> None:
                 "entries": {
                     "e": {
                         "command": ["run"],
-                        "source_hash": "sha256:0",
                         "metrics": ["m"],
                         "space": {"hidden_sizes": [[256, 256]]},
                     }
@@ -185,7 +180,6 @@ def test_run_config_round_trips() -> None:
     assert RunConfig.model_validate(config.model_dump(mode="json")) == config
     assert config.model_dump(mode="json", exclude_none=True) == payload
     assert config.digest == "registry.example/trainer@sha256:" + "a" * 64
-    assert config.source_hash == "sha256:41b0"
 
 
 def test_an_environment_names_a_task_and_how_many_copies_of_it():

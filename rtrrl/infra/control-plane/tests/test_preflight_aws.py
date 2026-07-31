@@ -348,7 +348,7 @@ def test_image_catalog_disagreeing_with_offline_catalog_is_rejected() -> None:
         return wrong_blob
 
     experiment, catalog, space = plan_arguments()
-    with pytest.raises(PreflightError, match=r"contract differs \(image 99, offline 3\)"):
+    with pytest.raises(PreflightError, match=r"contract differs \(image 99, offline 4\)"):
         check_aws(
             experiment,
             catalog,
@@ -381,21 +381,6 @@ def _image_catalog_check(drifted: Catalog) -> None:
             connect=lambda host, port: None,
         )
     return error.value
-
-
-def test_image_source_hash_drift_is_rejected() -> None:
-    entry = CATALOG.entries["brax_ppo_acceptance"].model_dump() | {
-        "source_hash": "sha256:deadbeef"
-    }
-    drifted = Catalog.model_validate(
-        CATALOG.model_dump() | {"entries": {"brax_ppo_acceptance": entry}}
-    )
-    error = _image_catalog_check(drifted)
-    message = str(error)
-    assert "brax_ppo_acceptance" in message
-    assert "source_hash" in message
-    assert "sha256:deadbeef" in message
-    assert CATALOG.entries["brax_ppo_acceptance"].source_hash in message
 
 
 def test_image_parameter_space_drift_is_rejected() -> None:

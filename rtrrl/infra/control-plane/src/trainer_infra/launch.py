@@ -56,7 +56,6 @@ def create_launch(
         "environment": experiment.environment.model_dump(mode="json"),
         "budget": experiment.budget.model_dump(mode="json"),
         "digest": plan.digest,
-        "source_hash": plan.entry.source_hash,
         "queue": plan.queue,
         "job_definition": plan.job_definition,
         "sampler": experiment.hpo.sampler,
@@ -109,7 +108,6 @@ def build_run_config(
             epoch_steps=experiment.budget.epoch_steps,
             eval_steps=experiment.budget.eval_steps,
         ),
-        source_hash=launch.plan.entry.source_hash,
         params=dict(params),
         logging=LoggingConfig(
             aim=experiment.logging.aim,

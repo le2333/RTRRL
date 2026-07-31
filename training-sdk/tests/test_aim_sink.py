@@ -46,7 +46,6 @@ def test_run_is_named_by_run_id_and_carries_launch_fields(tmp_path: Path) -> Non
     assert run["trial"] == config.trial
     assert run["entry"] == config.entry
     assert run["digest"] == config.digest
-    assert run["source_hash"] == config.source_hash
     assert run["params"]["total_steps"] == 4
     values = list(run.metrics())
     assert values, "the metric sequence must exist"

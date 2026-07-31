@@ -32,11 +32,10 @@ def catalog(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     path.write_text(
         json.dumps(
             {
-                "contract": 3,
+                "contract": 4,
                 "entries": {
                     "e": {
                         "command": [sys.executable, str(child)],
-                        "source_hash": "sha256:0",
                         "metrics": ["episode_return"],
                         "space": {"total_steps": [4]},
                     }
@@ -109,7 +108,6 @@ def test_catalog_contract_mismatch(
                 "entries": {
                     "e": {
                         "command": ["true"],
-                        "source_hash": "sha256:0",
                         "metrics": ["episode_return"],
                         "space": {"total_steps": [4]},
                     }

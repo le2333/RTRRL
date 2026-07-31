@@ -37,7 +37,6 @@ def run_launch(
             "launch_id": launch.launch_id,
             "entry": launch.plan.entry_name,
             "digest": launch.plan.digest,
-            "source_hash": launch.plan.entry.source_hash,
         },
         space=built,
         round_size=experiment.hpo.trials_per_round,
