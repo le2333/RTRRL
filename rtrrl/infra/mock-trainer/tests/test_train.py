@@ -506,6 +506,33 @@ def test_successful_launcher_uses_reporter_from_env_and_prints_runtime_summary(
     assert max(read_metric_steps(scratch)) == 128
 
 
+def test_launcher_uses_run_budget_instead_of_total_steps_param(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    params = default_params(total_steps=16)
+    scratch = tmp_path / "scratch"
+    scratch.mkdir()
+    config = make_run_config(tmp_path, params).model_copy(
+        update={
+            "budget": {
+                "total_steps": 8,
+                "epoch_steps": 8,
+                "eval_steps": 0,
+            }
+        }
+    )
+    config_path = tmp_path / "run-config.json"
+    config_path.write_text(config.model_dump_json(), encoding="utf-8")
+    monkeypatch.setenv("TRAINER_RUN_CONFIG", str(config_path))
+    monkeypatch.setenv("TRAINER_SCRATCH", str(scratch))
+    for key, value in test_environ().items():
+        monkeypatch.setenv(key, value)
+
+    assert launcher.main([]) == 0
+    assert max(read_metric_steps(scratch)) == 8
+
+
 def test_cli_requires_sdk_context(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
