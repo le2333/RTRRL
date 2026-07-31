@@ -10,7 +10,7 @@ from training_sdk.reporter import METRICS_FILENAME, Reporter
 def make_config(*, every_steps: int = 1) -> RunConfig:
     return RunConfig.model_validate(
         {
-            "contract": 4,
+            "contract": 5,
             "run_id": "smoke-20260725-000000-t0",
             "experiment": "infra-acceptance",
             "name": "smoke",
@@ -21,10 +21,11 @@ def make_config(*, every_steps: int = 1) -> RunConfig:
             "environment": {
                 "id": "brax::hopper",
                 "backend": "spring",
-                "num_envs": 1,
+                "seed": 0,
             },
-            "budget": {"total_steps": 100, "epoch_steps": 100, "eval_steps": 0},
-            "params": {"total_steps": 4},
+            "training": {"num_envs": 1, "total_steps": 100, "epoch_steps": 100},
+            "evaluation": {"steps": 0, "num_envs": 1},
+            "params": {"learning_rate": 0.0003},
             "logging": {"aim": "aim://127.0.0.1:1", "every_steps": every_steps},
             "score": {
                 "metric": "episode_return",

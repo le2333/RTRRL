@@ -4,7 +4,7 @@ from typing import Annotated, Literal, TypeAlias
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
-CONTRACT_VERSION = 4
+CONTRACT_VERSION = 5
 
 Scalar: TypeAlias = int | float | str | bool
 
@@ -86,13 +86,13 @@ class Catalog(_Frozen):
 class EnvironmentConfig(_Frozen):
     id: str
     backend: str
-    num_envs: int
+    seed: int
     observed: tuple[int, ...] | None = None
 
     @model_validator(mode="after")
     def _usable(self) -> "EnvironmentConfig":
-        if self.num_envs < 1:
-            raise ValueError("num_envs must be positive")
+        if self.seed < 0:
+            raise ValueError("seed must not be negative")
         if self.observed is None:
             return self
         if not self.observed:
@@ -104,24 +104,55 @@ class EnvironmentConfig(_Frozen):
         return self
 
 
-class BudgetConfig(_Frozen):
+class TrainingConfig(_Frozen):
+    num_envs: int
     total_steps: int
     epoch_steps: int
-    eval_steps: int
+    chunk_steps: int | None = None
+    early_stop_patience: int | None = None
 
     @model_validator(mode="after")
-    def _whole(self) -> "BudgetConfig":
+    def _whole(self) -> "TrainingConfig":
+        if self.num_envs < 1:
+            raise ValueError("num_envs must be positive")
         if self.total_steps < 1:
             raise ValueError("total_steps must be positive")
         if self.epoch_steps < 1:
             raise ValueError("epoch_steps must be positive")
-        if self.eval_steps < 0:
-            raise ValueError("eval_steps must not be negative")
         if self.total_steps % self.epoch_steps:
             raise ValueError(
                 f"total_steps {self.total_steps} is not whole epochs of "
                 f"{self.epoch_steps}"
             )
+        if self.epoch_steps % self.num_envs:
+            raise ValueError(
+                f"epoch_steps {self.epoch_steps} is not "
+                f"{self.num_envs} streams' worth"
+            )
+        if self.chunk_steps is not None:
+            if self.chunk_steps < 1:
+                raise ValueError("chunk_steps must be positive")
+            per_chunk = self.chunk_steps * self.num_envs
+            if self.total_steps % per_chunk or self.epoch_steps % per_chunk:
+                raise ValueError(
+                    f"chunk_steps {self.chunk_steps} over {self.num_envs} streams "
+                    "must divide total_steps and epoch_steps"
+                )
+        if self.early_stop_patience is not None and self.early_stop_patience < 0:
+            raise ValueError("early_stop_patience must not be negative")
+        return self
+
+
+class EvaluationConfig(_Frozen):
+    steps: int
+    num_envs: int
+
+    @model_validator(mode="after")
+    def _usable(self) -> "EvaluationConfig":
+        if self.steps < 0:
+            raise ValueError("evaluation steps must not be negative")
+        if self.num_envs < 1:
+            raise ValueError("evaluation num_envs must be positive")
         return self
 
 
@@ -157,16 +188,8 @@ class RunConfig(_Frozen):
     entry: str
     digest: str
     environment: EnvironmentConfig
-    budget: BudgetConfig
+    training: TrainingConfig
+    evaluation: EvaluationConfig
     params: dict[str, Scalar]
     logging: LoggingConfig
     score: ScoreConfig
-
-    @model_validator(mode="after")
-    def _epochs_hold_whole_rounds_of_streams(self) -> "RunConfig":
-        if self.budget.epoch_steps % self.environment.num_envs:
-            raise ValueError(
-                f"epoch_steps {self.budget.epoch_steps} is not "
-                f"{self.environment.num_envs} streams' worth"
-            )
-        return self

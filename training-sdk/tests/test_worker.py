@@ -32,7 +32,7 @@ def catalog(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     path.write_text(
         json.dumps(
             {
-                "contract": 4,
+                "contract": 5,
                 "entries": {
                     "e": {
                         "command": [sys.executable, str(child)],
