@@ -42,18 +42,22 @@ space: {}
 算法侧用 dataclass 声明,每个参数三个字段:
 
 ```python
-lambda_v: float = param(valid=(0.0, 1.0),     search=(0.5, 0.99),  default=0.9)
-meta_rl:  bool  = param(valid=[False, True],  search=[False, True], default=True)
-seed:     int   = param(valid=(0, None),                            default=0)
+lambda_v: float = param(valid=(0.0, 1.0),    search=(0.5, 0.99),  placeholder=0.9)
+meta_rl:  bool  = param(valid=[False, True], search=[False, True], placeholder=True)
+seed:     int   = param(valid=(0, None),                           placeholder=0)
 ```
 
 - **`valid`** 是硬边界,只用于校验。二元组为数值边界,`None` 表示该侧无界;列表为允许取值的集合。实验请求的单值或范围越界时 preflight 拒绝,并指出参数名与越界的一侧。
 - **`search`** 是默认搜索空间。二元组为连续区间,列表为离散候选集。省略表示该参数默认不搜索。
-- **`default`** 是单值,该参数不被搜索时的取值。
+- **`placeholder`** 是单值,该参数不进搜索时的取值。
 
-`search` 与 `default` 都必须落在 `valid` 内,导出 catalog 时检查。`log=True` 时 `valid` 的下界必须严格大于零。
+这里有两个都可以叫"默认"的东西,必须分开:`search` 是**搜索范围的默认**,即今天各入口 `SPACE` 里那些区间与候选列表,实验不覆盖时 HPO 就按它搜;`placeholder` 是**参数不被搜索时的取值**,只在未激活分支下、或参数压根没声明 `search` 时生效。命名为 `placeholder` 而非 `default`,因为后者读起来像"推荐值",会诱使实现者去考据它该是多少。
 
-catalog 从这些声明导出,不手写字面量,覆盖算法的全部配置面。实验 YAML 未提及的参数按其 `search` 搜索;`search` 缺省的取 `default`。
+`placeholder` 的取值不重要:任何实验真正在意的参数都会显式给出范围或单值,不会落到 `placeholder`。有现成出处的照抄(rtrrl 系取 `RTRRL-AAAI25/config/brax.yml`,streamac 系取 reproduce 实验里已钉死的值),没有的取任意安全值即可。唯一的硬要求是它落在 `valid` 内,且不是会引爆下游的退化值——例如作除数的参数不取 0,因为未激活分支的参数照样会写进 manifest 并被算法读到。
+
+`search` 与 `placeholder` 都必须落在 `valid` 内,导出 catalog 时检查。`log=True` 时 `valid` 的下界必须严格大于零。
+
+catalog 从这些声明导出,不手写字面量,覆盖算法的全部配置面。实验 YAML 未提及的参数按其 `search` 搜索;`search` 缺省的取 `placeholder`。
 
 manifest 携带全部参数,算法一律 `params["x"]` 取值。禁止 `params.get("x", v)` 这类 Python 端兜底,缺键即报错。
 
@@ -63,7 +67,7 @@ manifest 携带全部参数,算法一律 `params["x"]` 取值。禁止 `params.g
 
 ```python
 optimizer_bound: Structure = structure(
-    default="ob",
+    placeholder="ob",
     branches={
         "none": (),
         "ob": ObBound,
@@ -75,7 +79,7 @@ optimizer_bound: Structure = structure(
 
 catalog 导出这棵树。控制面按树逐层采样:先定结构分支,再只对该分支下的参数取值。
 
-未激活分支下的参数**搜索空间收缩为单点 `default`**,不是从参数面上消失。它仍然存在,仍然带着该值写进 manifest,只是不再构成一个搜索维度。
+未激活分支下的参数**搜索空间收缩为单点 `placeholder`**,不是从参数面上消失。它仍然存在,仍然带着该值写进 manifest,只是不再构成一个搜索维度。
 
 在 YAML 中把某个结构写成单值即为钉死该结构。此时若同时为未选中分支下的参数给出搜索范围,preflight 拒绝并指出该参数属于哪个未选中的分支。结构未被钉死时不存在这种拒绝——分支在部分 trial 中激活、在其余 trial 中不激活,正是条件采样本身。
 
