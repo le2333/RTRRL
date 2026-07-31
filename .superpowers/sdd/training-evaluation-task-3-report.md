@@ -48,3 +48,24 @@
   `failure_mode`).
 - The requested red-check push and remote workflow trigger were attempted but
   rejected by the external-action safety gate; no remote run was created.
+
+## Controller follow-up verification
+
+After the user confirmed this checkout can install and run tests locally, the
+controller installed the mock-trainer environment inside WSL. The virtualenv and
+cache were kept outside the repository:
+
+- `UV_PROJECT_ENVIRONMENT=/tmp/streaming-rtrrl-mock-trainer-venv`
+- `UV_CACHE_DIR=/tmp/streaming-rtrrl-uv-cache`
+
+Additional commands:
+
+| Command | Result | Full summary |
+| --- | --- | --- |
+| `uv sync --all-groups` (`rtrrl/infra/mock-trainer`, WSL) | PASS | Installed 129 Linux-compatible packages, including `brax`, `jax`, `training-sdk`, `pytest`, and `ruff`. |
+| `uv run ruff check .` (`rtrrl/infra/mock-trainer`, WSL) | PASS | `All checks passed!` |
+| `uv run pytest tests/test_config.py tests/test_catalog.py -q` (`rtrrl/infra/mock-trainer`, WSL) | PASS | 69 tests passed in 2.74s. |
+| `uv run pytest tests/test_train.py::test_acceptance_config_reads_seed_and_budget_from_run_sections tests/test_train.py::test_launcher_uses_run_budget_instead_of_total_steps_param -q` (`rtrrl/infra/mock-trainer`, WSL) | PASS | 2 tests passed with dependency warnings in 15.21s. |
+| `uv run pytest tests/test_runtime_cpu.py -q` (`rtrrl/infra/mock-trainer`, WSL) | PASS | 1 test passed with dependency warnings in 27.37s. |
+| `uv run pytest tests/test_train.py -q` (`rtrrl/infra/mock-trainer`, WSL) | TIMEOUT | Timed out after 124 seconds; this file includes real Brax/JAX training-path tests outside the targeted mapping change. |
+| `uv run python scripts/build_catalog.py` (`rtrrl/infra/mock-trainer`, WSL) | PASS | Regenerated `catalog.json`; Windows `git diff --ignore-cr-at-eol` showed no content diff, only WSL line-ending noise, which was restored. |
