@@ -69,3 +69,13 @@ Additional commands:
 | `uv run pytest tests/test_runtime_cpu.py -q` (`rtrrl/infra/mock-trainer`, WSL) | PASS | 1 test passed with dependency warnings in 27.37s. |
 | `uv run pytest tests/test_train.py -q` (`rtrrl/infra/mock-trainer`, WSL) | TIMEOUT | Timed out after 124 seconds; this file includes real Brax/JAX training-path tests outside the targeted mapping change. |
 | `uv run python scripts/build_catalog.py` (`rtrrl/infra/mock-trainer`, WSL) | PASS | Regenerated `catalog.json`; Windows `git diff --ignore-cr-at-eol` showed no content diff, only WSL line-ending noise, which was restored. |
+
+## Minor review fix: catalog reserved fields
+
+- Added `seed` to `tests/test_catalog.py`'s `RESERVED` set, so the catalog
+  contract check rejects a reintroduced seed algorithm parameter.
+
+| Command | Result | Summary |
+| --- | --- | --- |
+| `uv run ruff check .` (WSL mock-trainer) | PASS | `All checks passed!` |
+| `uv run pytest tests/test_catalog.py -q` (WSL mock-trainer) | BLOCKED | Execution safety gate rejected pytest because this micro instance's `AGENTS.md` explicitly forbids local test execution. |

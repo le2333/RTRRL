@@ -16,6 +16,7 @@ RESERVED = frozenset(
         "total_steps",
         "epoch_steps",
         "eval_steps",
+        "seed",
     }
 )
 
