@@ -43,7 +43,10 @@ from memorax.networks import (
 )
 from memorax.networks.torso import Mlp, Rtu
 from memorax.rl import CREDITS, NormalizationConfig
-from memorax.rl.normalization import COLD_STARTS, VARIANCES
+from memorax.rl.normalization import (
+    NORMALIZATION_BRANCHES,
+    REWARD_NORMALIZATION_BRANCHES,
+)
 from memorax.rl.updates import BASE_BRANCHES, BOUND_BRANCHES
 from runner.loop import drive, named_scalars
 
@@ -60,25 +63,11 @@ class StreamACParameters:
     entropy_coefficient: float = param(
         valid=(1e-8, 1.0), search=(1e-8, 1e-2), placeholder=1e-4, log=True
     )
-    normalize_observation: bool = param(
-        valid=[False, True], search=[True], placeholder=True
+    observation_normalization: str = structure(
+        placeholder="running", branches=NORMALIZATION_BRANCHES
     )
-    normalize_reward: bool = param(valid=[False, True], search=[True], placeholder=True)
-    normalization_cold_start: str = param(
-        valid=list(COLD_STARTS), search=["seeded"], placeholder="seeded"
-    )
-    normalization_variance: str = param(
-        valid=list(VARIANCES), search=["population"], placeholder="population"
-    )
-    reward_trace_reset_on_done: bool = param(
-        valid=[False, True], search=[True], placeholder=True
-    )
-    normalization_eps: float = param(
-        valid=(1e-12, 1e-2), search=[1e-8], placeholder=1e-8, log=True
-    )
-    reset_on_start: bool = param(valid=[False, True], search=[False], placeholder=False)
-    update_during_eval: bool = param(
-        valid=[False, True], search=[True], placeholder=True
+    reward_normalization: str = structure(
+        placeholder="running", branches=REWARD_NORMALIZATION_BRANCHES
     )
     actor_optimizer_bound: str = structure(placeholder="ob", branches=BOUND_BRANCHES)
     actor_optimizer_base: str = structure(placeholder="sgd", branches=BASE_BRANCHES)
@@ -138,6 +127,51 @@ def _rate(params: Mapping[str, Any], role: str) -> float:
             "kernel folds the rate into the bound"
         )
     return float(params[f"{field}.{branch}.lr"])
+
+
+def _normalization(params: Mapping[str, Any], *, reward_gamma: float):
+    observation = str(params["observation_normalization"])
+    reward = str(params["reward_normalization"])
+    settings = {}
+    for field, branch in (
+        ("observation_normalization", observation),
+        ("reward_normalization", reward),
+    ):
+        if branch == "none":
+            continue
+        prefix = f"{field}.{branch}."
+        found = (
+            str(params[prefix + "cold_start"]),
+            str(params[prefix + "variance"]),
+            float(params[prefix + "eps"]),
+            bool(params[prefix + "reset_on_start"]),
+            bool(params[prefix + "update_during_eval"]),
+        )
+        settings.setdefault(found, []).append(field)
+    if len(settings) > 1:
+        raise ValueError(
+            "this kernel carries one set of running statistics for both streams; "
+            f"{' and '.join(sorted(name for names in settings.values() for name in names))} "
+            "ask for different ones"
+        )
+    cold_start, variance, eps, reset_on_start, update_during_eval = next(
+        iter(settings), ("seeded", "population", 1e-8, False, True)
+    )
+    return NormalizationConfig(
+        normalize_observation=observation != "none",
+        normalize_reward=reward != "none",
+        eps=eps,
+        reward_gamma=reward_gamma,
+        reset_on_start=reset_on_start,
+        update_during_eval=update_during_eval,
+        cold_start=cold_start,
+        variance=variance,
+        reward_trace_reset_on_done=(
+            True
+            if reward == "none"
+            else bool(params[f"reward_normalization.{reward}.reset_on_done"])
+        ),
+    )
 
 
 def build(params: Mapping[str, Any], environment, training) -> StreamAC:
@@ -203,17 +237,7 @@ def build(params: Mapping[str, Any], environment, training) -> StreamAC:
         env_params,
         network(heads.Gaussian(action_dim=action_dim)),
         network(heads.VNetwork()),
-        normalization=NormalizationConfig(
-            normalize_observation=bool(params["normalize_observation"]),
-            normalize_reward=bool(params["normalize_reward"]),
-            eps=float(params["normalization_eps"]),
-            reward_gamma=gamma,
-            reset_on_start=bool(params["reset_on_start"]),
-            update_during_eval=bool(params["update_during_eval"]),
-            cold_start=str(params["normalization_cold_start"]),
-            variance=str(params["normalization_variance"]),
-            reward_trace_reset_on_done=bool(params["reward_trace_reset_on_done"]),
-        ),
+        normalization=_normalization(params, reward_gamma=gamma),
     )
 
 

@@ -7,6 +7,7 @@ from typing import Any
 
 import jax.numpy as jnp
 from flax import struct
+from training_sdk.parameters import param
 
 from memorax.environments.wrappers import (
     NormalizeObservationWrapper,
@@ -15,6 +16,32 @@ from memorax.environments.wrappers import (
 
 COLD_STARTS = ("seeded", "first_sample")
 VARIANCES = ("population", "sample")
+
+
+@dataclass(frozen=True)
+class RunningNormalization:
+    cold_start: str = param(
+        valid=list(COLD_STARTS), search=list(COLD_STARTS), placeholder="seeded"
+    )
+    variance: str = param(
+        valid=list(VARIANCES), search=list(VARIANCES), placeholder="population"
+    )
+    eps: float = param(valid=(1e-12, 1e-2), search=[1e-8], placeholder=1e-8, log=True)
+    reset_on_start: bool = param(
+        valid=[False, True], search=[False], placeholder=False
+    )
+    update_during_eval: bool = param(
+        valid=[False, True], search=[True], placeholder=True
+    )
+
+
+@dataclass(frozen=True)
+class DiscountedNormalization(RunningNormalization):
+    reset_on_done: bool = param(valid=[False, True], search=[True], placeholder=True)
+
+
+NORMALIZATION_BRANCHES = {"none": (), "running": RunningNormalization}
+REWARD_NORMALIZATION_BRANCHES = {"none": (), "running": DiscountedNormalization}
 
 
 @dataclass(frozen=True)
