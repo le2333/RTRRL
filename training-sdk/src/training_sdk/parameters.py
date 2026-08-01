@@ -40,16 +40,13 @@ def param(
     )
 
 
-def structure(
-    *, placeholder: Scalar, branches: dict[str, Any], search: Any = None
-) -> Any:
+def structure(*, placeholder: Scalar, branches: dict[str, Any]) -> Any:
     return field(
         default=placeholder,
         metadata={
             "trainer_kind": "structure",
             "placeholder": placeholder,
             "branches": branches,
-            "search": search,
         },
     )
 
@@ -99,25 +96,13 @@ def _structure(item: DataclassField) -> StructureSpec:
     for name, branch in item.metadata["branches"].items():
         branches[name] = {} if branch in (None, (), {}) else describe_parameters(branch)
 
-    search = item.metadata["search"]
     placeholder = item.metadata["placeholder"]
     if placeholder not in branches:
         raise ValueError(
             f"{item.name} placeholder {placeholder!r} is not one of its branches: "
             f"{', '.join(sorted(branches))}"
         )
-    if search is not None:
-        unknown = sorted(set(search) - set(branches))
-        if unknown:
-            raise ValueError(
-                f"{item.name} search names unknown branches: "
-                f"{', '.join(map(str, unknown))}"
-            )
-    return StructureSpec(
-        placeholder=placeholder,
-        search=tuple(search) if search is not None else None,
-        branches=branches,
-    )
+    return StructureSpec(placeholder=placeholder, branches=branches)
 
 
 def _valid_domain(name: str, value: Any, *, step: int) -> ValidSpec:

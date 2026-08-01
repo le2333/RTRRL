@@ -7,7 +7,6 @@ from training_sdk.contract import ChoiceSpec, EntryDescriptor
 from trainer_infra.space import (
     SpaceError,
     grid_distributions,
-    has_unpinned_structure,
     resolve_parameters,
     sample_parameters,
 )
@@ -59,7 +58,6 @@ def bound() -> dict:
     return {
         "kind": "structure",
         "placeholder": "ob",
-        "search": ["none", "ob", "adaptive_ob"],
         "branches": {
             "none": {},
             "ob": {"kappa": kappa(1.0)},
@@ -190,22 +188,21 @@ def test_a_structure_may_not_choose_a_branch_it_does_not_have() -> None:
         )
 
 
-def test_a_pinned_structure_is_not_unpinned() -> None:
+def test_a_structure_left_alone_takes_its_placeholder_branch() -> None:
     entry = make_entry({"optimizer_bound": bound()})
 
-    assert not has_unpinned_structure(
+    chosen = sample_parameters(a_trial(), resolve_parameters(entry, {}))
+
+    assert chosen["optimizer_bound"] == "ob"
+
+
+def test_a_structure_may_not_be_given_more_than_one_branch() -> None:
+    entry = make_entry({"optimizer_bound": bound()})
+
+    with pytest.raises(SpaceError, match="not searched"):
         resolve_parameters(
-            entry, {"optimizer_bound": ChoiceSpec.model_validate(["ob"])}
+            entry, {"optimizer_bound": ChoiceSpec.model_validate(["ob", "none"])}
         )
-    )
-    assert has_unpinned_structure(resolve_parameters(entry, {}))
-
-
-def test_the_grid_sampler_cannot_enumerate_an_unpinned_structure() -> None:
-    entry = make_entry({"optimizer_bound": bound()})
-
-    with pytest.raises(SpaceError, match="structure"):
-        grid_distributions(resolve_parameters(entry, {}))
 
 
 def test_the_grid_sampler_enumerates_a_pinned_branch() -> None:
@@ -220,7 +217,7 @@ def test_the_grid_sampler_enumerates_a_pinned_branch() -> None:
 
     built = grid_distributions(resolved)
 
-    assert sorted(built) == ["ob.kappa", "optimizer_bound"]
+    assert sorted(built) == ["ob.kappa"]
     assert list(built["ob.kappa"].choices) == [1.0, 2.0]
 
 

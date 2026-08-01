@@ -24,9 +24,7 @@ class Agent:
         valid=[False, True], search=[True], placeholder=True
     )
     optimizer_base: str = structure(
-        placeholder="sgd",
-        search=["sgd", "adam"],
-        branches={"sgd": (), "adam": Adam},
+        placeholder="sgd", branches={"sgd": (), "adam": Adam}
     )
 
 
@@ -112,17 +110,6 @@ def test_a_structure_placeholder_must_name_a_branch() -> None:
         s: str = structure(placeholder="nope", branches={"a": (), "b": ()})
 
     with pytest.raises(ValueError, match="s"):
-        describe_parameters(Bad)
-
-
-def test_a_structure_search_may_not_name_an_unknown_branch() -> None:
-    @dataclass(frozen=True)
-    class Bad:
-        s: str = structure(
-            placeholder="a", search=["a", "c"], branches={"a": (), "b": ()}
-        )
-
-    with pytest.raises(ValueError, match="c"):
         describe_parameters(Bad)
 
 

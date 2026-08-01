@@ -73,7 +73,6 @@ def test_catalog_parses_parameter_and_structure_entries() -> None:
                         "optimizer_base": {
                             "kind": "structure",
                             "placeholder": "sgd",
-                            "search": ["sgd", "adam"],
                             "branches": {
                                 "sgd": {},
                                 "adam": {

@@ -110,16 +110,7 @@ ParameterTree: TypeAlias = dict[str, "ParameterNode"]
 class StructureSpec(_Frozen):
     kind: Literal["structure"] = "structure"
     placeholder: Scalar
-    search: tuple[Scalar, ...] | None = None
     branches: dict[str, ParameterTree]
-
-    @model_validator(mode="before")
-    @classmethod
-    def _from_lists(cls, value: object) -> object:
-        if isinstance(value, dict) and isinstance(value.get("search"), list):
-            value = dict(value)
-            value["search"] = tuple(value["search"])
-        return value
 
     @model_validator(mode="after")
     def _placeholder_is_a_branch(self) -> "StructureSpec":
@@ -128,12 +119,6 @@ class StructureSpec(_Frozen):
                 f"structure placeholder {self.placeholder!r} is not one of its "
                 f"branches: {', '.join(sorted(self.branches))}"
             )
-        if self.search is not None:
-            unknown = sorted(set(self.search) - set(self.branches))
-            if unknown:
-                raise ValueError(
-                    f"structure search names unknown branches: {', '.join(map(str, unknown))}"
-                )
         return self
 
 

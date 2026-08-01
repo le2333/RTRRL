@@ -124,11 +124,13 @@ optimizer_bound: Structure = structure(
 )
 ```
 
-catalog 导出这棵树。控制面按树逐层采样:先定结构分支,再只对该分支下的参数取值。
+catalog 导出这棵树。
 
-未激活分支下的参数**搜索空间收缩为单点 `placeholder`**,不是从参数面上消失。它仍然存在,仍然带着该值写进 manifest,只是不再构成一个搜索维度。
+**结构不参与搜索,只有参数参与。** 一个 study 里结构是固定的:实验在 `space` 里把它钉成某个分支,或者不提、取 `placeholder`。所以结构声明没有 `search` 字段,实验给它两个以上分支时 preflight 拒绝。HPO 每一轮抽的只是被选中分支下的那些参数。
 
-在 YAML 中把某个结构写成单值即为钉死该结构。此时若同时为未选中分支下的参数给出搜索范围,preflight 拒绝并指出该参数属于哪个未选中的分支。结构未被钉死时不存在这种拒绝——分支在部分 trial 中激活、在其余 trial 中不激活,正是条件采样本身。
+这样一个 study 内所有 trial 的搜索维度是同一组,trial 之间可比;结构本身要比较时,是两个 study 而不是一个 study 内的两个 trial。GridSampler 也因此不需要特判——网格里从来没有结构这一维。
+
+未激活分支下的参数**取 `placeholder`**,不是从参数面上消失。它仍然存在,仍然带着该值写进 manifest,只是不构成搜索维度。
 
 没有分支特有参数的结构(两个归一化开关、两个梯度门控)在机制上与普通离散参数一致,不特判。
 
@@ -171,7 +173,7 @@ catalog 导出这棵树。控制面按树逐层采样:先定结构分支,再只�
 
 现状 `ask_round` 调用 `study.ask(dict(distributions))`,一次给出固定分布集(`study.py:79`),`distributions` 由整个 space 一次性构造(`space.py:34`)。改为 `study.ask()` 取得 trial 后按结构树逐层调用 `trial.suggest_*`。条件性在控制面解析完毕,作业提交前参数已全部确定,worker 不受影响。
 
-TPE 支持条件空间。`GridSampler` 要求预先给出完整网格,给不出条件空间,`check_sampler`(`study.py:14`)增加一条:空间含未钉死的结构时拒绝 grid。
+结构既然不搜,网格就总是给得出:`grid_distributions` 只枚举被选中分支下的参数。`check_sampler`(`study.py:14`)保持原样,仍然只拒绝非法采样器名与 grid 下的连续区间。
 
 本轮不引入通用跨参数约束语言。算法参数之间若存在"某选择下该参数才有意义",用结构树表达;训练循环的整除性归 `TrainingConfig` 校验;除此之外,参数声明保持独立。preflight 可以拒绝显然不成立的固定结构组合,但不把这类检查扩展成一套任意布尔/算术约束系统。
 

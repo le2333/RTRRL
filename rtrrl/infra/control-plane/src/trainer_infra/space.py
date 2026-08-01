@@ -75,10 +75,6 @@ def sample_parameters(trial: Trial, resolved: ResolvedParameters) -> dict[str, S
     return chosen
 
 
-def has_unpinned_structure(resolved: ResolvedParameters) -> bool:
-    return _unpinned(resolved.tree, resolved.overrides, prefix="")
-
-
 def grid_distributions(
     resolved: ResolvedParameters,
 ) -> dict[str, CategoricalDistribution]:
@@ -99,11 +95,7 @@ def _sample(
     for name, node in tree.items():
         key = f"{prefix}{name}"
         if isinstance(node, StructureSpec):
-            branch = (
-                _branch(trial, key, node, overrides)
-                if active
-                else str(node.placeholder)
-            )
+            branch = _branch(key, node, overrides) if active else str(node.placeholder)
             chosen[key] = branch
             for candidate, subtree in node.branches.items():
                 _sample(
@@ -118,15 +110,11 @@ def _sample(
             chosen[key] = _value(trial, key, node, overrides, active=active)
 
 
-def _branch(
-    trial: Trial, key: str, node: StructureSpec, overrides: dict[str, SpaceEntry]
-) -> str:
+def _branch(key: str, node: StructureSpec, overrides: dict[str, SpaceEntry]) -> str:
     override = overrides.get(key)
-    if override is not None:
-        return str(_suggest(trial, key, override))
-    if node.search is None:
+    if override is None:
         return str(node.placeholder)
-    return str(trial.suggest_categorical(key, list(node.search)))
+    return str(override.choices[0])
 
 
 def _value(
@@ -152,21 +140,6 @@ def _suggest(trial: Trial, key: str, spec: SpaceEntry) -> Scalar:
     raise SpaceError(f"unsupported space entry for {key}")
 
 
-def _unpinned(
-    tree: dict[str, ParameterNode], overrides: dict[str, SpaceEntry], *, prefix: str
-) -> bool:
-    for name, node in tree.items():
-        if not isinstance(node, StructureSpec):
-            continue
-        key = f"{prefix}{name}"
-        candidates = _candidates(key, node, overrides)
-        if len(candidates) > 1:
-            return True
-        branch = str(candidates[0])
-        if _unpinned(node.branches[branch], overrides, prefix=f"{branch}."):
-            return True
-    return False
-
 
 def _grid(
     tree: dict[str, ParameterNode],
@@ -178,14 +151,7 @@ def _grid(
     for name, node in tree.items():
         key = f"{prefix}{name}"
         if isinstance(node, StructureSpec):
-            candidates = _candidates(key, node, overrides)
-            if len(candidates) > 1:
-                raise SpaceError(
-                    "the grid sampler cannot enumerate an unpinned structure: "
-                    f"{key} may be {', '.join(map(str, candidates))}"
-                )
-            branch = str(candidates[0])
-            built[key] = CategoricalDistribution(list(candidates))
+            branch = _branch(key, node, overrides)
             _grid(node.branches[branch], overrides, built, prefix=f"{branch}.")
             continue
         spec = overrides.get(key, node.search)
@@ -197,24 +163,17 @@ def _grid(
         built[key] = CategoricalDistribution(list(spec.choices))
 
 
-def _candidates(
-    key: str, node: StructureSpec, overrides: dict[str, SpaceEntry]
-) -> list[Scalar]:
-    override = overrides.get(key)
-    if override is not None:
-        if not isinstance(override, ChoiceSpec):
-            raise SpaceError(f"{key} is a structure and must be pinned to a list")
-        return list(override.choices)
-    if node.search is not None:
-        return list(node.search)
-    return [node.placeholder]
-
 
 def _check_structure_override(
     key: str, node: StructureSpec, override: SpaceEntry
 ) -> None:
     if not isinstance(override, ChoiceSpec):
-        raise SpaceError(f"{key} is a structure and must be pinned to a list")
+        raise SpaceError(f"{key} is a structure and must be pinned to one branch")
+    if len(override.choices) != 1:
+        raise SpaceError(
+            f"{key} is a structure and is not searched; pin it to one branch, "
+            f"not {len(override.choices)}"
+        )
     unknown = sorted(str(c) for c in set(override.choices) - set(node.branches))
     if unknown:
         raise SpaceError(
