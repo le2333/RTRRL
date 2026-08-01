@@ -138,8 +138,8 @@ def test_branch_parameters_are_keyed_by_their_path() -> None:
     chosen = sample_parameters(a_trial(), resolved)
 
     assert chosen["optimizer_bound"] == "ob"
-    assert "ob.kappa" in chosen
-    assert "adaptive_ob.kappa" in chosen
+    assert "optimizer_bound.ob.kappa" in chosen
+    assert "optimizer_bound.adaptive_ob.kappa" in chosen
 
 
 def test_an_unchosen_branch_collapses_to_its_placeholders() -> None:
@@ -150,9 +150,9 @@ def test_an_unchosen_branch_collapses_to_its_placeholders() -> None:
 
     chosen = sample_parameters(a_trial(), resolved)
 
-    assert 0.5 <= chosen["ob.kappa"] <= 10.0
-    assert chosen["adaptive_ob.kappa"] == 2.0
-    assert chosen["adaptive_ob.beta2"] == 0.999
+    assert 0.5 <= chosen["optimizer_bound.ob.kappa"] <= 10.0
+    assert chosen["optimizer_bound.adaptive_ob.kappa"] == 2.0
+    assert chosen["optimizer_bound.adaptive_ob.beta2"] == 0.999
 
 
 def test_the_manifest_carries_every_declared_parameter() -> None:
@@ -164,18 +164,18 @@ def test_the_manifest_carries_every_declared_parameter() -> None:
     assert set(chosen) == {
         "learning_rate",
         "optimizer_bound",
-        "ob.kappa",
-        "adaptive_ob.kappa",
-        "adaptive_ob.beta2",
+        "optimizer_bound.ob.kappa",
+        "optimizer_bound.adaptive_ob.kappa",
+        "optimizer_bound.adaptive_ob.beta2",
     }
 
 
 def test_a_branch_override_is_checked_against_that_branch() -> None:
     entry = make_entry({"optimizer_bound": bound()})
 
-    with pytest.raises(SpaceError, match=r"ob\.kappa"):
+    with pytest.raises(SpaceError, match=r"optimizer_bound\.ob\.kappa"):
         resolve_parameters(
-            entry, {"ob.kappa": ChoiceSpec.model_validate([500.0])}
+            entry, {"optimizer_bound.ob.kappa": ChoiceSpec.model_validate([500.0])}
         )
 
 
@@ -211,14 +211,14 @@ def test_the_grid_sampler_enumerates_a_pinned_branch() -> None:
         entry,
         {
             "optimizer_bound": ChoiceSpec.model_validate(["ob"]),
-            "ob.kappa": ChoiceSpec.model_validate([1.0, 2.0]),
+            "optimizer_bound.ob.kappa": ChoiceSpec.model_validate([1.0, 2.0]),
         },
     )
 
     built = grid_distributions(resolved)
 
-    assert sorted(built) == ["ob.kappa"]
-    assert list(built["ob.kappa"].choices) == [1.0, 2.0]
+    assert sorted(built) == ["optimizer_bound.ob.kappa"]
+    assert list(built["optimizer_bound.ob.kappa"].choices) == [1.0, 2.0]
 
 
 def test_the_grid_sampler_refuses_a_range() -> None:

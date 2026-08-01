@@ -60,7 +60,9 @@ def flatten(
         found[key] = node
         if isinstance(node, StructureSpec):
             for branch, subtree in node.branches.items():
-                for sub_key, sub_node in flatten(subtree, prefix=f"{branch}.").items():
+                for sub_key, sub_node in flatten(
+                    subtree, prefix=f"{key}.{branch}."
+                ).items():
                     if sub_key in found:
                         raise SpaceError(
                             f"parameter {sub_key!r} is declared more than once"
@@ -105,7 +107,7 @@ def _sample(
                     subtree,
                     overrides,
                     chosen,
-                    prefix=f"{candidate}.",
+                    prefix=f"{key}.{candidate}.",
                     active=active and candidate == branch,
                 )
         else:
@@ -154,7 +156,7 @@ def _grid(
         key = f"{prefix}{name}"
         if isinstance(node, StructureSpec):
             branch = branch_of(key, node, overrides)
-            _grid(node.branches[branch], overrides, built, prefix=f"{branch}.")
+            _grid(node.branches[branch], overrides, built, prefix=f"{key}.{branch}.")
             continue
         spec = overrides.get(key, node.search)
         if not isinstance(spec, ChoiceSpec):
