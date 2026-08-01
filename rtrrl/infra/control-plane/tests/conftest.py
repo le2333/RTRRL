@@ -154,17 +154,30 @@ def _catalog(tmp_path: Path, command: list[str]) -> Path:
     path.write_text(
         json.dumps(
             {
-                "contract": 5,
+                "contract": 6,
                 "entries": {
                     "brax_ppo_acceptance": {
                         "command": command,
                         "metrics": ["episode_return", "episode_length"],
-                        "space": {
-                            "env": ["inverted_pendulum"],
-                            "backend": ["generalized"],
-                            "total_steps": {"type": "int", "low": 1, "high": 100000},
-                            "seed": {"type": "int", "low": 0, "high": 1000},
-                            "learning_rate": {"type": "float", "low": 1e-6, "high": 1e-2},
+                        "parameters": {
+                            "learning_rate": {
+                                "kind": "param",
+                                "value_type": "float",
+                                "valid": {"type": "float", "low": 1e-9, "high": 1.0},
+                                "search": {
+                                    "type": "float",
+                                    "low": 1e-6,
+                                    "high": 1e-2,
+                                },
+                                "placeholder": 0.001,
+                            },
+                            "episode_length": {
+                                "kind": "param",
+                                "value_type": "int",
+                                "valid": {"type": "int", "low": 1, "high": 1000},
+                                "search": {"type": "int", "low": 1, "high": 1000},
+                                "placeholder": 32,
+                            },
                         },
                     }
                 },

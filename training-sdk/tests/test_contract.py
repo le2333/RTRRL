@@ -85,6 +85,7 @@ def test_catalog_parses_parameter_and_structure_entries() -> None:
                                             "low": 0.0,
                                             "high": 1.0,
                                         },
+                                        "search": [0.9],
                                         "placeholder": 0.9,
                                     }
                                 },
@@ -103,23 +104,22 @@ def test_catalog_parses_parameter_and_structure_entries() -> None:
     assert entry.parameters["optimizer_base"].branches["sgd"] == {}
 
 
-def test_a_parameter_may_be_declared_without_a_search_domain() -> None:
-    entry = EntryDescriptor.model_validate(
-        {
-            "command": ["run"],
-            "metrics": ["m"],
-            "parameters": {
-                "reward_trace_reset_on_done": {
-                    "kind": "param",
-                    "value_type": "bool",
-                    "valid": [False, True],
-                    "placeholder": True,
-                }
-            },
-        }
-    )
-
-    assert entry.parameters["reward_trace_reset_on_done"].search is None
+def test_a_parameter_must_carry_a_search_domain() -> None:
+    with pytest.raises(ValidationError):
+        EntryDescriptor.model_validate(
+            {
+                "command": ["run"],
+                "metrics": ["m"],
+                "parameters": {
+                    "reward_trace_reset_on_done": {
+                        "kind": "param",
+                        "value_type": "bool",
+                        "valid": [False, True],
+                        "placeholder": True,
+                    }
+                },
+            }
+        )
 
 
 def test_a_valid_domain_may_be_open_on_one_side() -> None:
@@ -132,6 +132,7 @@ def test_a_valid_domain_may_be_open_on_one_side() -> None:
                     "kind": "param",
                     "value_type": "float",
                     "valid": {"type": "float", "low": 0.0},
+                    "search": [0.0],
                     "placeholder": 0.0,
                 }
             },

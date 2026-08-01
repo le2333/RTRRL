@@ -45,7 +45,7 @@ def create_launch(
 
     space_payload = {
         key: (list(spec.choices) if hasattr(spec, "choices") else spec.model_dump())
-        for key, spec in plan.space.items()
+        for key, spec in plan.parameters.overrides.items()
     }
     launch_payload = {
         "contract": CONTRACT_VERSION,

@@ -60,20 +60,22 @@ space: {}
 ```python
 lambda_v: float = param(valid=(0.0, 1.0),    search=(0.5, 0.99),  placeholder=0.9)
 meta_rl:  bool  = param(valid=[False, True], search=[False, True], placeholder=True)
-eta_pi:   float = param(valid=(0.0, None),                         placeholder=0.0)
+eta_pi:   float = param(valid=(0.0, None), search=[0.0],           placeholder=0.0)
 ```
 
 - **`valid`** 是硬边界,只用于校验。二元组为数值边界,`None` 表示该侧无界;列表为允许取值的集合。实验请求的单值或范围越界时 preflight 拒绝,并指出参数名与越界的一侧。
-- **`search`** 是默认搜索空间。二元组为连续区间,列表为离散候选集。省略表示该参数默认不搜索。
-- **`placeholder`** 是单值,该参数不进搜索时的取值。
+- **`search`** 是默认搜索空间,**每个参数都必须声明,没有例外**。二元组为连续区间,列表为离散候选集;不想让它变动就给单点列表 `[值]`。
+- **`placeholder`** 是单值,未激活分支下该参数塌缩到的取值。
 
-这里有两个都可以叫"默认"的东西,必须分开:`search` 是**搜索范围的默认**,即今天各入口 `SPACE` 里那些区间与候选列表,实验不覆盖时 HPO 就按它搜;`placeholder` 是**参数不被搜索时的取值**,只在未激活分支下、或参数压根没声明 `search` 时生效。命名为 `placeholder` 而非 `default`,因为后者读起来像"推荐值",会诱使实现者去考据它该是多少。
+这里有两个都可以叫"默认"的东西,必须分开:`search` 是**搜索范围的默认**,即今天各入口 `SPACE` 里那些区间与候选列表,实验不覆盖时 HPO 就按它搜;`placeholder` 是**未激活分支下的取值**。命名为 `placeholder` 而非 `default`,因为后者读起来像"推荐值",会诱使实现者去考据它该是多少。
+
+不允许"省略 `search` 表示不搜索"这条例外。一个参数不该变动时写单点 `search=[值]`,采样器照样走它,只是只有一个候选。这样每个参数都有一个采样器走的域,manifest 里的每个值都来自一次抽样而不是某条兜底规则,读 catalog 也不必分两种情况。
 
 `placeholder` 的取值不重要:任何实验真正在意的参数都会显式给出范围或单值,不会落到 `placeholder`。有现成出处的照抄(rtrrl 系取 `RTRRL-AAAI25/config/brax.yml`,streamac 系取 reproduce 实验里已钉死的值),没有的取任意安全值即可。唯一的硬要求是它落在 `valid` 内,且不是会引爆下游的退化值——例如作除数的参数不取 0,因为未激活分支的参数照样会写进 manifest 并被算法读到。
 
-`search` 与 `placeholder` 都必须落在 `valid` 内,导出 catalog 时检查。`log=True` 时 `valid` 的下界必须严格大于零。
+`search` 与 `placeholder` 都必须落在 `valid` 内,导出 catalog 时检查。`log=True` 时 `search` 的下界必须严格大于零。
 
-catalog 从这些声明导出,不手写字面量,覆盖算法的全部配置面。`EntryDescriptor` 中该字段命名为 `parameters`,因为它是入口声明的完整参数面,不等同于一次实验要搜索的空间。实验 YAML 顶层仍叫 `space`,表示本次实验固定结构选择或覆盖默认搜索范围。实验 YAML 未提及的参数按其 `search` 搜索;`search` 缺省的取 `placeholder`。
+catalog 从这些声明导出,不手写字面量,覆盖算法的全部配置面。`EntryDescriptor` 中该字段命名为 `parameters`,因为它是入口声明的完整参数面,不等同于一次实验要搜索的空间。实验 YAML 顶层仍叫 `space`,表示本次实验固定结构选择或覆盖默认搜索范围。实验 YAML 未提及的参数按其 `search` 搜索。
 
 manifest 携带全部参数,算法一律 `params["x"]` 取值。禁止 `params.get("x", v)` 这类 Python 端兜底,缺键即报错。
 
@@ -84,11 +86,11 @@ manifest 携带全部参数,算法一律 `params["x"]` 取值。禁止 `params.g
 `eps` 不作为跨算法统一参数名。AAAI 版 RTRRL 不暴露 optimizer eps,entry 不声明它,继续使用作者代码/Optax 的默认值。StreamAC 与 upstream StreamAC 统一拆成两个名字:
 
 - `optimizer_eps`:优化器/Adaptive OBGD 的 eps,只在自适应有界规则下有意义,保留默认搜索范围。
-- `normalization_eps`:观测或奖励归一化的 eps,只影响 normalization wrapper/config,默认不搜索,实验需要改时用单值覆盖。
+- `normalization_eps`:观测或奖励归一化的 eps,只影响 normalization wrapper/config,`search` 取单点,实验需要改时覆盖。
 
 两个值可以有相同 placeholder,但不共享一个参数名,也不由一个采样维度同时驱动。
 
-### 归一化:一个开关拆成三个,其中一个不进搜索
+### 归一化:一个开关拆成三个,其中一个只有一个候选
 
 `normalization_statistics: ours | upstream`(`memo/memorax/rl/normalization.py:20`)按**代码出自谁**命名,而不是按它是什么。配置面上的取值不该指向仓库归属。它同时也太粗:`UpstreamNormalizer` 覆写三个方法,合并成一个开关之后,跟 streaming-drl 的曲线对不上时说不出是哪一件造成的,而这条臂存在的全部目的就是把这三件事从"我们的框架"里分离出来。拆成三个:
 
@@ -98,7 +100,7 @@ manifest 携带全部参数,算法一律 `params["x"]` 取值。禁止 `params.g
 
 前两个是两种都站得住的估计量约定,几千个样本之后差别消失,是真正的选项,带 `search`。
 
-第三个不是选项。`reset_on_done=false` 时终止步之后 `G` 等于终止奖励,下一个回合带着它(衰减一次)开始,整段跑里每个回合边界都漏一次;这是缺陷,gymnasium 的 `NormalizeReward` 也带了多年。它**不声明 `search`**,因此永不构成搜索维度,只能被实验显式点名打开——否则 TPE 会把"跨回合漏奖励"当超参数去调,而在 Hopper 上漏进去的存活奖励很可能让它分数更高,于是被选中并当作结论报出来。placeholder 取 `true`。
+第三个不是选项。`reset_on_done=false` 时终止步之后 `G` 等于终止奖励,下一个回合带着它(衰减一次)开始,整段跑里每个回合边界都漏一次;这是缺陷,gymnasium 的 `NormalizeReward` 也带了多年。它的 `search` 是单点 `[true]`,因此采样器只有一个候选可选,只能被实验显式覆盖成 `false` 才会打开——否则 TPE 会把"跨回合漏奖励"当超参数去调,而在 Hopper 上漏进去的存活奖励很可能让它分数更高,于是被选中并当作结论报出来。
 
 `STATISTICS` 表与 `normalization_statistics` 一并删除。
 

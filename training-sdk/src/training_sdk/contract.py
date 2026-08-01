@@ -100,7 +100,7 @@ class ParameterSpec(_Frozen):
     kind: Literal["param"] = "param"
     value_type: Literal["float", "int", "str", "bool"]
     valid: ValidSpec
-    search: SpaceEntry | None = None
+    search: SpaceEntry
     placeholder: Scalar
 
 

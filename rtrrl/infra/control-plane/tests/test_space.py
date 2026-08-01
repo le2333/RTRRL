@@ -35,11 +35,12 @@ def learning_rate() -> dict:
     }
 
 
-def unsearched(placeholder: bool = True) -> dict:
+def single_point(placeholder: bool = True) -> dict:
     return {
         "kind": "param",
         "value_type": "bool",
         "valid": [False, True],
+        "search": [placeholder],
         "placeholder": placeholder,
     }
 
@@ -110,8 +111,8 @@ def test_an_override_range_outside_valid_is_rejected() -> None:
         resolve_parameters(entry, {"learning_rate": _spec(wide)})
 
 
-def test_a_parameter_without_a_search_takes_its_placeholder() -> None:
-    entry = make_entry({"reward_trace_reset_on_done": unsearched()})
+def test_a_single_point_search_yields_that_point() -> None:
+    entry = make_entry({"reward_trace_reset_on_done": single_point()})
     resolved = resolve_parameters(entry, {})
 
     assert sample_parameters(a_trial(), resolved) == {
@@ -119,8 +120,8 @@ def test_a_parameter_without_a_search_takes_its_placeholder() -> None:
     }
 
 
-def test_a_parameter_without_a_search_may_still_be_pinned_by_an_experiment() -> None:
-    entry = make_entry({"reward_trace_reset_on_done": unsearched()})
+def test_an_experiment_may_override_a_single_point_search() -> None:
+    entry = make_entry({"reward_trace_reset_on_done": single_point()})
     resolved = resolve_parameters(
         entry, {"reward_trace_reset_on_done": ChoiceSpec.model_validate([False])}
     )

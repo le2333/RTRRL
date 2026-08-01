@@ -11,14 +11,22 @@ optuna.logging.set_verbosity(optuna.logging.WARNING)
 SAMPLERS = ("tpe", "random", "grid")
 
 
-def check_sampler(name: str, space: Mapping[str, BaseDistribution]) -> None:
+def check_sampler(
+    name: str,
+    *,
+    grid_space: Mapping[str, BaseDistribution] | None = None,
+) -> None:
     """Reject a sampler the space cannot be searched with. Called by preflight."""
     if name not in SAMPLERS:
         raise ValueError(f"unsupported sampler {name!r}; use {', '.join(SAMPLERS)}")
     if name != "grid":
         return
+    if grid_space is None:
+        return
     continuous = sorted(
-        key for key, dist in space.items() if not isinstance(dist, CategoricalDistribution)
+        key
+        for key, dist in grid_space.items()
+        if not isinstance(dist, CategoricalDistribution)
     )
     if continuous:
         raise ValueError(
@@ -30,11 +38,11 @@ def check_sampler(name: str, space: Mapping[str, BaseDistribution]) -> None:
 
 def _sampler(
     name: str,
-    space: Mapping[str, BaseDistribution],
+    grid_space: Mapping[str, BaseDistribution] | None,
     round_size: int,
     seed: int | None,
 ):
-    check_sampler(name, space)
+    check_sampler(name, grid_space=grid_space)
     if name == "tpe":
         # TPE samples at random until it has enough results to fit a density to,
         # and its own default for enough is ten. A launch that asks in rounds has
@@ -47,7 +55,7 @@ def _sampler(
     # A grid is enumerated rather than drawn, so a seed would only shuffle the
     # order it is walked in, and it is walked to the end either way.
     return optuna.samplers.GridSampler(
-        {key: list(dist.choices) for key, dist in space.items()}  # type: ignore[attr-defined]
+        {key: list(dist.choices) for key, dist in (grid_space or {}).items()}  # type: ignore[attr-defined]
     )
 
 
@@ -57,15 +65,15 @@ def create_study(
     sampler: str,
     direction: str,
     user_attrs: Mapping[str, object],
-    space: Mapping[str, BaseDistribution],
     round_size: int,
+    grid_space: Mapping[str, BaseDistribution] | None = None,
     seed: int | None = None,
 ) -> optuna.Study:
     Path(storage_path).parent.mkdir(parents=True, exist_ok=True)
     study = optuna.create_study(
         study_name=name,
         storage=f"sqlite:///{storage_path}",
-        sampler=_sampler(sampler, space, round_size, seed),
+        sampler=_sampler(sampler, grid_space, round_size, seed),
         direction=direction,
     )
     for key, value in user_attrs.items():
@@ -73,10 +81,8 @@ def create_study(
     return study
 
 
-def ask_round(
-    study: optuna.Study, distributions: Mapping[str, BaseDistribution], count: int
-) -> list[optuna.trial.Trial]:
-    return [study.ask(dict(distributions)) for _ in range(count)]
+def ask_round(study: optuna.Study, count: int) -> list[optuna.trial.Trial]:
+    return [study.ask() for _ in range(count)]
 
 
 def tell_value(study: optuna.Study, trial: optuna.trial.Trial, value: float) -> bool:

@@ -10,7 +10,7 @@ from trainer_infra.backends.base import Backend
 from trainer_infra.launch import Launch, build_run_config
 from trainer_infra.packing import publish_round
 from trainer_infra.report import Report, TrialRecord
-from trainer_infra.space import distributions
+from trainer_infra.space import grid_distributions, sample_parameters
 from trainer_infra.study import ask_round, create_study, tell_value
 
 LOG_TAIL_LINES = 200
@@ -25,7 +25,6 @@ def run_launch(
 ) -> Report:
     experiment = launch.plan.experiment
     started = time.monotonic()
-    built = distributions(launch.plan.space)
     study = create_study(
         name=f"{experiment.name}-{launch.launch_id}",
         storage_path=launch.archive / "study.db",
@@ -38,8 +37,12 @@ def run_launch(
             "entry": launch.plan.entry_name,
             "digest": launch.plan.digest,
         },
-        space=built,
         round_size=experiment.hpo.trials_per_round,
+        grid_space=(
+            grid_distributions(launch.plan.parameters)
+            if experiment.hpo.sampler == "grid"
+            else None
+        ),
         seed=experiment.hpo.seed,
     )
 
@@ -47,8 +50,14 @@ def run_launch(
     submitted: list[str] = []
     try:
         for round_index in range(experiment.hpo.rounds):
-            trials = ask_round(study, built, experiment.hpo.trials_per_round)
-            configs = [build_run_config(launch, t.number, t.params) for t in trials]
+            trials = ask_round(study, experiment.hpo.trials_per_round)
+            drawn = [
+                sample_parameters(trial, launch.plan.parameters) for trial in trials
+            ]
+            configs = [
+                build_run_config(launch, trial.number, chosen)
+                for trial, chosen in zip(trials, drawn, strict=True)
+            ]
             plans = publish_round(
                 launch, round_index, configs, jobs=experiment.hpo.parallel_jobs
             )
@@ -82,20 +91,20 @@ def run_launch(
             }
             submitted = []
             exhausted = False
-            for trial, config in zip(trials, configs, strict=True):
+            for trial, config, chosen in zip(trials, configs, drawn, strict=True):
                 value = _read_score(config.score.s3)
                 exhausted |= tell_value(study, trial, value)
                 result = owner[trial.number]
                 records.append(
                     TrialRecord(
                         trial=trial.number,
-                        params=dict(trial.params),
+                        params=dict(chosen),
                         value=value,
                         job_id=result.job_id,
                         log_stream=result.log_stream,
                     )
                 )
-                printer(f"trial {trial.number}: {trial.params} -> {value}")
+                printer(f"trial {trial.number}: {chosen} -> {value}")
             if exhausted:
                 # A grid with nothing left would spend the remaining rounds
                 # re-running points it has already paid for.

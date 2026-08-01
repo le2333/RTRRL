@@ -16,17 +16,26 @@ push a test failure; `tests/test_examples.py` keeps them honest instead.
 
 CATALOG = Catalog.model_validate(
     {
-        "contract": 5,
+        "contract": 6,
         "entries": {
             "brax_ppo_acceptance": {
                 "command": ["python", "-m", "brax_ppo_acceptance"],
                 "metrics": ["episode_return", "episode_length"],
-                "space": {
-                    "env": ["inverted_pendulum"],
-                    "backend": ["generalized"],
-                    "total_steps": {"type": "int", "low": 1, "high": 100000},
-                    "seed": {"type": "int", "low": 0, "high": 1000},
-                    "learning_rate": {"type": "float", "low": 1e-6, "high": 1e-2},
+                "parameters": {
+                    "learning_rate": {
+                        "kind": "param",
+                        "value_type": "float",
+                        "valid": {"type": "float", "low": 1e-9, "high": 1.0},
+                        "search": {"type": "float", "low": 1e-6, "high": 1e-2},
+                        "placeholder": 0.001,
+                    },
+                    "episode_length": {
+                        "kind": "param",
+                        "value_type": "int",
+                        "valid": {"type": "int", "low": 1, "high": 1000},
+                        "search": {"type": "int", "low": 1, "high": 1000},
+                        "placeholder": 32,
+                    },
                 },
             }
         },
@@ -100,7 +109,7 @@ def make_plan(s3_base: str, *, rerun_enabled: bool = True) -> LaunchPlan:
         experiment=experiment,
         entry_name=experiment.entry,
         entry=CATALOG.entries[experiment.entry],
-        space=check_offline(experiment, CATALOG),
+        parameters=check_offline(experiment, CATALOG),
         digest="sha256:" + "a" * 64,
         queue="run-cpu-c7am-queue",
         job_definition="trainer-c7am-" + "a" * 64,

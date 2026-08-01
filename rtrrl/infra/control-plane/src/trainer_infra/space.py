@@ -139,10 +139,7 @@ def _value(
 ) -> Scalar:
     if not active:
         return node.placeholder
-    spec = overrides.get(key, node.search)
-    if spec is None:
-        return node.placeholder
-    return _suggest(trial, key, spec)
+    return _suggest(trial, key, overrides.get(key, node.search))
 
 
 def _suggest(trial: Trial, key: str, spec: SpaceEntry) -> Scalar:
@@ -188,13 +185,10 @@ def _grid(
                     f"{key} may be {', '.join(map(str, candidates))}"
                 )
             branch = str(candidates[0])
-            if key in overrides or node.search is not None:
-                built[key] = CategoricalDistribution(list(candidates))
+            built[key] = CategoricalDistribution(list(candidates))
             _grid(node.branches[branch], overrides, built, prefix=f"{branch}.")
             continue
         spec = overrides.get(key, node.search)
-        if spec is None:
-            continue
         if not isinstance(spec, ChoiceSpec):
             raise SpaceError(
                 "the grid sampler needs every parameter to be a fixed list of "

@@ -22,8 +22,8 @@ from training_sdk.contract import (
 def param(
     *,
     valid: Any,
+    search: Any,
     placeholder: Scalar,
-    search: Any = None,
     log: bool = False,
     step: int = 1,
 ) -> Any:
@@ -79,12 +79,12 @@ def _parameter(item: DataclassField) -> ParameterSpec:
     _check_value(item.name, "placeholder", valid, placeholder)
 
     declared = item.metadata["search"]
-    search: SpaceEntry | None = None
-    if declared is not None:
-        search = _search_domain(
-            item.name, declared, log=bool(item.metadata["log"]), step=step
-        )
-        _check_search(item.name, valid, search)
+    if declared is None:
+        raise ValueError(f"{item.name} must declare a search domain")
+    search = _search_domain(
+        item.name, declared, log=bool(item.metadata["log"]), step=step
+    )
+    _check_search(item.name, valid, search)
 
     return ParameterSpec(
         value_type=_value_type(item.name, item.type),

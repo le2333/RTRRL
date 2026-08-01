@@ -10,7 +10,11 @@ from training_sdk.contract import CONTRACT_VERSION, Catalog, ChoiceSpec, EntryDe
 from training_sdk.contract import SpaceEntry
 
 from trainer_infra.experiment import Experiment
-from trainer_infra.space import distributions, resolve_space
+from trainer_infra.space import (
+    ResolvedParameters,
+    grid_distributions,
+    resolve_parameters,
+)
 from trainer_infra.study import check_sampler
 
 
@@ -23,7 +27,7 @@ class LaunchPlan:
     experiment: Experiment
     entry_name: str
     entry: EntryDescriptor
-    space: dict[str, SpaceEntry]
+    parameters: ResolvedParameters
     digest: str
     queue: str
     job_definition: str
@@ -47,14 +51,21 @@ def check_offline(experiment: Experiment, catalog: Catalog) -> dict[str, SpaceEn
             f"entry {experiment.entry} does not report metric "
             f"{experiment.score.metric!r}; it reports: {reported}"
         )
-    space = resolve_space(entry, experiment.space)
-    check_sampler(experiment.hpo.sampler, distributions(space))
+    resolved = resolve_parameters(entry, experiment.space)
+    check_sampler(
+        experiment.hpo.sampler,
+        grid_space=(
+            grid_distributions(resolved)
+            if experiment.hpo.sampler == "grid"
+            else None
+        ),
+    )
     if experiment.score.window_steps[1] > experiment.training.total_steps:
         raise PreflightError(
             f"score window upper bound {experiment.score.window_steps[1]} exceeds "
             f"the training total_steps ({experiment.training.total_steps})"
         )
-    return space
+    return resolved
 
 
 def connect(host: str, port: int) -> None:
@@ -136,10 +147,10 @@ def _describe_catalog_mismatch(image_catalog: Catalog, offline_catalog: Catalog)
         if image_entry.metrics != offline_entry.metrics:
             parts.append(f"entry {name!r} metrics differs")
 
-        image_space = image_entry.space
-        offline_space = offline_entry.space
+        image_space = image_entry.parameters
+        offline_space = offline_entry.parameters
         for key in sorted(set(image_space) | set(offline_space)):
-            field = f"space.{key}"
+            field = f"parameters.{key}"
             if key not in image_space:
                 parts.append(f"entry {name!r} {field} only in offline catalog")
             elif key not in offline_space:
@@ -155,7 +166,7 @@ def _describe_catalog_mismatch(image_catalog: Catalog, offline_catalog: Catalog)
 def check_aws(
     experiment: Experiment,
     catalog: Catalog,
-    space: dict[str, SpaceEntry],
+    parameters: ResolvedParameters,
     *,
     ecr_client: Any,
     batch_client: Any,
@@ -218,7 +229,7 @@ def check_aws(
         experiment=experiment,
         entry_name=experiment.entry,
         entry=catalog.entries[experiment.entry],
-        space=space,
+        parameters=parameters,
         digest=resolved.digest,
         queue=queue_name,
         job_definition=definition_name,

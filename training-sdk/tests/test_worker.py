@@ -42,6 +42,7 @@ def catalog(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
                                 "kind": "param",
                                 "value_type": "float",
                                 "valid": {"type": "float", "low": 0.0, "high": 1.0},
+                                "search": [0.001],
                                 "placeholder": 0.001,
                             }
                         },
@@ -121,6 +122,7 @@ def test_catalog_contract_mismatch(
                                 "kind": "param",
                                 "value_type": "float",
                                 "valid": {"type": "float", "low": 0.0, "high": 1.0},
+                                "search": [0.001],
                                 "placeholder": 0.001,
                             }
                         },

@@ -19,8 +19,10 @@ class Agent:
         valid=(1e-9, 10.0), search=(1e-4, 1e-2), placeholder=0.001, log=True
     )
     hidden_dim: int = param(valid=(1, 512), search=(1, 512), placeholder=128)
-    eta_pi: float = param(valid=(0.0, None), placeholder=0.0)
-    reward_trace_reset_on_done: bool = param(valid=[False, True], placeholder=True)
+    eta_pi: float = param(valid=(0.0, None), search=[0.0], placeholder=0.0)
+    reward_trace_reset_on_done: bool = param(
+        valid=[False, True], search=[True], placeholder=True
+    )
     optimizer_base: str = structure(
         placeholder="sgd",
         search=["sgd", "adam"],
@@ -38,11 +40,19 @@ def test_dataclass_metadata_exports_a_parameter_tree() -> None:
     assert tree["optimizer_base"].branches["sgd"] == {}
 
 
-def test_a_parameter_without_a_search_is_not_a_search_dimension() -> None:
+def test_a_single_point_search_is_how_a_parameter_stays_out_of_a_sweep() -> None:
     tree = describe_parameters(Agent)
 
-    assert tree["reward_trace_reset_on_done"].search is None
-    assert tree["reward_trace_reset_on_done"].placeholder is True
+    assert tree["reward_trace_reset_on_done"].search.choices == (True,)
+
+
+def test_a_parameter_must_declare_a_search() -> None:
+    @dataclass(frozen=True)
+    class Bad:
+        x: float = param(valid=(0.0, 1.0), search=None, placeholder=0.5)
+
+    with pytest.raises(ValueError, match="x"):
+        describe_parameters(Bad)
 
 
 def test_a_valid_domain_may_be_open_on_one_side() -> None:
@@ -72,7 +82,7 @@ def test_search_must_lie_inside_valid() -> None:
 def test_placeholder_must_lie_inside_valid() -> None:
     @dataclass(frozen=True)
     class Bad:
-        x: int = param(valid=(1, 5), placeholder=0)
+        x: int = param(valid=(1, 5), search=[1], placeholder=0)
 
     with pytest.raises(ValueError, match="x"):
         describe_parameters(Bad)
