@@ -8,7 +8,7 @@ space an experiment is searched over.
 
 This is `memo/runner/catalog.py` for the forked project. It differs in what a
 module in `entries` has to look like. There, every module is
-an entry and one that declares none of `SPACE`, `METRICS` or `main` is a
+an entry and one that declares none of `PARAMETERS`, `METRICS` or `main` is a
 mistake; here `entries` also holds the logger adapter, and a package that may
 not contain a helper is a package that pushes its helpers somewhere worse. A
 module declaring none of the three is skipped, and a module declaring some of
@@ -30,7 +30,7 @@ from training_sdk.contract import CONTRACT_VERSION, Catalog, EntryDescriptor
 
 PACKAGE_ROOT = Path(__file__).resolve().parents[1]
 CATALOG_PATH = PACKAGE_ROOT / "catalog.json"
-DECLARED = ("SPACE", "METRICS", "main")
+DECLARED = ("PARAMETERS", "METRICS", "main")
 
 
 def discover() -> dict[str, Any]:
@@ -63,7 +63,7 @@ def build_catalog() -> Catalog:
                 {
                     "command": ["python", "-m", module.__name__],
                     "metrics": list(module.METRICS),
-                    "space": dict(module.SPACE),
+                    "parameters": dict(module.PARAMETERS),
                 }
             )
             for name, module in discover().items()

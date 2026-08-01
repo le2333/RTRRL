@@ -22,10 +22,28 @@ def build_entry() -> EntryDescriptor:
         {
             "command": ["python", "-m", "brax_ppo_acceptance"],
             "metrics": ["episode_return", "episode_length"],
-            "space": {
-                "learning_rate": {"type": "float", "low": 1e-6, "high": 1e-2},
-                "episode_length": [32],
-                "failure_mode": ["none"],
+            "parameters": {
+                "learning_rate": {
+                    "kind": "param",
+                    "value_type": "float",
+                    "valid": {"type": "float", "low": 1e-9, "high": 1.0},
+                    "search": {"type": "float", "low": 1e-6, "high": 1e-2},
+                    "placeholder": 0.0003,
+                },
+                "episode_length": {
+                    "kind": "param",
+                    "value_type": "int",
+                    "valid": {"type": "int", "low": 1, "high": 1000},
+                    "search": [32],
+                    "placeholder": 32,
+                },
+                "failure_mode": {
+                    "kind": "param",
+                    "value_type": "str",
+                    "valid": ["none", "crash", "nan"],
+                    "search": ["none"],
+                    "placeholder": "none",
+                },
             },
         }
     )

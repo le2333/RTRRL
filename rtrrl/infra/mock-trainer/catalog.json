@@ -1,5 +1,5 @@
 {
-  "contract": 5,
+  "contract": 6,
   "entries": {
     "brax_ppo_acceptance": {
       "command": [
@@ -11,22 +11,55 @@
         "episode_return",
         "episode_length"
       ],
-      "space": {
+      "parameters": {
         "episode_length": {
-          "choices": [
-            32
-          ]
+          "kind": "param",
+          "placeholder": 32,
+          "search": {
+            "choices": [
+              32
+            ]
+          },
+          "valid": {
+            "high": 1000,
+            "low": 1,
+            "step": 1,
+            "type": "int"
+          },
+          "value_type": "int"
         },
         "failure_mode": {
-          "choices": [
-            "none"
-          ]
+          "kind": "param",
+          "placeholder": "none",
+          "search": {
+            "choices": [
+              "none"
+            ]
+          },
+          "valid": {
+            "choices": [
+              "none",
+              "crash",
+              "nan"
+            ]
+          },
+          "value_type": "str"
         },
         "learning_rate": {
-          "high": 0.01,
-          "log": false,
-          "low": 1e-06,
-          "type": "float"
+          "kind": "param",
+          "placeholder": 0.0003,
+          "search": {
+            "high": 0.01,
+            "log": false,
+            "low": 1e-06,
+            "type": "float"
+          },
+          "valid": {
+            "high": 1.0,
+            "low": 1e-09,
+            "type": "float"
+          },
+          "value_type": "float"
         }
       }
     }

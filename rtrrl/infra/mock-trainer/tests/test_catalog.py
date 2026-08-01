@@ -25,6 +25,6 @@ def test_catalog_declares_current_contract_and_only_algorithm_parameters() -> No
     catalog = Catalog.model_validate(json.loads(CATALOG.read_text()))
     assert catalog.contract == CONTRACT_VERSION
     entry = catalog.entries["brax_ppo_acceptance"]
-    taken = RESERVED & set(entry.space)
+    taken = RESERVED & set(entry.parameters)
     assert not taken, f"brax_ppo_acceptance still declares {sorted(taken)}"
     assert set(entry.metrics) >= {"episode_return", "episode_length"}

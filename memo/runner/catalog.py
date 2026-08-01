@@ -6,8 +6,8 @@ this catalog off the image's label instead, which binds what was sampled to the
 digest that will run it: a file edited but not rebuilt cannot quietly widen the
 space an experiment is searched over.
 
-Nothing is registered. Every module under ``entries`` that declares ``SPACE``
-and ``METRICS`` is one, and its command follows from its name.
+Nothing is registered. Every module under ``entries`` that declares
+``PARAMETERS`` and ``METRICS`` is one, and its command follows from its name.
 """
 
 from __future__ import annotations
@@ -37,13 +37,13 @@ def discover() -> dict[str, Any]:
         imported = importlib.import_module(f"{entries.__name__}.{module}")
         missing = [
             name
-            for name in ("SPACE", "METRICS", "main")
+            for name in ("PARAMETERS", "METRICS", "main")
             if getattr(imported, name, None) is None
         ]
         if missing:
             raise ValueError(
                 f"{imported.__name__} declares no {', '.join(missing)}; "
-                "an entry is a module with a space, a score, and a way to run"
+                "an entry is a module with parameters, a score, and a way to run"
             )
         found[module] = imported
     if not found:
@@ -59,7 +59,7 @@ def build_catalog() -> Catalog:
                 {
                     "command": ["python", "-m", module.__name__],
                     "metrics": list(module.METRICS),
-                    "space": dict(module.SPACE),
+                    "parameters": dict(module.PARAMETERS),
                 }
             )
             for name, module in discover().items()
