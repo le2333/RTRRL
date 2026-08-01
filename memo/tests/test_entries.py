@@ -19,6 +19,7 @@ from typing import Any
 
 import pytest
 from training_sdk.episode import Episode
+from training_sdk.parameters import expand, flatten
 
 from entries import rtrrl
 from runner.catalog import discover
@@ -40,16 +41,14 @@ TRAINING = SimpleNamespace(num_envs=2, total_steps=8, epoch_steps=4)
 EVALUATION = SimpleNamespace(steps=4, num_envs=2)
 
 
-def smallest(space: Mapping[str, Any]) -> dict[str, Any]:
-    """One value per declared parameter, chosen for cheapness not for sense."""
+def manifest(parameters: Mapping[str, Any]) -> dict[str, Any]:
+    """What a launch would send, taken through the loader rather than by hand."""
 
-    values = {
-        name: spec[0] if isinstance(spec, list) else spec["low"]
-        for name, spec in space.items()
+    declared = flatten(parameters)
+    pinned = {
+        name: value for name, value in PARAM_OVERRIDES.items() if name in declared
     }
-    return values | {
-        name: PARAM_OVERRIDES[name] for name in PARAM_OVERRIDES if name in space
-    }
+    return expand(parameters, pinned)
 
 
 class Watched(Mapping):
@@ -90,7 +89,7 @@ ENTRIES = discover()
 @pytest.fixture(scope="module", params=sorted(ENTRIES), ids=sorted(ENTRIES))
 def trained(request) -> tuple[Any, Collector, Watched]:
     entry = ENTRIES[request.param]
-    collector, params = Collector(), Watched(smallest(entry.SPACE))
+    collector, params = Collector(), Watched(manifest(entry.PARAMETERS))
     config = SimpleNamespace(
         params=params,
         environment=ENVIRONMENT,
@@ -103,12 +102,12 @@ def trained(request) -> tuple[Any, Collector, Watched]:
 
 def test_the_entry_reads_nothing_it_has_not_declared(trained):
     entry, _, params = trained
-    assert not params.read - set(entry.SPACE)
+    assert not params.read - set(flatten(entry.PARAMETERS))
 
 
 def test_the_entry_declares_nothing_it_does_not_read(trained):
     entry, _, params = trained
-    assert not set(entry.SPACE) - params.read
+    assert not set(flatten(entry.PARAMETERS)) - params.read
 
 
 def test_it_reports_once_per_epoch_at_the_step_it_has_reached(trained):
@@ -129,7 +128,7 @@ def test_the_scalars_it_names_are_scalars_it_sends(trained):
 def test_rtrrl_entry_can_reproduce_the_papers_bounded_actor():
     """The paper bounds its actor before clipping its environment action."""
 
-    params = smallest(rtrrl.SPACE) | {"bound_actor": True, "act_clip": 1.0}
+    params = manifest(rtrrl.PARAMETERS) | {"bound_actor": True, "act_clip": 1.0}
     agent = rtrrl.build(params, ENVIRONMENT, TRAINING)
     assert agent.actor_head.bound is True
     assert agent.cfg.act_clip == 1.0
@@ -155,5 +154,5 @@ RESERVED = frozenset(
 
 def test_no_entry_declares_the_environment_or_the_budget():
     for name, module in ENTRIES.items():
-        taken = RESERVED & set(module.SPACE)
+        taken = RESERVED & set(flatten(module.PARAMETERS))
         assert not taken, f"{name} still declares {sorted(taken)}"

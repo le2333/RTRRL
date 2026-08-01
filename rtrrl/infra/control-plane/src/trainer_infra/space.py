@@ -4,6 +4,7 @@ from dataclasses import dataclass, field
 
 from optuna.distributions import CategoricalDistribution
 from optuna.trial import Trial
+from training_sdk.parameters import flatten, walk
 from training_sdk.contract import (
     ChoiceSpec,
     EntryDescriptor,
@@ -49,32 +50,15 @@ def resolve_parameters(
     return ResolvedParameters(tree=entry.parameters, overrides=dict(overrides))
 
 
-def flatten(
-    tree: dict[str, ParameterNode], prefix: str = ""
-) -> dict[str, ParameterNode]:
-    found: dict[str, ParameterNode] = {}
-    for name, node in tree.items():
-        key = f"{prefix}{name}"
-        if key in found:
-            raise SpaceError(f"parameter {key!r} is declared more than once")
-        found[key] = node
-        if isinstance(node, StructureSpec):
-            for branch, subtree in node.branches.items():
-                for sub_key, sub_node in flatten(
-                    subtree, prefix=f"{key}.{branch}."
-                ).items():
-                    if sub_key in found:
-                        raise SpaceError(
-                            f"parameter {sub_key!r} is declared more than once"
-                        )
-                    found[sub_key] = sub_node
-    return found
-
 
 def sample_parameters(trial: Trial, resolved: ResolvedParameters) -> dict[str, Scalar]:
-    chosen: dict[str, Scalar] = {}
-    _sample(trial, resolved.tree, resolved.overrides, chosen, prefix="", active=True)
-    return chosen
+    return walk(
+        resolved.tree,
+        choose=lambda key, node: branch_of(key, node, resolved.overrides),
+        fill=lambda key, node, active: _value(
+            trial, key, node, resolved.overrides, active=active
+        ),
+    )
 
 
 def grid_distributions(
@@ -84,34 +68,6 @@ def grid_distributions(
     _grid(resolved.tree, resolved.overrides, built, prefix="")
     return built
 
-
-def _sample(
-    trial: Trial,
-    tree: dict[str, ParameterNode],
-    overrides: dict[str, SpaceEntry],
-    chosen: dict[str, Scalar],
-    *,
-    prefix: str,
-    active: bool,
-) -> None:
-    for name, node in tree.items():
-        key = f"{prefix}{name}"
-        if isinstance(node, StructureSpec):
-            branch = (
-                branch_of(key, node, overrides) if active else str(node.placeholder)
-            )
-            chosen[key] = branch
-            for candidate, subtree in node.branches.items():
-                _sample(
-                    trial,
-                    subtree,
-                    overrides,
-                    chosen,
-                    prefix=f"{key}.{candidate}.",
-                    active=active and candidate == branch,
-                )
-        else:
-            chosen[key] = _value(trial, key, node, overrides, active=active)
 
 
 def branch_of(key: str, node: StructureSpec, overrides: dict[str, SpaceEntry]) -> str:

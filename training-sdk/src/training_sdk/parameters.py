@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from dataclasses import Field as DataclassField
 from dataclasses import field, fields, is_dataclass
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from typing import Any
 
 from training_sdk.contract import (
@@ -202,3 +202,69 @@ def read_branch(
     if model in (None, (), {}):
         return branch, None
     return branch, read_parameters(model, params, prefix=f"{key}.{branch}.")
+
+
+def flatten(
+    tree: Mapping[str, Any], prefix: str = ""
+) -> dict[str, Any]:
+    found: dict[str, Any] = {}
+    for name, node in tree.items():
+        key = f"{prefix}{name}"
+        if key in found:
+            raise ValueError(f"parameter {key!r} is declared more than once")
+        found[key] = node
+        if isinstance(node, StructureSpec):
+            for branch, subtree in node.branches.items():
+                for sub_key, sub_node in flatten(subtree, f"{key}.{branch}.").items():
+                    if sub_key in found:
+                        raise ValueError(
+                            f"parameter {sub_key!r} is declared more than once"
+                        )
+                    found[sub_key] = sub_node
+    return found
+
+
+def walk(
+    tree: Mapping[str, Any],
+    *,
+    choose: Callable[[str, StructureSpec], str],
+    fill: Callable[[str, ParameterSpec, bool], Scalar],
+    prefix: str = "",
+    active: bool = True,
+) -> dict[str, Scalar]:
+    chosen: dict[str, Scalar] = {}
+    for name, node in tree.items():
+        key = f"{prefix}{name}"
+        if isinstance(node, StructureSpec):
+            branch = choose(key, node) if active else str(node.placeholder)
+            chosen[key] = branch
+            for candidate, subtree in node.branches.items():
+                chosen |= walk(
+                    subtree,
+                    choose=choose,
+                    fill=fill,
+                    prefix=f"{key}.{candidate}.",
+                    active=active and candidate == branch,
+                )
+        else:
+            chosen[key] = fill(key, node, active)
+    return chosen
+
+
+def expand(
+    tree: Mapping[str, Any], overrides: Mapping[str, Scalar] | None = None
+) -> dict[str, Scalar]:
+    pinned = dict(overrides or {})
+    return walk(
+        tree,
+        choose=lambda key, node: str(pinned.get(key, node.placeholder)),
+        fill=lambda key, node, active: (
+            pinned.get(key, _single(node)) if active else node.placeholder
+        ),
+    )
+
+
+def _single(node: ParameterSpec) -> Scalar:
+    if isinstance(node.search, ChoiceSpec):
+        return node.search.choices[0]
+    return node.search.low

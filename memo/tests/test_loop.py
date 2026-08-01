@@ -189,7 +189,7 @@ def test_the_catalog_is_the_entries_directory_and_nothing_written_down():
     assert set(catalog.entries) == {"rtrrl", "stream_ac", "upstream_stream_ac"}
     for name, entry in catalog.entries.items():
         assert entry.command == ("python", "-m", f"{entries.__name__}.{name}")
-        assert set(entry.space) == set(modules[name].SPACE)
+        assert set(entry.parameters) == set(modules[name].PARAMETERS)
         assert entry.metrics == tuple(modules[name].METRICS)
 
 

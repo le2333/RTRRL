@@ -106,9 +106,6 @@ def make_optax_rule(transform) -> UpdateRule:
 
 BOUNDED_RULES = ("obgd", "adaptive_obgd", "adaptive_obgd_fixed")
 
-OPTIMIZER_BOUNDS = ("none", "ob", "adaptive_ob", "adaptive_ob_fixed")
-OPTIMIZER_BASES = ("sgd", "adam")
-
 
 @dataclass(frozen=True)
 class ObBound:
