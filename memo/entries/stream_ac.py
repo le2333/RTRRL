@@ -108,6 +108,38 @@ TRAINING_METRICS: tuple[str, ...] = (
 )
 
 
+def _bound(params: Mapping[str, Any], role: str) -> tuple[str, float, float, float]:
+    field = f"{role}_optimizer_bound"
+    branch = str(params[field])
+    if branch == "none":
+        raise ValueError(
+            f"{field}=none needs the bound and base decomposition; this kernel "
+            "always applies a bound"
+        )
+    kappa = float(params[f"{field}.{branch}.kappa"])
+    if branch == "ob":
+        return "obgd", kappa, 0.0, 1e-8
+    return (
+        {"adaptive_ob": "adaptive_obgd", "adaptive_ob_fixed": "adaptive_obgd_fixed"}[
+            branch
+        ],
+        kappa,
+        float(params[f"{field}.{branch}.beta2"]),
+        float(params[f"{field}.{branch}.eps"]),
+    )
+
+
+def _rate(params: Mapping[str, Any], role: str) -> float:
+    field = f"{role}_optimizer_base"
+    branch = str(params[field])
+    if branch != "sgd":
+        raise ValueError(
+            f"{field}={branch} needs the bound and base decomposition; this "
+            "kernel folds the rate into the bound"
+        )
+    return float(params[f"{field}.{branch}.lr"])
+
+
 def build(params: Mapping[str, Any], environment, training) -> StreamAC:
     """Assemble the agent this file is about."""
 
@@ -117,7 +149,11 @@ def build(params: Mapping[str, Any], environment, training) -> StreamAC:
         backend=environment.backend,
     )
     gamma = float(params["gamma"])
-    feature_dim = int(params["feature_dim"])
+    backbone = str(params["backbone"])
+    hidden_dim = int(params[f"backbone.{backbone}.hidden_dim"])
+    feature_dim = (
+        int(params[f"backbone.{backbone}.feature_dim"]) if backbone == "rtu" else hidden_dim
+    )
     meta_rl = bool(params["meta_rl"])
 
     def encoder():
@@ -131,12 +167,20 @@ def build(params: Mapping[str, Any], environment, training) -> StreamAC:
                 reward_extractor=encoder() if meta_rl else None,
             ),
             torso=make_torso(
-                str(params["backbone"]),
+                backbone,
                 features=feature_dim * (3 if meta_rl else 1),
-                hidden_dim=int(params["hidden_dim"]),
+                hidden_dim=hidden_dim,
                 output_dim=feature_dim,
             ),
             head=head,
+        )
+
+    actor_rule, actor_kappa, actor_beta2, actor_eps = _bound(params, "actor")
+    critic_rule, critic_kappa, critic_beta2, critic_eps = _bound(params, "critic")
+    if (actor_rule, actor_beta2, actor_eps) != (critic_rule, critic_beta2, critic_eps):
+        raise ValueError(
+            "this kernel carries one bounded rule for both roles; actor and "
+            f"critic ask for {actor_rule} and {critic_rule}"
         )
 
     action_dim = int(env.action_space(env_params).shape[0])
@@ -145,15 +189,15 @@ def build(params: Mapping[str, Any], environment, training) -> StreamAC:
             num_envs=training.num_envs,
             gamma=gamma,
             trace_lambda=float(params["trace_lambda"]),
-            actor_lr=float(params["actor_lr"]),
-            critic_lr=float(params["critic_lr"]),
-            actor_kappa=float(params["actor_kappa"]),
-            critic_kappa=float(params["critic_kappa"]),
+            actor_lr=_rate(params, "actor"),
+            critic_lr=_rate(params, "critic"),
+            actor_kappa=actor_kappa,
+            critic_kappa=critic_kappa,
             entropy_coefficient=float(params["entropy_coefficient"]),
             credit=str(params["credit"]),
-            bounded_rule=str(params["bounded_rule"]),
-            beta2=float(params["beta2"]),
-            eps=float(params["eps"]),
+            bounded_rule=actor_rule,
+            beta2=actor_beta2,
+            eps=actor_eps,
         ),
         env,
         env_params,
@@ -162,8 +206,13 @@ def build(params: Mapping[str, Any], environment, training) -> StreamAC:
         normalization=NormalizationConfig(
             normalize_observation=bool(params["normalize_observation"]),
             normalize_reward=bool(params["normalize_reward"]),
+            eps=float(params["normalization_eps"]),
             reward_gamma=gamma,
-            statistics=str(params["normalization_statistics"]),
+            reset_on_start=bool(params["reset_on_start"]),
+            update_during_eval=bool(params["update_during_eval"]),
+            cold_start=str(params["normalization_cold_start"]),
+            variance=str(params["normalization_variance"]),
+            reward_trace_reset_on_done=bool(params["reward_trace_reset_on_done"]),
         ),
     )
 
