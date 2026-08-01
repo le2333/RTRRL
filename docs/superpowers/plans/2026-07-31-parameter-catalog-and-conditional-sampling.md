@@ -2,7 +2,7 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Replace flat hand-written `SPACE` dictionaries with dataclass-backed parameter declarations, export catalog `parameters`, validate `valid/search/placeholder`, and sample structure-dependent parameters conditionally. One entry, `stream_ac`, is carried all the way through as the template the rest are written against later.
+**Goal:** Give the infrastructure a configuration loader: parameter-tree contract models, a declaration helper and its reader, override resolution, conditional sampling, and catalog builders that export what an entry declares. This plan is the loader's behaviour and nothing else -- no algorithm's parameters are designed here, and no test in it names one.
 
 **Architecture:** The shared contract gains parameter-tree nodes and `EntryDescriptor.parameters`; experiment YAML keeps top-level `space` as an override document. A lightweight `training_sdk.parameters` helper turns dataclass field metadata into the contract model, so entries keep declarations beside the code that reads the resolved flat `params`. The control plane resolves overrides against the tree, asks Optuna for an empty trial, recursively calls `trial.suggest_*`, and fills inactive branches with `placeholder`.
 
@@ -26,7 +26,9 @@
 - `CONTRACT_VERSION` becomes `6` in this plan.
 - The YAML top-level key remains `space`; only the catalog entry field changes from `space` to `parameters`.
 - This plan does not implement OBGD `bound/base` decomposition or the metrics changes.
-- Only `stream_ac` is in scope. `upstream_stream_ac`, `rtrrl`, `rtrrl_aaai` and the experiment YAML migration are out of this batch; memo's catalog does not build and its suite stays red until they follow.
+- This plan is the infra side only. Which parameters an algorithm has, and what its components are, belong to the algorithm and component phase.
+- **No test here may assert an algorithm's fields.** Every assertion is about the loader and uses declarations built inside the test. A `gamma` or a `kappa` in an assertion means it is testing the wrong layer.
+- `stream_ac` already declares `PARAMETERS`, which is what lets the framework tests run at all. Its declarations, its components and its kernel are the next phase's; the experiment YAML migration is too.
 - Tests run locally in WSL with virtualenvs and caches outside the repository. After changing `training-sdk`, reinstall it into memo's environment (`uv sync --group development --reinstall-package training-sdk`) or memo keeps importing the old copy.
 
 ---
@@ -1099,7 +1101,13 @@ Expected: tests still fail because entry modules have not yet declared `PARAMETE
 
 ---
 
-### Task 4: `stream_ac` Declares Its Parameters
+### Task 4: `stream_ac` Declares Its Parameters — landed here, belongs to the next phase
+
+The phases were redrawn after this task ran: designing an algorithm's parameters is the
+algorithm and component phase's, not the loader's. It stays recorded because it shipped
+and because without one entry declaring `PARAMETERS` the framework tests have nothing to
+run against. Its declarations get revisited there, alongside the components and the
+kernel.
 
 **Files:**
 - Modify: `memo/entries/stream_ac.py`
@@ -1135,88 +1143,35 @@ this kernel cannot hold, and each such case raises naming the phase that removes
 
 ---
 
-### Task 5: Requirements, Module Design, and Tests Aligned To Them
+### Task 5: The Framework's Tests Read `PARAMETERS`
 
 **Files:**
 - Modify: `memo/tests/test_entries.py`
 - Modify: `memo/tests/test_loop.py`
-- Create: `memo/tests/test_stream_ac_parameters.py`
-- Modify: `memo/tests/test_algorithms.py`
 
-No source changes. This task states what the modules must be and writes the tests that
-say so; every one of them is expected to fail until Task 6.
+Two framework tests still reach for `SPACE`: `test_entries.py` builds its parameters
+with `smallest(entry.SPACE)` and `test_loop.py:192` compares the catalog against
+`module.SPACE`. Both belong to loading, so both move to `PARAMETERS` and to taking a
+sampled manifest from the loader rather than a hand-built dictionary.
 
-**Requirements**
+Neither may assert an algorithm's fields. `test_loop.py` asserts that a catalog entry
+carries what its module declares, whatever that is. `test_entries.py` asserts that an
+entry reads nothing it has not declared and declares nothing it does not read -- a
+property of every entry, stated without naming one parameter.
 
-1. One set of names. The kernel takes the bound by the name the configuration surface
-   uses -- `ob`, `adaptive_ob`, `adaptive_ob_fixed` -- and there is no table mapping
-   those onto older ones. `BOUNDED_RULES` and the entry's `_RULES` are gone.
-2. The kernel takes components, not fields. `StreamACConfig` holds a bound and a base
-   per role as instances of the declared dataclasses, so two roles asking for different
-   bounds is ordinary rather than an error.
-3. Nothing declared twice. A component's limits are written once, beside it; the entry
-   names structures and the parameters no structure holds, and reads components back
-   with `read_branch`.
-4. The framework's tests read `PARAMETERS`. Nothing in `memo/tests` or `memo/runner`
-   reaches for `SPACE`.
-5. `stream_ac` passes. The other three entries keep `SPACE`, so the catalog does not
-   build and their tests fail; that is the expected state, not a regression.
+- [ ] **Step 1: Replace `smallest(entry.SPACE)` with a manifest from the loader**
 
-**Modules**
+Resolve the entry's `PARAMETERS` and sample them, so what reaches `run` is what a
+launch would send. The `Watched` mapping that records which names were read stays; it
+is what makes the declared-versus-read property checkable.
 
-- `memorax/rl/updates.py`: `make_bounded_rule(*, bound, base)` taking the declared
-  component instances and returning an `UpdateRule`. `bound=None` is the unbounded
-  path; `base` carries the rate. The old `make_obgd_rule` signature, its `rule` string
-  and `BOUNDED_RULES` are deleted.
-- `memorax/algorithms/stream_ac.py`: `StreamACConfig` loses `actor_lr`, `critic_lr`,
-  `actor_kappa`, `critic_kappa`, `bounded_rule`, `beta2` and `eps`, and gains
-  `actor_bound`, `actor_base`, `critic_bound`, `critic_base`.
-- `memo/entries/stream_ac.py`: `build` reads four components and passes them through.
-  `_optimizer`, `_rate` and `_RULES` disappear.
+- [ ] **Step 2: Point `test_loop.py`'s catalog comparison at `parameters`**
 
-**Out of scope, and why**
+- [ ] **Step 3: Run, and record which entries fail and why**
 
-The normaliser keeps its single shared config. Two instances need the observation and
-reward paths separated inside the component, which is the phase 5 work in the spec, so
-`_normalization` and its reconciliation stay until then. `optimizer_base=adam` and
-`optimizer_bound=none` stay unreachable until the phase 3 decomposition; the tests
-assert that asking for them raises and names the phase.
-
-- [ ] **Step 1: Rewrite `test_entries.py` against `PARAMETERS`**
-- [ ] **Step 2: Rewrite `test_loop.py`'s catalog comparison**
-- [ ] **Step 3: Write `test_stream_ac_parameters.py`**
-
-The tree's shape, that no entry field restates a component's, that `read_branch` gives
-back what was declared, and that the two unreachable combinations raise naming their
-phase.
-
-- [ ] **Step 4: Point `test_algorithms.py` at the component config**
-- [ ] **Step 5: Run them and record the failure set**
-
-Every new assertion fails. Record which, so Task 6 closes exactly those.
-
----
-
-### Task 6: Implement, Remove the Dual Path, Turn `stream_ac` Green
-
-**Files:**
-- Modify: `memo/memorax/rl/updates.py`
-- Modify: `memo/memorax/rl/__init__.py`
-- Modify: `memo/memorax/algorithms/stream_ac.py`
-- Modify: `memo/entries/stream_ac.py`
-
-- [ ] **Step 1: `make_bounded_rule` takes components**
-- [ ] **Step 2: `StreamACConfig` holds the four components**
-- [ ] **Step 3: `build` stops translating**
-- [ ] **Step 4: Delete `BOUNDED_RULES`, `_RULES`, `OPTIMIZER_BOUNDS`, `OPTIMIZER_BASES`**
-
-The last two are dead on arrival; the branch dictionaries already carry the names.
-
-- [ ] **Step 5: Verify**
-
-`stream_ac`'s tests pass and the Task 5 failure set is closed. `memo`'s remaining
-failures are the three unmigrated entries, the experiments written against retired
-names, and the five sanctioned golden failures -- and nothing else.
+Only `stream_ac` declares `PARAMETERS`. The other three still declare `SPACE`, so
+`discover()` refuses them and every test parameterised over the entries fails at
+collection. That is phase 3's to close, not this task's.
 
 ---
 
