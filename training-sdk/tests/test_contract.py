@@ -104,9 +104,6 @@ def test_catalog_parses_parameter_and_structure_entries() -> None:
 
 
 def test_a_parameter_may_be_declared_without_a_search_domain() -> None:
-    """The unsearched declaration. A parameter that carries a correctness
-    decision rather than a choice must not become an HPO dimension."""
-
     entry = EntryDescriptor.model_validate(
         {
             "command": ["run"],

@@ -32,12 +32,19 @@ def catalog(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     path.write_text(
         json.dumps(
             {
-                "contract": 5,
+                "contract": 6,
                 "entries": {
                     "e": {
                         "command": [sys.executable, str(child)],
                         "metrics": ["episode_return"],
-                        "space": {"total_steps": [4]},
+                        "parameters": {
+                            "learning_rate": {
+                                "kind": "param",
+                                "value_type": "float",
+                                "valid": {"type": "float", "low": 0.0, "high": 1.0},
+                                "placeholder": 0.001,
+                            }
+                        },
                     }
                 },
             }
@@ -109,7 +116,14 @@ def test_catalog_contract_mismatch(
                     "e": {
                         "command": ["true"],
                         "metrics": ["episode_return"],
-                        "space": {"total_steps": [4]},
+                        "parameters": {
+                            "learning_rate": {
+                                "kind": "param",
+                                "value_type": "float",
+                                "valid": {"type": "float", "low": 0.0, "high": 1.0},
+                                "placeholder": 0.001,
+                            }
+                        },
                     }
                 },
             }

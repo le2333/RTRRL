@@ -4,7 +4,7 @@ from typing import Annotated, Literal, TypeAlias
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
-CONTRACT_VERSION = 5
+CONTRACT_VERSION = 6
 
 Scalar: TypeAlias = int | float | str | bool
 
@@ -64,10 +64,88 @@ SpaceEntry: TypeAlias = Annotated[
 ]
 
 
+class FloatValidSpec(_Frozen):
+    type: Literal["float"]
+    low: float | None = None
+    high: float | None = None
+
+    @model_validator(mode="after")
+    def _ordered(self) -> "FloatValidSpec":
+        if self.low is not None and self.high is not None and self.low > self.high:
+            raise ValueError("float valid low must not exceed high")
+        return self
+
+
+class IntValidSpec(_Frozen):
+    type: Literal["int"]
+    low: int | None = None
+    high: int | None = None
+    step: int = 1
+
+    @model_validator(mode="after")
+    def _ordered(self) -> "IntValidSpec":
+        if self.low is not None and self.high is not None and self.low > self.high:
+            raise ValueError("int valid low must not exceed high")
+        if self.step < 1:
+            raise ValueError("int valid step must be positive")
+        return self
+
+
+ValidSpec: TypeAlias = Annotated[
+    FloatValidSpec | IntValidSpec | ChoiceSpec, Field(union_mode="left_to_right")
+]
+
+
+class ParameterSpec(_Frozen):
+    kind: Literal["param"] = "param"
+    value_type: Literal["float", "int", "str", "bool"]
+    valid: ValidSpec
+    search: SpaceEntry | None = None
+    placeholder: Scalar
+
+
+ParameterTree: TypeAlias = dict[str, "ParameterNode"]
+
+
+class StructureSpec(_Frozen):
+    kind: Literal["structure"] = "structure"
+    placeholder: Scalar
+    search: tuple[Scalar, ...] | None = None
+    branches: dict[str, ParameterTree]
+
+    @model_validator(mode="before")
+    @classmethod
+    def _from_lists(cls, value: object) -> object:
+        if isinstance(value, dict) and isinstance(value.get("search"), list):
+            value = dict(value)
+            value["search"] = tuple(value["search"])
+        return value
+
+    @model_validator(mode="after")
+    def _placeholder_is_a_branch(self) -> "StructureSpec":
+        if self.placeholder not in self.branches:
+            raise ValueError(
+                f"structure placeholder {self.placeholder!r} is not one of its "
+                f"branches: {', '.join(sorted(self.branches))}"
+            )
+        if self.search is not None:
+            unknown = sorted(set(self.search) - set(self.branches))
+            if unknown:
+                raise ValueError(
+                    f"structure search names unknown branches: {', '.join(map(str, unknown))}"
+                )
+        return self
+
+
+ParameterNode: TypeAlias = Annotated[
+    ParameterSpec | StructureSpec, Field(discriminator="kind")
+]
+
+
 class EntryDescriptor(_Frozen):
     command: tuple[str, ...]
     metrics: tuple[str, ...]
-    space: dict[str, SpaceEntry]
+    parameters: dict[str, ParameterNode]
 
     @model_validator(mode="after")
     def _non_empty(self) -> "EntryDescriptor":

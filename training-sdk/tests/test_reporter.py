@@ -10,7 +10,7 @@ from training_sdk.reporter import METRICS_FILENAME, Reporter
 def make_config(*, every_steps: int = 1) -> RunConfig:
     return RunConfig.model_validate(
         {
-            "contract": 5,
+            "contract": 6,
             "run_id": "smoke-20260725-000000-t0",
             "experiment": "infra-acceptance",
             "name": "smoke",

@@ -1,12 +1,3 @@
-"""Declarations are the only place a parameter's limits are written down.
-
-The catalog is exported from these, never hand-written, so an entry cannot
-declare a knob it does not read or grow one an experiment has not heard of.
-Three fields, and the two that could both be called a default are kept apart:
-``search`` is the default *range* the sampler uses, ``placeholder`` is the value
-the parameter takes when it is not searched at all.
-"""
-
 from __future__ import annotations
 
 from dataclasses import dataclass
@@ -48,11 +39,6 @@ def test_dataclass_metadata_exports_a_parameter_tree() -> None:
 
 
 def test_a_parameter_without_a_search_is_not_a_search_dimension() -> None:
-    """``reward_trace_reset_on_done`` selects between a correct trace and a
-    published defect. Left searchable, the sampler would try the defect and, on
-    a task where leaking reward inflates the scale, report it as the better
-    setting."""
-
     tree = describe_parameters(Agent)
 
     assert tree["reward_trace_reset_on_done"].search is None
