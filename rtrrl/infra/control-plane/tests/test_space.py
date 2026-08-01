@@ -1,104 +1,236 @@
+from __future__ import annotations
+
 import optuna
 import pytest
 from training_sdk.contract import ChoiceSpec, EntryDescriptor
 
 from trainer_infra.space import (
     SpaceError,
-    distributions,
-    resolve_space,
+    grid_distributions,
+    has_unpinned_structure,
+    resolve_parameters,
+    sample_parameters,
 )
 
 optuna.logging.set_verbosity(optuna.logging.WARNING)
 
 
-def make_entry(space: dict) -> EntryDescriptor:
+def make_entry(parameters: dict) -> EntryDescriptor:
     return EntryDescriptor.model_validate(
         {
             "command": ["run"],
-            "metrics": ["episode_return"],
-            "space": space,
+            "metrics": ["eval/episode/return"],
+            "parameters": parameters,
         }
     )
 
 
-def test_override_replaces_entry_by_key() -> None:
-    entry = make_entry(
-        {
-            "total_steps": {"type": "int", "low": 1, "high": 1000},
-            "learning_rate": {"type": "float", "low": 1e-6, "high": 1e-2},
-        }
-    )
-    resolved = resolve_space(entry, {"total_steps": ChoiceSpec.model_validate([128])})
-    assert resolved["total_steps"].choices == (128,)
-    assert resolved["learning_rate"].high == 1e-2
-
-
-def test_unknown_override_key_is_rejected() -> None:
-    entry = make_entry({"total_steps": [128]})
-    with pytest.raises(SpaceError, match="learnign_rate"):
-        resolve_space(entry, {"learnign_rate": ChoiceSpec.model_validate([0.1])})
-
-
-def test_distributions_cover_every_key() -> None:
-    entry = make_entry(
-        {
-            "total_steps": [128],
-            "env": ["walker2d", "ant"],
-            "num_envs": {"type": "int", "low": 256, "high": 1024, "step": 256},
-            "warmup_steps": {"type": "int", "low": 100, "high": 10000, "log": True},
-            "learning_rate": {"type": "float", "low": 1e-6, "high": 1e-2, "log": True},
-        }
-    )
-    built = distributions(resolve_space(entry, {}))
-    assert set(built) == {
-        "total_steps",
-        "env",
-        "num_envs",
-        "warmup_steps",
-        "learning_rate",
+def learning_rate() -> dict:
+    return {
+        "kind": "param",
+        "value_type": "float",
+        "valid": {"type": "float", "low": 1e-9, "high": 10.0},
+        "search": {"type": "float", "low": 1e-4, "high": 1e-2, "log": True},
+        "placeholder": 0.001,
     }
-    assert isinstance(built["total_steps"], optuna.distributions.CategoricalDistribution)
-    assert isinstance(built["num_envs"], optuna.distributions.IntDistribution)
-    assert built["num_envs"].step == 256
-    assert built["num_envs"].log is False
-    assert isinstance(built["warmup_steps"], optuna.distributions.IntDistribution)
-    assert built["warmup_steps"].log is True
-    assert isinstance(built["learning_rate"], optuna.distributions.FloatDistribution)
-    assert built["learning_rate"].log is True
 
 
-def test_optuna_can_sample_every_built_distribution() -> None:
-    entry = make_entry(
-        {
-            "total_steps": [128],
-            "env": ["walker2d", "ant"],
-            "num_envs": {"type": "int", "low": 256, "high": 1024, "step": 256},
-            "learning_rate": {"type": "float", "low": 1e-6, "high": 1e-2, "log": True},
-        }
-    )
-    built = distributions(resolve_space(entry, {}))
+def unsearched(placeholder: bool = True) -> dict:
+    return {
+        "kind": "param",
+        "value_type": "bool",
+        "valid": [False, True],
+        "placeholder": placeholder,
+    }
+
+
+def kappa(placeholder: float) -> dict:
+    return {
+        "kind": "param",
+        "value_type": "float",
+        "valid": {"type": "float", "low": 0.0, "high": 100.0},
+        "search": {"type": "float", "low": 0.5, "high": 10.0},
+        "placeholder": placeholder,
+    }
+
+
+def bound() -> dict:
+    return {
+        "kind": "structure",
+        "placeholder": "ob",
+        "search": ["none", "ob", "adaptive_ob"],
+        "branches": {
+            "none": {},
+            "ob": {"kappa": kappa(1.0)},
+            "adaptive_ob": {
+                "kappa": kappa(2.0),
+                "beta2": {
+                    "kind": "param",
+                    "value_type": "float",
+                    "valid": {"type": "float", "low": 0.0, "high": 1.0},
+                    "search": {"type": "float", "low": 0.9, "high": 0.9999},
+                    "placeholder": 0.999,
+                },
+            },
+        },
+    }
+
+
+def a_trial() -> optuna.trial.Trial:
     study = optuna.create_study(sampler=optuna.samplers.RandomSampler(seed=0))
-    trial = study.ask(built)
-    assert trial.params["total_steps"] == 128
-    assert trial.params["env"] in {"walker2d", "ant"}
-    assert 256 <= trial.params["num_envs"] <= 1024
-    assert trial.params["num_envs"] % 256 == 0
-    assert 1e-6 <= trial.params["learning_rate"] <= 1e-2
+    return study.ask()
 
 
-def test_unknown_override_key_lists_declared_keys() -> None:
-    entry = make_entry({"total_steps": [128], "learning_rate": [0.1]})
-    with pytest.raises(
-        SpaceError,
-        match="experiment declares parameters the entry does not accept: learnign_rate; "
-        "entry declares: learning_rate, total_steps",
-    ):
-        resolve_space(entry, {"learnign_rate": ChoiceSpec.model_validate([0.1])})
+def test_an_unknown_override_is_rejected() -> None:
+    entry = make_entry({"learning_rate": learning_rate()})
+
+    with pytest.raises(SpaceError, match="learnign_rate"):
+        resolve_parameters(entry, {"learnign_rate": ChoiceSpec.model_validate([0.1])})
 
 
-def test_distributions_rejects_unsupported_space_entry() -> None:
-    class UnsupportedSpec:
-        pass
+def test_an_unknown_override_lists_what_the_entry_declares() -> None:
+    entry = make_entry({"learning_rate": learning_rate()})
 
-    with pytest.raises(SpaceError, match="unsupported space entry for rogue"):
-        distributions({"rogue": UnsupportedSpec()})  # type: ignore[dict-item]
+    with pytest.raises(SpaceError, match="entry declares: learning_rate"):
+        resolve_parameters(entry, {"learnign_rate": ChoiceSpec.model_validate([0.1])})
+
+
+def test_an_override_outside_valid_is_rejected() -> None:
+    entry = make_entry({"learning_rate": learning_rate()})
+
+    with pytest.raises(SpaceError, match="learning_rate"):
+        resolve_parameters(entry, {"learning_rate": ChoiceSpec.model_validate([20.0])})
+
+
+def test_an_override_range_outside_valid_is_rejected() -> None:
+    entry = make_entry({"learning_rate": learning_rate()})
+    wide = {"type": "float", "low": 1e-4, "high": 50.0}
+
+    with pytest.raises(SpaceError, match="learning_rate"):
+        resolve_parameters(entry, {"learning_rate": _spec(wide)})
+
+
+def test_a_parameter_without_a_search_takes_its_placeholder() -> None:
+    entry = make_entry({"reward_trace_reset_on_done": unsearched()})
+    resolved = resolve_parameters(entry, {})
+
+    assert sample_parameters(a_trial(), resolved) == {
+        "reward_trace_reset_on_done": True
+    }
+
+
+def test_a_parameter_without_a_search_may_still_be_pinned_by_an_experiment() -> None:
+    entry = make_entry({"reward_trace_reset_on_done": unsearched()})
+    resolved = resolve_parameters(
+        entry, {"reward_trace_reset_on_done": ChoiceSpec.model_validate([False])}
+    )
+
+    assert sample_parameters(a_trial(), resolved) == {
+        "reward_trace_reset_on_done": False
+    }
+
+
+def test_branch_parameters_are_keyed_by_their_path() -> None:
+    entry = make_entry({"optimizer_bound": bound()})
+    resolved = resolve_parameters(
+        entry, {"optimizer_bound": ChoiceSpec.model_validate(["ob"])}
+    )
+
+    chosen = sample_parameters(a_trial(), resolved)
+
+    assert chosen["optimizer_bound"] == "ob"
+    assert "optimizer_bound.ob.kappa" in chosen
+    assert "optimizer_bound.adaptive_ob.kappa" in chosen
+
+
+def test_an_unchosen_branch_collapses_to_its_placeholders() -> None:
+    entry = make_entry({"optimizer_bound": bound()})
+    resolved = resolve_parameters(
+        entry, {"optimizer_bound": ChoiceSpec.model_validate(["ob"])}
+    )
+
+    chosen = sample_parameters(a_trial(), resolved)
+
+    assert 0.5 <= chosen["optimizer_bound.ob.kappa"] <= 10.0
+    assert chosen["optimizer_bound.adaptive_ob.kappa"] == 2.0
+    assert chosen["optimizer_bound.adaptive_ob.beta2"] == 0.999
+
+
+def test_the_manifest_carries_every_declared_parameter() -> None:
+    entry = make_entry({"learning_rate": learning_rate(), "optimizer_bound": bound()})
+    resolved = resolve_parameters(entry, {})
+
+    chosen = sample_parameters(a_trial(), resolved)
+
+    assert set(chosen) == {
+        "learning_rate",
+        "optimizer_bound",
+        "optimizer_bound.ob.kappa",
+        "optimizer_bound.adaptive_ob.kappa",
+        "optimizer_bound.adaptive_ob.beta2",
+    }
+
+
+def test_a_branch_override_is_checked_against_that_branch() -> None:
+    entry = make_entry({"optimizer_bound": bound()})
+
+    with pytest.raises(SpaceError, match=r"optimizer_bound\.ob\.kappa"):
+        resolve_parameters(
+            entry, {"optimizer_bound.ob.kappa": ChoiceSpec.model_validate([500.0])}
+        )
+
+
+def test_a_structure_may_not_choose_a_branch_it_does_not_have() -> None:
+    entry = make_entry({"optimizer_bound": bound()})
+
+    with pytest.raises(SpaceError, match="obgd"):
+        resolve_parameters(
+            entry, {"optimizer_bound": ChoiceSpec.model_validate(["obgd"])}
+        )
+
+
+def test_a_pinned_structure_is_not_unpinned() -> None:
+    entry = make_entry({"optimizer_bound": bound()})
+
+    assert not has_unpinned_structure(
+        resolve_parameters(
+            entry, {"optimizer_bound": ChoiceSpec.model_validate(["ob"])}
+        )
+    )
+    assert has_unpinned_structure(resolve_parameters(entry, {}))
+
+
+def test_the_grid_sampler_cannot_enumerate_an_unpinned_structure() -> None:
+    entry = make_entry({"optimizer_bound": bound()})
+
+    with pytest.raises(SpaceError, match="structure"):
+        grid_distributions(resolve_parameters(entry, {}))
+
+
+def test_the_grid_sampler_enumerates_a_pinned_branch() -> None:
+    entry = make_entry({"optimizer_bound": bound()})
+    resolved = resolve_parameters(
+        entry,
+        {
+            "optimizer_bound": ChoiceSpec.model_validate(["ob"]),
+            "optimizer_bound.ob.kappa": ChoiceSpec.model_validate([1.0, 2.0]),
+        },
+    )
+
+    built = grid_distributions(resolved)
+
+    assert sorted(built) == ["optimizer_bound", "optimizer_bound.ob.kappa"]
+    assert list(built["optimizer_bound.ob.kappa"].choices) == [1.0, 2.0]
+
+
+def test_the_grid_sampler_refuses_a_range() -> None:
+    entry = make_entry({"learning_rate": learning_rate()})
+
+    with pytest.raises(SpaceError, match="learning_rate"):
+        grid_distributions(resolve_parameters(entry, {}))
+
+
+def _spec(raw: dict):
+    from training_sdk.contract import FloatSpec
+
+    return FloatSpec.model_validate(raw)
