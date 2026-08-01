@@ -1,41 +1,264 @@
 from __future__ import annotations
 
-from optuna.distributions import (
-    BaseDistribution,
-    CategoricalDistribution,
-    FloatDistribution,
-    IntDistribution,
+from dataclasses import dataclass, field
+
+from optuna.distributions import CategoricalDistribution
+from optuna.trial import Trial
+from training_sdk.contract import (
+    ChoiceSpec,
+    EntryDescriptor,
+    FloatSpec,
+    FloatValidSpec,
+    IntSpec,
+    IntValidSpec,
+    ParameterNode,
+    ParameterSpec,
+    Scalar,
+    SpaceEntry,
+    StructureSpec,
+    ValidSpec,
 )
-from training_sdk.contract import ChoiceSpec, EntryDescriptor, FloatSpec, IntSpec, SpaceEntry
+
 
 class SpaceError(ValueError):
     """The resolved search space is not usable."""
 
 
-def resolve_space(
+@dataclass(frozen=True)
+class ResolvedParameters:
+    tree: dict[str, ParameterNode]
+    overrides: dict[str, SpaceEntry] = field(default_factory=dict)
+
+
+def resolve_parameters(
     entry: EntryDescriptor, overrides: dict[str, SpaceEntry]
-) -> dict[str, SpaceEntry]:
-    unknown = sorted(set(overrides) - set(entry.space))
+) -> ResolvedParameters:
+    declared = flatten(entry.parameters)
+    unknown = sorted(set(overrides) - set(declared))
     if unknown:
-        declared = ", ".join(sorted(entry.space))
         raise SpaceError(
-            f"experiment declares parameters the entry does not accept: "
-            f"{', '.join(unknown)}; entry declares: {declared}"
+            "experiment declares parameters the entry does not accept: "
+            f"{', '.join(unknown)}; entry declares: {', '.join(sorted(declared))}"
         )
-    return dict(entry.space) | dict(overrides)
+    for key, override in overrides.items():
+        node = declared[key]
+        if isinstance(node, StructureSpec):
+            _check_structure_override(key, node, override)
+        else:
+            _check_override(key, node, override)
+    return ResolvedParameters(tree=entry.parameters, overrides=dict(overrides))
 
 
-def distributions(space: dict[str, SpaceEntry]) -> dict[str, BaseDistribution]:
-    built: dict[str, BaseDistribution] = {}
-    for key, spec in space.items():
-        if isinstance(spec, ChoiceSpec):
-            built[key] = CategoricalDistribution(choices=list(spec.choices))
-        elif isinstance(spec, IntSpec):
-            built[key] = IntDistribution(
-                low=spec.low, high=spec.high, step=spec.step, log=spec.log
-            )
-        elif isinstance(spec, FloatSpec):
-            built[key] = FloatDistribution(low=spec.low, high=spec.high, log=spec.log)
-        else:  # the union is closed
-            raise SpaceError(f"unsupported space entry for {key}")
+def flatten(
+    tree: dict[str, ParameterNode], prefix: str = ""
+) -> dict[str, ParameterNode]:
+    found: dict[str, ParameterNode] = {}
+    for name, node in tree.items():
+        key = f"{prefix}{name}"
+        if key in found:
+            raise SpaceError(f"parameter {key!r} is declared more than once")
+        found[key] = node
+        if isinstance(node, StructureSpec):
+            for branch, subtree in node.branches.items():
+                for sub_key, sub_node in flatten(subtree, prefix=f"{branch}.").items():
+                    if sub_key in found:
+                        raise SpaceError(
+                            f"parameter {sub_key!r} is declared more than once"
+                        )
+                    found[sub_key] = sub_node
+    return found
+
+
+def sample_parameters(trial: Trial, resolved: ResolvedParameters) -> dict[str, Scalar]:
+    chosen: dict[str, Scalar] = {}
+    _sample(trial, resolved.tree, resolved.overrides, chosen, prefix="", active=True)
+    return chosen
+
+
+def has_unpinned_structure(resolved: ResolvedParameters) -> bool:
+    return _unpinned(resolved.tree, resolved.overrides, prefix="")
+
+
+def grid_distributions(
+    resolved: ResolvedParameters,
+) -> dict[str, CategoricalDistribution]:
+    built: dict[str, CategoricalDistribution] = {}
+    _grid(resolved.tree, resolved.overrides, built, prefix="")
     return built
+
+
+def _sample(
+    trial: Trial,
+    tree: dict[str, ParameterNode],
+    overrides: dict[str, SpaceEntry],
+    chosen: dict[str, Scalar],
+    *,
+    prefix: str,
+    active: bool,
+) -> None:
+    for name, node in tree.items():
+        key = f"{prefix}{name}"
+        if isinstance(node, StructureSpec):
+            branch = (
+                _branch(trial, key, node, overrides)
+                if active
+                else str(node.placeholder)
+            )
+            chosen[key] = branch
+            for candidate, subtree in node.branches.items():
+                _sample(
+                    trial,
+                    subtree,
+                    overrides,
+                    chosen,
+                    prefix=f"{candidate}.",
+                    active=active and candidate == branch,
+                )
+        else:
+            chosen[key] = _value(trial, key, node, overrides, active=active)
+
+
+def _branch(
+    trial: Trial, key: str, node: StructureSpec, overrides: dict[str, SpaceEntry]
+) -> str:
+    override = overrides.get(key)
+    if override is not None:
+        return str(_suggest(trial, key, override))
+    if node.search is None:
+        return str(node.placeholder)
+    return str(trial.suggest_categorical(key, list(node.search)))
+
+
+def _value(
+    trial: Trial,
+    key: str,
+    node: ParameterSpec,
+    overrides: dict[str, SpaceEntry],
+    *,
+    active: bool,
+) -> Scalar:
+    if not active:
+        return node.placeholder
+    spec = overrides.get(key, node.search)
+    if spec is None:
+        return node.placeholder
+    return _suggest(trial, key, spec)
+
+
+def _suggest(trial: Trial, key: str, spec: SpaceEntry) -> Scalar:
+    if isinstance(spec, FloatSpec):
+        return trial.suggest_float(key, spec.low, spec.high, log=spec.log)
+    if isinstance(spec, IntSpec):
+        return trial.suggest_int(key, spec.low, spec.high, step=spec.step, log=spec.log)
+    if isinstance(spec, ChoiceSpec):
+        return trial.suggest_categorical(key, list(spec.choices))
+    raise SpaceError(f"unsupported space entry for {key}")
+
+
+def _unpinned(
+    tree: dict[str, ParameterNode], overrides: dict[str, SpaceEntry], *, prefix: str
+) -> bool:
+    for name, node in tree.items():
+        if not isinstance(node, StructureSpec):
+            continue
+        key = f"{prefix}{name}"
+        candidates = _candidates(key, node, overrides)
+        if len(candidates) > 1:
+            return True
+        branch = str(candidates[0])
+        if _unpinned(node.branches[branch], overrides, prefix=f"{branch}."):
+            return True
+    return False
+
+
+def _grid(
+    tree: dict[str, ParameterNode],
+    overrides: dict[str, SpaceEntry],
+    built: dict[str, CategoricalDistribution],
+    *,
+    prefix: str,
+) -> None:
+    for name, node in tree.items():
+        key = f"{prefix}{name}"
+        if isinstance(node, StructureSpec):
+            candidates = _candidates(key, node, overrides)
+            if len(candidates) > 1:
+                raise SpaceError(
+                    "the grid sampler cannot enumerate an unpinned structure: "
+                    f"{key} may be {', '.join(map(str, candidates))}"
+                )
+            branch = str(candidates[0])
+            if key in overrides or node.search is not None:
+                built[key] = CategoricalDistribution(list(candidates))
+            _grid(node.branches[branch], overrides, built, prefix=f"{branch}.")
+            continue
+        spec = overrides.get(key, node.search)
+        if spec is None:
+            continue
+        if not isinstance(spec, ChoiceSpec):
+            raise SpaceError(
+                "the grid sampler needs every parameter to be a fixed list of "
+                f"values, but {key} is a range; either pin it or use tpe or random"
+            )
+        built[key] = CategoricalDistribution(list(spec.choices))
+
+
+def _candidates(
+    key: str, node: StructureSpec, overrides: dict[str, SpaceEntry]
+) -> list[Scalar]:
+    override = overrides.get(key)
+    if override is not None:
+        if not isinstance(override, ChoiceSpec):
+            raise SpaceError(f"{key} is a structure and must be pinned to a list")
+        return list(override.choices)
+    if node.search is not None:
+        return list(node.search)
+    return [node.placeholder]
+
+
+def _check_structure_override(
+    key: str, node: StructureSpec, override: SpaceEntry
+) -> None:
+    if not isinstance(override, ChoiceSpec):
+        raise SpaceError(f"{key} is a structure and must be pinned to a list")
+    unknown = sorted(str(c) for c in set(override.choices) - set(node.branches))
+    if unknown:
+        raise SpaceError(
+            f"{key} names branches it does not have: {', '.join(unknown)}; "
+            f"it has: {', '.join(sorted(node.branches))}"
+        )
+
+
+def _check_override(key: str, node: ParameterSpec, override: SpaceEntry) -> None:
+    if isinstance(override, ChoiceSpec):
+        for choice in override.choices:
+            _inside(key, node.valid, choice)
+        return
+    if node.value_type == "int" and isinstance(override, FloatSpec):
+        raise SpaceError(f"{key} is an int but the experiment gives a float range")
+    if override.log and override.low <= 0:
+        raise SpaceError(f"{key} log search low must be above zero")
+    _inside(key, node.valid, override.low)
+    _inside(key, node.valid, override.high)
+
+
+def _inside(key: str, valid: ValidSpec, value: Scalar) -> None:
+    if isinstance(valid, ChoiceSpec):
+        if value not in valid.choices:
+            raise SpaceError(
+                f"{key} value {value!r} is outside its valid choices: "
+                f"{', '.join(map(str, valid.choices))}"
+            )
+        return
+    if isinstance(valid, IntValidSpec):
+        if type(value) is not int:
+            raise SpaceError(f"{key} value {value!r} is not an int")
+    elif not isinstance(valid, FloatValidSpec):
+        raise SpaceError(f"unsupported valid spec for {key}")
+    elif type(value) not in (int, float):
+        raise SpaceError(f"{key} value {value!r} is not numeric")
+    numeric = float(value)
+    if valid.low is not None and numeric < valid.low:
+        raise SpaceError(f"{key} value {value!r} is below its valid low {valid.low}")
+    if valid.high is not None and numeric > valid.high:
+        raise SpaceError(f"{key} value {value!r} is above its valid high {valid.high}")
