@@ -1135,6 +1135,91 @@ this kernel cannot hold, and each such case raises naming the phase that removes
 
 ---
 
+### Task 5: Requirements, Module Design, and Tests Aligned To Them
+
+**Files:**
+- Modify: `memo/tests/test_entries.py`
+- Modify: `memo/tests/test_loop.py`
+- Create: `memo/tests/test_stream_ac_parameters.py`
+- Modify: `memo/tests/test_algorithms.py`
+
+No source changes. This task states what the modules must be and writes the tests that
+say so; every one of them is expected to fail until Task 6.
+
+**Requirements**
+
+1. One set of names. The kernel takes the bound by the name the configuration surface
+   uses -- `ob`, `adaptive_ob`, `adaptive_ob_fixed` -- and there is no table mapping
+   those onto older ones. `BOUNDED_RULES` and the entry's `_RULES` are gone.
+2. The kernel takes components, not fields. `StreamACConfig` holds a bound and a base
+   per role as instances of the declared dataclasses, so two roles asking for different
+   bounds is ordinary rather than an error.
+3. Nothing declared twice. A component's limits are written once, beside it; the entry
+   names structures and the parameters no structure holds, and reads components back
+   with `read_branch`.
+4. The framework's tests read `PARAMETERS`. Nothing in `memo/tests` or `memo/runner`
+   reaches for `SPACE`.
+5. `stream_ac` passes. The other three entries keep `SPACE`, so the catalog does not
+   build and their tests fail; that is the expected state, not a regression.
+
+**Modules**
+
+- `memorax/rl/updates.py`: `make_bounded_rule(*, bound, base)` taking the declared
+  component instances and returning an `UpdateRule`. `bound=None` is the unbounded
+  path; `base` carries the rate. The old `make_obgd_rule` signature, its `rule` string
+  and `BOUNDED_RULES` are deleted.
+- `memorax/algorithms/stream_ac.py`: `StreamACConfig` loses `actor_lr`, `critic_lr`,
+  `actor_kappa`, `critic_kappa`, `bounded_rule`, `beta2` and `eps`, and gains
+  `actor_bound`, `actor_base`, `critic_bound`, `critic_base`.
+- `memo/entries/stream_ac.py`: `build` reads four components and passes them through.
+  `_optimizer`, `_rate` and `_RULES` disappear.
+
+**Out of scope, and why**
+
+The normaliser keeps its single shared config. Two instances need the observation and
+reward paths separated inside the component, which is the phase 5 work in the spec, so
+`_normalization` and its reconciliation stay until then. `optimizer_base=adam` and
+`optimizer_bound=none` stay unreachable until the phase 3 decomposition; the tests
+assert that asking for them raises and names the phase.
+
+- [ ] **Step 1: Rewrite `test_entries.py` against `PARAMETERS`**
+- [ ] **Step 2: Rewrite `test_loop.py`'s catalog comparison**
+- [ ] **Step 3: Write `test_stream_ac_parameters.py`**
+
+The tree's shape, that no entry field restates a component's, that `read_branch` gives
+back what was declared, and that the two unreachable combinations raise naming their
+phase.
+
+- [ ] **Step 4: Point `test_algorithms.py` at the component config**
+- [ ] **Step 5: Run them and record the failure set**
+
+Every new assertion fails. Record which, so Task 6 closes exactly those.
+
+---
+
+### Task 6: Implement, Remove the Dual Path, Turn `stream_ac` Green
+
+**Files:**
+- Modify: `memo/memorax/rl/updates.py`
+- Modify: `memo/memorax/rl/__init__.py`
+- Modify: `memo/memorax/algorithms/stream_ac.py`
+- Modify: `memo/entries/stream_ac.py`
+
+- [ ] **Step 1: `make_bounded_rule` takes components**
+- [ ] **Step 2: `StreamACConfig` holds the four components**
+- [ ] **Step 3: `build` stops translating**
+- [ ] **Step 4: Delete `BOUNDED_RULES`, `_RULES`, `OPTIMIZER_BOUNDS`, `OPTIMIZER_BASES`**
+
+The last two are dead on arrival; the branch dictionaries already carry the names.
+
+- [ ] **Step 5: Verify**
+
+`stream_ac`'s tests pass and the Task 5 failure set is closed. `memo`'s remaining
+failures are the three unmigrated entries, the experiments written against retired
+names, and the five sanctioned golden failures -- and nothing else.
+
+---
+
 ## Self-Review
 
 **Spec coverage.** This plan covers §3 `valid/search/placeholder`, YAML scalar pins, catalog `parameters`, manifest flat full params, and no Python-side `params.get` defaults for declared parameters. It covers §4 structure trees, inactive-branch placeholder collapse, conditional Optuna suggestions, grid rejection for unpinned structures, and the decision not to add a general cross-parameter constraint system. It covers the StreamAC `eps` split and the AAAI "no eps" decision. It does not cover OBGD `bound/base` decomposition or metric logging.
