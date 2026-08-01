@@ -30,7 +30,12 @@ from dataclasses import dataclass
 from typing import Any
 
 import flax.linen as nn
-from training_sdk.parameters import describe_parameters, param, structure
+from training_sdk.parameters import (
+    describe_parameters,
+    param,
+    read_branch,
+    structure,
+)
 from training_sdk.reporter import Reporter
 
 from memorax.algorithms.stream_ac import StreamAC, StreamACConfig
@@ -46,6 +51,7 @@ from memorax.rl import CREDITS, NormalizationConfig
 from memorax.rl.normalization import (
     NORMALIZATION_BRANCHES,
     REWARD_NORMALIZATION_BRANCHES,
+    RunningNormalization,
 )
 from memorax.rl.updates import BASE_BRANCHES, BOUND_BRANCHES
 from runner.loop import drive, named_scalars
@@ -97,80 +103,53 @@ TRAINING_METRICS: tuple[str, ...] = (
 )
 
 
-def _bound(params: Mapping[str, Any], role: str) -> tuple[str, float, float, float]:
-    field = f"{role}_optimizer_bound"
-    branch = str(params[field])
-    if branch == "none":
-        raise ValueError(
-            f"{field}=none needs the bound and base decomposition; this kernel "
-            "always applies a bound"
-        )
-    kappa = float(params[f"{field}.{branch}.kappa"])
-    if branch == "ob":
-        return "obgd", kappa, 0.0, 1e-8
-    return (
-        {"adaptive_ob": "adaptive_obgd", "adaptive_ob_fixed": "adaptive_obgd_fixed"}[
-            branch
-        ],
-        kappa,
-        float(params[f"{field}.{branch}.beta2"]),
-        float(params[f"{field}.{branch}.eps"]),
-    )
+_RULES = {"ob": "obgd", "adaptive_ob": "adaptive_obgd", "adaptive_ob_fixed": "adaptive_obgd_fixed"}
 
 
-def _rate(params: Mapping[str, Any], role: str) -> float:
-    field = f"{role}_optimizer_base"
-    branch = str(params[field])
-    if branch != "sgd":
+def _optimizer(params: Mapping[str, Any], role: str) -> tuple[str, float, float, float, float]:
+    bound_name, bound = read_branch(params, f"{role}_optimizer_bound", BOUND_BRANCHES)
+    base_name, base = read_branch(params, f"{role}_optimizer_base", BASE_BRANCHES)
+    if bound is None:
         raise ValueError(
-            f"{field}={branch} needs the bound and base decomposition; this "
-            "kernel folds the rate into the bound"
+            f"{role}_optimizer_bound=none needs the bound and base decomposition; "
+            "this kernel always applies a bound"
         )
-    return float(params[f"{field}.{branch}.lr"])
+    if base_name != "sgd":
+        raise ValueError(
+            f"{role}_optimizer_base={base_name} needs the bound and base "
+            "decomposition; this kernel folds the rate into the bound"
+        )
+    beta2 = getattr(bound, "beta2", 0.0)
+    eps = getattr(bound, "eps", 1e-8)
+    return _RULES[bound_name], base.lr, bound.kappa, beta2, eps
 
 
 def _normalization(params: Mapping[str, Any], *, reward_gamma: float):
-    observation = str(params["observation_normalization"])
-    reward = str(params["reward_normalization"])
-    settings = {}
-    for field, branch in (
-        ("observation_normalization", observation),
-        ("reward_normalization", reward),
-    ):
-        if branch == "none":
-            continue
-        prefix = f"{field}.{branch}."
-        found = (
-            str(params[prefix + "cold_start"]),
-            str(params[prefix + "variance"]),
-            float(params[prefix + "eps"]),
-            bool(params[prefix + "reset_on_start"]),
-            bool(params[prefix + "update_during_eval"]),
-        )
-        settings.setdefault(found, []).append(field)
-    if len(settings) > 1:
-        raise ValueError(
-            "this kernel carries one set of running statistics for both streams; "
-            f"{' and '.join(sorted(name for names in settings.values() for name in names))} "
-            "ask for different ones"
-        )
-    cold_start, variance, eps, reset_on_start, update_during_eval = next(
-        iter(settings), ("seeded", "population", 1e-8, False, True)
+    _, observation = read_branch(
+        params, "observation_normalization", NORMALIZATION_BRANCHES
     )
+    _, reward = read_branch(params, "reward_normalization", REWARD_NORMALIZATION_BRANCHES)
+    running = [one for one in (observation, reward) if one is not None]
+    shared = {
+        (one.cold_start, one.variance, one.eps, one.reset_on_start, one.update_during_eval)
+        for one in running
+    }
+    if len(shared) > 1:
+        raise ValueError(
+            "this kernel carries one set of running statistics for both streams, "
+            "and the two normalisers ask for different ones"
+        )
+    first = running[0] if running else RunningNormalization()
     return NormalizationConfig(
-        normalize_observation=observation != "none",
-        normalize_reward=reward != "none",
-        eps=eps,
+        normalize_observation=observation is not None,
+        normalize_reward=reward is not None,
+        eps=first.eps,
         reward_gamma=reward_gamma,
-        reset_on_start=reset_on_start,
-        update_during_eval=update_during_eval,
-        cold_start=cold_start,
-        variance=variance,
-        reward_trace_reset_on_done=(
-            True
-            if reward == "none"
-            else bool(params[f"reward_normalization.{reward}.reset_on_done"])
-        ),
+        reset_on_start=first.reset_on_start,
+        update_during_eval=first.update_during_eval,
+        cold_start=first.cold_start,
+        variance=first.variance,
+        reward_trace_reset_on_done=True if reward is None else reward.reset_on_done,
     )
 
 
@@ -209,8 +188,10 @@ def build(params: Mapping[str, Any], environment, training) -> StreamAC:
             head=head,
         )
 
-    actor_rule, actor_kappa, actor_beta2, actor_eps = _bound(params, "actor")
-    critic_rule, critic_kappa, critic_beta2, critic_eps = _bound(params, "critic")
+    actor_rule, actor_lr, actor_kappa, actor_beta2, actor_eps = _optimizer(params, "actor")
+    critic_rule, critic_lr, critic_kappa, critic_beta2, critic_eps = _optimizer(
+        params, "critic"
+    )
     if (actor_rule, actor_beta2, actor_eps) != (critic_rule, critic_beta2, critic_eps):
         raise ValueError(
             "this kernel carries one bounded rule for both roles; actor and "
@@ -223,8 +204,8 @@ def build(params: Mapping[str, Any], environment, training) -> StreamAC:
             num_envs=training.num_envs,
             gamma=gamma,
             trace_lambda=float(params["trace_lambda"]),
-            actor_lr=_rate(params, "actor"),
-            critic_lr=_rate(params, "critic"),
+            actor_lr=actor_lr,
+            critic_lr=critic_lr,
             actor_kappa=actor_kappa,
             critic_kappa=critic_kappa,
             entropy_coefficient=float(params["entropy_coefficient"]),

@@ -5,7 +5,12 @@ from dataclasses import dataclass
 import pytest
 
 from training_sdk.contract import ChoiceSpec, FloatValidSpec
-from training_sdk.parameters import describe_parameters, param, structure
+from training_sdk.parameters import (
+    describe_parameters,
+    param,
+    read_branch,
+    structure,
+)
 
 
 @dataclass(frozen=True)
@@ -120,3 +125,35 @@ def test_a_field_that_is_not_a_declaration_is_refused() -> None:
 
     with pytest.raises(ValueError, match="x"):
         describe_parameters(Bad)
+
+
+def test_a_component_is_read_back_from_its_subtree() -> None:
+    params = {
+        "optimizer_base": "adam",
+        "optimizer_base.adam.b1": 0.95,
+        "optimizer_base.sgd.b1": 0.9,
+    }
+
+    branch, component = read_branch(params, "optimizer_base", {"sgd": (), "adam": Adam})
+
+    assert branch == "adam"
+    assert component == Adam(b1=0.95)
+
+
+def test_a_branch_without_parameters_reads_as_none() -> None:
+    branch, component = read_branch(
+        {"optimizer_base": "sgd"}, "optimizer_base", {"sgd": (), "adam": Adam}
+    )
+
+    assert branch == "sgd"
+    assert component is None
+
+
+def test_a_missing_key_is_an_error_rather_than_a_default() -> None:
+    with pytest.raises(KeyError, match="optimizer_base.adam.b1"):
+        read_branch({"optimizer_base": "adam"}, "optimizer_base", {"adam": Adam})
+
+
+def test_an_unknown_branch_is_refused() -> None:
+    with pytest.raises(KeyError, match="rmsprop"):
+        read_branch({"optimizer_base": "rmsprop"}, "optimizer_base", {"adam": Adam})

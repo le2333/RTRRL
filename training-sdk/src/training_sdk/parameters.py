@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import Field as DataclassField
 from dataclasses import field, fields, is_dataclass
+from collections.abc import Mapping
 from typing import Any
 
 from training_sdk.contract import (
@@ -169,3 +170,35 @@ def _check_search(name: str, valid: ValidSpec, search: SpaceEntry) -> None:
         raise ValueError(f"{name} log search low must be above zero")
     _check_value(name, "search low", valid, search.low)
     _check_value(name, "search high", valid, search.high)
+
+
+def read_parameters(model: type, params: Mapping[str, Any], prefix: str = "") -> Any:
+    if not is_dataclass(model):
+        raise TypeError(f"{model.__name__} must be a dataclass")
+    values = {}
+    for item in fields(model):
+        key = f"{prefix}{item.name}"
+        if key not in params:
+            raise KeyError(f"the manifest carries no {key!r}")
+        values[item.name] = params[key]
+    return model(**values)
+
+
+def read_branch(
+    params: Mapping[str, Any],
+    field_name: str,
+    branches: Mapping[str, Any],
+    prefix: str = "",
+) -> tuple[str, Any]:
+    key = f"{prefix}{field_name}"
+    if key not in params:
+        raise KeyError(f"the manifest carries no {key!r}")
+    branch = str(params[key])
+    if branch not in branches:
+        raise KeyError(
+            f"{key} is {branch!r}, which is not one of {', '.join(sorted(branches))}"
+        )
+    model = branches[branch]
+    if model in (None, (), {}):
+        return branch, None
+    return branch, read_parameters(model, params, prefix=f"{key}.{branch}.")
