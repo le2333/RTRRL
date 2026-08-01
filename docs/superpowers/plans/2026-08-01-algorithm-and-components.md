@@ -24,6 +24,8 @@
 
 ## File Structure
 
+- `memo/memorax/environments/brax.py`: the wrapper carries out brax's `truncation` and the observation from before the auto-reset, and takes `episode_length` from the environment section instead of the literal 1000.
+- `memo/memorax/rl/td.py`: `td0` takes `terminal` and `gamma` rather than a discount its caller already multiplied.
 - `memo/memorax/rl/updates.py`: `make_bounded_rule(*, bound, base)` over component instances. `make_obgd_rule`, its `rule` string and `BOUNDED_RULES` are deleted.
 - `memo/memorax/rl/normalization.py`: a running estimator that centres or does not, and a discounted trace. Neither names an observation or a reward.
 - `memo/memorax/networks/`: components compose into a sequence. `Network`, `torso.py`'s `TORSOS`/`make_torso`, and `FeatureExtractor` are deleted.
@@ -56,7 +58,42 @@ entry's `_RULES` table, `_optimizer` and `_rate`.
 
 ---
 
-### Task 2: The Normaliser Stops Naming Its Streams
+### Task 2: Terminal and Done Are Two Signals
+
+**Interfaces:**
+- Consumes: brax's `truncation`, and the state the auto-reset wrapper replaces.
+- Produces: a wrapper that emits both endings and the true next observation; `td0(*, reward, value, next_value, terminal, gamma)`.
+
+- [ ] **Step 1: Write the failing tests**
+
+Step an environment to its step limit and assert the wrapper reports the ending as a
+truncation, not a termination, and hands back the observation from before the reset.
+Step it into a fall and assert the opposite. Then assert the TD error bootstraps at a
+truncation and does not at a termination -- with the same reward on both, since the
+environment returns one either way.
+
+Asserting on a single `done` means the two are still conflated and the test is wrong.
+
+- [ ] **Step 2: Implement**
+
+`BraxGymnaxWrapper.step` returns an empty `info` today and throws both away.
+`bootstrap_discount = gamma * (1 - next_done)` in the kernel becomes the TD component's
+own `gamma * (1 - terminal)`; the carry and the traces keep resetting on `done`, since
+both endings end an episode.
+
+Gamma moves to the algorithm's declarations rather than a component's: the bootstrap and
+the discounted reward trace both read it and have to agree, and this design has no way to
+say that between two components.
+
+`episode_length` comes from the environment section. It defines the task -- the same
+policy's return under a limit of 500 and of 1000 is not the same number -- so a literal
+in a wrapper is the wrong place for it.
+
+- [ ] **Step 3: Green**
+
+---
+
+### Task 3: The Normaliser Stops Naming Its Streams
 
 **Interfaces:**
 - Produces: a running estimator parameterised by `center`, and a discounted trace carrying `gamma` and `reset_on_done`.
@@ -76,7 +113,7 @@ collapse to one pair. `step`'s two near-identical blocks go with them.
 
 ---
 
-### Task 3: A Network Is a Sequence
+### Task 4: A Network Is a Sequence
 
 **Interfaces:**
 - Produces: a sequence whose step is `(carries, x) -> (carries, y)`; `FFN`, `LayerNorm`, and the activations as components.
@@ -98,7 +135,7 @@ the network.
 
 ---
 
-### Task 4: The Three Backbones Match Their Sources
+### Task 5: The Three Backbones Match Their Sources
 
 **Interfaces:**
 - Produces: `rtu`, `lru` and `mlp` branches whose sequences are their published ones.
@@ -121,7 +158,7 @@ recurrence and LRU has none.
 
 ---
 
-### Task 5: `stream_ac` Runs From the Target Experiment File
+### Task 6: `stream_ac` Runs From the Target Experiment File
 
 - [ ] **Step 1: Write the failing test**
 
@@ -135,7 +172,7 @@ steps. That is the whole loader and the whole entry in one assertion.
 
 ---
 
-## Open, decide before Task 5
+## Open, decide before Task 6
 
 The template scores on `eval/episode/return_per_step`, which phase 4 introduces. Either
 phase 4 lands first, or Task 5 scores on a metric this entry already reports and the
