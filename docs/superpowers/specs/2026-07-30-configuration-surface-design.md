@@ -147,6 +147,22 @@ catalog 导出这棵树。
 - `Network`(`memo/memorax/networks/network.py:8-11`)是固定三槽 `feature_extractor / torso / head`,不是序列。
 - `RTUCell` 与 `LRUCell` 各自带 `activation_fn` 字段,让"哪个非线性"看起来像递推组件的一个参数。
 
+### 组件不得认识自己的调用场景
+
+上一节说的是一个组件内部不混两件事。还有一种混法:组件把**它被用在哪**写进了自己的字段名和方法名。识别方法是看命名——组件里出现了调用方才该知道的词,它就已经把两个场景焊进来了。
+
+四处:
+
+**归一化器**同时认识"观测"和"奖励":`_update_observation`/`_normalize_observation` 与 `_update_reward`/`_scale_reward` 四个方法,Welford 那段算术两边一字不差。真差异只有两条:统计量喂什么(观测本身,还是折扣回报迹 `G = r + γ·G_prev·(1-done)`),以及变换要不要减均值(观测减,奖励不减)。这两条都是**配置**,不是代码路径。拆成 `RunningNormalizer(cold_start, variance, center, eps)` 与 `DiscountedTrace(gamma, reset_on_done)` 两个组件,观测是 `center=True` 直接喂,奖励是 `center=False` 喂迹的输出,四个方法塌回一对,`step` 里那两段只有变量名不同的 `if ... is not None: if update:` 整块消失。`reward_trace_reset_on_done` 随之归到迹上,名字也就自解释了。
+
+**`FeatureExtractor`** 有四个具名槽 `observation_extractor` / `action_extractor` / `reward_extractor` / `done_extractor`,再拼出 `*_embedding` 三个键——而全仓没有任何下游读那三个键。它认识的正是四种输入,而它做的事只是"对若干输入各过一个编码器再拼接"。
+
+**`Network`** 的三个固定槽与推给每一级的 `action=`/`reward=`/`done=`,同上一节。
+
+**`StreamACConfig`** 把 `actor_lr`/`critic_lr`、`actor_kappa`/`critic_kappa` 并列成四个字段。优化器被实例化了两次,参数各一份;组件化之后那是同一个优化器组件的两个实例,前缀由图给出,配置里不该有 `actor_`/`critic_` 这种前缀成对出现。
+
+判据统一为:**组件的字段名里不得出现只有调用方知道的名词。** 出现了就说明那是两个实例或两个配置,不是一个组件的两条分支。
+
 **递推组件的非线性是例外,不算混合。** RTU 的定义就是把非线性引入递推(`arXiv 2409.01449`,Elelimy 等,NeurIPS 2024):它作用在 carry 上,外提就改变了下一步的递推,那是另一个算法而不是同一组件后面加一层。LRU 是线性的,名字里的 Linear 就是这个意思。两者是并列的两个原子组件,不是"LRU 加激活等于 RTU";去掉 RTU 的非线性它就退回成 LRU,而 LRU 正是 RTU 论文用来对照的基线。因此 `RTU` 与 `LRU` 各自完整,但都不再暴露"换一个激活函数"的字段。
 
 ### 三条 backbone 分支各自对齐自己的原版
@@ -277,7 +293,7 @@ Hopper 的奖励是存活、前进、控制代价三项之和,Brax 在 `info` �
 2. `param()` 三件套、catalog `parameters`、结构树、条件采样、移除 `source_hash`,归一化三参数与 `reset_on_start`/`update_during_eval`。
 3. OBGD 分解为 `optimizer_bound` 与 `optimizer_base` 两轴。
 4. 指标面:三段命名、训练侧两条、`eval/episode/return_per_step`。
-5. 网络拆成组件,三条 backbone 分支各自对齐来源。
+5. 网络与归一化拆成组件,组件不再认识自己的调用场景,三条 backbone 分支各自对齐来源。
 
 阶段 3 依赖阶段 2 的结构树来表达两条轴,阶段 2 依赖阶段 1 腾空 space。阶段 4 与前三个阶段无依赖,排在其后只是因为它与参数迁移同样会改到 entry 的报告面。阶段 5 依赖阶段 2 的结构树来表达分支下的组件参数,并且会改变已记录分数的可比性——现有网络的参数量与非线性位置都变,旧分数不再是对照。
 
