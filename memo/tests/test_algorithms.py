@@ -31,7 +31,7 @@ from memorax.networks import (
 from memorax.rl import NormalizationConfig, make_obgd_rule, make_optax_rule
 
 
-def rtrrl_program(*, record_trajectory=False, **overrides):
+def rtrrl_program(*, record=(), **overrides):
     env = TinyContinuousEnv()
     config = RTRRLConfig(
         num_envs=1,
@@ -61,7 +61,7 @@ def rtrrl_program(*, record_trajectory=False, **overrides):
         ),
         heads.Gaussian(action_dim=2),
         heads.VNetwork(),
-        record_trajectory=record_trajectory,
+        record=record,
     )
     return agent.init, agent.train, agent.evaluate
 
@@ -134,7 +134,7 @@ PROGRAMS = [
         id="stream_ac_memoryless",
     ),
     pytest.param(
-        lambda: rtrrl_program(record_trajectory=True),
+        lambda: rtrrl_program(record=("observation", "reward", "done")),
         id="rtrrl_trajectory",
     ),
 ]

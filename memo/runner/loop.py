@@ -1,18 +1,20 @@
-"""Train, report, evaluate, report, until the budget is spent.
+"""Train, evaluate, until the budget is spent, reporting when an episode ends.
 
 The arrows only. What is being trained, on what, under which parameter names,
-and which scalars are worth reporting are all decided by the caller and passed
-in already resolved -- this file names none of them, which is why one copy can
-drive every entry without becoming the place they all have to agree.
+and which step-level quantities are worth reducing are all decided by the caller
+and passed in already resolved -- this file names none of them, which is why one
+copy can drive every entry without becoming the place they all have to agree.
+
+A completed episode is the only reporting occasion. Its boundary comes from the
+environment; a chunk's does not, and an epoch's says only how often to evaluate.
 """
 
 from __future__ import annotations
 
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Iterable
 from typing import Any, Protocol
 
 import jax
-import jax.numpy as jnp
 from training_sdk.episode import Episode
 
 from .episodes import complete_episodes
@@ -21,9 +23,13 @@ from .episodes import complete_episodes
 class Destination(Protocol):
     """All of the reporter this file touches."""
 
-    def report(self, step: int, metrics: Mapping[str, float]) -> None: ...
-
     def log_episode(self, episode: Episode) -> None: ...
+
+
+# What a kernel has to hand back before any of this can find an episode at all.
+# A kernel that gates these behind a switch reports nothing and says nothing
+# about it, so an entry adds them to whatever its own metrics need.
+EPISODE_FIELDS: tuple[str, ...] = ("reward", "done")
 
 
 def whole_epochs(*, total_steps: int, epoch_steps: int, num_envs: int) -> range:
@@ -43,42 +49,6 @@ def whole_epochs(*, total_steps: int, epoch_steps: int, num_envs: int) -> range:
     return range(epoch_steps, total_steps + 1, epoch_steps)
 
 
-def report_evaluation(
-    reporter: Destination,
-    summary,
-    *,
-    done: int,
-    num_envs: int,
-    number: int,
-    rewards=None,
-) -> int:
-    """Report the score, and hand every whole episode to the viewer."""
-
-    paid = summary.reward if rewards is None else rewards
-    returns: list[float] = []
-    lengths: list[int] = []
-    for episode in complete_episodes(
-        summary,
-        phase="eval",
-        start_env_steps=done,
-        num_envs=num_envs,
-        first_number=number,
-        rewards=paid,
-    ):
-        reporter.log_episode(episode)
-        number = episode.number + 1
-        returns.append(float(sum(episode.rewards)))
-        lengths.append(len(episode.actions))
-
-    report = {"eval/reward": float(jnp.nanmean(paid))}
-    # A mean over no episodes would be reported as zero and read as a score.
-    if returns:
-        report["eval/episode_return"] = sum(returns) / len(returns)
-        report["eval/episode_length"] = sum(lengths) / len(lengths)
-    reporter.report(done, report)
-    return number
-
-
 def drive(
     reporter: Destination,
     *,
@@ -90,18 +60,19 @@ def drive(
     eval_steps: int,
     num_envs: int,
     seed: int,
-    training_report: Callable[[Any], Mapping[str, float]],
-    eval_reward: Callable[[Any], Any] | None = None,
+    series: Iterable[str] = (),
+    reward: str = "reward",
 ) -> None:
-    """Run the algorithm to its budget, reporting once per epoch.
+    """Run the algorithm to its budget, reporting on every episode it finishes.
 
     Three functions rather than an object, so that an algorithm can be a class
     with methods or a built program holding closures without either having to
     become the other to be driven.
 
-    ``eval_reward`` picks what an episode was worth out of the summary, for the
-    entry whose environment hands its algorithm a rescaled reward. Left out, the
-    summary's own reward is what it was worth.
+    ``series`` names the step-level quantities to reduce over each episode. A
+    name the run never produced is left out rather than reported as nothing, so
+    the declaration says what this algorithm can measure rather than what this
+    configuration happened to.
     """
 
     epochs = whole_epochs(
@@ -115,57 +86,42 @@ def drive(
     key, init_key = jax.random.split(key)
     state = jax.jit(init_fn)(init_key)
 
-    number = 1
+    numbers = {"train": 1, "eval": 1}
     for done in epochs:
         key, epoch_key = jax.random.split(key)
         state, metrics = train(epoch_key, state, epoch_steps)
-        reporter.report(done, training_report(metrics))
+        numbers["train"] = _report(
+            reporter,
+            metrics,
+            phase="train",
+            start_env_steps=done - epoch_steps,
+            num_envs=num_envs,
+            stride=num_envs,
+            first_number=numbers["train"],
+            reward=reward,
+            series=series,
+        )
 
         if not eval_steps:
             continue
         key, eval_key = jax.random.split(key)
         _, summary = evaluate(eval_key, state, eval_steps)
-        number = report_evaluation(
+        numbers["eval"] = _report(
             reporter,
             summary,
-            done=done,
+            phase="eval",
+            start_env_steps=done,
             num_envs=num_envs,
-            number=number,
-            rewards=None if eval_reward is None else eval_reward(summary),
+            stride=0,
+            first_number=numbers["eval"],
+            reward=reward,
+            series=series,
         )
 
 
-def named_scalars(metrics, names, *, prefix: str) -> dict[str, float]:
-    """Average the fields the caller named, skipping any the run left absent.
-
-    A field is absent when the configuration that produces it was not chosen,
-    so its name is still worth declaring: it says what this algorithm can
-    report, not what this run happened to.
-    """
-
-    report = {}
-    for name in names:
-        value = _reading(metrics, name)
-        if value is None:
-            continue
-        report[f"{prefix}{name}"] = float(jnp.nanmean(value))
-    return report
-
-
-def _reading(metrics, name: str):
-    """A named field, or a named key of one, which is how a family is read.
-
-    A kernel that reports one number per part of a network cannot know what the
-    parts are called, so it hands back a mapping and the entry names the parts
-    it built.
-    """
-
-    found = metrics
-    for step in name.split("/"):
-        if isinstance(found, Mapping):
-            found = found.get(step)
-        else:
-            found = getattr(found, step, None)
-        if found is None:
-            return None
-    return found
+def _report(reporter: Destination, chunk, **cut) -> int:
+    number = cut["first_number"]
+    for episode in complete_episodes(chunk, **cut):
+        reporter.log_episode(episode)
+        number = episode.number + 1
+    return number

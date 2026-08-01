@@ -116,9 +116,7 @@ class ObBound:
 class AdaptiveObBound:
     kappa: float = param(valid=(0.0, 100.0), search=(0.5, 10.0), placeholder=2.0)
     beta2: float = param(valid=(0.0, 1.0), search=(0.9, 0.9999), placeholder=0.999)
-    eps: float = param(
-        valid=(1e-12, 1e-2), search=[1e-8], placeholder=1e-8, log=True
-    )
+    eps: float = param(valid=(1e-12, 1e-2), search=[1e-8], placeholder=1e-8, log=True)
 
 
 @dataclass(frozen=True)
@@ -133,9 +131,7 @@ class Adam:
     )
     b1: float = param(valid=(0.0, 1.0), search=[0.9], placeholder=0.9)
     b2: float = param(valid=(0.0, 1.0), search=[0.999], placeholder=0.999)
-    eps: float = param(
-        valid=(1e-12, 1e-2), search=[1e-8], placeholder=1e-8, log=True
-    )
+    eps: float = param(valid=(1e-12, 1e-2), search=[1e-8], placeholder=1e-8, log=True)
 
 
 BOUND_BRANCHES = {

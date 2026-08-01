@@ -18,7 +18,7 @@ from types import SimpleNamespace
 from typing import Any
 
 import pytest
-from training_sdk.episode import Episode
+from training_sdk.episode import Episode, metric_names, statistics
 from training_sdk.parameters import expand, flatten
 
 from entries import rtrrl
@@ -70,17 +70,15 @@ class Watched(Mapping):
 
 
 class Collector:
-    """Stands in for the reporter and keeps what the entry sent it."""
+    """Stands in for the reporter, reducing each episode the way it would."""
 
     def __init__(self) -> None:
         self.reports: list[tuple[int, dict[str, float]]] = []
         self.episodes: list[Episode] = []
 
-    def report(self, step: int, metrics: Mapping[str, float]) -> None:
-        self.reports.append((step, dict(metrics)))
-
     def log_episode(self, episode: Episode) -> None:
         self.episodes.append(episode)
+        self.reports.append((episode.end_env_steps, statistics(episode)))
 
 
 ENTRIES = discover()
@@ -110,19 +108,23 @@ def test_the_entry_declares_nothing_it_does_not_read(trained):
     assert not set(flatten(entry.PARAMETERS)) - params.read
 
 
-def test_it_reports_once_per_epoch_at_the_step_it_has_reached(trained):
-    _, collector, _ = trained
-    assert sorted({step for step, _ in collector.reports}) == [4, 8]
+def test_what_it_declares_follows_from_what_it_measures(trained):
+    """The declaration is derived, not written beside the thing it describes.
+
+    Hand-written, the two drift and neither says so: a name declared but never
+    reported is a score an experiment can ask for and never receive.
+    """
+
+    entry, _, _ = trained
+    assert entry.METRICS == metric_names(
+        "train", entry.TRAINING_METRICS
+    ) + metric_names("eval")
 
 
-def test_the_scalars_it_names_are_scalars_it_sends(trained):
+def test_it_reports_nothing_it_has_not_declared(trained):
     entry, collector, _ = trained
     sent = {name for _, report in collector.reports for name in report}
-    named = {f"train/{name}" for name in entry.TRAINING_METRICS}
-    # Only what this configuration produces: a metric belonging to an update
-    # rule the run did not use is declared but absent, which is not a fault.
-    assert named & sent, "not one declared training scalar arrived"
-    assert not sent - named - {"eval/reward", *entry.METRICS}
+    assert not sent - set(entry.METRICS)
 
 
 def test_rtrrl_entry_can_reproduce_the_papers_bounded_actor():

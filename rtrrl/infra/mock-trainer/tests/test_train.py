@@ -115,7 +115,6 @@ def make_run_config(
             "params": params,
             "logging": {
                 "aim": str(tmp_path / "aim"),
-                "every_steps": 1,
                 "rerun_s3": f"{trial_prefix}/episodes/" if include_rerun else None,
                 "rerun_every_episodes": 1 if include_rerun else None,
             },

@@ -3,6 +3,10 @@
 Neither knows an algorithm, so neither is tested with one: the driver runs a
 few lines of arithmetic dressed as an algorithm, which is enough to check that
 the arrows go where they should and much faster than the real thing.
+
+The arithmetic is arranged so that the two streams end their episodes at
+different steps. Anything that averages the stream axis away turns those two
+answers into one, which is the arrangement this file is here to refuse.
 """
 
 from __future__ import annotations
@@ -13,31 +17,52 @@ import jax.numpy as jnp
 import numpy as np
 import pytest
 from training_sdk.contract import Catalog
+from training_sdk.episode import statistics
 
 import entries
 from runner.catalog import build_catalog, discover
 from runner.episodes import complete_episodes
-from runner.loop import drive, named_scalars, whole_epochs
+from runner.loop import drive, whole_epochs
 
 
 class Recorder:
     """A reporter that keeps what it was told instead of shipping it."""
 
     def __init__(self) -> None:
-        self.reports: list[tuple[int, dict[str, float]]] = []
         self.episodes: list = []
-
-    def report(self, step, metrics):
-        self.reports.append((step, dict(metrics)))
 
     def log_episode(self, episode):
         self.episodes.append(episode)
 
+    def of(self, phase: str) -> list:
+        return [episode for episode in self.episodes if episode.phase == phase]
+
+
+NUM_ENVS = 2
+EPOCH_STEPS = 8
+TOTAL_STEPS = 16
+
+# Stream 0 ends its episode two transitions in, stream 1 three; both run past
+# their ending without reaching another, so each chunk holds two whole episodes
+# and two partial ones.
+TRAIN_REWARD = jnp.array([[1.0, 5.0], [3.0, 5.0], [7.0, 5.0], [9.0, 5.0]])
+TRAIN_DONE = jnp.array([[False, False], [True, False], [False, True], [False, False]])
+TRAIN_LOSS = jnp.array([[0.0, 0.0], [2.0, 1.0], [4.0, 1.0], [6.0, 1.0]])
+
+EVAL_REWARD = jnp.array([[2.0, 0.0], [4.0, 0.0], [0.0, 0.0]])
+EVAL_DONE = jnp.array([[False, False], [True, False], [False, False]])
+EVAL_STEPS = EVAL_DONE.shape[0]
+
+SERIES = ("loss", "by_part.torso", "only_sometimes")
+
 
 class Metrics(NamedTuple):
+    reward: Any
+    done: Any
     loss: Any
-    only_sometimes: Any = None
+    paid: Any = None
     by_part: Any = None
+    only_sometimes: Any = None
 
 
 class Rollout(NamedTuple):
@@ -46,11 +71,7 @@ class Rollout(NamedTuple):
     action: Any
     reward: Any
     done: Any
-
-
-NUM_ENVS = 2
-# One episode ends in the first stream; the second stream never terminates.
-DONE = jnp.array([[False, False], [True, False], [False, False]])
+    paid: Any = None
 
 
 def arithmetic():
@@ -61,9 +82,14 @@ def arithmetic():
         return jnp.asarray(0.0)
 
     def train_fn(key, state, num_steps):
-        del key
-        updates = num_steps // NUM_ENVS
-        return state + num_steps, Metrics(loss=jnp.arange(updates, dtype=jnp.float32))
+        del key, num_steps
+        return state + EPOCH_STEPS, Metrics(
+            reward=TRAIN_REWARD,
+            done=TRAIN_DONE,
+            loss=TRAIN_LOSS,
+            paid=TRAIN_REWARD / 10,
+            by_part={"torso": TRAIN_LOSS},
+        )
 
     def evaluate_fn(key, state, num_steps):
         del key
@@ -73,8 +99,9 @@ def arithmetic():
             observation=grid[..., None],
             next_observation=grid[..., None] + 1,
             action=grid[..., None],
-            reward=grid,
-            done=DONE,
+            reward=EVAL_REWARD,
+            done=EVAL_DONE,
+            paid=EVAL_REWARD / 10,
         )
 
     return init_fn, train_fn, evaluate_fn
@@ -83,14 +110,12 @@ def arithmetic():
 def run_arithmetic(recorder, **overrides):
     init_fn, train_fn, evaluate_fn = arithmetic()
     settings: dict[str, Any] = {
-        "total_steps": 8,
-        "epoch_steps": 4,
-        "eval_steps": DONE.shape[0],
+        "total_steps": TOTAL_STEPS,
+        "epoch_steps": EPOCH_STEPS,
+        "eval_steps": EVAL_STEPS,
         "num_envs": NUM_ENVS,
         "seed": 0,
-        "training_report": lambda metrics: named_scalars(
-            metrics, ("loss", "only_sometimes"), prefix="train/"
-        ),
+        "series": SERIES,
     }
     drive(
         recorder,
@@ -101,67 +126,124 @@ def run_arithmetic(recorder, **overrides):
     )
 
 
-def test_each_epoch_is_reported_at_the_step_it_ends_on():
+def test_a_completed_episode_is_the_only_reporting_occasion():
     recorder = Recorder()
     run_arithmetic(recorder)
 
-    assert [step for step, _ in recorder.reports] == [4, 4, 8, 8]
+    # Two whole episodes per training chunk and one per evaluation, twice.
+    assert len(recorder.of("train")) == 4
+    assert len(recorder.of("eval")) == 2
+    assert [episode.number for episode in recorder.of("train")] == [1, 2, 3, 4]
+    assert [episode.number for episode in recorder.of("eval")] == [1, 2]
 
 
-def test_a_metric_the_configuration_never_produced_is_left_out():
+def test_an_episode_carries_what_it_was_paid_and_where_it_ended():
     recorder = Recorder()
     run_arithmetic(recorder)
 
-    training = [report for _, report in recorder.reports if "train/loss" in report]
-    assert len(training) == 2
-    assert all("train/only_sometimes" not in report for report in training)
+    first, second = recorder.of("train")[:2]
+    assert first.rewards == (1.0, 3.0)
+    assert second.rewards == (5.0, 5.0, 5.0)
+    assert statistics(first) == pytest.approx(
+        {
+            "train/episode/length": 2.0,
+            "train/episode/return": 4.0,
+            "train/episode/return_per_step": 2.0,
+            "train/episode/return_per_step_variance": 1.0,
+            "train/episode/loss": 1.0,
+            "train/episode/loss_variance": 1.0,
+            "train/episode/by_part.torso": 1.0,
+            "train/episode/by_part.torso_variance": 1.0,
+        }
+    )
 
 
-def test_the_whole_episode_is_scored_and_the_partial_ones_are_not():
-    recorder = Recorder()
-    run_arithmetic(recorder)
+def test_two_streams_are_two_series_and_not_one_average():
+    """Each episode belongs to one stream, so per-env comes for free.
 
-    assert [episode.number for episode in recorder.episodes] == [1, 2]
-    scored = [report for _, report in recorder.reports if "eval/reward" in report]
-    assert all("eval/episode_return" in report for report in scored)
-
-
-def test_an_episode_is_worth_what_was_paid_not_what_the_algorithm_was_shown():
-    """The scale an algorithm learns on is not the scale a score is read on.
-
-    A kernel that normalises inside itself keeps the environment's own reward for
-    the summary, and this argument is for the other arrangement: normalisation in
-    an environment wrapper, which overwrites the reward before the algorithm ever
-    sees it. The entry that wrapped the environment is what knows where the
-    untouched one went, so it hands it in, and both the episode returns and the
-    reported mean have to come from it rather than from the summary.
+    A single number per epoch is what averaging the stream axis produces, and
+    the two streams here disagree about both when their episode ended and what
+    it was worth. Asserting one scalar per epoch is asserting the arrangement
+    this replaces.
     """
 
-    shown, paid = Recorder(), Recorder()
-    run_arithmetic(shown)
-    run_arithmetic(paid, eval_reward=lambda summary: summary.reward / 10)
+    recorder = Recorder()
+    run_arithmetic(recorder)
 
-    assert [episode.rewards for episode in paid.episodes] != [
-        episode.rewards for episode in shown.episodes
-    ]
-    for one, other in zip(paid.episodes, shown.episodes, strict=True):
-        assert one.rewards == pytest.approx([reward / 10 for reward in other.rewards])
+    ends = [episode.end_env_steps for episode in recorder.of("train")]
+    assert ends == [4, 6, 12, 14]
+    returns = [sum(episode.rewards) for episode in recorder.of("train")]
+    assert returns == [4.0, 15.0, 4.0, 15.0]
 
-    def scores(recorder, key):
-        return [report[key] for _, report in recorder.reports if key in report]
 
-    for key in ("eval/reward", "eval/episode_return"):
-        assert scores(paid, key) == pytest.approx(
-            [value / 10 for value in scores(shown, key)]
-        )
+def test_an_episode_the_budget_cut_off_emits_nothing():
+    """Both streams run past their ending without reaching another one."""
+
+    recorder = Recorder()
+    run_arithmetic(recorder)
+
+    assert all(episode.terminals[-1] for episode in recorder.episodes)
+    assert [len(episode.rewards) for episode in recorder.of("train")] == [2, 3, 2, 3]
+
+
+def test_a_diagnostic_the_configuration_never_produced_is_left_out():
+    recorder = Recorder()
+    run_arithmetic(recorder)
+
+    for episode in recorder.of("train"):
+        assert set(episode.series) == {"loss", "by_part.torso"}
+
+
+def test_an_evaluation_episode_is_dated_by_the_training_it_measures():
+    """Evaluation steps are not training steps, so they do not move the axis.
+
+    A rollout run at the epoch boundary measures the policy as it stood there.
+    Spreading its episodes along the axis as though they were training would
+    put them in the epoch that has not happened yet.
+    """
+
+    recorder = Recorder()
+    run_arithmetic(recorder)
+
+    for episode in recorder.of("eval"):
+        assert episode.start_env_steps == episode.end_env_steps
+    assert [episode.end_env_steps for episode in recorder.of("eval")] == [8, 16]
+
+
+def test_an_evaluation_episode_carries_the_trajectory_it_walked():
+    recorder = Recorder()
+    run_arithmetic(recorder)
+
+    for episode in recorder.of("eval"):
+        assert len(episode.observations) == len(episode.actions) + 1
+        assert len(episode.rewards) == len(episode.actions)
 
 
 def test_evaluation_can_be_switched_off_entirely():
     recorder = Recorder()
     run_arithmetic(recorder, eval_steps=0)
 
-    assert [step for step, _ in recorder.reports] == [4, 8]
-    assert not recorder.episodes
+    assert not recorder.of("eval")
+    assert len(recorder.of("train")) == 4
+
+
+def test_an_episode_is_worth_what_was_paid_not_what_the_algorithm_was_shown():
+    """The scale an algorithm learns on is not the scale a score is read on.
+
+    An entry that normalises in an environment wrapper has had the reward
+    overwritten before the algorithm ever saw it, and the untouched one is
+    somewhere else in the same summary. The entry names where.
+    """
+
+    shown, paid = Recorder(), Recorder()
+    run_arithmetic(shown)
+    run_arithmetic(paid, reward="paid")
+
+    assert [episode.rewards for episode in paid.episodes] != [
+        episode.rewards for episode in shown.episodes
+    ]
+    for one, other in zip(paid.episodes, shown.episodes, strict=True):
+        assert one.rewards == pytest.approx([reward / 10 for reward in other.rewards])
 
 
 @pytest.mark.parametrize(
@@ -222,31 +304,3 @@ def test_a_partial_episode_at_either_end_is_left_out():
     assert [len(episode.actions) for episode in episodes] == [2, 3]
     assert [episode.number for episode in episodes] == [1, 2]
     assert episodes[0].observations[-1] == [102.0]
-
-
-def test_every_episode_carries_one_more_observation_than_action():
-    recorder = Recorder()
-    run_arithmetic(recorder)
-
-    for episode in recorder.episodes:
-        assert len(episode.observations) == len(episode.actions) + 1
-        assert len(episode.rewards) == len(episode.actions)
-        assert episode.terminals[-1] is True
-        assert not any(episode.terminals[:-1])
-
-
-def test_a_named_family_is_read_one_part_at_a_time():
-    """A kernel that measures parts of a network cannot name them.
-
-    It reports a mapping and the entry, which built the network, names the parts
-    it wants watched. A part that is absent is skipped like any other absent
-    field rather than failing the epoch.
-    """
-
-    metrics = Metrics(
-        loss=jnp.asarray([1.0]),
-        by_part={"torso": jnp.asarray([1.0, 3.0])},
-    )
-    assert named_scalars(
-        metrics, ("by_part/torso", "by_part/absent", "absent/torso"), prefix="train/"
-    ) == {"train/by_part/torso": 2.0}

@@ -29,7 +29,7 @@ def test_the_catalog_declares_this_contract_and_this_entry() -> None:
     assert declared.contract == CONTRACT_VERSION
     entry = declared.entries[ENTRY_NAME]
     assert entry.command == ("python", "-m", "entries.rtrrl_aaai")
-    assert "eval/episode_return" in entry.metrics
+    assert "eval/episode/return" in entry.metrics
 
 
 def test_the_catalog_on_disk_is_the_one_the_entry_would_produce() -> None:

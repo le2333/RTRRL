@@ -36,7 +36,6 @@ def run_config_kwargs() -> dict:
         "params": {"learning_rate": 0.0003},
         "logging": {
             "aim": "aim://127.0.0.1:53801",
-            "every_steps": 1,
             "enable_rerun": False,
         },
         "score": {

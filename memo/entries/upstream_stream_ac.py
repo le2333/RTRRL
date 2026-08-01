@@ -35,6 +35,7 @@ from collections.abc import Mapping
 from typing import Any
 
 import flax.linen as nn
+from training_sdk.episode import metric_names
 from training_sdk.reporter import Reporter
 
 from memorax.algorithms.upstream_stream_ac import (
@@ -53,7 +54,7 @@ from memorax.networks import (
     heads,
     make_torso,
 )
-from runner.loop import drive, named_scalars
+from runner.loop import drive
 
 _UNIT = {"type": "float", "low": 0.0, "high": 1.0}
 _RATE = {"type": "float", "low": 1e-9, "high": 10.0, "log": True}
@@ -82,8 +83,6 @@ SPACE: dict[str, Any] = {
     "eps": {"type": "float", "low": 1e-12, "high": 1e-2, "log": True},
 }
 
-METRICS: tuple[str, ...] = ("eval/episode_return", "eval/episode_length")
-
 # What upstream's step metrics carry. The step sizes and the per-part norms the
 # other entry reports are not here: the bound lives inside upstream's own update
 # and does not hand its size back, and asking it to would be editing the file
@@ -93,6 +92,10 @@ TRAINING_METRICS: tuple[str, ...] = (
     "value",
     "log_prob",
     "entropy",
+)
+
+METRICS: tuple[str, ...] = metric_names("train", TRAINING_METRICS) + metric_names(
+    "eval"
 )
 
 
@@ -155,10 +158,6 @@ def build(params: Mapping[str, Any], environment, training) -> UpstreamStreamAC:
     )
 
 
-def training_report(metrics) -> dict[str, float]:
-    return named_scalars(metrics, TRAINING_METRICS, prefix="train/")
-
-
 def run(reporter, config) -> None:
     agent = build(config.params, config.environment, config.training)
     scaled = bool(config.params["normalize_reward"])
@@ -172,14 +171,12 @@ def run(reporter, config) -> None:
         eval_steps=config.evaluation.steps,
         num_envs=config.training.num_envs,
         seed=config.environment.seed,
-        training_report=training_report,
+        series=TRAINING_METRICS,
         # The wrapper replaced the reward the algorithm sees, and the algorithm
         # put that into the summary. The one the environment paid is beside it,
         # and this is the file that knows to look, since it is the file that
         # wrapped the environment.
-        eval_reward=(
-            (lambda summary: summary.info["environment_reward"]) if scaled else None
-        ),
+        reward="info.environment_reward" if scaled else "reward",
     )
 
 

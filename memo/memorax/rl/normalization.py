@@ -27,9 +27,7 @@ class RunningNormalization:
         valid=list(VARIANCES), search=list(VARIANCES), placeholder="population"
     )
     eps: float = param(valid=(1e-12, 1e-2), search=[1e-8], placeholder=1e-8, log=True)
-    reset_on_start: bool = param(
-        valid=[False, True], search=[False], placeholder=False
-    )
+    reset_on_start: bool = param(valid=[False, True], search=[False], placeholder=False)
     update_during_eval: bool = param(
         valid=[False, True], search=[True], placeholder=True
     )
@@ -112,7 +110,11 @@ class Normalizer:
             observation=(
                 RunningStatistics(
                     mean=jnp.zeros_like(observation),
-                    M2=jnp.ones_like(observation) if seeded else jnp.zeros_like(observation),
+                    M2=(
+                        jnp.ones_like(observation)
+                        if seeded
+                        else jnp.zeros_like(observation)
+                    ),
                     count=start,
                 )
                 if self.config.normalize_observation

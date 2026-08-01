@@ -37,7 +37,7 @@ def test_their_evaluation_scalar_arrives_under_the_scored_name() -> None:
 
     logger.log({"steps": 100_000, "eval/rewards": 42.0}, step=100_000)
 
-    assert recorder.reports == [(100_000, {"eval/episode_return": 42.0})]
+    assert recorder.reports == [(100_000, {"eval/episode/return": 42.0})]
 
 
 def test_their_training_scalars_are_kept_apart_from_the_score() -> None:

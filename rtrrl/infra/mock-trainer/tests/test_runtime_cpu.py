@@ -50,7 +50,7 @@ def test_installed_module_runs_real_cpu_ppo_in_subprocess(tmp_path: Path) -> Non
                     "episode_length": 32,
                     "failure_mode": "none",
                 },
-                "logging": {"aim": str(aim_repo), "every_steps": 1},
+                "logging": {"aim": str(aim_repo)},
                 "score": {
                     "metric": "episode_return",
                     "window_steps": [0, 128],

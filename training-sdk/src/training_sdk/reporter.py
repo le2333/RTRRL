@@ -7,7 +7,7 @@ from pathlib import Path
 from typing import Protocol
 
 from training_sdk.contract import RunConfig
-from training_sdk.episode import Episode
+from training_sdk.episode import Episode, statistics
 from training_sdk.sinks.metrics import MetricsSink
 
 METRICS_FILENAME = "metrics.jsonl"
@@ -43,6 +43,10 @@ class Reporter:
             sink.report(step, metrics)
 
     def log_episode(self, episode: Episode) -> None:
+        # One occasion read two ways. The statistics travel as scalars, dated by
+        # the step the episode ended on, and the episode itself travels to
+        # whatever sink keeps series. Neither sink has to know about the other.
+        self.report(episode.end_env_steps, statistics(episode))
         for sink in self._sinks:
             sink.log_episode(episode)
 
@@ -68,6 +72,6 @@ def build_default_sinks(config: RunConfig, scratch: Path) -> tuple[Sink, ...]:
     from training_sdk.sinks.rerun import RerunSink
 
     sinks: list[Sink] = [AimSink(config, repo=config.logging.aim)]
-    if config.logging.rerun_s3 and config.logging.rerun_every_episodes:
+    if config.logging.enable_rerun:
         sinks.append(RerunSink(config, scratch))
     return tuple(sinks)

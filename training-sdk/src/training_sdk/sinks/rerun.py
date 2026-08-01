@@ -26,7 +26,7 @@ class RerunSink:
     def log_episode(self, episode: Episode) -> None:
         if episode.number % self._every:
             return
-        name = f"episode-{episode.number:06d}.rrd"
+        name = f"{episode.phase}-{episode.number:06d}.rrd"
         path = self._scratch / name
         self._write(path, episode)
         objects.put_file(f"{self._prefix}/{name}", path)
@@ -48,12 +48,18 @@ class RerunSink:
             ),
             static=True,
         )
-        series: dict[str, Sequence[object]] = {
+        walked: dict[str, Sequence[object] | None] = {
             "observations": episode.observations,
             "actions": episode.actions,
             "rewards": episode.rewards,
             "terminals": episode.terminals,
             "truncations": episode.truncations,
+        }
+        series: dict[str, Sequence[object]] = {
+            entity: values for entity, values in walked.items() if values is not None
+        }
+        series |= {
+            f"series/{name}": values for name, values in episode.series.items()
         }
         for entity, values in series.items():
             for index, value in enumerate(values):

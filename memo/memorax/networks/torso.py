@@ -57,6 +57,7 @@ class Lru:
 class Mlp:
     hidden_dim: int = param(valid=(1, 4096), search=(32, 512), placeholder=128)
 
+
 _LRU_CELLS = {
     "lru": LRUCell,
     "lru_published": PublishedLRUCell,

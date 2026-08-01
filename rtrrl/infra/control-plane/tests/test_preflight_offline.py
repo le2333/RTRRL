@@ -31,7 +31,7 @@ def _catalog() -> Catalog:
             "entries": {
                 "demo_entry": {
                     "command": ["run"],
-                    "metrics": ("eval/episode_return",),
+                    "metrics": ("eval/episode/return",),
                     "parameters": {
                         "learning_rate": {
                             "kind": "param",

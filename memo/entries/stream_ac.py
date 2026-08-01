@@ -3,7 +3,7 @@
 What this file fixes is the wiring: the actor and the critic get their own
 feature extractor, their own torso and their own head, sharing nothing. Change
 that and it is a different algorithm, which is why it is written here rather
-than exposed. Every hyperparameter is in ``SPACE``, and an experiment file
+than exposed. Every hyperparameter is in ``PARAMETERS``, and an experiment file
 narrows it by pinning single values.
 
 ``credit`` is what makes one entry enough for what used to be two. Under
@@ -13,9 +13,9 @@ incoming carry, which is StreamAC as published. Same objective, same bounded
 update, same everything else, so a pair of runs that differ only here is an
 ablation of exact recurrent credit rather than a comparison of two programs.
 
-``SPACE`` is the only place these names and their limits are written down. The
-constructor call below is the only place they are read. Both are on one screen,
-which is the whole of the arrangement.
+``PARAMETERS`` is the only place these names and their limits are written down.
+The constructor call below is the only place they are read. Both are on one
+screen, which is the whole of the arrangement.
 
 The score to beat, Aim run d9fe0986 on masked Brax Hopper: evaluation return
 sits at 85 after the first epoch, climbs to 269 by 900k steps, jumps to 1043.66
@@ -30,6 +30,7 @@ from dataclasses import dataclass
 from typing import Any
 
 import flax.linen as nn
+from training_sdk.episode import metric_names
 from training_sdk.parameters import (
     describe_parameters,
     param,
@@ -54,7 +55,7 @@ from memorax.rl.normalization import (
     RunningNormalization,
 )
 from memorax.rl.updates import BASE_BRANCHES, BOUND_BRANCHES
-from runner.loop import drive, named_scalars
+from runner.loop import EPISODE_FIELDS, drive
 
 BACKBONE_BRANCHES = {"rtu": Rtu, "mlp": Mlp}
 
@@ -83,8 +84,6 @@ class StreamACParameters:
 
 PARAMETERS = describe_parameters(StreamACParameters)
 
-METRICS: tuple[str, ...] = ("eval/episode_return", "eval/episode_length")
-
 PARTS: tuple[str, ...] = ("feature_extractor", "torso", "head")
 
 TRAINING_METRICS: tuple[str, ...] = (
@@ -95,18 +94,30 @@ TRAINING_METRICS: tuple[str, ...] = (
     "actor_step_size",
     "critic_step_size",
     *(
-        f"{domain}_{reading}_norm/{part}"
+        f"{domain}_{reading}_norm.{part}"
         for domain in ("actor", "critic")
         for reading in ("grad", "trace")
         for part in PARTS
     ),
 )
 
+METRICS: tuple[str, ...] = metric_names("train", TRAINING_METRICS) + metric_names(
+    "eval"
+)
 
-_RULES = {"ob": "obgd", "adaptive_ob": "adaptive_obgd", "adaptive_ob_fixed": "adaptive_obgd_fixed"}
+RECORD = frozenset(EPISODE_FIELDS) | set(TRAINING_METRICS)
 
 
-def _optimizer(params: Mapping[str, Any], role: str) -> tuple[str, float, float, float, float]:
+_RULES = {
+    "ob": "obgd",
+    "adaptive_ob": "adaptive_obgd",
+    "adaptive_ob_fixed": "adaptive_obgd_fixed",
+}
+
+
+def _optimizer(
+    params: Mapping[str, Any], role: str
+) -> tuple[str, float, float, float, float]:
     bound_name, bound = read_branch(params, f"{role}_optimizer_bound", BOUND_BRANCHES)
     base_name, base = read_branch(params, f"{role}_optimizer_base", BASE_BRANCHES)
     if bound is None:
@@ -128,10 +139,18 @@ def _normalization(params: Mapping[str, Any], *, reward_gamma: float):
     _, observation = read_branch(
         params, "observation_normalization", NORMALIZATION_BRANCHES
     )
-    _, reward = read_branch(params, "reward_normalization", REWARD_NORMALIZATION_BRANCHES)
+    _, reward = read_branch(
+        params, "reward_normalization", REWARD_NORMALIZATION_BRANCHES
+    )
     running = [one for one in (observation, reward) if one is not None]
     shared = {
-        (one.cold_start, one.variance, one.eps, one.reset_on_start, one.update_during_eval)
+        (
+            one.cold_start,
+            one.variance,
+            one.eps,
+            one.reset_on_start,
+            one.update_during_eval,
+        )
         for one in running
     }
     if len(shared) > 1:
@@ -165,7 +184,9 @@ def build(params: Mapping[str, Any], environment, training) -> StreamAC:
     backbone = str(params["backbone"])
     hidden_dim = int(params[f"backbone.{backbone}.hidden_dim"])
     feature_dim = (
-        int(params[f"backbone.{backbone}.feature_dim"]) if backbone == "rtu" else hidden_dim
+        int(params[f"backbone.{backbone}.feature_dim"])
+        if backbone == "rtu"
+        else hidden_dim
     )
     meta_rl = bool(params["meta_rl"])
 
@@ -188,7 +209,9 @@ def build(params: Mapping[str, Any], environment, training) -> StreamAC:
             head=head,
         )
 
-    actor_rule, actor_lr, actor_kappa, actor_beta2, actor_eps = _optimizer(params, "actor")
+    actor_rule, actor_lr, actor_kappa, actor_beta2, actor_eps = _optimizer(
+        params, "actor"
+    )
     critic_rule, critic_lr, critic_kappa, critic_beta2, critic_eps = _optimizer(
         params, "critic"
     )
@@ -219,13 +242,8 @@ def build(params: Mapping[str, Any], environment, training) -> StreamAC:
         network(heads.Gaussian(action_dim=action_dim)),
         network(heads.VNetwork()),
         normalization=_normalization(params, reward_gamma=gamma),
+        record=RECORD,
     )
-
-
-def training_report(metrics) -> dict[str, float]:
-    """The scalars worth watching while an epoch runs, named one by one."""
-
-    return named_scalars(metrics, TRAINING_METRICS, prefix="train/")
 
 
 def run(reporter, config) -> None:
@@ -240,7 +258,7 @@ def run(reporter, config) -> None:
         eval_steps=config.evaluation.steps,
         num_envs=config.training.num_envs,
         seed=config.environment.seed,
-        training_report=training_report,
+        series=TRAINING_METRICS,
     )
 
 

@@ -67,13 +67,13 @@ def _document() -> dict:
         },
         "space": {"learning_rate": [0.001]},
         "score": {
-            "metric": "eval/episode_return",
+            "metric": "eval/episode/return",
             "window_steps": [0, 2000],
             "reduce": "max",
             "direction": "maximize",
             "non_finite": "worst",
         },
-        "logging": {"aim": "aim://127.0.0.1:53801", "every_steps": 1},
+        "logging": {"aim": "aim://127.0.0.1:53801"},
     }
 
 
@@ -102,7 +102,7 @@ def make_plan(s3_base: str, *, rerun_enabled: bool = True) -> LaunchPlan:
     updates: dict[str, object] = {"storage": s3_base}
     if not rerun_enabled:
         updates["logging"] = experiment.logging.model_copy(
-            update={"rerun_every_episodes": None}
+            update={"enable_rerun": False}
         )
     experiment = experiment.model_copy(update=updates)
     return LaunchPlan(

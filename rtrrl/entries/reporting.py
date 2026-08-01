@@ -14,7 +14,7 @@ carries numbers. The rest exist because the loop calls them.
 Two things are translated on the way through.
 
 Their evaluation scalar is named `eval/rewards`, and the score every arm of
-this comparison is read on is named `eval/episode_return`. They are the same
+this comparison is read on is named `eval/episode/return`. They are the same
 quantity -- the mean over the evaluation environments of the reward
 accumulated up to each one's first termination -- so the rename is the whole
 of the mapping, and it happens here rather than in the experiment file because
@@ -38,13 +38,13 @@ from collections.abc import Mapping
 from typing import Any, Protocol
 
 # The scalar their loop computes at evaluation time, under the name the five
-# arms are compared on. `eval/best_eval_reward` is their running maximum of it,
-# written only on an improvement; the score reduces with `max` over the window
-# and so does not need it, but it is the reading their own runs are read on and
-# it costs one line to keep.
+# arms are compared on. `eval/episode/best_return` is their running maximum of
+# it, written only on an improvement; the score reduces with `max` over the
+# window and so does not need it, but it is the reading their own runs are read
+# on and it costs one line to keep.
 RENAMED = {
-    "eval/rewards": "eval/episode_return",
-    "eval/best_eval_reward": "eval/best_episode_return",
+    "eval/rewards": "eval/episode/return",
+    "eval/best_eval_reward": "eval/episode/best_return",
 }
 
 # Their environment-step count, which this reports as the step rather than as a

@@ -9,7 +9,7 @@ description: >
 
   Read the curve, not only the number. Our kernel's trial 4 climbed to its peak
   and held; a comparison that lands at a similar score by a different route is a
-  different answer than one that tracks it. Both report eval/episode_return in
+  different answer than one that tracks it. Both report eval/episode/return in
   the task's own units -- upstream normalises rewards in a wrapper, so this
   entry digs the paid reward back out rather than summing the scaled one.
 
@@ -70,7 +70,7 @@ space:
   eps: [1.0e-8]
 
 score:
-  metric: eval/episode_return
+  metric: eval/episode/return
   window_steps: [0, 2000000]
   reduce: max
   direction: maximize
@@ -78,5 +78,5 @@ score:
 
 logging:
   aim: aim://172.31.62.192:53801
-  every_steps: 1
+  enable_rerun: true
   rerun_every_episodes: 16

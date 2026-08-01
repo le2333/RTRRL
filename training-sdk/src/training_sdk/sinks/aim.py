@@ -24,17 +24,12 @@ class AimSink:
         self._run["entry"] = config.entry
         self._run["digest"] = config.digest
         self._run["params"] = dict(config.params)
-        self._every = config.logging.every_steps
-        self._last: int | None = None
 
     def report(self, step: int, metrics: Mapping[str, float]) -> None:
-        # Reports at a step already recorded always go through. A caller that
-        # splits one step across several reports -- training metrics and then
-        # evaluation metrics for the same epoch -- is not reporting too often,
-        # and dropping the second one loses a whole family of metrics silently.
-        if self._last is not None and step != self._last and step - self._last < self._every:
-            return
-        self._last = step
+        # Everything reported is kept. The thinning is the episode itself: two
+        # streams that finished at the same step are two answers about it, and
+        # a stride over an already-reduced number thinned nothing that was not
+        # already thin.
         for name, value in metrics.items():
             self._run.track(float(value), name=str(name), step=int(step))
 

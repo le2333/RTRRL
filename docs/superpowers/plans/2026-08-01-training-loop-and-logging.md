@@ -35,7 +35,7 @@
 **Interfaces:**
 - Produces: for each completed episode, `length`, `return`, `return_per_step`, and the variance of its per-step reward.
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 Drive a run whose episodes have known lengths and rewards, and assert one event per
 completed episode with those four values. An episode cut off by the step budget emits
@@ -45,12 +45,12 @@ Assert the events are per stream: two streams whose episodes end at different st
 two independent series, not one averaged number. A test that asserts a single scalar per
 epoch is testing the arrangement being removed.
 
-- [ ] **Step 2: Implement**
+- [x] **Step 2: Implement**
 
 `drive` reports on episode completion. `named_scalars` is deleted along with the epoch
 report; `jnp.nanmean` over the whole array is what flattened time and stream together.
 
-- [ ] **Step 3: Green**
+- [x] **Step 3: Green**
 
 ---
 
@@ -59,19 +59,19 @@ report; `jnp.nanmean` over the whole array is what flattened time and stream tog
 **Interfaces:**
 - Produces: each declared step-level diagnostic reduced over the episode, as a mean and a variance.
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 A diagnostic recorded per step arrives as two numbers per episode. A mean alone cannot
 say whether a value sat steady or swung, which is the whole reason for the second.
 
-- [ ] **Step 2: Implement**
+- [x] **Step 2: Implement**
 
 The fields a declared metric needs must be recorded, so `record_trajectory` follows from
 the declarations rather than being a separate flag that defaults to off and that no entry
 sets. Left as it is, `reward` and `done` are never recorded and every new metric reports
 nothing at all, silently.
 
-- [ ] **Step 3: Green**
+- [x] **Step 3: Green**
 
 ---
 
@@ -80,7 +80,7 @@ nothing at all, silently.
 **Interfaces:**
 - Produces: `<phase>/<window>/<quantity>`, with `episode` the only window.
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 Every reported name has three parts and its middle one is `episode`. A name with `step`
 in the middle means something is still claiming a granularity that no longer exists.
@@ -89,11 +89,11 @@ in the middle means something is still claiming a granularity that no longer exi
 hand-written beside it. Assert they agree by construction: an entry cannot report a name
 it has not declared, nor declare one it does not report.
 
-- [ ] **Step 2: Implement, and migrate what names a metric**
+- [x] **Step 2: Implement, and migrate what names a metric**
 
 Every `score.metric` in `experiments/*.yaml` and in both templates.
 
-- [ ] **Step 3: Green**
+- [x] **Step 3: Green**
 
 ---
 
@@ -102,27 +102,50 @@ Every `score.metric` in `experiments/*.yaml` and in both templates.
 **Interfaces:**
 - Produces: `log_episode` carrying the statistics to Aim and the series to rerun; `LoggingConfig` without `every_steps`.
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 An episode's statistics reach Aim at the cumulative step where it ended. Its per-step
 series reaches rerun. `every_steps` is gone from the contract, and an experiment naming
 it is refused.
 
-- [ ] **Step 2: Implement**
+- [x] **Step 2: Implement**
 
 `AimSink.log_episode` is a no-op today, which is why episode detail has never reached
 Aim. `every_steps` discarded writes of an already-computed mean while its name claimed a
 stride it never took.
 
-- [ ] **Step 3: Green**
+- [x] **Step 3: Green**
 
 ---
+
+## What landed
+
+`training_sdk.episode` owns the naming: `statistics(episode)` and `metric_names(phase,
+series)` are built from the same list, so an entry's `METRICS` cannot drift from what it
+reports. Mean and variance are `<name>` and `<name>_variance`. A family inside a quantity
+is spelled with a dot -- `train/episode/actor_grad_norm.torso` -- so the three slashes
+stay the three axes of the name, the way a parameter inside a structure is keyed.
+
+`Reporter.log_episode` is the only reporting call the loop makes. It reduces the episode
+to statistics, reports them under `report`, and hands the episode itself to whatever sink
+keeps series. Aim and the metrics file take the first, rerun the second; neither has to
+know about the other. `AimSink` no longer throttles.
+
+Evaluation episodes are dated at the epoch boundary rather than spread along the axis:
+`complete_episodes` takes a `stride`, and evaluation's is zero. A rollout run at a
+boundary measures the policy as it stood there, and evaluation steps are not training
+steps.
+
+`enable_rerun` became the rerun switch. It was in the contract with no consumer while a
+destination turned the sink on by accident.
 
 ## Open
 
 The AAAI arm's `eval_model` discards episode length, so it cannot report
-`return_per_step`. It does not run this loop, so it declares what it can; the five-arm
-comparison reads `eval/episode/return`. Recorded rather than resolved.
+`return_per_step`. It does not run this loop, so it declares what it can and the five-arm
+comparison reads `eval/episode/return`. Its own training scalars keep two-part names --
+they are per scanned iteration, not reduced over an episode, and giving them a middle
+segment would claim a window that does not exist.
 
 `evaluation.num_envs` still has no consumer: `drive()` evaluates on the training stream
 count. Spec §8 has it open and this plan does not close it.

@@ -6,7 +6,7 @@ from aim import Repo
 
 from training_sdk.reporter import METRICS_FILENAME, Reporter
 from training_sdk.sinks.aim import AimSink, close_aim_run
-from tests.test_reporter import make_config
+from tests.test_reporter import make_config, make_episode
 
 
 def _metric_steps(repo_path: str, metric_name: str = "episode_return") -> list[int]:
@@ -88,44 +88,29 @@ def test_close_aim_run_on_read_only_run_does_not_raise_and_data_readable(
     close_aim_run(run)
 
 
-def test_every_step_reported_when_every_steps_is_one(tmp_path: Path) -> None:
+def test_every_report_reaches_aim(tmp_path: Path) -> None:
+    """Nothing thins the stream: an episode is already the thinning.
+
+    Reporting used to happen on a fixed step interval and a stride discarded
+    most of it. Both were arrangements of a granularity nothing measured at.
+    """
+
     repo_path = str(tmp_path / "aim")
     Repo.from_path(repo_path, init=True)
-    sink = AimSink(make_config(every_steps=1), repo=repo_path)
-    for step in (0, 1, 2, 3):
+    sink = AimSink(make_config(), repo=repo_path)
+    for step in (0, 300, 600, 1200):
         sink.report(step, {"episode_return": float(step)})
     sink.close()
 
-    assert _metric_steps(repo_path) == [0, 1, 2, 3]
-
-
-@pytest.mark.parametrize(
-    ("steps", "expected"),
-    [
-        ((0, 1024, 2048), [0, 1024, 2048]),
-        ((0, 300, 600, 1200), [0, 1200]),
-    ],
-)
-def test_throttle_uses_elapsed_steps_not_modulus(
-    tmp_path: Path, steps: tuple[int, ...], expected: list[int]
-) -> None:
-    repo_path = str(tmp_path / "aim")
-    Repo.from_path(repo_path, init=True)
-    sink = AimSink(make_config(every_steps=1000), repo=repo_path)
-    for step in steps:
-        sink.report(step, {"episode_return": float(step)})
-    sink.close()
-
-    assert _metric_steps(repo_path) == expected
+    assert _metric_steps(repo_path) == [0, 300, 600, 1200]
 
 
 def test_two_reports_at_one_step_both_arrive(tmp_path: Path) -> None:
-    # A training epoch reports its own metrics and then its evaluation metrics
-    # at the same step. Throttling is meant to thin out a stream that advances
-    # too fast, not to drop the second half of one step's report.
+    # Two streams whose episodes ended at the same step are two reports at that
+    # step, and neither is a repeat of the other.
     repo_path = str(tmp_path / "aim")
     Repo.from_path(repo_path, init=True)
-    sink = AimSink(make_config(every_steps=1), repo=repo_path)
+    sink = AimSink(make_config(), repo=repo_path)
     sink.report(25600, {"train_return": 1.0})
     sink.report(25600, {"eval_return": 2.0})
     sink.close()
@@ -134,18 +119,21 @@ def test_two_reports_at_one_step_both_arrive(tmp_path: Path) -> None:
     assert _metric_steps(repo_path, "eval_return") == [25600]
 
 
-def test_metrics_file_keeps_every_report_while_aim_is_throttled(tmp_path: Path) -> None:
+def test_an_episodes_statistics_reach_aim_at_the_step_it_ended_on(
+    tmp_path: Path,
+) -> None:
+    """``AimSink.log_episode`` was a no-op, which is why none of this arrived."""
+
     repo_path = str(tmp_path / "aim")
     Repo.from_path(repo_path, init=True)
-    config = make_config(every_steps=1000)
-    steps = (0, 512, 1024, 1536, 2048)
+    config = make_config().model_copy(
+        update={"logging": make_config().logging.model_copy(update={"aim": repo_path})}
+    )
 
     with Reporter(config, tmp_path, sinks=[AimSink(config, repo=repo_path)]) as reporter:
-        for step in steps:
-            reporter.report(step, {"episode_return": float(step)})
+        reporter.log_episode(make_episode())
 
-    assert _metric_steps(repo_path) == [0, 1024, 2048]
+    assert _metric_steps(repo_path, "train/episode/return") == [8]
     metrics_path = tmp_path / METRICS_FILENAME
     records = [json.loads(line) for line in metrics_path.read_text().splitlines()]
-    assert [record["step"] for record in records] == list(steps)
-    assert records[2]["metrics"]["episode_return"] == 1024.0
+    assert records[0]["metrics"]["train/episode/return_per_step"] == 2.0

@@ -9,7 +9,7 @@ defaults:
   training_budget: {env_steps: 128}
   logging: {aim_every_env_steps: 1, rerun_every_episodes: 1}
 objective:
-  metric: eval/episode_return
+  metric: eval/episode/return
   direction: maximize
   reduction: last
 fields:

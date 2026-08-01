@@ -8,7 +8,7 @@ keeps the bootstrap target from moving with the parameters it evaluates.
 
 from __future__ import annotations
 
-from collections.abc import Callable
+from collections.abc import Callable, Iterable
 from dataclasses import dataclass, replace
 from typing import Any, cast
 
@@ -330,7 +330,7 @@ class RTRRL:
         activation: Callable[[Any], Any] = jax.nn.silu,
         normalization: Any = None,
         evaluation: EvaluationConfig | None = None,
-        record_trajectory: bool = False,
+        record: Iterable[str] = (),
     ) -> None:
         evaluation = evaluation or EvaluationConfig()
         self.cfg = cfg
@@ -341,7 +341,9 @@ class RTRRL:
         self.actor_head = actor_head
         self.critic_head = critic_head
         self.activation = activation
-        self.record_trajectory = record_trajectory
+        # Which of the optional per-step fields to fill. A caller names what
+        # its metrics need rather than switching a bundle on.
+        self.record = frozenset(record)
 
         declared = make_normalizer(normalization or NormalizationConfig())
         self.normalizer = make_normalizer(
@@ -548,6 +550,8 @@ class RTRRL:
         next_obs, env_state, next_reward, next_done, info = jax.vmap(
             self.env.step, in_axes=(0, 0, 0, None)
         )(step_keys, state.env_state, env_action, self.env_params)
+        # What the environment paid, kept before normalisation overwrites it.
+        environment_reward = jnp.asarray(next_reward, dtype=jnp.float32)
         normalizer_state = state.normalizer_state
         raw_episode_return = None
         if self.normalizing:
@@ -737,9 +741,9 @@ class RTRRL:
             entropy=entropy,
             emphasis=state.emphasis.mean(),
             step_size=outputs["rnn"].metrics.get("step_size"),
-            observation=next_obs if self.record_trajectory else None,
-            reward=next_reward_f if self.record_trajectory else None,
-            done=next_done if self.record_trajectory else None,
+            observation=next_obs if "observation" in self.record else None,
+            reward=environment_reward if "reward" in self.record else None,
+            done=next_done if "done" in self.record else None,
             diag_lambda_max=(
                 jnp.max(jnp.exp(-jnp.exp(nu_log))) if nu_log is not None else jnp.nan
             ),

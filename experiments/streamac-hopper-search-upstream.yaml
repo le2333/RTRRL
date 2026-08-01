@@ -86,7 +86,7 @@ space:
   entropy_coefficient: {type: float, low: 1.0e-6, high: 1.0e-2, log: true}
 
 score:
-  metric: eval/episode_return
+  metric: eval/episode/return
   window_steps: [0, 2000000]
   reduce: max
   direction: maximize
@@ -94,5 +94,5 @@ score:
 
 logging:
   aim: aim://172.31.62.192:53801
-  every_steps: 1
+  enable_rerun: true
   rerun_every_episodes: 16

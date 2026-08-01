@@ -17,6 +17,7 @@ from typing import Any
 
 import flax.linen as nn
 import jax
+from training_sdk.episode import metric_names
 from training_sdk.reporter import Reporter
 
 from memorax.algorithms.rtrrl import RTRRL, RTRRLConfig
@@ -29,7 +30,7 @@ from memorax.networks import (
     make_torso,
 )
 from memorax.rl import BOUNDED_RULES, NormalizationConfig
-from runner.loop import drive, named_scalars
+from runner.loop import EPISODE_FIELDS, drive
 
 _UNIT = {"type": "float", "low": 0.0, "high": 1.0}
 _RATE = {"type": "float", "low": 1e-9, "high": 10.0, "log": True}
@@ -74,8 +75,6 @@ SPACE: dict[str, Any] = {
     "critic_to_recurrent": [False, True],
 }
 
-METRICS: tuple[str, ...] = ("eval/episode_return", "eval/episode_length")
-
 TRAINING_METRICS: tuple[str, ...] = (
     "log_prob",
     "value",
@@ -111,6 +110,12 @@ TRAINING_METRICS: tuple[str, ...] = (
     "diag_actor_scale",
     "diag_act_abs",
 )
+
+METRICS: tuple[str, ...] = metric_names("train", TRAINING_METRICS) + metric_names(
+    "eval"
+)
+
+RECORD = frozenset(EPISODE_FIELDS) | set(TRAINING_METRICS)
 
 
 def build(params: Mapping[str, Any], environment, training) -> RTRRL:
@@ -181,13 +186,8 @@ def build(params: Mapping[str, Any], environment, training) -> RTRRL:
             normalize_reward=bool(params["normalize_reward"]),
             reward_gamma=gamma,
         ),
+        record=RECORD,
     )
-
-
-def training_report(metrics) -> dict[str, float]:
-    """The scalars worth watching while an epoch runs, named one by one."""
-
-    return named_scalars(metrics, TRAINING_METRICS, prefix="train/")
 
 
 def run(reporter, config) -> None:
@@ -202,7 +202,7 @@ def run(reporter, config) -> None:
         eval_steps=config.evaluation.steps,
         num_envs=config.training.num_envs,
         seed=config.environment.seed,
-        training_report=training_report,
+        series=TRAINING_METRICS,
     )
 
 

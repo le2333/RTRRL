@@ -57,7 +57,5 @@ score:
 logging:
   # 考虑设置记录的字段
   aim: aim://172.31.62.192:53801
-  every_steps: 1000
-
   enable_rerun: true
   rerun_every_episodes: 20

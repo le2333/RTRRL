@@ -100,6 +100,8 @@ class UpstreamStreamACStepMetrics:
     value: Any = None
     next_value: Any = None
     td_error: Any = None
+    reward: Any = None
+    done: Any = None
     info: Any = None
 
 
@@ -450,6 +452,8 @@ class UpstreamStreamAC:
             value=value,
             next_value=next_value,
             td_error=td_error,
+            reward=next_reward_f,
+            done=next_done,
             info=info,
         )
         return state, metrics

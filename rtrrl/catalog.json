@@ -8,7 +8,7 @@
         "entries.rtrrl_aaai"
       ],
       "metrics": [
-        "eval/episode_return"
+        "eval/episode/return"
       ],
       "space": {
         "backbone": {

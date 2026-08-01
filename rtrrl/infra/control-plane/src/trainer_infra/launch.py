@@ -86,9 +86,7 @@ def build_run_config(
     experiment = launch.plan.experiment
     trial_prefix = f"{launch.prefix}/trials/t{trial}"
     rerun_s3 = (
-        f"{trial_prefix}/episodes/"
-        if experiment.logging.rerun_every_episodes
-        else None
+        f"{trial_prefix}/episodes/" if experiment.logging.enable_rerun else None
     )
     return RunConfig(
         contract=CONTRACT_VERSION,
@@ -119,7 +117,7 @@ def build_run_config(
         params=dict(params),
         logging=LoggingConfig(
             aim=experiment.logging.aim,
-            every_steps=experiment.logging.every_steps,
+            enable_rerun=experiment.logging.enable_rerun,
             rerun_s3=rerun_s3,
             rerun_every_episodes=experiment.logging.rerun_every_episodes,
         ),

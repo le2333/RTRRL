@@ -161,7 +161,7 @@ score:
 
 logging:
   aim: aim://172.31.62.192:53801
-  every_steps: 1
+  enable_rerun: true
   rerun_every_episodes: 1
 ```
 
@@ -241,8 +241,8 @@ if it is not.
 | Field | Required | Meaning |
 | --- | --- | --- |
 | `aim` | yes | `aim://host:port` of the Aim server |
-| `every_steps` | yes | Passed to your script; the Aim sink also skips reports closer together than this |
-| `rerun_every_episodes` | no | Omit to disable Rerun recording entirely |
+| `enable_rerun` | no | Turns the Rerun sink on; defaults to off |
+| `rerun_every_episodes` | no | How many episodes one recording covers |
 
 ### The search space
 
@@ -565,8 +565,8 @@ Behaviours that are intentional but surprising, gathered in one place:
   `run --backend local` silently ignores `--queues`.
 - `validate --catalog` and `run --backend local` do not validate `compute.instance_type`,
   because the queue table is only consulted during a Batch preflight.
-- `logging.every_steps` is not checked for positivity, and an empty `space` is valid: it
-  uses the catalog's complete algorithm parameter space unchanged.
+- An empty `space` is valid: it uses the catalog's complete algorithm parameter space
+  unchanged.
 - Overriding a catalog parameter only checks the key's name, not that your values fall
   within the range the catalog declared.
 - `run --backend local` does not model Ctrl-C: the report is still written and children

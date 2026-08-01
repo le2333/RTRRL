@@ -2,12 +2,14 @@ import json
 from pathlib import Path
 
 import pytest
+from pydantic import ValidationError
 
 from training_sdk.contract import RunConfig
+from training_sdk.episode import Episode
 from training_sdk.reporter import METRICS_FILENAME, Reporter
 
 
-def make_config(*, every_steps: int = 1) -> RunConfig:
+def make_config(**logging: object) -> RunConfig:
     return RunConfig.model_validate(
         {
             "contract": 6,
@@ -26,7 +28,7 @@ def make_config(*, every_steps: int = 1) -> RunConfig:
             "training": {"num_envs": 1, "total_steps": 100, "epoch_steps": 100},
             "evaluation": {"steps": 0, "num_envs": 1},
             "params": {"learning_rate": 0.0003},
-            "logging": {"aim": "aim://127.0.0.1:1", "every_steps": every_steps},
+            "logging": {"aim": "aim://127.0.0.1:1", **logging},
             "score": {
                 "metric": "episode_return",
                 "window_steps": [0, 4],
@@ -42,13 +44,14 @@ def make_config(*, every_steps: int = 1) -> RunConfig:
 class RecordingSink:
     def __init__(self) -> None:
         self.reports: list[tuple[int, dict[str, float]]] = []
+        self.episodes: list[object] = []
         self.closed = False
 
     def report(self, step: int, metrics: dict[str, float]) -> None:
         self.reports.append((step, dict(metrics)))
 
     def log_episode(self, episode: object) -> None:
-        return None
+        self.episodes.append(episode)
 
     def close(self) -> None:
         self.closed = True
@@ -113,3 +116,56 @@ def test_reporter_close_both_sinks_raise_propagates_first(tmp_path: Path) -> Non
     reporter = Reporter(make_config(), tmp_path, sinks=[first, second])
     with pytest.raises(RuntimeError, match="first failure"):
         reporter.close()
+
+
+def make_episode() -> Episode:
+    return Episode(
+        number=1,
+        phase="train",
+        start_env_steps=0,
+        end_env_steps=8,
+        rewards=[1.0, 3.0],
+        terminals=[False, True],
+        truncations=[False, False],
+        series={"td_error": [0.0, 2.0]},
+    )
+
+
+def test_an_episode_arrives_as_statistics_and_as_the_series_they_came_from(
+    tmp_path: Path,
+) -> None:
+    """One occasion, two readings of it.
+
+    A scalar is what two runs are compared on and a series is what one run is
+    looked at, so the episode carries both and each sink takes the one it holds.
+    """
+
+    sink = RecordingSink()
+    with Reporter(make_config(), tmp_path, sinks=[sink]) as reporter:
+        reporter.log_episode(make_episode())
+
+    assert sink.episodes == [make_episode()]
+    step, metrics = sink.reports[0]
+    assert step == 8
+    assert metrics["train/episode/return"] == 4.0
+    assert metrics["train/episode/td_error_variance"] == 1.0
+
+
+def test_an_episode_is_dated_by_the_step_it_ended_on(tmp_path: Path) -> None:
+    sink = RecordingSink()
+    with Reporter(make_config(), tmp_path, sinks=[sink]) as reporter:
+        reporter.log_episode(make_episode())
+
+    written = json.loads((tmp_path / METRICS_FILENAME).read_text().strip())
+    assert written["step"] == 8
+
+
+def test_an_experiment_naming_a_reporting_stride_is_refused() -> None:
+    """There is no stride to name: an episode ends when the environment says.
+
+    ``every_steps`` discarded writes of an already-computed mean while its name
+    claimed a granularity nothing ever measured at.
+    """
+
+    with pytest.raises(ValidationError, match="every_steps"):
+        make_config(every_steps=1000)

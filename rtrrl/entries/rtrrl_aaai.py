@@ -90,9 +90,10 @@ SPACE: dict[str, Any] = {
 # accumulated up to its first termination, and the loop records it as
 # `eval/rewards`; `entries/reporting.py` renames it to the name below. There is
 # no length beside it -- the index of that first termination is computed and
-# then spent on the reward sum, never reported -- so `eval/episode_length`, which
-# the four `memo` arms do report, is absent here rather than invented.
-METRICS: tuple[str, ...] = ("eval/episode_return",)
+# then spent on the reward sum, never reported -- so `eval/episode/length` and
+# `eval/episode/return_per_step`, which the four `memo` arms do report, are
+# absent here rather than invented.
+METRICS: tuple[str, ...] = ("eval/episode/return",)
 
 
 def iterations(*, total_steps: int, scan_steps: int, num_envs: int) -> int:

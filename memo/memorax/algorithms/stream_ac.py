@@ -15,6 +15,7 @@ run for a whole epoch can only be judged by whether the curve looked right.
 
 from __future__ import annotations
 
+from collections.abc import Iterable
 from dataclasses import dataclass, replace
 from typing import Any
 
@@ -173,7 +174,7 @@ class StreamAC:
         *,
         normalization: Any = None,
         evaluation: EvaluationConfig | None = None,
-        record_trajectory: bool = False,
+        record: Iterable[str] = (),
     ) -> None:
         evaluation = evaluation or EvaluationConfig()
         self.cfg = cfg
@@ -181,7 +182,10 @@ class StreamAC:
         self.env_params = env_params
         self.actor_network = actor_network
         self.critic_network = critic_network
-        self.record_trajectory = record_trajectory
+        # Which of the optional per-step fields to fill. A caller names what its
+        # metrics need rather than switching a bundle on, so a field nobody
+        # reduces is never stacked and a field somebody does is never missing.
+        self.record = frozenset(record)
 
         declared = make_normalizer(normalization or cfg)
         self.normalizer = make_normalizer(
@@ -546,6 +550,10 @@ class StreamAC:
             self.env.step,
             in_axes=(0, 0, 0, None),
         )(step_keys, state.env_state, sampled_action, self.env_params)
+        # What the environment paid, kept before normalisation overwrites it. An
+        # episode's return is a statement about the task, not about the scale
+        # this algorithm happens to be learning on.
+        environment_reward = jnp.asarray(next_reward, dtype=jnp.float32)
         normalizer_state = state.normalizer_state
         raw_episode_return = None
         if self.normalizing:
@@ -704,9 +712,9 @@ class StreamAC:
             critic_grad_norm=subtree_norms(critic_grads, streams=True),
             actor_trace_norm=subtree_norms(actor_traces, streams=True),
             critic_trace_norm=subtree_norms(critic_traces, streams=True),
-            observation=next_obs if self.record_trajectory else None,
-            reward=next_reward_f if self.record_trajectory else None,
-            done=next_done if self.record_trajectory else None,
+            observation=next_obs if "observation" in self.record else None,
+            reward=environment_reward if "reward" in self.record else None,
+            done=next_done if "done" in self.record else None,
             info=info,
             raw_episode_return=raw_episode_return,
             normalization=normalization_metrics(

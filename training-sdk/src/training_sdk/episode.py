@@ -1,7 +1,13 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
-from typing import Any, Sequence
+from collections.abc import Iterable, Mapping, Sequence
+from dataclasses import dataclass, field
+from typing import Any
+
+WINDOW = "episode"
+VARIANCE = "_variance"
+TOTALS: tuple[str, ...] = ("length", "return")
+SPREAD: tuple[str, ...] = ("return_per_step",)
 
 
 @dataclass(frozen=True)
@@ -10,11 +16,12 @@ class Episode:
     phase: str
     start_env_steps: int
     end_env_steps: int
-    observations: Sequence[Any]
-    actions: Sequence[Any]
     rewards: Sequence[Any]
     terminals: Sequence[bool]
     truncations: Sequence[bool]
+    series: Mapping[str, Sequence[Any]] = field(default_factory=dict)
+    observations: Sequence[Any] | None = None
+    actions: Sequence[Any] | None = None
     environment_states: Sequence[Any] | None = None
 
     def __post_init__(self) -> None:
@@ -22,35 +29,63 @@ class Episode:
             raise TypeError("episode number must be an integer")
         if not 1 <= self.number <= 999_999:
             raise ValueError("episode number must be between 1 and 999999")
-        for field_name in (
-            "observations",
-            "actions",
-            "rewards",
-            "terminals",
-            "truncations",
-        ):
+        for field_name in ("rewards", "terminals", "truncations"):
             object.__setattr__(self, field_name, tuple(getattr(self, field_name)))
-        if self.environment_states is not None:
-            object.__setattr__(
-                self, "environment_states", tuple(self.environment_states)
-            )
+        for field_name in ("observations", "actions", "environment_states"):
+            value = getattr(self, field_name)
+            if value is not None:
+                object.__setattr__(self, field_name, tuple(value))
+        object.__setattr__(
+            self,
+            "series",
+            {name: tuple(values) for name, values in self.series.items()},
+        )
 
-        transition_count = len(self.actions)
-        transition_lengths = {
-            len(self.actions),
-            len(self.rewards),
-            len(self.terminals),
-            len(self.truncations),
-        }
-        if len(transition_lengths) != 1:
+        lengths = {len(self.rewards), len(self.terminals), len(self.truncations)}
+        if len(lengths) != 1:
             raise ValueError("episode transition arrays must have equal lengths")
-        if len(self.observations) != transition_count + 1:
+        transition_count = len(self.rewards)
+        if transition_count == 0 or not (self.terminals[-1] or self.truncations[-1]):
+            raise ValueError("episode must be complete (terminal or truncated)")
+        for name, values in self.series.items():
+            if len(values) != transition_count:
+                raise ValueError(f"series {name} must span the episode")
+        if self.actions is not None and len(self.actions) != transition_count:
+            raise ValueError("actions must hold one value per transition")
+        if self.observations is not None and (
+            len(self.observations) != transition_count + 1
+        ):
             raise ValueError(
                 "episode observations must contain N+1 values for N transitions"
             )
-        if transition_count == 0 or not (
-            self.terminals[-1] or self.truncations[-1]
-        ):
-            raise ValueError("episode must be complete (terminal or truncated)")
         if self.end_env_steps < self.start_env_steps:
             raise ValueError("end_env_steps must not precede start_env_steps")
+
+
+def metric_names(phase: str, series: Iterable[str] = ()) -> tuple[str, ...]:
+    names = list(TOTALS)
+    for name in (*SPREAD, *series):
+        names += [name, f"{name}{VARIANCE}"]
+    return tuple(f"{phase}/{WINDOW}/{name}" for name in names)
+
+
+def statistics(episode: Episode) -> dict[str, float]:
+    rewards = [float(one) for one in episode.rewards]
+    values: dict[str, float] = {
+        "length": float(len(rewards)),
+        "return": float(sum(rewards)),
+    }
+    values |= _moments("return_per_step", rewards)
+    for name, series in episode.series.items():
+        values |= _moments(name, [float(one) for one in series])
+    return {
+        f"{episode.phase}/{WINDOW}/{name}": value for name, value in values.items()
+    }
+
+
+def _moments(name: str, values: list[float]) -> dict[str, float]:
+    mean = sum(values) / len(values)
+    return {
+        name: mean,
+        f"{name}{VARIANCE}": sum((one - mean) ** 2 for one in values) / len(values),
+    }
