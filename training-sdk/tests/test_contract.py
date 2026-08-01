@@ -18,7 +18,7 @@ from training_sdk.contract import (
 
 def run_config_kwargs() -> dict:
     return {
-        "contract": 5,
+        "contract": 6,
         "run_id": "sweep-20260725-051400-t7",
         "experiment": "locomotion",
         "name": "sweep",
@@ -46,44 +46,109 @@ def run_config_kwargs() -> dict:
     }
 
 
-def test_contract_version_is_five() -> None:
-    assert CONTRACT_VERSION == 5
+def test_contract_version_is_six() -> None:
+    assert CONTRACT_VERSION == 6
 
 
-def test_catalog_parses_float_int_and_choice_entries() -> None:
+def _learning_rate() -> dict:
+    return {
+        "kind": "param",
+        "value_type": "float",
+        "valid": {"type": "float", "low": 1e-9, "high": 10.0},
+        "search": {"type": "float", "low": 1e-4, "high": 1e-2, "log": True},
+        "placeholder": 0.001,
+    }
+
+
+def test_catalog_parses_parameter_and_structure_entries() -> None:
     catalog = Catalog.model_validate(
         {
-            "contract": 2,
+            "contract": 6,
             "entries": {
-                "brax_ppo": {
-                    "command": ["python", "-m", "brax_ppo.train"],
-                    "metrics": ["episode_return"],
-                    "space": {
-                        "total_steps": [128],
-                        "learning_rate": {
-                            "type": "float",
-                            "low": 1e-6,
-                            "high": 1e-2,
-                            "log": True,
-                        },
-                        "batch_size": {
-                            "type": "int",
-                            "low": 256,
-                            "high": 8192,
-                            "step": 256,
+                "agent": {
+                    "command": ["python", "-m", "agent"],
+                    "metrics": ["eval/episode/return"],
+                    "parameters": {
+                        "learning_rate": _learning_rate(),
+                        "optimizer_base": {
+                            "kind": "structure",
+                            "placeholder": "sgd",
+                            "search": ["sgd", "adam"],
+                            "branches": {
+                                "sgd": {},
+                                "adam": {
+                                    "b1": {
+                                        "kind": "param",
+                                        "value_type": "float",
+                                        "valid": {
+                                            "type": "float",
+                                            "low": 0.0,
+                                            "high": 1.0,
+                                        },
+                                        "placeholder": 0.9,
+                                    }
+                                },
+                            },
                         },
                     },
                 }
             },
         }
     )
-    entry = catalog.entries["brax_ppo"]
-    assert isinstance(entry.space["total_steps"], ChoiceSpec)
-    assert entry.space["total_steps"].choices == (128,)
-    assert isinstance(entry.space["learning_rate"], FloatSpec)
-    assert entry.space["learning_rate"].log is True
-    assert isinstance(entry.space["batch_size"], IntSpec)
-    assert entry.space["batch_size"].step == 256
+
+    entry = catalog.entries["agent"]
+    assert entry.parameters["learning_rate"].placeholder == 0.001
+    assert entry.parameters["learning_rate"].search.log is True
+    assert entry.parameters["optimizer_base"].branches["adam"]["b1"].placeholder == 0.9
+    assert entry.parameters["optimizer_base"].branches["sgd"] == {}
+
+
+def test_a_parameter_may_be_declared_without_a_search_domain() -> None:
+    """The unsearched declaration. A parameter that carries a correctness
+    decision rather than a choice must not become an HPO dimension."""
+
+    entry = EntryDescriptor.model_validate(
+        {
+            "command": ["run"],
+            "metrics": ["m"],
+            "parameters": {
+                "reward_trace_reset_on_done": {
+                    "kind": "param",
+                    "value_type": "bool",
+                    "valid": [False, True],
+                    "placeholder": True,
+                }
+            },
+        }
+    )
+
+    assert entry.parameters["reward_trace_reset_on_done"].search is None
+
+
+def test_a_valid_domain_may_be_open_on_one_side() -> None:
+    entry = EntryDescriptor.model_validate(
+        {
+            "command": ["run"],
+            "metrics": ["m"],
+            "parameters": {
+                "eta_pi": {
+                    "kind": "param",
+                    "value_type": "float",
+                    "valid": {"type": "float", "low": 0.0},
+                    "placeholder": 0.0,
+                }
+            },
+        }
+    )
+
+    assert entry.parameters["eta_pi"].valid.high is None
+
+
+def test_entry_descriptor_rejects_the_retired_space_field() -> None:
+    with pytest.raises(ValidationError):
+        EntryDescriptor.model_validate(
+            {"command": ["run"], "metrics": ["m"], "space": {"x": [1]}}
+        )
 
 
 def test_float_spec_rejects_low_greater_than_high() -> None:
@@ -112,7 +177,7 @@ def test_entry_descriptor_rejects_empty_command() -> None:
             {
                 "command": [],
                 "metrics": ["m"],
-                "space": {},
+                "parameters": {},
             }
         )
 
@@ -123,7 +188,7 @@ def test_entry_descriptor_rejects_empty_metrics() -> None:
             {
                 "command": ["run"],
                 "metrics": [],
-                "space": {},
+                "parameters": {},
             }
         )
 
@@ -146,12 +211,12 @@ def test_choice_spec_rejects_non_scalar_choices() -> None:
     with pytest.raises(ValidationError):
         Catalog.model_validate(
             {
-                "contract": 2,
+                "contract": 6,
                 "entries": {
                     "e": {
                         "command": ["run"],
                         "metrics": ["m"],
-                        "space": {"hidden_sizes": [[256, 256]]},
+                        "parameters": {"hidden_sizes": [[256, 256]]},
                     }
                 },
             }
@@ -165,8 +230,8 @@ def test_an_entry_descriptor_has_no_source_hash() -> None:
     with pytest.raises(ValidationError):
         EntryDescriptor(
             command=("train",),
-            metrics=("eval/episode_return",),
-            space={},
+            metrics=("eval/episode/return",),
+            parameters={},
             source_hash="sha256:0",
         )
 
