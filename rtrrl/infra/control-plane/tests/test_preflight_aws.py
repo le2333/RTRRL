@@ -348,7 +348,7 @@ def test_image_catalog_disagreeing_with_offline_catalog_is_rejected() -> None:
         return wrong_blob
 
     experiment, catalog, space = plan_arguments()
-    with pytest.raises(PreflightError, match=r"contract differs \(image 99, offline 5\)"):
+    with pytest.raises(PreflightError, match=r"contract differs \(image 99, offline 6\)"):
         check_aws(
             experiment,
             catalog,
@@ -384,16 +384,22 @@ def _image_catalog_check(drifted: Catalog) -> None:
 
 
 def test_image_parameter_space_drift_is_rejected() -> None:
-    space = dict(CATALOG.entries["brax_ppo_acceptance"].space)
-    space["total_steps"] = {"type": "int", "low": 1, "high": 50000}
-    entry = CATALOG.entries["brax_ppo_acceptance"].model_dump() | {"space": space}
+    space = dict(CATALOG.entries["brax_ppo_acceptance"].parameters)
+    space["learning_rate"] = {
+        "kind": "param",
+        "value_type": "float",
+        "valid": {"type": "float", "low": 1e-9, "high": 1.0},
+        "search": [0.5],
+        "placeholder": 0.5,
+    }
+    entry = CATALOG.entries["brax_ppo_acceptance"].model_dump() | {"parameters": space}
     drifted = Catalog.model_validate(
         CATALOG.model_dump() | {"entries": {"brax_ppo_acceptance": entry}}
     )
     error = _image_catalog_check(drifted)
     message = str(error)
     assert "brax_ppo_acceptance" in message
-    assert "space.total_steps" in message
+    assert "parameters.learning_rate" in message
 
 
 def test_non_ecr_image_reference_is_rejected() -> None:

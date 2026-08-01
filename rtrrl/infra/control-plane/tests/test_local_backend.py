@@ -23,12 +23,20 @@ def write_catalog(tmp_path: Path, body: str) -> Path:
     catalog.write_text(
         json.dumps(
             {
-                "contract": 5,
+                "contract": 6,
                 "entries": {
                     ENTRY: {
                         "command": [sys.executable, str(child)],
                         "metrics": ["m"],
-                        "space": {"total_steps": [1]},
+                        "parameters": {
+                            "learning_rate": {
+                                "kind": "param",
+                                "value_type": "float",
+                                "valid": {"type": "float", "low": 1e-9, "high": 1.0},
+                                "search": [0.001],
+                                "placeholder": 0.001,
+                            }
+                        },
                     }
                 },
             }

@@ -222,6 +222,7 @@ class EvaluationConfig(_Frozen):
 class LoggingConfig(_Frozen):
     aim: str
     every_steps: int
+    enable_rerun: bool = False
     rerun_s3: str | None = None
     rerun_every_episodes: int | None = None
 

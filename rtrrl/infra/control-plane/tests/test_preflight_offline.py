@@ -3,9 +3,10 @@ from pathlib import Path
 
 import pytest
 import yaml
-from training_sdk.contract import CONTRACT_VERSION, Catalog, ChoiceSpec
+from training_sdk.contract import CONTRACT_VERSION, Catalog
 
 from trainer_infra.experiment import Experiment, load_experiment
+from trainer_infra.space import flatten
 from trainer_infra.preflight import PreflightError, check_offline, format_space
 from tests.helpers import CATALOG, EXAMPLE, _document, replace_once
 
@@ -31,7 +32,15 @@ def _catalog() -> Catalog:
                 "demo_entry": {
                     "command": ["run"],
                     "metrics": ("eval/episode_return",),
-                    "space": {"learning_rate": ChoiceSpec(choices=(0.001,))},
+                    "parameters": {
+                        "learning_rate": {
+                            "kind": "param",
+                            "value_type": "float",
+                            "valid": {"type": "float", "low": 1e-9, "high": 1.0},
+                            "search": [0.001],
+                            "placeholder": 0.001,
+                        }
+                    },
                 }
             },
         }
@@ -59,17 +68,18 @@ def test_a_score_window_past_training_is_refused(tmp_path):
 def test_a_score_window_inside_training_is_accepted(tmp_path):
     experiment = _written(tmp_path, window=(0, 2000), total_steps=2000)
 
-    assert "learning_rate" in check_offline(experiment, _catalog())
+    resolved = check_offline(experiment, _catalog())
+    assert "learning_rate" in flatten(resolved.tree)
 
 
 def test_example_passes_offline_checks() -> None:
-    space = check_offline(load_experiment(EXAMPLE), CATALOG)
-    assert space["total_steps"].model_dump() == {
-        "type": "int",
-        "low": 1,
-        "high": 100000,
-        "step": 1,
-        "log": False,
+    resolved = check_offline(load_experiment(EXAMPLE), CATALOG)
+    assert flatten(resolved.tree)["learning_rate"].placeholder == 0.001
+    assert resolved.overrides["learning_rate"].model_dump() == {
+        "type": "float",
+        "low": 1e-4,
+        "high": 1e-3,
+        "log": True,
     }
 
 
@@ -98,7 +108,7 @@ def test_window_beyond_smallest_total_steps_is_rejected(tmp_path: Path) -> None:
 
 
 def test_format_space_lists_every_key() -> None:
-    space = check_offline(load_experiment(EXAMPLE), CATALOG)
-    text = format_space(space)
-    for key in space:
+    resolved = check_offline(load_experiment(EXAMPLE), CATALOG)
+    text = format_space(resolved)
+    for key in flatten(resolved.tree):
         assert key in text

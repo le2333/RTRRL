@@ -12,6 +12,7 @@ from training_sdk import objects
 from tests.test_preflight_offline import modified, write_catalog
 from trainer_infra.cli import main
 from trainer_infra.experiment import load_experiment
+from trainer_infra.space import flatten
 from trainer_infra.preflight import check_offline
 
 
@@ -58,7 +59,7 @@ def test_validate_catalog_exits_zero_and_prints_resolved_space(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
     catalog_path = write_catalog(tmp_path)
-    space = check_offline(load_experiment(EXAMPLE), CATALOG)
+    resolved = check_offline(load_experiment(EXAMPLE), CATALOG)
 
     code = main(["validate", str(EXAMPLE), "--catalog", str(catalog_path)])
 
@@ -67,8 +68,8 @@ def test_validate_catalog_exits_zero_and_prints_resolved_space(
     assert captured.err == ""
     lines = captured.out.strip().splitlines()
     assert lines[0] == "resolved search space:"
-    assert len(lines) == 1 + len(space)
-    assert '  total_steps: {"type":"int","low":1,"high":100000' in captured.out
+    assert len(lines) == 1 + len(flatten(resolved.tree))
+    assert "  learning_rate: " in captured.out
 
 
 def test_validate_catalog_rejects_unsupported_contract(
@@ -83,7 +84,7 @@ def test_validate_catalog_rejects_unsupported_contract(
     assert code == 1
     assert captured.out == ""
     assert "contract 99" in captured.err
-    assert "contract 5" in captured.err
+    assert "contract 6" in captured.err
 
 
 def test_validate_catalog_rejects_unknown_score_metric(

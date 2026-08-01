@@ -4,9 +4,11 @@ from pathlib import Path
 
 import pytest
 from training_sdk import objects
+from training_sdk.contract import CONTRACT_VERSION
 
 from trainer_infra.experiment import load_experiment
 from trainer_infra.launch import build_run_config, config_uri, create_launch
+from trainer_infra.space import ResolvedParameters
 from trainer_infra.preflight import LaunchPlan
 from tests.helpers import CATALOG, EXAMPLE, _document, make_plan
 
@@ -25,7 +27,7 @@ def _launch(tmp_path):
         experiment=experiment,
         entry_name=experiment.entry,
         entry=next(iter(CATALOG.entries.values())),
-        space={},
+        parameters=ResolvedParameters(tree={}),
         digest="sha256:" + "a" * 64,
         queue="run-cpu-c7am-queue",
         job_definition="trainer-c7am-" + "a" * 64,
@@ -46,11 +48,11 @@ def test_launch_metadata_is_written_to_archive_and_s3(s3_base: str, tmp_path: Pa
     assert objects.get_bytes(f"{launch.prefix}/experiment.yaml") == source_bytes
     archived = json.loads((launch.archive / "launch.json").read_text())
     assert archived["digest"] == "sha256:" + "a" * 64
-    assert archived["contract"] == 5
+    assert archived["contract"] == CONTRACT_VERSION
     remote = json.loads(objects.get_bytes(f"{launch.prefix}/launch.json"))
     assert remote == archived
     space = json.loads(objects.get_bytes(f"{launch.prefix}/space.json"))
-    assert space["total_steps"]["type"] == "int"
+    assert space["learning_rate"]["type"] == "float"
 
 
 @pytest.mark.parametrize("trial", [3, 7])

@@ -4,7 +4,7 @@ from pathlib import Path
 
 import pytest
 from training_sdk import objects
-from training_sdk.contract import RunConfig
+from training_sdk.contract import CONTRACT_VERSION, RunConfig
 
 from trainer_infra.launch import build_run_config, create_launch
 from trainer_infra.packing import publish_round, split
@@ -51,7 +51,7 @@ def test_configs_and_manifests_are_uploaded(s3_base: str, tmp_path: Path) -> Non
     second = json.loads(objects.get_bytes(plans[1].manifest_uri))
     assert len(first["runs"]) == 2 and len(second["runs"]) == 1
     for uri in first["runs"] + second["runs"]:
-        assert json.loads(objects.get_bytes(uri))["contract"] == 5
+        assert json.loads(objects.get_bytes(uri))["contract"] == CONTRACT_VERSION
 
 
 def test_every_trial_appears_exactly_once_in_manifests(

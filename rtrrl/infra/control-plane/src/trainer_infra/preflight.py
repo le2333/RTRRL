@@ -6,12 +6,19 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any
 
-from training_sdk.contract import CONTRACT_VERSION, Catalog, ChoiceSpec, EntryDescriptor
-from training_sdk.contract import SpaceEntry
+from training_sdk.contract import (
+    CONTRACT_VERSION,
+    Catalog,
+    ChoiceSpec,
+    EntryDescriptor,
+    StructureSpec,
+)
 
 from trainer_infra.experiment import Experiment
 from trainer_infra.space import (
     ResolvedParameters,
+    branch_of,
+    flatten,
     grid_distributions,
     resolve_parameters,
 )
@@ -33,7 +40,7 @@ class LaunchPlan:
     job_definition: str
 
 
-def check_offline(experiment: Experiment, catalog: Catalog) -> dict[str, SpaceEntry]:
+def check_offline(experiment: Experiment, catalog: Catalog) -> ResolvedParameters:
     if catalog.contract != CONTRACT_VERSION:
         raise PreflightError(
             f"image declares contract {catalog.contract}; "
@@ -236,10 +243,16 @@ def check_aws(
     )
 
 
-def format_space(space: dict[str, SpaceEntry]) -> str:
+def format_space(resolved: ResolvedParameters) -> str:
+    declared = flatten(resolved.tree)
     lines = []
-    for key in sorted(space):
-        spec = space[key]
+    for key, node in sorted(declared.items()):
+        if isinstance(node, StructureSpec):
+            lines.append(f"  {key}: {branch_of(key, node, resolved.overrides)}")
+    for key, node in sorted(declared.items()):
+        if isinstance(node, StructureSpec):
+            continue
+        spec = resolved.overrides.get(key, node.search)
         if isinstance(spec, ChoiceSpec):
             rendered = " | ".join(repr(choice) for choice in spec.choices)
         else:

@@ -95,7 +95,9 @@ def _sample(
     for name, node in tree.items():
         key = f"{prefix}{name}"
         if isinstance(node, StructureSpec):
-            branch = _branch(key, node, overrides) if active else str(node.placeholder)
+            branch = (
+                branch_of(key, node, overrides) if active else str(node.placeholder)
+            )
             chosen[key] = branch
             for candidate, subtree in node.branches.items():
                 _sample(
@@ -110,7 +112,7 @@ def _sample(
             chosen[key] = _value(trial, key, node, overrides, active=active)
 
 
-def _branch(key: str, node: StructureSpec, overrides: dict[str, SpaceEntry]) -> str:
+def branch_of(key: str, node: StructureSpec, overrides: dict[str, SpaceEntry]) -> str:
     override = overrides.get(key)
     if override is None:
         return str(node.placeholder)
@@ -151,7 +153,7 @@ def _grid(
     for name, node in tree.items():
         key = f"{prefix}{name}"
         if isinstance(node, StructureSpec):
-            branch = _branch(key, node, overrides)
+            branch = branch_of(key, node, overrides)
             _grid(node.branches[branch], overrides, built, prefix=f"{branch}.")
             continue
         spec = overrides.get(key, node.search)

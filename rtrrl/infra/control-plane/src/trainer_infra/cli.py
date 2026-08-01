@@ -180,7 +180,7 @@ def run_local_command(
         experiment=experiment,
         entry_name=experiment.entry,
         entry=entry,
-        space=space,
+        parameters=space,
         digest="local",
         queue="local",
         job_definition="local",
