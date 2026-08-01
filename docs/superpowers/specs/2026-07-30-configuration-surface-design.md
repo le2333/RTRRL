@@ -157,6 +157,8 @@ catalog 导出这棵树。
 
 **`FeatureExtractor`** 有四个具名槽 `observation_extractor` / `action_extractor` / `reward_extractor` / `done_extractor`,再拼出 `*_embedding` 三个键——而全仓没有任何下游读那三个键。它认识的正是四种输入,而它做的事只是"对若干输入各过一个编码器再拼接"。
 
+它**整个删除**,不做拆分。需要编码的分支(`rtu` 的来源规定了 encoder)就在 sequence 里放一个 FFN 组件,和其它层没有区别;不需要的分支(`lru` 按 AAAI 版是观测直连)就没有这一层。`meta_rl` 把上一步动作与奖励并到观测旁边,是**输入组合**,按前一节归到网络之外,不需要网络里有一个知道"动作"和"奖励"的槽位来做它。
+
 **`Network`** 的三个固定槽与推给每一级的 `action=`/`reward=`/`done=`,同上一节。
 
 **`StreamACConfig`** 把 `actor_lr`/`critic_lr`、`actor_kappa`/`critic_kappa` 并列成四个字段。优化器被实例化了两次,参数各一份;组件化之后那是同一个优化器组件的两个实例,前缀由图给出,配置里不该有 `actor_`/`critic_` 这种前缀成对出现。
