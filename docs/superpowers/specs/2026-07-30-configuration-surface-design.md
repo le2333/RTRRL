@@ -243,40 +243,45 @@ optimizer_base:  sgd  | adam
 
 ## 6. 指标面
 
-### 两个粒度,写进名字
+### 上报由回合结束驱动
 
-记录的量分两类:
+一个回合完成时发出一个事件,携带这个回合的全部统计量。没有别的上报时机。
 
-- **环境步采样**:每个环境步取一次、在 epoch 内聚合后上报。
-- **回合级**:每个完成的回合取一次。
+回合是唯一有训练含义的窗口:它的边界由环境给出(摔倒,或到达截断长度),不由我们的实现给出。chunk 是 JAX 的调度单位——调小它是为了显存,不该让任何曲线的粒度跟着变,所以**测量面看不见 chunk**。epoch 也不是窗口,它只剩"每隔多久评估一次"。
 
-现状两类都存在但不区分:全部量共用一个平铺命名空间(`training-sdk/src/training_sdk/sinks/aim.py:39-40`),`train/` 与 `eval/` 前缀标的是阶段而非粒度。
+按环境步的固定间隔采样没有语义:间隔与任何自然边界都不对齐,那个点既不是某一步的值,也不是某个完整窗口的均值。现状把 epoch 内的窗口均值标在一个累计环境步的坐标上,读起来正是这种不存在的采样;`logging.every_steps` 这个名字加固了它,而它做的是丢弃已经算完的写入。该字段删除。
 
-名字改为三段 `<阶段>/<粒度>/<量>`:
+**per-env 是白送的。** 每个回合只属于一条流,所以按回合统计天然分得开各条流。今天丢掉这个区分的是 `named_scalars` 里的 `jnp.nanmean`,它把时间轴和 env 轴一起压平——是聚合方式丢的,不是测不到。
+
+### 一个回合发出什么
+
+`length`、`return`、`return_per_step`,以及**方差**。
+
+只报一个均值是不够的:`return_per_step` 说不出这个回合是稳定拿分还是几次尖峰撑起来的。方差和均值一起给,才是对分布的最小交代。
+
+算法自己的步级诊断量(`td_error`、`value`、`entropy`、各种范数)同样按回合归约——它们没有天然窗口,借回合这个窗口是唯一有意义的选择,同样是均值与方差一起。
+
+回合内的细节——`td_error` 是不是在开头尖峰——不进标量库,进 rerun 的完整轨迹。两者分工:**rerun 存轨迹,Aim 存统计量。**
+
+### 名字
+
+`<阶段>/<粒度>/<量>`:
 
 ```
-train/step/reward          eval/step/reward
-train/episode/return       eval/episode/return_per_step
+train/episode/length          eval/episode/length
+train/episode/return          eval/episode/return
+train/episode/return_per_step eval/episode/return_per_step
 ```
 
-粒度由名字承担,不用 Aim 的 context。context 的用处是让同名 metric 带不同 context 画进一张图,而这里不需要把 train 与 eval 叠在一起;名字里的层级已经把它们组织清楚。这样 `score.metric` 保持是一个字符串,preflight 拿它对入口声明的 `METRICS` 校验的做法不用改,也不需要从名字派生 context 的机制。
+中段是**归约所用的窗口**,当前只有 `episode` 一种。保留三段是为了以后加别的窗口时不必改名;`step` 这一段不存在,因为没有步级的上报。
 
-横轴仍是累计环境步。
+粒度由名字承担,不用 Aim 的 context。`score.metric` 保持是一个字符串,preflight 拿它对入口声明的指标校验的做法不用改。
 
-`AimSink.log_episode` 当前是空实现(`:42-43`),回合级明细不进 Aim,只有聚合后的两个标量进。是否让单个回合进 Aim 与本设计的两类划分独立,不在本轮改动内。
+横轴仍是累计环境步:回合在它结束的那个步数上发出事件。
 
-### 奖励与每步收益
+### 一处要接受的代价
 
-训练侧当前不报告任何奖励量,`TRAINING_METRICS` 中一条都没有。补两条:
-
-- `train/step/reward`,环境步采样类,epoch 内每步奖励的均值。
-- `train/episode/return`,回合级,epoch 内 `sum(reward) / max(1, sum(done))`。对应 AAAI 的 `mean_reward = sum(reward) / num_episodes`(`RTRRL-AAAI25/rtrrl.py:843-845`)。
-
-两条所需的 `reward` 与 `done` 已经逐步记录在 `RTRRLStepMetrics`(`memo/memorax/algorithms/rtrrl.py:288-289`),只是没有上报。第一条把名字加进 `TRAINING_METRICS` 即可;第二条是两个字段的比值而非某一字段的均值,`named_scalars` 的形状(`memo/runner/loop.py:138-152`)表达不了,需要在 `training_report` 内单独算一条。
-
-评估侧新增 `eval/episode/return_per_step`,定义为**整批完成回合的 `sum(returns) / sum(lengths)`**,不是每回合先相除再平均——后者会放大短回合的权重。它是回合级量,只统计完成的回合。
-
-这一条是这组指标里最该看的一个:在 Hopper 上,一个不动作但不摔倒的策略靠存活奖励拿到高回报,除以长度才能把它和真正前进的策略分开。它与现有的 `eval/step/reward` 不是同一个量——后者是整段 rollout 所有步的奖励均值(`memo/runner/loop.py:70`),含未完成的回合。两条都保留。
+回合不结束就没有点。训练早期回合短、点密;策略变好后回合变长、点变稀。这是诚实的——它反映的正是"这个策略活多久"。被 `total_steps` 截断的最后一个未完成回合不发事件。
 
 ### 按环境拆解,后续
 
