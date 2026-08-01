@@ -6,7 +6,8 @@ objectives, or drives its own loop stays with the algorithm.
 
 from .credit import CREDITS, make_credit, make_exact_rtrl_credit
 from .normalization import (
-    STATISTICS,
+    COLD_STARTS,
+    VARIANCES,
     NormalizationConfig,
     NormalizationMetrics,
     NormalizedStep,
@@ -41,7 +42,8 @@ __all__ = [
     "RewardStatistics",
     "RuleOutput",
     "RunningStatistics",
-    "STATISTICS",
+    "COLD_STARTS",
+    "VARIANCES",
     "UpdateRule",
     "delayed_update",
     "environment_owns_normalization",

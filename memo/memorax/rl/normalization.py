@@ -13,11 +13,8 @@ from memorax.environments.wrappers import (
     NormalizeRewardWrapper,
 )
 
-# Whose running statistics to keep. ``ours`` is this file; ``upstream``
-# reproduces the three things streaming-drl's wrappers do differently, and is an
-# arm to compare against rather than a setting to train with.
-# ``normalization_upstream.py`` says what the three are.
-STATISTICS = ("ours", "upstream")
+COLD_STARTS = ("seeded", "first_sample")
+VARIANCES = ("population", "sample")
 
 
 @dataclass(frozen=True)
@@ -28,7 +25,9 @@ class NormalizationConfig:
     reward_gamma: float = 0.99
     reset_on_start: bool = True
     update_during_eval: bool = True
-    statistics: str = "ours"
+    cold_start: str = "seeded"
+    variance: str = "population"
+    reward_trace_reset_on_done: bool = True
 
 
 @struct.dataclass
@@ -78,22 +77,16 @@ class Normalizer:
         self.config = config
 
     def _initial_state(self, observation) -> NormalizerState:
-        """Where the statistics start, before any observation is folded in.
-
-        A method so that a normaliser reproducing another implementation can
-        start where that one starts. Ours seeds a pseudo-observation of mean
-        zero and second moment one, which is not what upstream does and is the
-        first of the three differences ``normalization_upstream.py`` sets out.
-        """
-
         num_envs = observation.shape[0]
+        seeded = self.config.cold_start == "seeded"
         ones = jnp.ones((num_envs,), dtype=jnp.float32)
+        start = ones if seeded else jnp.zeros((num_envs,), dtype=jnp.float32)
         return NormalizerState(
             observation=(
                 RunningStatistics(
                     mean=jnp.zeros_like(observation),
-                    M2=jnp.ones_like(observation),
-                    count=ones,
+                    M2=jnp.ones_like(observation) if seeded else jnp.zeros_like(observation),
+                    count=start,
                 )
                 if self.config.normalize_observation
                 else None
@@ -101,8 +94,8 @@ class Normalizer:
             reward=(
                 RewardStatistics(
                     mean=jnp.zeros((num_envs,), dtype=jnp.float32),
-                    M2=ones,
-                    count=ones,
+                    M2=ones if seeded else jnp.zeros((num_envs,), dtype=jnp.float32),
+                    count=start,
                     G=jnp.zeros((num_envs,), dtype=jnp.float32),
                 )
                 if self.config.normalize_reward
@@ -168,35 +161,51 @@ class Normalizer:
             raw_episode_return=accumulated_return,
         )
 
+    def _open(self, mean, M2, count, sample):
+        if self.config.cold_start == "seeded":
+            return mean, M2
+        first = count == 0
+        return (
+            jnp.where(_expand_for(first, mean), sample, mean),
+            jnp.where(_expand_for(first, M2), jnp.zeros_like(M2), M2),
+        )
+
+    def _spread(self, M2, count):
+        if self.config.variance == "population":
+            return M2 / count
+        return jnp.where(count < 2, jnp.ones_like(M2), M2 / jnp.maximum(count - 1, 1.0))
+
     def _update_observation(self, state, observation):
+        mean, M2 = self._open(state.mean, state.M2, state.count, observation)
         count = state.count + 1
         expanded_count = _expand_for(count, observation)
-        delta = observation - state.mean
-        mean = state.mean + delta / expanded_count
-        M2 = state.M2 + delta * (observation - mean)
+        delta = observation - mean
+        mean = mean + delta / expanded_count
+        M2 = M2 + delta * (observation - mean)
         return replace(state, mean=mean, M2=M2, count=count)
 
     def _normalize_observation(self, state, observation):
         count = _expand_for(state.count, observation)
-        return (observation - state.mean) / jnp.sqrt(state.M2 / count + self.config.eps)
+        spread = self._spread(state.M2, count)
+        return (observation - state.mean) / jnp.sqrt(spread + self.config.eps)
 
     def _scale_reward(self, state, reward):
-        """The spread the reward is divided by. Ours is ``M2 / count``."""
-
-        return reward / jnp.sqrt(state.M2 / state.count + self.config.eps)
+        spread = self._spread(state.M2, state.count)
+        return reward / jnp.sqrt(spread + self.config.eps)
 
     def _update_reward(self, state, reward, done):
         G = reward + self.config.reward_gamma * state.G * (1 - done)
+        mean, M2 = self._open(state.mean, state.M2, state.count, G)
         count = state.count + 1
-        delta = G - state.mean
-        mean = state.mean + delta / count
-        M2 = state.M2 + delta * (G - mean)
+        delta = G - mean
+        mean = mean + delta / count
+        M2 = M2 + delta * (G - mean)
         return replace(
             state,
             mean=mean,
             M2=M2,
             count=count,
-            G=G * (1 - done),
+            G=G * (1 - done) if self.config.reward_trace_reset_on_done else G,
         )
 
 
@@ -247,20 +256,23 @@ def make_normalizer(config) -> Normalizer:
             reward_gamma=float(getattr(config, "normalization_reward_gamma", 0.99)),
             reset_on_start=bool(getattr(config, "reset_on_start", True)),
             update_during_eval=bool(getattr(config, "update_during_eval", True)),
-            statistics=str(getattr(config, "normalization_statistics", "ours")),
+            cold_start=str(getattr(config, "normalization_cold_start", "seeded")),
+            variance=str(getattr(config, "normalization_variance", "population")),
+            reward_trace_reset_on_done=bool(
+                getattr(config, "reward_trace_reset_on_done", True)
+            ),
         )
     if config.reset_on_start and not config.update_during_eval:
         raise ValueError("reset_on_start=True requires update_during_eval=True")
-    if config.statistics not in STATISTICS:
+    if config.cold_start not in COLD_STARTS:
         raise ValueError(
-            f"unknown statistics {config.statistics!r}; use {', '.join(STATISTICS)}"
+            f"unknown cold start {config.cold_start!r}; use {', '.join(COLD_STARTS)}"
         )
-    if config.statistics == "upstream":
-        # Imported here because that module subclasses this one's normaliser, and
-        # naming it at the top would close the circle.
-        from .normalization_upstream import UpstreamNormalizer
+    if config.variance not in VARIANCES:
+        raise ValueError(
+            f"unknown variance {config.variance!r}; use {', '.join(VARIANCES)}"
+        )
 
-        return UpstreamNormalizer(config)
     return Normalizer(config)
 
 

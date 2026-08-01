@@ -26,63 +26,68 @@ from __future__ import annotations
 
 import sys
 from collections.abc import Mapping
+from dataclasses import dataclass
 from typing import Any
 
 import flax.linen as nn
+from training_sdk.parameters import describe_parameters, param, structure
 from training_sdk.reporter import Reporter
 
 from memorax.algorithms.stream_ac import StreamAC, StreamACConfig
 from memorax.environments import make
 from memorax.networks import (
-    TORSOS,
     FeatureExtractor,
     Network,
     heads,
     make_torso,
 )
-from memorax.rl import BOUNDED_RULES, CREDITS, STATISTICS, NormalizationConfig
+from memorax.networks.torso import Mlp, Rtu
+from memorax.rl import CREDITS, NormalizationConfig
+from memorax.rl.normalization import COLD_STARTS, VARIANCES
+from memorax.rl.updates import BASE_BRANCHES, BOUND_BRANCHES
 from runner.loop import drive, named_scalars
 
-_UNIT = {"type": "float", "low": 0.0, "high": 1.0}
-_RATE = {"type": "float", "low": 1e-9, "high": 10.0, "log": True}
+BACKBONE_BRANCHES = {"rtu": Rtu, "mlp": Mlp}
 
-SPACE: dict[str, Any] = {
-    "backbone": list(TORSOS),
-    "hidden_dim": {"type": "int", "low": 1, "high": 512},
-    "feature_dim": {"type": "int", "low": 1, "high": 512},
-    # Whether the previous action and reward are fed back in alongside the
-    # observation, which is what lets the agent condition on its own history.
-    "meta_rl": [False, True],
-    # On unless an experiment says otherwise. A bounded step reads the size of
-    # its own inputs, so an unnormalised observation changes what the bound
-    # means; the published runs normalise, and a run that does not is the
-    # unusual one. First in the list is what the cheapest sampled point takes.
-    "normalize_observation": [True, False],
-    "normalize_reward": [True, False],
-    # Whose running statistics the two switches above keep. ``upstream`` is the
-    # arm reproducing what streaming-drl's wrappers do differently, and is here
-    # so a comparison against their curves can hold it fixed rather than leaving
-    # three unnamed differences inside every gap.
-    "normalization_statistics": list(STATISTICS),
-    # Exact online credit, or one step of backpropagation and no sensitivity.
-    "credit": list(CREDITS),
-    "gamma": {"type": "float", "low": 0.5, "high": 0.9999},
-    "trace_lambda": _UNIT,
-    "actor_lr": _RATE,
-    "critic_lr": _RATE,
-    "actor_kappa": {"type": "float", "low": 0.0, "high": 100.0},
-    "critic_kappa": {"type": "float", "low": 0.0, "high": 100.0},
-    "entropy_coefficient": {"type": "float", "low": 1e-8, "high": 1.0, "log": True},
-    "bounded_rule": list(BOUNDED_RULES),
-    "beta2": _UNIT,
-    "eps": {"type": "float", "low": 1e-12, "high": 1e-2, "log": True},
-}
+
+@dataclass(frozen=True)
+class StreamACParameters:
+    backbone: str = structure(placeholder="rtu", branches=BACKBONE_BRANCHES)
+    meta_rl: bool = param(valid=[False, True], search=[False, True], placeholder=False)
+    credit: str = param(valid=list(CREDITS), search=list(CREDITS), placeholder="tbptt")
+    gamma: float = param(valid=(0.5, 0.9999), search=(0.9, 0.9999), placeholder=0.99)
+    trace_lambda: float = param(valid=(0.0, 1.0), search=(0.0, 1.0), placeholder=0.9)
+    entropy_coefficient: float = param(
+        valid=(1e-8, 1.0), search=(1e-8, 1e-2), placeholder=1e-4, log=True
+    )
+    normalize_observation: bool = param(
+        valid=[False, True], search=[True], placeholder=True
+    )
+    normalize_reward: bool = param(valid=[False, True], search=[True], placeholder=True)
+    normalization_cold_start: str = param(
+        valid=list(COLD_STARTS), search=["seeded"], placeholder="seeded"
+    )
+    normalization_variance: str = param(
+        valid=list(VARIANCES), search=["population"], placeholder="population"
+    )
+    reward_trace_reset_on_done: bool = param(
+        valid=[False, True], search=[True], placeholder=True
+    )
+    normalization_eps: float = param(
+        valid=(1e-12, 1e-2), search=[1e-8], placeholder=1e-8, log=True
+    )
+    reset_on_start: bool = param(valid=[False, True], search=[False], placeholder=False)
+    update_during_eval: bool = param(
+        valid=[False, True], search=[True], placeholder=True
+    )
+    optimizer_bound: str = structure(placeholder="ob", branches=BOUND_BRANCHES)
+    optimizer_base: str = structure(placeholder="sgd", branches=BASE_BRANCHES)
+
+
+PARAMETERS = describe_parameters(StreamACParameters)
 
 METRICS: tuple[str, ...] = ("eval/episode_return", "eval/episode_length")
 
-# The parts of the networks this file wires, which is what makes a norm per
-# part reportable: the kernel measures whatever parts it is given and cannot
-# name them.
 PARTS: tuple[str, ...] = ("feature_extractor", "torso", "head")
 
 TRAINING_METRICS: tuple[str, ...] = (
@@ -92,11 +97,6 @@ TRAINING_METRICS: tuple[str, ...] = (
     "entropy",
     "actor_step_size",
     "critic_step_size",
-    # Split by part because the parts are not credited alike: under
-    # ``credit=rtrl`` the torso's cell sees the whole stream while what feeds it
-    # sees one step, and one norm over the whole network hides that. Read them
-    # beside the step sizes, since a bounded step can shrink a large gradient
-    # into a small update and the two cases look alike from the update alone.
     *(
         f"{domain}_{reading}_norm/{part}"
         for domain in ("actor", "critic")

@@ -12,6 +12,10 @@ recurrence itself should offer ``RECURRENT_TORSOS`` instead of ``TORSOS``.
 
 from __future__ import annotations
 
+from dataclasses import dataclass
+
+from training_sdk.parameters import param
+
 from memorax.networks.sequence_models import (
     RNN,
     LRUCell,
@@ -35,6 +39,23 @@ TORSOS = (*RECURRENT_TORSOS, "mlp")
 # that they take the same config and build the same parameter tree as ``lru``,
 # which is visible below rather than asserted here.
 UPSTREAM_TORSOS = ("lru_published", "lru_rewritten")
+
+
+@dataclass(frozen=True)
+class Rtu:
+    hidden_dim: int = param(valid=(1, 4096), search=(32, 512), placeholder=192)
+    feature_dim: int = param(valid=(1, 4096), search=(16, 256), placeholder=64)
+
+
+@dataclass(frozen=True)
+class Lru:
+    hidden_dim: int = param(valid=(1, 4096), search=(32, 512), placeholder=128)
+    feature_dim: int = param(valid=(1, 4096), search=(16, 256), placeholder=32)
+
+
+@dataclass(frozen=True)
+class Mlp:
+    hidden_dim: int = param(valid=(1, 4096), search=(32, 512), placeholder=128)
 
 _LRU_CELLS = {
     "lru": LRUCell,
