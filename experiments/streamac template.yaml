@@ -1,0 +1,63 @@
+experiment: streamac-test
+name: template
+description: ""
+
+image: 007122174918.dkr.ecr.eu-north-1.amazonaws.com/rtrrl@sha256:b33d69821d4dd8e601fea78b3dde331bacfd2797bda256da1dbdfeb5b1ce12a5
+entry: stream_ac
+storage: s3://rtrrl-artifacts-007122174918/trainer
+
+environment:
+  id: brax::hopper
+  backend: spring
+  observed: [0, 2, 4, 6, 8, 10]
+  seed: 0
+
+training:
+  num_envs: 16
+  total_steps: 2000000
+  epoch_steps: 10000
+
+evaluation:
+  steps: 1000
+  num_envs: 1
+
+compute:
+  instance_type: c7a.large
+  timeout_minutes: 90
+
+hpo:
+  sampler: grid
+  rounds: 5
+  trials_per_round: 4
+  parallel_jobs: 4
+
+space:
+  normalize_observation: [true]
+  normalize_reward: [true]
+  normalization_statistics: ["ours"] # ours是什么算法，not reset when eval?
+
+  # rnn
+  backbone: [rtu]
+  hidden_dim: [32]
+  feature_dim: [32] # 这个参数是什么？
+  meta_rl: [false]
+
+  # optimize
+  credit: [tbptt]
+  optimizer_bound: [none]
+  optimizer_base: [sgd]
+
+score:
+  metric: eval/episode/return_per_step
+  window_steps: [0, 2000000] # 取值范围
+  reduce: last # 值序列如何生成分数
+  non_finite: worst # nan/inf处理策略
+  direction: maximize
+
+logging:
+  # 考虑设置记录的字段
+  aim: aim://172.31.62.192:53801
+  every_steps: 1000
+
+  enable_rerun: true
+  rerun_every_episodes: 20

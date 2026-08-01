@@ -88,6 +88,24 @@ manifest 携带全部参数,算法一律 `params["x"]` 取值。禁止 `params.g
 
 两个值可以有相同 placeholder,但不共享一个参数名,也不由一个采样维度同时驱动。
 
+### 归一化:一个开关拆成三个,其中一个不进搜索
+
+`normalization_statistics: ours | upstream`(`memo/memorax/rl/normalization.py:20`)按**代码出自谁**命名,而不是按它是什么。配置面上的取值不该指向仓库归属。它同时也太粗:`UpstreamNormalizer` 覆写三个方法,合并成一个开关之后,跟 streaming-drl 的曲线对不上时说不出是哪一件造成的,而这条臂存在的全部目的就是把这三件事从"我们的框架"里分离出来。拆成三个:
+
+- `normalization_cold_start`:`seeded`(播一个均值 0、M2 1、count 1 的伪观测)| `first_sample`(第一个样本直接成为均值、M2 置零,第一个方差恰好 1)。
+- `normalization_variance`:`population`(`M2/count`)| `sample`(`M2/(count-1)`,count<2 时钉在 1)。
+- `reward_trace_reset_on_done`:折扣回报迹在终止步存回时是否再掩一次码。
+
+前两个是两种都站得住的估计量约定,几千个样本之后差别消失,是真正的选项,带 `search`。
+
+第三个不是选项。`reset_on_done=false` 时终止步之后 `G` 等于终止奖励,下一个回合带着它(衰减一次)开始,整段跑里每个回合边界都漏一次;这是缺陷,gymnasium 的 `NormalizeReward` 也带了多年。它**不声明 `search`**,因此永不构成搜索维度,只能被实验显式点名打开——否则 TPE 会把"跨回合漏奖励"当超参数去调,而在 Hopper 上漏进去的存活奖励很可能让它分数更高,于是被选中并当作结论报出来。placeholder 取 `true`。
+
+`STATISTICS` 表与 `normalization_statistics` 一并删除。
+
+### 评估期的归一化统计量
+
+`reset_on_start` 与 `update_during_eval`(`normalization.py:29-30`)今天是 `NormalizationConfig` 的字段,不在任何 `SPACE` 里,配置文件够不着,于是每次运行都是 `True`/`True`。两者都声明为参数,placeholder 取 `false`/`true`。现有约束"`reset_on_start=True` 要求 `update_during_eval=True`"(`normalization.py:252`)保留,在该 placeholder 组合下自然满足。
+
 ## 4. 结构与条件空间
 
 结构是计算图的可替换部分:backbone、归一化的开关、梯度门控、优化器的界与底。声明为一个选择字段加若干分支,每个分支可携带自己的子参数:
@@ -112,6 +130,41 @@ catalog 导出这棵树。控制面按树逐层采样:先定结构分支,再只�
 
 没有分支特有参数的结构(两个归一化开关、两个梯度门控)在机制上与普通离散参数一致,不特判。
 
+### 网络由组件组合,组件内不混合
+
+前馈层、层归一化、各个激活函数、LRU、RTU 都是**独立组件**。算法把它们组合成一个 sequence。单个组件内部不得混合两件事。
+
+这条约束不是风格偏好。三条通路在编码、非线性位置、归一化上两两都不同,任何一段公共接线都会同时破坏其中两条;而只有当网络是一串可排列的组件时,"后续用配置文件描述网络结构"才可能——固定槽位的接线没法被数据描述。
+
+现状有四处违反:
+
+- `Memoryless`(`memo/memorax/networks/sequence_models/memoryless.py:48-53`)把 `Dense → LayerNorm → 激活 → Dense → LayerNorm → 激活` 六件事焊成一个 torso,层数还写死为二。
+- 三个 entry 的 `encoder()`(`memo/entries/stream_ac.py:120`)是 `nn.Sequential((Dense, relu))`,两件事。
+- `Network`(`memo/memorax/networks/network.py:8-11`)是固定三槽 `feature_extractor / torso / head`,不是序列。
+- `RTUCell` 与 `LRUCell` 各自带 `activation_fn` 字段,让"哪个非线性"看起来像递推组件的一个参数。
+
+**递推组件的非线性是例外,不算混合。** RTU 的定义就是把非线性引入递推(`arXiv 2409.01449`,Elelimy 等,NeurIPS 2024):它作用在 carry 上,外提就改变了下一步的递推,那是另一个算法而不是同一组件后面加一层。LRU 是线性的,名字里的 Linear 就是这个意思。两者是并列的两个原子组件,不是"LRU 加激活等于 RTU";去掉 RTU 的非线性它就退回成 LRU,而 LRU 正是 RTU 论文用来对照的基线。因此 `RTU` 与 `LRU` 各自完整,但都不再暴露"换一个激活函数"的字段。
+
+### 三条 backbone 分支各自对齐自己的原版
+
+每条分支有各自的已发表来源,通路互不相同:
+
+| 分支 | 来源 | sequence |
+|------|------|----------|
+| `rtu` | `arXiv 2605.24709`,Farr 等,Masked MuJoCo 正是本项目的任务 | `FFN(64) → LayerNorm → tanh → RTU(hidden 192) → FFN(head)` |
+| `lru` | RTRRL AAAI | `LRU → SiLU → FFN(head)` |
+| `mlp` | streaming-drl | `FFN(128) → LayerNorm → LeakyReLU → FFN(128) → LayerNorm → LeakyReLU → FFN(head)` |
+
+`rtu` 的来源明写了三个参数组:"an encoder φ producing features, a recurrent RTU layer producing the state, and a feedforward head",并给出 Masked MuJoCo 的取值:全连接宽度 64、该基准上用 tanh(离散动作基准才用 LeakyReLU)、每个激活之前 LayerNorm、单层 RTU 隐藏维 192、policy 与 value 各自独立的网络、初始化 90% 稀疏。所以编码器是这条分支的原版规定的,不是多出来的一层;`feature_dim` 保留,它就是编码器宽度,placeholder 取 64。memo 现有的 `initializers/sparse.py` 已实现稀疏初始化,只是 entry 没有用它。
+
+`lru` 按 AAAI 版的通路写。他们的 `OnlineLRULayer` 在 `C` 读出与 `D` 直连之后作用一个 SiLU,memo 的 `LRUCell` 没有这一步——要补上,但作为 LRU 之后的独立组件,不是塞进 `LRUCell`。抄的是通路,不是他们把激活焊进层里的封装方式。
+
+`mlp` 是 streaming-drl 的两个前馈块,宽度 128,不是一层裸 `Dense+relu`。
+
+`stream_ac` 与 `upstream_stream_ac` 的 backbone 值域去掉 `lru`,留 `rtu` 与 `mlp`;LRU 归 rtrrl 那条线。
+
+`test_paper_parity.py` 今天覆盖 OBGD、归一化、TD 误差与 actor/critic 方向,没有一条断言网络结构,所以这些通路从未对照任何参考被检查过。拆成组件之后,每条分支都应当能被驱动着与它的来源逐层比对。
+
 ### 采样的改动
 
 现状 `ask_round` 调用 `study.ask(dict(distributions))`,一次给出固定分布集(`study.py:79`),`distributions` 由整个 space 一次性构造(`space.py:34`)。改为 `study.ask()` 取得 trial 后按结构树逐层调用 `trial.suggest_*`。条件性在控制面解析完毕,作业提交前参数已全部确定,worker 不受影响。
@@ -127,9 +180,13 @@ TPE 支持条件空间。`GridSampler` 要求预先给出完整网格,给不出�
 拆成两条独立的结构轴:
 
 ```
-optimizer.bound: none | ob | adaptive_ob | adaptive_ob_fixed
-optimizer.base:  sgd  | adam
+optimizer_bound: none | ob | adaptive_ob | adaptive_ob_fixed
+optimizer_base:  sgd  | adam
 ```
+
+两个名字共享 `optimizer_` 前缀。manifest 把参数拍平成 `params["x"]`,前缀是拍平之后唯一还能说明这两个字段是同一次分解的东西。
+
+值里去掉 `gd`:`obgd` 指的是 Overshoot-Bounded Gradient Descent,名字里已经含了底,拿它当界这条轴的取值,`optimizer_bound=obgd, optimizer_base=adam` 就成了"用 Adam 的梯度下降界的梯度下降"。`ob` 只说界,正是这条轴表达的东西。`none` 也因此能进同一条轴——今天想说"不加界"要去改另一个字段(`update_rule=adam`),一个概念散在两处。
 
 更新链固定为三段:**bound → 环境轴均值 → base**。
 
@@ -147,27 +204,40 @@ optimizer.base:  sgd  | adam
 
 ## 6. 指标面
 
-### 两个粒度
+### 两个粒度,写进名字
 
-记录的量分两类,由 Aim 的 context 区分:
+记录的量分两类:
 
-- **环境步采样**:每个环境步取一次、在 epoch 内聚合后上报。训练侧的全部诊断量、`eval/reward` 属于此类。
-- **回合级**:每个完成的回合取一次。`eval/episode_return`、`eval/episode_length` 属于此类。
+- **环境步采样**:每个环境步取一次、在 epoch 内聚合后上报。
+- **回合级**:每个完成的回合取一次。
 
-现状两类都存在但不区分:`AimSink.report` 调 `run.track(value, name, step)` 不带 context(`training-sdk/src/training_sdk/sinks/aim.py:39-40`),全部量共用一个平铺命名空间、共用累计环境步这一个横轴,`train/` 与 `eval/` 前缀标的是阶段而非粒度。改为在 `track` 上带 `context={"scope": "step"}` 或 `{"scope": "episode"}`,横轴仍是累计环境步。
+现状两类都存在但不区分:全部量共用一个平铺命名空间(`training-sdk/src/training_sdk/sinks/aim.py:39-40`),`train/` 与 `eval/` 前缀标的是阶段而非粒度。
+
+名字改为三段 `<阶段>/<粒度>/<量>`:
+
+```
+train/step/reward          eval/step/reward
+train/episode/return       eval/episode/return_per_step
+```
+
+粒度由名字承担,不用 Aim 的 context。context 的用处是让同名 metric 带不同 context 画进一张图,而这里不需要把 train 与 eval 叠在一起;名字里的层级已经把它们组织清楚。这样 `score.metric` 保持是一个字符串,preflight 拿它对入口声明的 `METRICS` 校验的做法不用改,也不需要从名字派生 context 的机制。
+
+横轴仍是累计环境步。
 
 `AimSink.log_episode` 当前是空实现(`:42-43`),回合级明细不进 Aim,只有聚合后的两个标量进。是否让单个回合进 Aim 与本设计的两类划分独立,不在本轮改动内。
 
-### 奖励
+### 奖励与每步收益
 
 训练侧当前不报告任何奖励量,`TRAINING_METRICS` 中一条都没有。补两条:
 
-- `train/reward`,环境步采样类,epoch 内每步奖励的均值。
-- `train/episode_return`,回合级,epoch 内 `sum(reward) / max(1, sum(done))`。对应 AAAI 的 `mean_reward = sum(reward) / num_episodes`(`RTRRL-AAAI25/rtrrl.py:843-845`)。
+- `train/step/reward`,环境步采样类,epoch 内每步奖励的均值。
+- `train/episode/return`,回合级,epoch 内 `sum(reward) / max(1, sum(done))`。对应 AAAI 的 `mean_reward = sum(reward) / num_episodes`(`RTRRL-AAAI25/rtrrl.py:843-845`)。
 
 两条所需的 `reward` 与 `done` 已经逐步记录在 `RTRRLStepMetrics`(`memo/memorax/algorithms/rtrrl.py:288-289`),只是没有上报。第一条把名字加进 `TRAINING_METRICS` 即可;第二条是两个字段的比值而非某一字段的均值,`named_scalars` 的形状(`memo/runner/loop.py:138-152`)表达不了,需要在 `training_report` 内单独算一条。
 
-评估侧 `eval/reward` 与 `eval/episode_return`、`eval/episode_length` 已经齐备(`memo/runner/loop.py:73-77`)。这一组的意义在于回报与长度可以相除:在 Hopper 上一个不动作但不摔倒的策略靠存活奖励拿到高回报,而每步奖励会把它和真正前进的策略分开。训练侧补上这两条之后,同样的读法在训练过程中也成立。
+评估侧新增 `eval/episode/return_per_step`,定义为**整批完成回合的 `sum(returns) / sum(lengths)`**,不是每回合先相除再平均——后者会放大短回合的权重。它是回合级量,只统计完成的回合。
+
+这一条是这组指标里最该看的一个:在 Hopper 上,一个不动作但不摔倒的策略靠存活奖励拿到高回报,除以长度才能把它和真正前进的策略分开。它与现有的 `eval/step/reward` 不是同一个量——后者是整段 rollout 所有步的奖励均值(`memo/runner/loop.py:70`),含未完成的回合。两条都保留。
 
 ### 按环境拆解,后续
 
@@ -189,13 +259,26 @@ Hopper 的奖励是存活、前进、控制代价三项之和,Brax 在 `info` �
 
 `CONTRACT_VERSION` 递增。catalog 结构改变,旧镜像的 catalog 不再被接受,memo 与 rtrrl 两个镜像都要重建。
 
-`experiments/` 下现存的 20 个 streamac YAML 与 5 个 rtrrl YAML 一并迁移到新格式,旧格式不保留,控制面不同时接受两种语义。
+`experiments/` 下现存的实验一并迁移到新格式,旧格式不保留,控制面不同时接受两种语义。`experiments/streamac template.yaml` 与 `experiments/rtrrl template.yaml` 是目标格式的两份样板,实验按它们写。
+
+`seed` 只作为 `environment.seed` 出现,一个值,不是列表,任何时候都不进搜索。因此不存在"多 seed 实验"这种文件:仅靠改变 seed 来重复的实验就是重复启动同一个文件。原先四个 `streamac-hopper-seeds-*` 实验的 `space` 是十八个钉死的值加 `seed: [0,1,2,3,4]`,拿 grid 采样器的 trial 数当重复循环,seed 注入之后无可搜索,已删除。多 seed 的聚合语义不在本设计范围内,也不用复制文件的方式补回来。
+
+`LoggingSpec` 拆成两个组件,Aim 与 Rerun 各自完整,各自可关:今天 `rerun_every_episodes` 是一个可选整数,靠"是否为 None"兼任开关,而 Aim 没有开关。新增 `enable_rerun`,两个 sink 的启用与参数分别声明。
+
+`normalization_statistics`、`STATISTICS` 表、`feature_dim` 作为公共编码宽度的用法一并处理:前两者删除并换成三个参数,`feature_dim` 保留但归入 `rtu` 分支。`RTUCell` 与 `LRUCell` 去掉 `activation_fn` 字段。
 
 实施分四个阶段,每阶段自身可验证:
 
 1. 环境、训练、评估分段,`seed`/预算/循环/评估参数出 `space`,`observed` 与删维度。
-2. `param()` 三件套、catalog `parameters`、结构树、条件采样、移除 `source_hash`。
-3. OBGD 分解为 bound 与 base 两轴。
-4. 指标面:两个粒度的 context、训练侧的两条奖励。
+2. `param()` 三件套、catalog `parameters`、结构树、条件采样、移除 `source_hash`,归一化三参数与 `reset_on_start`/`update_during_eval`。
+3. OBGD 分解为 `optimizer_bound` 与 `optimizer_base` 两轴。
+4. 指标面:三段命名、训练侧两条、`eval/episode/return_per_step`。
+5. 网络拆成组件,三条 backbone 分支各自对齐来源。
 
-阶段 3 依赖阶段 2 的结构树来表达两条轴,阶段 2 依赖阶段 1 腾空 space。阶段 4 与前三个阶段无依赖,排在末尾只是因为它与参数迁移同样会改到 entry 的报告面。
+阶段 3 依赖阶段 2 的结构树来表达两条轴,阶段 2 依赖阶段 1 腾空 space。阶段 4 与前三个阶段无依赖,排在其后只是因为它与参数迁移同样会改到 entry 的报告面。阶段 5 依赖阶段 2 的结构树来表达分支下的组件参数,并且会改变已记录分数的可比性——现有网络的参数量与非线性位置都变,旧分数不再是对照。
+
+## 8. 未定
+
+- `evaluation.num_envs` 目前没有消费者。`drive()` 拿训练的流数做评估(`memo/runner/loop.py:133`),memo entry 只读 `evaluation.steps`。规格 §7 要求 memo entry 从 `evaluation` 读循环参数,所以 `evaluate()` 应当接收自己的流数;`evaluate()` 内部的 reset key、动作零张量、timestep、carry、sensitivity 全部按宽度当场新建,从训练带过来的只有网络参数与 normalizer 状态,两者都不依赖 batch 宽度,所以这个宽度本就是独立的。
+- `mlp` 分支的层数、`rtu` 分支编码器的层数,以及各分支里 LayerNorm 的开关,是分支下的参数还是固定接线,未定;placeholder 一律取各自来源的取值。
+- 90% 稀疏初始化(`rtu` 来源规定)是分支参数还是固定接线,未定。

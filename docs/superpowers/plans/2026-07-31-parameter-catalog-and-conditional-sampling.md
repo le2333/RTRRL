@@ -8,6 +8,8 @@
 
 **Tech Stack:** Python 3.12, dataclasses, pydantic v2, Optuna, uv, GitHub Actions.
 
+> **The concrete declarations below are out of date.** The mechanism — `param()`, `structure()`, `describe_parameters`, `EntryDescriptor.parameters`, the resolver and the conditional sampler — still stands. The parameter names and values in Task 4 do not. The spec has since decided: `bounded_rule` and `update_rule` become `optimizer_bound: none|ob|adaptive_ob|adaptive_ob_fixed` and `optimizer_base: sgd|adam`; `normalization_statistics` splits into `normalization_cold_start`, `normalization_variance` and `reward_trace_reset_on_done`, the last declaring no `search`; `reset_on_start` and `update_during_eval` become parameters; the StreamAC entries drop `lru` from their backbone; and `feature_dim` belongs to the `rtu` branch rather than to every backbone. Re-derive Task 4's dataclasses from the spec before writing them.
+
 ## Global Constraints
 
 - Complete `2026-07-31-training-evaluation-sections.md` before starting this plan. This plan assumes `CONTRACT_VERSION == 5`, `EnvironmentConfig.seed`, `TrainingConfig`, and `EvaluationConfig`.
