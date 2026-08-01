@@ -80,8 +80,10 @@ class StreamACParameters:
     update_during_eval: bool = param(
         valid=[False, True], search=[True], placeholder=True
     )
-    optimizer_bound: str = structure(placeholder="ob", branches=BOUND_BRANCHES)
-    optimizer_base: str = structure(placeholder="sgd", branches=BASE_BRANCHES)
+    actor_optimizer_bound: str = structure(placeholder="ob", branches=BOUND_BRANCHES)
+    actor_optimizer_base: str = structure(placeholder="sgd", branches=BASE_BRANCHES)
+    critic_optimizer_bound: str = structure(placeholder="ob", branches=BOUND_BRANCHES)
+    critic_optimizer_base: str = structure(placeholder="sgd", branches=BASE_BRANCHES)
 
 
 PARAMETERS = describe_parameters(StreamACParameters)
