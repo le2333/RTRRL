@@ -2,13 +2,17 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Replace flat hand-written `SPACE` dictionaries with dataclass-backed parameter declarations, export catalog `parameters`, validate `valid/search/placeholder`, and sample structure-dependent parameters conditionally.
+**Goal:** Replace flat hand-written `SPACE` dictionaries with dataclass-backed parameter declarations, export catalog `parameters`, validate `valid/search/placeholder`, and sample structure-dependent parameters conditionally. One entry, `stream_ac`, is carried all the way through as the template the rest are written against later.
 
 **Architecture:** The shared contract gains parameter-tree nodes and `EntryDescriptor.parameters`; experiment YAML keeps top-level `space` as an override document. A lightweight `training_sdk.parameters` helper turns dataclass field metadata into the contract model, so entries keep declarations beside the code that reads the resolved flat `params`. The control plane resolves overrides against the tree, asks Optuna for an empty trial, recursively calls `trial.suggest_*`, and fills inactive branches with `placeholder`.
 
 **Tech Stack:** Python 3.12, dataclasses, pydantic v2, Optuna, uv, GitHub Actions.
 
-> **The concrete declarations below are out of date.** The mechanism — `param()`, `structure()`, `describe_parameters`, `EntryDescriptor.parameters`, the resolver and the conditional sampler — still stands. The parameter names and values in Task 4 do not. The spec has since decided: `bounded_rule` and `update_rule` become `optimizer_bound: none|ob|adaptive_ob|adaptive_ob_fixed` and `optimizer_base: sgd|adam`; `normalization_statistics` splits into `normalization_cold_start`, `normalization_variance` and `reward_trace_reset_on_done`, the last declaring no `search`; `reset_on_start` and `update_during_eval` become parameters; the StreamAC entries drop `lru` from their backbone; and `feature_dim` belongs to the `rtu` branch rather than to every backbone. Re-derive Task 4's dataclasses from the spec before writing them.
+> **Executed. The spec is the authority, not this file.** Tasks 1 to 3 landed as written
+> in mechanism; the parameter names in them were superseded while the work ran and the
+> code is what shipped. Task 4 was rewritten down to one entry: this batch delivers
+> `stream_ac` as the standard template and nothing else. Read
+> `2026-07-30-configuration-surface-design.md` before extending any of it.
 
 ## Global Constraints
 
@@ -22,6 +26,8 @@
 - `CONTRACT_VERSION` becomes `6` in this plan.
 - The YAML top-level key remains `space`; only the catalog entry field changes from `space` to `parameters`.
 - This plan does not implement OBGD `bound/base` decomposition or the metrics changes.
+- Only `stream_ac` is in scope. `upstream_stream_ac`, `rtrrl`, `rtrrl_aaai` and the experiment YAML migration are out of this batch; memo's catalog does not build and its suite stays red until they follow.
+- Tests run locally in WSL with virtualenvs and caches outside the repository. After changing `training-sdk`, reinstall it into memo's environment (`uv sync --group development --reinstall-package training-sdk`) or memo keeps importing the old copy.
 
 ---
 
@@ -49,7 +55,7 @@
 - Consumes: `CONTRACT_VERSION == 5` from the preceding plan.
 - Produces: `CONTRACT_VERSION == 6`; `EntryDescriptor(command, metrics, parameters)`; `ParameterSpec(value_type, valid, search, placeholder, log=False, step=1)`; `StructureSpec(placeholder, search, branches)`.
 
-- [ ] **Step 1: Write failing contract tests**
+- [x] **Step 1: Write failing contract tests**
 
 In `training-sdk/tests/test_contract.py`, replace `test_contract_version_is_five` with:
 
@@ -119,7 +125,7 @@ def test_entry_descriptor_rejects_legacy_space_field() -> None:
         )
 ```
 
-- [ ] **Step 2: Write failing helper tests**
+- [x] **Step 2: Write failing helper tests**
 
 Create `training-sdk/tests/test_parameters.py`:
 
@@ -175,7 +181,7 @@ def test_placeholder_must_be_inside_valid() -> None:
         describe_parameters(Bad)
 ```
 
-- [ ] **Step 3: Commit and run the remote red check**
+- [x] **Step 3: Commit and run the remote red check**
 
 ```bash
 git add training-sdk/tests/test_contract.py training-sdk/tests/test_parameters.py
@@ -186,7 +192,7 @@ gh workflow run tests.yml --ref "$(git branch --show-current)"
 
 Expected: training-sdk tests fail because `training_sdk.parameters` and the new contract models do not exist.
 
-- [ ] **Step 4: Implement contract models**
+- [x] **Step 4: Implement contract models**
 
 In `training-sdk/src/training_sdk/contract.py`, set:
 
@@ -271,7 +277,7 @@ class EntryDescriptor(_Frozen):
 
 and update its validator to keep the command/metrics checks.
 
-- [ ] **Step 5: Implement declaration helper**
+- [x] **Step 5: Implement declaration helper**
 
 Create `training-sdk/src/training_sdk/parameters.py`:
 
@@ -445,7 +451,7 @@ def _check_search(name: str, valid: ValidSpec, search: SpaceEntry) -> None:
     _check_value(name, "search high", valid, search.high)
 ```
 
-- [ ] **Step 6: Run static checks and commit**
+- [x] **Step 6: Run static checks and commit**
 
 ```bash
 uv run ruff check training-sdk
@@ -477,7 +483,7 @@ Expected: training-sdk tests pass. Other jobs fail until their catalog builders 
 - Consumes: `EntryDescriptor.parameters`.
 - Produces: `ResolvedParameters`, `resolve_parameters(entry, overrides)`, `sample_parameters(trial, resolved) -> dict[str, Scalar]`, `grid_distributions(resolved) -> dict[str, CategoricalDistribution]`, and `has_unpinned_structure(resolved) -> bool`.
 
-- [ ] **Step 1: Write failing resolver and sampler tests**
+- [x] **Step 1: Write failing resolver and sampler tests**
 
 Replace `rtrrl/infra/control-plane/tests/test_space.py` with tests for the new API:
 
@@ -581,7 +587,7 @@ def test_inactive_branch_collapses_to_placeholders() -> None:
     assert 0.5 <= params["kappa"] <= 10.0
 ```
 
-- [ ] **Step 2: Write failing study tests**
+- [x] **Step 2: Write failing study tests**
 
 In `rtrrl/infra/control-plane/tests/test_study.py`, update `ask_round` expectations:
 
@@ -602,7 +608,7 @@ def test_grid_rejects_unpinned_structures() -> None:
         check_sampler("grid", has_unpinned_structure=True, grid_space={})
 ```
 
-- [ ] **Step 3: Write failing scalar override test**
+- [x] **Step 3: Write failing scalar override test**
 
 In `rtrrl/infra/control-plane/tests/test_experiments.py`, add:
 
@@ -624,7 +630,7 @@ def test_scalar_space_value_pins_one_candidate() -> None:
     assert experiment.space["normalize_reward"].choices == (True,)
 ```
 
-- [ ] **Step 4: Commit and run the remote red check**
+- [x] **Step 4: Commit and run the remote red check**
 
 ```bash
 git add rtrrl/infra/control-plane/tests/test_space.py rtrrl/infra/control-plane/tests/test_study.py rtrrl/infra/control-plane/tests/test_experiments.py
@@ -635,7 +641,7 @@ gh workflow run tests.yml --ref "$(git branch --show-current)"
 
 Expected: control-plane tests fail because the old resolver only knows `EntryDescriptor.space`, scalar YAML values are not normalized to one-choice overrides, and `ask_round` still requires distributions.
 
-- [ ] **Step 5: Implement resolver and sampler**
+- [x] **Step 5: Implement resolver and sampler**
 
 In `rtrrl/infra/control-plane/src/trainer_infra/space.py`, replace the old flat functions with:
 
@@ -913,7 +919,7 @@ def _structure_values(
     return [node.placeholder]
 ```
 
-- [ ] **Step 6: Normalize scalar experiment overrides and update study orchestration**
+- [x] **Step 6: Normalize scalar experiment overrides and update study orchestration**
 
 In `rtrrl/infra/control-plane/src/trainer_infra/experiment.py`, add `field_validator` to the pydantic imports and add this validator to `Experiment` before `_space_is_only_algorithm`:
 
@@ -966,7 +972,7 @@ def ask_round(study: optuna.Study, count: int) -> list[optuna.trial.Trial]:
     return [study.ask() for _ in range(count)]
 ```
 
-- [ ] **Step 7: Update preflight, launch, and loop**
+- [x] **Step 7: Update preflight, launch, and loop**
 
 In `preflight.py`, replace `resolve_space` with `resolve_parameters`, and return `ResolvedParameters` from `check_offline`.
 
@@ -1002,7 +1008,7 @@ configs = [
 
 and record/report `chosen` instead of `trial.params`.
 
-- [ ] **Step 8: Run static checks and commit**
+- [x] **Step 8: Run static checks and commit**
 
 ```bash
 uv run ruff check rtrrl/infra/control-plane
@@ -1030,7 +1036,7 @@ Expected: control-plane tests pass. Catalog-related tests still fail until Task 
 - Consumes: entry modules declaring `PARAMETERS`.
 - Produces: catalog JSON with entry field `parameters`.
 
-- [ ] **Step 1: Write failing catalog-builder tests**
+- [x] **Step 1: Write failing catalog-builder tests**
 
 In each catalog test, change assertions from `.space` to `.parameters`. For example in `rtrrl/tests/test_catalog.py`:
 
@@ -1049,7 +1055,7 @@ In `memo/tests/test_loop.py`, change:
 assert set(entry.parameters) == set(modules[name].PARAMETERS)
 ```
 
-- [ ] **Step 2: Commit and run the remote red checks**
+- [x] **Step 2: Commit and run the remote red checks**
 
 ```bash
 git add memo/tests/test_loop.py rtrrl/tests/test_catalog.py rtrrl/infra/mock-trainer/tests/test_catalog.py
@@ -1061,7 +1067,7 @@ gh workflow run build-aaai-image.yml --ref "$(git branch --show-current)"
 
 Expected: tests fail because builders still require `SPACE` and entries do not define `PARAMETERS`.
 
-- [ ] **Step 3: Update builders**
+- [x] **Step 3: Update builders**
 
 In `memo/runner/catalog.py`, change discovery to require:
 
@@ -1079,7 +1085,7 @@ Apply the same change in `rtrrl/scripts/build_catalog.py`. In `rtrrl/infra/mock-
 
 Remove imports of `SpaceEntry` if they become unused.
 
-- [ ] **Step 4: Run static checks and commit**
+- [x] **Step 4: Run static checks and commit**
 
 ```bash
 uv run ruff check memo/runner rtrrl/scripts rtrrl/infra/mock-trainer/scripts
@@ -1093,367 +1099,39 @@ Expected: tests still fail because entry modules have not yet declared `PARAMETE
 
 ---
 
-### Task 4: Entry Declarations and StreamAC `eps` Split
+### Task 4: `stream_ac` Declares Its Parameters
 
 **Files:**
-- Modify: `memo/entries/rtrrl.py`
 - Modify: `memo/entries/stream_ac.py`
-- Modify: `memo/entries/upstream_stream_ac.py`
-- Modify: `rtrrl/entries/rtrrl_aaai.py`
-- Modify: `rtrrl/infra/mock-trainer/src/brax_ppo_acceptance/space.py`
-- Modify: `memo/tests/test_entries.py`
-- Modify: `rtrrl/tests/test_entry.py`
-- Modify: `memo/tests/test_hopper_reproduction.py`
-- Modify: `rtrrl/catalog.json`
-- Modify: `rtrrl/infra/mock-trainer/catalog.json`
+- Modify: `memo/memorax/rl/updates.py`
+- Modify: `memo/memorax/rl/normalization.py`
+- Modify: `memo/memorax/networks/torso.py`
 
 **Interfaces:**
-- Consumes: `param`, `structure`, and `describe_parameters` from Task 1.
-- Produces: each entry declares `PARAMETERS`; no entry declares `SPACE`; StreamAC entries read `optimizer_eps` and `normalization_eps`.
+- Consumes: `param`, `structure`, `describe_parameters`, `read_branch` from Task 1.
+- Produces: `stream_ac.PARAMETERS`, and a `build` that reads a component out of the branch in force.
 
-- [ ] **Step 1: Write failing entry-use tests**
+This batch delivers **one entry only**. `stream_ac` is the template the other three
+are written against later; `upstream_stream_ac`, `rtrrl` and `rtrrl_aaai` are out of
+scope here and keep their `SPACE`, so `memo`'s catalog does not build and its suite
+stays red. That is the intended state: the contract is what this batch must get right,
+not an end-to-end run.
 
-In `memo/tests/test_entries.py`, replace every `entry.SPACE` read with `entry.PARAMETERS`. Add:
+- [x] **Step 1: Declare the components beside their implementations**
 
-```python
-def test_stream_ac_eps_names_are_split():
-    from entries import stream_ac, upstream_stream_ac
+The bound and base rules in `memorax/rl/updates.py`, the running and discounted
+normalisers in `memorax/rl/normalization.py`, the backbones in
+`memorax/networks/torso.py`. A component holds declarations and no methods.
 
-    assert "eps" not in stream_ac.PARAMETERS
-    assert "eps" not in upstream_stream_ac.PARAMETERS
-    assert "optimizer_eps" in stream_ac.PARAMETERS
-    assert "normalization_eps" in stream_ac.PARAMETERS
-    assert "optimizer_eps" in upstream_stream_ac.PARAMETERS
-    assert "normalization_eps" in upstream_stream_ac.PARAMETERS
-```
+- [x] **Step 2: Declare the entry**
 
-In `rtrrl/tests/test_entry.py`, replace imports of `SPACE` with `PARAMETERS` and assert:
+`stream_ac` names structures and the parameters no structure holds. An optimiser per
+role, a normaliser per stream. Nothing a component already declares is restated.
 
-```python
-def test_aaai_declares_no_eps():
-    from entries import rtrrl_aaai
+- [x] **Step 3: Read components rather than fields**
 
-    assert "eps" not in rtrrl_aaai.PARAMETERS
-```
-
-- [ ] **Step 2: Commit and run remote red checks**
-
-```bash
-git add memo/tests/test_entries.py rtrrl/tests/test_entry.py memo/tests/test_hopper_reproduction.py
-git commit -m "test(entries): require declared parameters and split eps names"
-git push origin HEAD
-gh workflow run tests.yml --ref "$(git branch --show-current)"
-gh workflow run build-aaai-image.yml --ref "$(git branch --show-current)"
-```
-
-Expected: tests fail because entry modules still declare `SPACE`.
-
-- [ ] **Step 3: Convert `memo/entries/stream_ac.py`**
-
-Add imports:
-
-```python
-from dataclasses import dataclass
-from training_sdk.parameters import describe_parameters, param, structure
-```
-
-Declare:
-
-```python
-@dataclass(frozen=True)
-class AdaptiveBound:
-    beta2: float = param(valid=(0.0, 1.0), search=(0.0, 1.0), placeholder=0.999)
-    optimizer_eps: float = param(
-        valid=(1e-12, 1e-2),
-        search=(1e-12, 1e-2),
-        placeholder=1e-8,
-        log=True,
-    )
-
-
-@dataclass(frozen=True)
-class StreamACParameters:
-    backbone: str = param(valid=list(TORSOS), search=list(TORSOS), placeholder="rtu")
-    hidden_dim: int = param(valid=(1, 512), search=(1, 512), placeholder=128)
-    feature_dim: int = param(valid=(1, 512), search=(1, 512), placeholder=32)
-    meta_rl: bool = param(valid=[False, True], search=[False, True], placeholder=True)
-    normalize_observation: bool = param(valid=[False, True], search=[True, False], placeholder=True)
-    normalize_reward: bool = param(valid=[False, True], search=[True, False], placeholder=True)
-    normalization_statistics: str = param(valid=list(STATISTICS), search=list(STATISTICS), placeholder="ours")
-    normalization_eps: float = param(valid=(1e-12, 1e-2), placeholder=1e-8, log=True)
-    credit: str = param(valid=list(CREDITS), search=list(CREDITS), placeholder="rtrl")
-    gamma: float = param(valid=(0.5, 0.9999), search=(0.5, 0.9999), placeholder=0.99)
-    trace_lambda: float = param(valid=(0.0, 1.0), search=(0.0, 1.0), placeholder=0.9)
-    actor_lr: float = param(valid=(1e-9, 10.0), search=(1e-9, 10.0), placeholder=0.1, log=True)
-    critic_lr: float = param(valid=(1e-9, 10.0), search=(1e-9, 10.0), placeholder=0.1, log=True)
-    actor_kappa: float = param(valid=(0.0, 100.0), search=(0.0, 100.0), placeholder=1.0)
-    critic_kappa: float = param(valid=(0.0, 100.0), search=(0.0, 100.0), placeholder=1.0)
-    entropy_coefficient: float = param(valid=(1e-8, 1.0), search=(1e-8, 1.0), placeholder=1e-4, log=True)
-    bounded_rule: str = structure(
-        placeholder="obgd",
-        search=list(BOUNDED_RULES),
-        branches={
-            "obgd": (),
-            "adaptive_obgd": AdaptiveBound,
-            "adaptive_obgd_fixed": AdaptiveBound,
-        },
-    )
-
-
-PARAMETERS = describe_parameters(StreamACParameters)
-```
-
-Delete `SPACE`. In `build()`, replace:
-
-```python
-            beta2=float(params["beta2"]),
-            eps=float(params["eps"]),
-```
-
-with:
-
-```python
-            beta2=float(params["beta2"]),
-            eps=float(params["optimizer_eps"]),
-```
-
-and pass normalization eps:
-
-```python
-            eps=float(params["normalization_eps"]),
-```
-
-to `NormalizationConfig`.
-
-- [ ] **Step 4: Convert `memo/entries/upstream_stream_ac.py`**
-
-Use the same `AdaptiveBound` declaration, with `bounded_rule` branches only for `"obgd"` and `"adaptive_obgd"`.
-
-Delete `SPACE`, define `PARAMETERS`, and replace:
-
-```python
-eps = float(params["eps"])
-```
-
-with:
-
-```python
-optimizer_eps = float(params["optimizer_eps"])
-normalization_eps = float(params["normalization_eps"])
-```
-
-Pass wrapper eps:
-
-```python
-env = NormalizeObservationWrapper(env, eps=normalization_eps)
-env = NormalizeRewardWrapper(env, gamma=gamma, eps=normalization_eps)
-```
-
-and config eps:
-
-```python
-            eps=optimizer_eps,
-```
-
-- [ ] **Step 5: Convert `memo/entries/rtrrl.py`**
-
-Define dataclass declarations for the existing algorithm parameters. Preserve the existing `eps` name for RTRRL because it is the algorithm optimizer epsilon.
-
-Use a structure for `update_rule`:
-
-```python
-@dataclass(frozen=True)
-class AdamUpdate:
-    b1: float = param(valid=(0.0, 1.0), search=(0.0, 1.0), placeholder=0.9)
-    b2: float = param(valid=(0.0, 1.0), search=(0.0, 1.0), placeholder=0.999)
-    rnn_grad_clip: float = param(valid=(0.0, 1e4), search=(0.0, 1e4), placeholder=0.0)
-    freeze_gamma: bool = param(valid=[False, True], search=[False, True], placeholder=False)
-
-
-@dataclass(frozen=True)
-class AdaptiveObgd:
-    obgd_beta2: float = param(valid=(0.0, 1.0), search=(0.0, 1.0), placeholder=0.999)
-
-
-@dataclass(frozen=True)
-class ObgdUpdate:
-    kappa: float = param(valid=(0.0, 100.0), search=(0.0, 100.0), placeholder=1.0)
-    obgd_rule: str = structure(
-        placeholder="obgd",
-        search=list(BOUNDED_RULES),
-        branches={
-            "obgd": (),
-            "adaptive_obgd": AdaptiveObgd,
-            "adaptive_obgd_fixed": AdaptiveObgd,
-        },
-    )
-```
-
-The top-level RTRRL declaration is explicit. Keep `eps` as one top-level parameter for this plan, because the current `RTRRLConfig` has one `eps` field consumed by Adam and adaptive OBGD. The Phase 3 OBGD decomposition can revisit whether that field should split.
-
-```python
-@dataclass(frozen=True)
-class RTRRLParameters:
-    backbone: str = param(
-        valid=[*RECURRENT_TORSOS, *UPSTREAM_TORSOS],
-        search=[*RECURRENT_TORSOS, *UPSTREAM_TORSOS],
-        placeholder="lru",
-    )
-    hidden_dim: int = param(valid=(1, 512), search=(1, 512), placeholder=128)
-    feature_dim: int = param(valid=(1, 512), search=(1, 512), placeholder=32)
-    meta_rl: bool = param(valid=[False, True], search=[False, True], placeholder=True)
-    normalize_observation: bool = param(valid=[False, True], search=[False, True], placeholder=True)
-    normalize_reward: bool = param(valid=[False, True], search=[False, True], placeholder=True)
-    bound_actor: bool = param(valid=[False, True], search=[False, True], placeholder=False)
-    gamma: float = param(valid=(0.5, 0.9999), search=(0.5, 0.9999), placeholder=0.99)
-    lambda_pi: float = param(valid=(0.0, 1.0), search=(0.0, 1.0), placeholder=0.9)
-    lambda_v: float = param(valid=(0.0, 1.0), search=(0.0, 1.0), placeholder=0.9)
-    lambda_rnn: float = param(valid=(0.0, 1.0), search=(0.0, 1.0), placeholder=0.9)
-    td_lr: float = param(valid=(1e-9, 10.0), search=(1e-9, 10.0), placeholder=0.001, log=True)
-    rnn_lr: float = param(valid=(1e-9, 10.0), search=(1e-9, 10.0), placeholder=0.001, log=True)
-    eta_pi: float = param(valid=(0.0, 10.0), search=(0.0, 10.0), placeholder=0.0)
-    eta_f: float = param(valid=(0.0, 10.0), search=(0.0, 10.0), placeholder=0.0)
-    entropy_rate: float = param(valid=(1e-8, 1.0), search=(1e-8, 1.0), placeholder=1e-4, log=True)
-    update_period: float = param(valid=(0.0, 1.0), search=(0.0, 1.0), placeholder=1.0)
-    eps: float = param(valid=(1e-12, 1e-2), search=(1e-12, 1e-2), placeholder=1e-8, log=True)
-    act_clip: float = param(valid=(0.0, 1e4), search=(0.0, 1e4), placeholder=0.0)
-    update_trace_before_td: bool = param(valid=[False, True], search=[False, True], placeholder=True)
-    logprob_scale: float = param(valid=(0.0, 100.0), search=(0.0, 100.0), placeholder=1.0)
-    actor_to_recurrent: bool = param(valid=[False, True], search=[False, True], placeholder=True)
-    critic_to_recurrent: bool = param(valid=[False, True], search=[False, True], placeholder=True)
-    update_rule: str = structure(
-        placeholder="adam",
-        search=["adam", "obgd"],
-        branches={"adam": AdamUpdate, "obgd": ObgdUpdate},
-    )
-
-
-PARAMETERS = describe_parameters(RTRRLParameters)
-```
-
-- [ ] **Step 6: Convert `rtrrl/entries/rtrrl_aaai.py` and mock trainer**
-
-In `rtrrl_aaai.py`, define `PARAMETERS` for the remaining algorithm parameters only. Do not declare `eps`.
-
-For `backbone`, keep valid/search choices `["lru", "ctrnn"]`. For `gradient_mode`, keep `["rtrl", "bptt"]`; do not add `rflo`.
-
-In `rtrrl/infra/mock-trainer/src/brax_ppo_acceptance/space.py`, replace `SPACE` with a dataclass declaration named `AcceptanceParameters` and set `PARAMETERS = describe_parameters(AcceptanceParameters)` for `learning_rate`, `episode_length`, and `failure_mode`.
-
-- [ ] **Step 7: Regenerate checked-in catalogs**
-
-```bash
-cd rtrrl
-uv run python scripts/build_catalog.py
-cd ..
-uv run --project rtrrl/infra/mock-trainer python rtrrl/infra/mock-trainer/scripts/build_catalog.py
-```
-
-Expected diffs: both catalogs have `"contract": 6` and use `"parameters"` instead of `"space"`.
-
-- [ ] **Step 8: Run static checks and commit**
-
-```bash
-uv run ruff check memo rtrrl/entries rtrrl/scripts rtrrl/infra/mock-trainer training-sdk
-git add memo/entries memo/tests rtrrl/entries rtrrl/tests rtrrl/catalog.json rtrrl/infra/mock-trainer/src rtrrl/infra/mock-trainer/tests rtrrl/infra/mock-trainer/catalog.json
-git commit -m "feat(entries): declare parameter trees"
-git push origin HEAD
-gh workflow run tests.yml --ref "$(git branch --show-current)"
-gh workflow run build-aaai-image.yml --ref "$(git branch --show-current)"
-```
-
-Expected: catalog and entry tests pass, except for sanctioned memo golden failures if Memo CI runs.
-
----
-
-### Task 5: Experiment Overrides and `eps` YAML Migration
-
-**Files:**
-- Modify: `experiments/*.yaml`
-- Modify: `memo/tests/test_experiments.py`
-- Modify: `rtrrl/tests/test_experiment.py`
-- Modify: `docs/trainerctl-manual.md`
-
-**Interfaces:**
-- Consumes: `PARAMETERS` from Task 4 and `resolve_parameters` from Task 2.
-- Produces: no experiment file uses old `eps` for StreamAC entries; all overrides validate against parameter trees.
-
-- [ ] **Step 1: Write failing YAML tests**
-
-In `memo/tests/test_experiments.py`, add:
-
-```python
-def test_stream_ac_experiments_use_split_eps_names(experiment):
-    if experiment["entry"] not in {"stream_ac", "upstream_stream_ac"}:
-        return
-
-    assert "eps" not in experiment["space"]
-    assert "optimizer_eps" in experiment["space"]
-    assert "normalization_eps" in experiment["space"]
-```
-
-In `rtrrl/tests/test_experiment.py`, update checks to compare against `PARAMETERS` instead of `SPACE`.
-
-- [ ] **Step 2: Commit and run the remote red check**
-
-```bash
-git add memo/tests/test_experiments.py rtrrl/tests/test_experiment.py
-git commit -m "test(experiments): use parameter tree override names"
-git push origin HEAD
-gh workflow run tests.yml --ref "$(git branch --show-current)"
-gh workflow run build-aaai-image.yml --ref "$(git branch --show-current)"
-```
-
-Expected: tests fail on StreamAC YAML files that still use `eps`.
-
-- [ ] **Step 3: Migrate StreamAC YAML overrides**
-
-For every `experiments/*.yaml` whose `entry` is `stream_ac` or `upstream_stream_ac`, replace:
-
-```yaml
-  eps: [1.0e-8]
-```
-
-with:
-
-```yaml
-  optimizer_eps: [1.0e-8]
-  normalization_eps: [1.0e-8]
-```
-
-If an experiment has `normalize_observation: [false]` and `normalize_reward: [false]`, still write `normalization_eps: [1.0e-8]` for reproducibility of the complete manifest; the sampler collapses it to that single value.
-
-- [ ] **Step 4: Remove unselected branch overrides**
-
-For every experiment that pins a structure selector, remove overrides for unselected branches:
-
-- If `bounded_rule: [obgd]`, remove `beta2` and `optimizer_eps` from StreamAC entries.
-- If `update_rule: [adam]`, remove `kappa`, `obgd_beta2`, and `obgd_rule` from RTRRL entries.
-- If `update_rule: [obgd]`, remove `b1`, `b2`, `rnn_grad_clip`, and `freeze_gamma` from RTRRL entries.
-
-Keep a branch-specific override when the selector is not pinned because conditional sampling may activate that branch in some trials.
-
-- [ ] **Step 5: Update docs**
-
-In `docs/trainerctl-manual.md`, change catalog examples from `space` to `parameters`, and change StreamAC examples from `eps` to:
-
-```yaml
-space:
-  optimizer_eps: [1.0e-8]
-  normalization_eps: [1.0e-8]
-```
-
-- [ ] **Step 6: Run static checks and commit**
-
-```bash
-uv run ruff check memo rtrrl/infra/control-plane rtrrl
-git add -- experiments/*.yaml memo/tests/test_experiments.py rtrrl/tests/test_experiment.py docs/trainerctl-manual.md
-git commit -m "exp: migrate overrides to parameter tree names"
-git push origin HEAD
-gh workflow run tests.yml --ref "$(git branch --show-current)"
-gh workflow run build-aaai-image.yml --ref "$(git branch --show-current)"
-```
-
-Expected: experiment validation passes for memo and AAAI entries.
+`build` uses `read_branch` for each structure. What remains hand-written is only what
+this kernel cannot hold, and each such case raises naming the phase that removes it.
 
 ---
 
