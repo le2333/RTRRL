@@ -35,7 +35,15 @@ from memorax.utils.axes import (
     remove_time_axis,
 )
 
-from .contract import ActionDecision, EvalSummary, EvaluationConfig
+from .contract import (
+    ActionDecision,
+    EvalSummary,
+    EvaluationConfig,
+)
+from .contract import ended_in as ended_in_of
+from .contract import (
+    terminal_of,
+)
 
 RECURRENT_DOMAINS = ("feature_extractor", "torso")
 
@@ -281,6 +289,7 @@ class RTRRLStepMetrics:
     value: Any = None
     next_value: Any = None
     td_error: Any = None
+    terminal: Any = None
     entropy: Any = None
     emphasis: Any = None
     step_size: Any = None
@@ -552,6 +561,10 @@ class RTRRL:
         )(step_keys, state.env_state, env_action, self.env_params)
         # What the environment paid, kept before normalisation overwrites it.
         environment_reward = jnp.asarray(next_reward, dtype=jnp.float32)
+        # The failure ending, and the observation the episode ended in before
+        # the auto-reset replaced it. At a truncation the bootstrap survives.
+        next_terminal = terminal_of(info, next_done)
+        ended_in = ended_in_of(info, next_obs)
         normalizer_state = state.normalizer_state
         raw_episode_return = None
         if self.normalizing:
@@ -565,8 +578,9 @@ class RTRRL:
             next_reward = normalized.reward
             normalizer_state = normalized.state
             raw_episode_return = normalized.raw_episode_return
-        next_obs_s, next_done_s, next_action_s, next_reward_s = Timestep(
-            obs=next_obs,
+            ended_in = self.normalizer.normalize_observation(normalizer_state, ended_in)
+        ended_in_s, next_done_s, next_action_s, next_reward_s = Timestep(
+            obs=ended_in,
             action=env_action,
             reward=next_reward,
             done=next_done,
@@ -576,7 +590,7 @@ class RTRRL:
             _bootstrap_sensitivity,
         ), (_, next_value_raw) = self._forward(
             jax.lax.stop_gradient(forward_params),
-            next_obs_s,
+            ended_in_s,
             next_action_s,
             next_reward_s,
             next_done_s,
@@ -588,7 +602,8 @@ class RTRRL:
             reward=next_reward,
             value=value,
             next_value=next_value,
-            bootstrap_discount=self.cfg.gamma * (1 - next_done),
+            terminal=next_terminal,
+            gamma=self.cfg.gamma,
         )
 
         def differentiation(params):
@@ -738,6 +753,7 @@ class RTRRL:
             value=value,
             next_value=next_value,
             td_error=td_error,
+            terminal=next_terminal if "terminal" in self.record else None,
             entropy=entropy,
             emphasis=state.emphasis.mean(),
             step_size=outputs["rnn"].metrics.get("step_size"),
@@ -857,6 +873,7 @@ class RTRRL:
             next_observation=next_obs,
             action=chosen,
             reward=environment_reward,
+            terminal=terminal_of(info, next_done),
             done=next_done,
         )
 

@@ -87,6 +87,7 @@ class Environment(_Frozen):
     id: str
     backend: str
     seed: int
+    episode_length: int = 1000
     observed: tuple[int, ...] | None = None
 
     @model_validator(mode="after")

@@ -101,6 +101,7 @@ def build_run_config(
             id=experiment.environment.id,
             backend=experiment.environment.backend,
             seed=experiment.environment.seed,
+            episode_length=experiment.environment.episode_length,
             observed=experiment.environment.observed,
         ),
         training=TrainingConfig(

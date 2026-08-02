@@ -133,10 +133,10 @@ def terminals(kind: str, key):
 def test_the_td_error_is_upstreams(seed, done):
     """Block: TD(0).
 
-    Ours takes the bootstrap discount already formed, because an algorithm that
-    discounts differently should not have to reimplement the difference. That
-    makes the discount part of the comparison: it is spelled here the way both
-    kernels spell it at the call site.
+    Ours takes the ending and the discount rather than the product, because the
+    mask is the whole of what TD says about an ending and forming it at the call
+    site is how the two endings got conflated. Upstream has one flag, so its
+    flag is this one.
     """
 
     keys = jax.random.split(jax.random.key(seed), 4)
@@ -148,7 +148,8 @@ def test_the_td_error_is_upstreams(seed, done):
         reward=reward,
         value=value,
         next_value=next_value,
-        bootstrap_discount=theirs.cfg.gamma * (1 - next_done),
+        terminal=next_done,
+        gamma=theirs.cfg.gamma,
     )
     assert_within(
         {"td": mine},
@@ -626,3 +627,24 @@ def test_exact_credit_is_not_the_truncated_one():
         "exact and truncated credit produced the same gradient from a "
         "sensitivity that was not zero, so one of them is not doing its job"
     )
+
+
+def test_the_bootstrap_survives_a_truncation_and_not_a_termination():
+    """The same reward on both, because the environment pays one either way.
+
+    A run cut off at its step limit was about to go on earning, so the value of
+    where it stopped is the best statement anyone has about the rest. A run that
+    failed has nothing after it. One flag for both teaches the critic that the
+    clock running out is as bad as falling over.
+    """
+
+    td0 = make_td0()
+    paid = {
+        "reward": jnp.float32(1.0),
+        "value": jnp.float32(0.5),
+        "next_value": jnp.float32(2.0),
+        "gamma": 0.9,
+    }
+
+    assert float(td0(terminal=jnp.bool_(False), **paid)) == pytest.approx(2.3)
+    assert float(td0(terminal=jnp.bool_(True), **paid)) == pytest.approx(0.5)

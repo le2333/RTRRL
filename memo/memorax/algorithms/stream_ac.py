@@ -40,7 +40,15 @@ from memorax.utils.axes import (
 )
 from memorax.utils.trees import subtree_norms
 
-from .contract import ActionDecision, EvalSummary, EvaluationConfig
+from .contract import (
+    ActionDecision,
+    EvalSummary,
+    EvaluationConfig,
+)
+from .contract import ended_in as ended_in_of
+from .contract import (
+    terminal_of,
+)
 
 
 @dataclass(frozen=True)
@@ -124,6 +132,7 @@ class StreamACStepMetrics:
     value: Any = None
     next_value: Any = None
     td_error: Any = None
+    terminal: Any = None
     actor_step_size: Any = None
     critic_step_size: Any = None
     actor_grad_norm: Any = None
@@ -554,6 +563,12 @@ class StreamAC:
         # episode's return is a statement about the task, not about the scale
         # this algorithm happens to be learning on.
         environment_reward = jnp.asarray(next_reward, dtype=jnp.float32)
+        # The failure ending, which is the only one that says the future is
+        # worth nothing, and the observation the episode ended in, which the
+        # auto-reset replaced. At a truncation the bootstrap survives, so it has
+        # to value where the episode stopped rather than where the next starts.
+        next_terminal = terminal_of(info, next_done)
+        ended_in = ended_in_of(info, next_obs)
         normalizer_state = state.normalizer_state
         raw_episode_return = None
         if self.normalizing:
@@ -567,8 +582,9 @@ class StreamAC:
             next_reward = normalized.reward
             normalizer_state = normalized.state
             raw_episode_return = normalized.raw_episode_return
-        next_obs_s, next_done_s, next_action_s, next_reward_s = Timestep(
-            obs=next_obs,
+            ended_in = self.normalizer.normalize_observation(normalizer_state, ended_in)
+        ended_in_s, next_done_s, next_action_s, next_reward_s = Timestep(
+            obs=ended_in,
             action=sampled_action,
             reward=next_reward,
             done=next_done,
@@ -584,7 +600,7 @@ class StreamAC:
             _bootstrap_sensitivity,
         ), (next_value_raw, _) = self._critic_forward(
             jax.lax.stop_gradient(state.critic_params),
-            next_obs_s,
+            ended_in_s,
             next_action_s,
             next_reward_s,
             next_done_s,
@@ -596,7 +612,8 @@ class StreamAC:
             reward=next_reward,
             value=value,
             next_value=next_value,
-            bootstrap_discount=self.cfg.gamma * (1 - next_done),
+            terminal=next_terminal,
+            gamma=self.cfg.gamma,
         )
 
         actor_grads = self._actor_gradient(
@@ -706,6 +723,7 @@ class StreamAC:
             value=value,
             next_value=next_value,
             td_error=td_error,
+            terminal=next_terminal if "terminal" in self.record else None,
             actor_step_size=actor_step.metrics["step_size"],
             critic_step_size=critic_step.metrics["step_size"],
             actor_grad_norm=subtree_norms(actor_grads, streams=True),
@@ -794,6 +812,7 @@ class StreamAC:
             action=chosen,
             reward=environment_reward,
             done=next_done,
+            terminal=terminal_of(info, next_done),
         )
 
     def evaluate(self, key, state: Any, num_steps: int):

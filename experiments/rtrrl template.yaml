@@ -11,6 +11,7 @@ environment:
   backend: spring
   observed: [0, 2, 4, 6, 8, 10]
   seed: 0
+  episode_length: 1000
 
 training:
   num_envs: 1

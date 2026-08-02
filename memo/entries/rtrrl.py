@@ -125,6 +125,7 @@ def build(params: Mapping[str, Any], environment, training) -> RTRRL:
         environment.id,
         observed=environment.observed,
         backend=environment.backend,
+        episode_length=environment.episode_length,
     )
     gamma = float(params["gamma"])
     feature_dim = int(params["feature_dim"])

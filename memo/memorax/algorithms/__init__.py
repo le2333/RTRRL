@@ -8,7 +8,6 @@ if TYPE_CHECKING:
     from .contract import AgentProgram as AgentProgram
     from .contract import EvalSummary as EvalSummary
     from .contract import EvaluationConfig as EvaluationConfig
-    from .contract import Transition as Transition
     from .dqn import DQN as DQN
     from .dqn import DQNConfig as DQNConfig
     from .dqn import DQNState as DQNState
@@ -46,7 +45,6 @@ _EXPORTS = {
     "AgentProgram": (".contract", "AgentProgram"),
     "EvalSummary": (".contract", "EvalSummary"),
     "EvaluationConfig": (".contract", "EvaluationConfig"),
-    "Transition": (".contract", "Transition"),
     "DQN": (".dqn", "DQN"),
     "DQNConfig": (".dqn", "DQNConfig"),
     "DQNState": (".dqn", "DQNState"),
@@ -120,7 +118,6 @@ __all__ = [
     "StreamAC",
     "StreamACConfig",
     "StreamACState",
-    "Transition",
 ]
 
 

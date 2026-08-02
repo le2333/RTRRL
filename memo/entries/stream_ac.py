@@ -179,6 +179,7 @@ def build(params: Mapping[str, Any], environment, training) -> StreamAC:
         environment.id,
         observed=environment.observed,
         backend=environment.backend,
+        episode_length=environment.episode_length,
     )
     gamma = float(params["gamma"])
     backbone = str(params["backbone"])

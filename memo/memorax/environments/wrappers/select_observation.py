@@ -39,4 +39,9 @@ class SelectObservationWrapper(GymnaxWrapper):
         observation, state, reward, done, info = self._env.step(
             key, state, action, params
         )
+        # The observation the episode ended in is masked with the rest of them:
+        # a critic asked to value a state the actor could not see is answering a
+        # different question about a different task.
+        if "next_observation" in info:
+            info = {**info, "next_observation": info["next_observation"][..., self.observed]}
         return observation[..., self.observed], state, reward, done, info

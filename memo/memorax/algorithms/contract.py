@@ -37,17 +37,25 @@ class ActionDecision:
     persisted_feedback_action: Any = None
 
 
-@struct.dataclass
-class Transition:
-    """JAX-pytree data for one online environment transition."""
+def terminal_of(info, done):
+    """The failure ending, from an environment that tells the two apart.
 
-    observation: Any = None
-    action_decision: ActionDecision | None = None
-    reward: Any = None
-    done: Any = None
-    next_observation: Any = None
-    bootstrap_discount: Any = None
-    info: Any = None
+    One that does not says every ending was a failure, which is what it knew and
+    what a single flag always meant. Reading it that way is also the safe one: it
+    never bootstraps past an ending the environment could not explain.
+    """
+
+    return info.get("terminal", done)
+
+
+def ended_in(info, observation):
+    """The observation the episode ended in, before any auto-reset replaced it.
+
+    An environment that does not reset underneath the caller never lost it, so
+    the one it handed back is the one.
+    """
+
+    return info.get("next_observation", observation)
 
 
 @struct.dataclass
@@ -66,6 +74,7 @@ class EvalSummary:
     action: Any = None
     reward: Any = None
     done: Any = None
+    terminal: Any = None
 
 
 @dataclass(frozen=True)

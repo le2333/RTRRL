@@ -116,6 +116,35 @@ def test_a_chunk_without_a_trajectory_still_cuts():
     assert episodes[0].rewards == (1.0, 1.0)
 
 
+def test_an_episode_says_which_of_the_two_endings_it_reached():
+    """A run cut off at its step limit did not fail, and the record says so.
+
+    Both endings end an episode, so both cut here; only one of them says the
+    future was worth nothing, and writing every ending down as a termination
+    loses the difference before anyone can read it.
+    """
+
+    episodes = cut(
+        chunk(
+            [[0, 0], [1, 0], [0, 1], [0, 0]],
+            terminal=[[0, 0], [1, 0], [0, 0], [0, 0]],
+        ),
+        terminal="terminal",
+    )
+
+    assert episodes[0].terminals[-1] and not episodes[0].truncations[-1]
+    assert episodes[1].truncations[-1] and not episodes[1].terminals[-1]
+
+
+def test_a_kernel_that_tells_nobody_says_every_ending_was_a_termination():
+    """Which is what it knew. The record reflects the kernel, not a guess."""
+
+    episodes = cut(chunk([[0, 0], [1, 0], [0, 1], [0, 0]]))
+
+    assert all(episode.terminals[-1] for episode in episodes)
+    assert not any(episode.truncations[-1] for episode in episodes)
+
+
 def test_every_episode_says_which_stream_it_came_from():
     """An episode belongs to one stream, so it has to be able to say which.
 

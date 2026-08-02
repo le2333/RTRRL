@@ -150,6 +150,10 @@ class EnvironmentConfig(_Frozen):
     id: str
     backend: str
     seed: int
+    # How long an episode may run before the clock ends it. The same policy's
+    # return under a limit of 500 and of 1000 is not the same number, so this
+    # is part of what the task is rather than a literal inside a wrapper.
+    episode_length: int = 1000
     observed: tuple[int, ...] | None = None
 
     @model_validator(mode="after")

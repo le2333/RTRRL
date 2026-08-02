@@ -32,6 +32,7 @@ def complete_episodes(
     stride: int | None = None,
     first_number: int = 1,
     reward: str = "reward",
+    terminal: str = "terminal",
     series: Iterable[str] = (),
 ) -> Iterator[Episode]:
     """Yield every episode that both starts and ends inside the chunk.
@@ -47,11 +48,17 @@ def complete_episodes(
     axis. Evaluation advances it by nothing: a rollout run at an epoch boundary
     measures the policy as it stood there, and spreading its episodes forward
     would date them to training that has not happened.
+
+    ``terminal`` names the failure ending; what is done without being terminal
+    was truncated. A kernel that does not tell the two apart reports every
+    ending as a termination, which is what it knew.
     """
 
     stride = num_envs if stride is None else stride
     rewards = np.asarray(read(summary, reward))
     dones = np.asarray(read(summary, "done")).astype(bool)
+    found = read(summary, terminal)
+    terminals = dones if found is None else np.asarray(found).astype(bool)
     steps = dones.shape[0]
     traces = {
         name: _streamed(found, steps, num_envs)
@@ -84,8 +91,11 @@ def complete_episodes(
                 start_env_steps=start_env_steps + start * stride,
                 end_env_steps=start_env_steps + (end + 1) * stride,
                 rewards=[float(rewards[step, env]) for step in span],
-                terminals=[bool(dones[step, env]) for step in span],
-                truncations=[False] * (end - start + 1),
+                terminals=[bool(terminals[step, env]) for step in span],
+                truncations=[
+                    bool(dones[step, env] and not terminals[step, env])
+                    for step in span
+                ],
                 series={
                     name: [float(column[step, env]) for step in span]
                     for name, column in traces.items()

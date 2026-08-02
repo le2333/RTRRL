@@ -28,7 +28,7 @@ class Destination(Protocol):
 # What a kernel has to hand back before any of this can find an episode at all.
 # A kernel that gates these behind a switch reports nothing and says nothing
 # about it, so an entry adds them to whatever its own metrics need.
-EPISODE_FIELDS: tuple[str, ...] = ("reward", "done")
+EPISODE_FIELDS: tuple[str, ...] = ("reward", "done", "terminal")
 
 
 def whole_epochs(*, total_steps: int, epoch_steps: int, num_envs: int) -> range:

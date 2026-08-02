@@ -106,6 +106,7 @@ def build(params: Mapping[str, Any], environment, training) -> UpstreamStreamAC:
         environment.id,
         observed=environment.observed,
         backend=environment.backend,
+        episode_length=environment.episode_length,
     )
     gamma = float(params["gamma"])
     eps = float(params["eps"])

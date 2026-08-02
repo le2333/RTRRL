@@ -664,7 +664,8 @@ def test_the_td_error_is_the_published_td_error(published_agent, done):
         reward=jnp.float32(theirs["reward"]),
         value=jnp.float32(theirs["value"]),
         next_value=jnp.float32(theirs["next_value"]),
-        bootstrap_discount=jnp.float32(GAMMA * (1 - done)),
+        terminal=jnp.bool_(done),
+        gamma=GAMMA,
     )
     assert_within(
         {"td": np.asarray(ours)},
