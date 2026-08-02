@@ -94,12 +94,12 @@ def test_an_epoch_moves_parameters_and_hands_back_what_it_logged(adaptive):
     assert int(trained.step) == steps
     assert int(trained.update_step) == updates
 
-    assert metrics.td_error.shape == (updates, ENVS)
-    assert metrics.value.shape == (updates, ENVS)
-    assert metrics.next_value.shape == (updates, ENVS)
-    assert metrics.log_prob.shape == (updates, ENVS)
-    assert metrics.entropy.shape == (updates,)
-    assert metrics.info["step_count"].shape == (updates, ENVS)
+    assert metrics.update.td_error.shape == (updates, ENVS)
+    assert metrics.forward.value.shape == (updates, ENVS)
+    assert metrics.forward.next_value.shape == (updates, ENVS)
+    assert metrics.forward.log_prob.shape == (updates, ENVS)
+    assert metrics.forward.entropy.shape == (updates,)
+    assert metrics.interaction.info["step_count"].shape == (updates, ENVS)
 
     assert any(
         not jnp.allclose(old, new)
@@ -124,12 +124,14 @@ def test_the_evaluation_rollout_reports_the_reward_the_environment_gave():
         jax.random.key(2), state, steps
     )
 
-    actions = np.asarray(summary.action)
-    counts = np.asarray(summary.info["step_count"])
+    actions = np.asarray(summary.interaction.action)
+    counts = np.asarray(summary.interaction.info["step_count"])
     expected = 0.25 * np.where(actions == 0, -1.0, 1.0) + 0.1 * counts
 
     assert actions.shape == (steps, ENVS)
-    np.testing.assert_allclose(np.asarray(summary.reward), expected, rtol=0, atol=1e-6)
+    np.testing.assert_allclose(
+        np.asarray(summary.interaction.reward), expected, rtol=0, atol=1e-6
+    )
     # The rollout starts from a reset, so the step it reports is its own, and it
     # starts from one again at the horizon: the environment resets nothing, so
     # beginning the next episode is the acting step's business.
@@ -150,7 +152,15 @@ def test_the_rollout_cuts_into_the_episodes_a_sink_accepts():
     )
 
     episodes = list(
-        complete_episodes(summary, phase="eval", start_env_steps=0, num_envs=ENVS)
+        complete_episodes(
+            summary,
+            phase="eval",
+            start_env_steps=0,
+            num_envs=ENVS,
+            transitions="interaction",
+            reward="interaction.reward",
+            terminal="interaction.terminal",
+        )
     )
     assert episodes, "a rollout past the horizon held no complete episode"
 

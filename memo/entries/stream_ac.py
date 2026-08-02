@@ -1,5 +1,4 @@
-"""StreamAC over a recurrent actor and critic, credited either way.
-
+"""
 What this file fixes is the wiring: the actor and the critic get their own
 feature extractor, their own torso and their own head, sharing nothing. Change
 that and it is a different algorithm, which is why it is written here rather
@@ -16,10 +15,6 @@ ablation of exact recurrent credit rather than a comparison of two programs.
 ``PARAMETERS`` is the only place these names and their limits are written down.
 The constructor call below is the only place they are read. Both are on one
 screen, which is the whole of the arrangement.
-
-The score to beat, Aim run d9fe0986 on masked Brax Hopper: evaluation return
-sits at 85 after the first epoch, climbs to 269 by 900k steps, jumps to 1043.66
-at 1M and then holds between 1014 and 1026.
 """
 
 from __future__ import annotations
@@ -60,6 +55,7 @@ from runner.loop import EPISODE_FIELDS, drive
 BACKBONE_BRANCHES = {"rtu": Rtu, "mlp": Mlp}
 
 
+# 算法接线参数
 @dataclass(frozen=True)
 class StreamACParameters:
     backbone: str = structure(placeholder="rtu", branches=BACKBONE_BRANCHES)
@@ -84,17 +80,18 @@ class StreamACParameters:
 
 PARAMETERS = describe_parameters(StreamACParameters)
 
+# 这里要改吧？
 PARTS: tuple[str, ...] = ("feature_extractor", "torso", "head")
 
 TRAINING_METRICS: tuple[str, ...] = (
-    "td_error",
-    "value",
-    "log_prob",
-    "entropy",
-    "actor_step_size",
-    "critic_step_size",
+    "update.td_error",
+    "update.actor_step_size",
+    "update.critic_step_size",
+    "forward.value",
+    "forward.log_prob",
+    "forward.entropy",
     *(
-        f"{domain}_{reading}_norm.{part}"
+        f"update.{domain}_{reading}_norm.{part}"
         for domain in ("actor", "critic")
         for reading in ("grad", "trace")
         for part in PARTS

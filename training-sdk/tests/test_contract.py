@@ -30,6 +30,7 @@ def run_config_kwargs() -> dict:
             "id": "brax::hopper",
             "backend": "spring",
             "seed": 0,
+            "episode_length": 1000,
         },
         "training": {"num_envs": 1, "total_steps": 100, "epoch_steps": 100},
         "evaluation": {"steps": 0, "num_envs": 1},

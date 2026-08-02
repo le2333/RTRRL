@@ -25,10 +25,14 @@ class Destination(Protocol):
     def log_episode(self, episode: Episode) -> None: ...
 
 
-# What a kernel has to hand back before any of this can find an episode at all.
-# A kernel that gates these behind a switch reports nothing and says nothing
-# about it, so an entry adds them to whatever its own metrics need.
-EPISODE_FIELDS: tuple[str, ...] = ("reward", "done", "terminal")
+# Where a kernel groups the transition, and what it has to put there before any
+# of this can find an episode at all. A kernel that gates these behind a switch
+# reports nothing and says nothing about it, so an entry adds them to whatever
+# its own metrics need.
+TRANSITIONS = "interaction"
+EPISODE_FIELDS: tuple[str, ...] = tuple(
+    f"{TRANSITIONS}.{name}" for name in ("reward", "done", "terminal")
+)
 
 
 def whole_epochs(*, total_steps: int, epoch_steps: int, num_envs: int) -> range:
@@ -60,7 +64,7 @@ def drive(
     num_envs: int,
     seed: int,
     series: Iterable[str] = (),
-    reward: str = "reward",
+    reward: str = f"{TRANSITIONS}.reward",
 ) -> None:
     """Run the algorithm to its budget, reporting on every episode it finishes.
 
@@ -97,7 +101,9 @@ def drive(
             num_envs=num_envs,
             stride=num_envs,
             first_number=numbers["train"],
+            transitions=TRANSITIONS,
             reward=reward,
+            terminal=f"{TRANSITIONS}.terminal",
             series=series,
         )
 
@@ -113,7 +119,9 @@ def drive(
             num_envs=num_envs,
             stride=0,
             first_number=numbers["eval"],
+            transitions=TRANSITIONS,
             reward=reward,
+            terminal=f"{TRANSITIONS}.terminal",
             series=series,
         )
 

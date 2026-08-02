@@ -88,10 +88,10 @@ SPACE: dict[str, Any] = {
 # and does not hand its size back, and asking it to would be editing the file
 # this entry exists to leave alone.
 TRAINING_METRICS: tuple[str, ...] = (
-    "td_error",
-    "value",
-    "log_prob",
-    "entropy",
+    "update.td_error",
+    "forward.value",
+    "forward.log_prob",
+    "forward.entropy",
 )
 
 METRICS: tuple[str, ...] = metric_names("train", TRAINING_METRICS) + metric_names(
@@ -177,7 +177,9 @@ def run(reporter, config) -> None:
         # put that into the summary. The one the environment paid is beside it,
         # and this is the file that knows to look, since it is the file that
         # wrapped the environment.
-        reward="info.environment_reward" if scaled else "reward",
+        reward=(
+            "interaction.info.environment_reward" if scaled else "interaction.reward"
+        ),
     )
 
 

@@ -16,7 +16,7 @@ than computing:
 
 ``lox.log`` calls, which logged from inside the traced region. Nothing here
 logs. ``_update_step`` returns a fixed-shape record of what the transition
-passed through and the evaluation step returns an ``EvalSummary``, both stacked
+passed through and the evaluation step returns a ``StepMetrics``, both stacked
 by the scan and reported outside JIT by whatever drives the algorithm, which is
 the boundary every other algorithm in this package keeps.
 
@@ -51,7 +51,7 @@ from memorax.utils.axes import (
 )
 from memorax.utils.typing import Array, Discrete, EnvState, Key, PyTree
 
-from .contract import ActionDecision, EvalSummary
+from .contract import ActionDecision, Interaction, StepMetrics, terminal_of
 
 
 @struct.dataclass(frozen=True)
@@ -97,24 +97,27 @@ class UpstreamStreamACState:
     critic_carry: Array
 
 
-@struct.dataclass(frozen=True)
-class UpstreamStreamACStepMetrics:
-    """What one transition passed through, in the shape it is stacked in.
+@struct.dataclass
+class UpstreamForward:
+    """What upstream's two networks answered about this step."""
 
-    The three scalars upstream handed to its logger are here, alongside the
-    quantities they were computed from. The bound on the step size is not: it
-    lives inside ``_obgd_update``, which is upstream's and stays that way.
-    """
-
-    action_decision: ActionDecision | None = None
-    log_prob: Any = None
-    entropy: Any = None
     value: Any = None
     next_value: Any = None
+    log_prob: Any = None
+    entropy: Any = None
+
+
+@struct.dataclass
+class UpstreamUpdate:
+    """What upstream's update produced.
+
+    The step sizes and the per-part norms the other entry reports are not here:
+    the bound lives inside upstream's own update and does not hand its size
+    back, and asking it to would be editing the file this arm exists to leave
+    alone.
+    """
+
     td_error: Any = None
-    reward: Any = None
-    done: Any = None
-    info: Any = None
 
 
 @dataclass
@@ -172,7 +175,7 @@ class UpstreamStreamAC:
 
     def _step(
         self, state: Any, key: Key, *, policy: Callable
-    ) -> tuple[UpstreamStreamACState, EvalSummary]:
+    ) -> tuple[UpstreamStreamACState, StepMetrics]:
         restart_key, action_key, step_key = jax.random.split(key, 3)
         state = self._restarted(restart_key, state)
         state, action, log_prob, value = policy(action_key, state)
@@ -188,13 +191,17 @@ class UpstreamStreamAC:
             range(state.timestep.done.ndim, state.timestep.action.ndim)
         )
         next_reward = jnp.asarray(reward, dtype=jnp.float32)
-        summary = EvalSummary(
-            info=info,
-            observation=state.timestep.obs,
-            next_observation=next_obs,
-            action=action,
-            reward=next_reward,
-            done=done,
+        summary = StepMetrics(
+            interaction=Interaction(
+                observation=state.timestep.obs,
+                next_observation=next_obs,
+                action=action,
+                reward=next_reward,
+                done=done,
+                terminal=terminal_of(info, done),
+                info=info,
+            ),
+            forward=UpstreamForward(),
         )
         state = state.replace(
             step=state.step + self.cfg.num_envs,
@@ -345,12 +352,13 @@ class UpstreamStreamAC:
 
     def _update_step(
         self, state: Any, key: Key
-    ) -> tuple[UpstreamStreamACState, UpstreamStreamACStepMetrics]:
+    ) -> tuple[UpstreamStreamACState, StepMetrics]:
         restart_key, action_key, step_key, actor_torso_key, critic_torso_key = (
             jax.random.split(key, 5)
         )
         state = self._restarted(restart_key, state)
 
+        obs_before = state.timestep.obs
         obs, done, ts_action, reward = state.timestep.to_sequence()
 
         actor_carry, (probs, _) = self.actor_network.apply(
@@ -474,22 +482,30 @@ class UpstreamStreamAC:
             critic_carry=critic_carry,
         )
 
-        metrics = UpstreamStreamACStepMetrics(
-            action_decision=ActionDecision(
-                sampled_action=action,
-                logprob_action=action,
-                env_action=action,
-                bootstrap_feedback_action=action,
-                persisted_feedback_action=persisted_action,
+        metrics = StepMetrics(
+            interaction=Interaction(
+                observation=obs_before,
+                next_observation=next_obs,
+                action=action,
+                action_decision=ActionDecision(
+                    sampled_action=action,
+                    logprob_action=action,
+                    env_action=action,
+                    bootstrap_feedback_action=action,
+                    persisted_feedback_action=persisted_action,
+                ),
+                reward=next_reward_f,
+                done=next_done,
+                terminal=terminal_of(info, next_done),
+                info=info,
             ),
-            log_prob=log_prob,
-            entropy=entropy,
-            value=value,
-            next_value=next_value,
-            td_error=td_error,
-            reward=next_reward_f,
-            done=next_done,
-            info=info,
+            forward=UpstreamForward(
+                value=value,
+                next_value=next_value,
+                log_prob=log_prob,
+                entropy=entropy,
+            ),
+            update=UpstreamUpdate(td_error=td_error),
         )
         return state, metrics
 

@@ -4,6 +4,13 @@ An algorithm owns its own loop. What it agrees to is narrow: hand back a
 program that can be initialised, trained for an epoch, and evaluated, plus
 pytrees with a fixed shape so a caller can read results without knowing which
 algorithm produced them.
+
+What one step observed is grouped by what produced it rather than by when the
+step ran. Training and evaluation used to have a container each, so the fields
+they share -- the transition, the endings -- were written twice and gated once,
+and the quantities only one of them declared were unreachable from the other
+even when it had already computed them. Grouped this way, absence means
+something: no update ran, so there are no update quantities.
 """
 
 from __future__ import annotations
@@ -37,6 +44,46 @@ class ActionDecision:
     persisted_feedback_action: Any = None
 
 
+@struct.dataclass
+class Interaction:
+    """One transition, as the environment and its preprocessing produced it.
+
+    The transition is spelled out rather than left inside ``info`` because a
+    viewer needs to replay it, and reconstructing episodes from a bag of
+    environment-specific keys would make the host care which environment ran.
+
+    ``observation`` is what the agent acted on and ``next_observation`` is where
+    the transition ended -- not where the next episode starts, because nothing
+    below the algorithm resets. ``done`` ends an episode either way; ``terminal``
+    is the ending that says the future is worth nothing.
+    """
+
+    observation: Any = None
+    next_observation: Any = None
+    action: Any = None
+    action_decision: ActionDecision | None = None
+    reward: Any = None
+    done: Any = None
+    terminal: Any = None
+    info: Any = None
+    normalization: Any = None
+    raw_episode_return: Any = None
+
+
+@struct.dataclass
+class StepMetrics:
+    """Everything one step observed, by whose doing it was.
+
+    ``forward`` and ``update`` are each algorithm's own: what a network answers
+    and what an update produces differ between algorithms, while a transition
+    does not. ``update`` is absent during evaluation, where nothing is updated.
+    """
+
+    interaction: Interaction = Interaction()
+    forward: Any = None
+    update: Any = None
+
+
 def terminal_of(info, done):
     """The failure ending, from an environment that tells the two apart.
 
@@ -46,25 +93,6 @@ def terminal_of(info, done):
     """
 
     return info.get("terminal", done)
-
-
-@struct.dataclass
-class EvalSummary:
-    """One evaluation step, stacked by the caller's scan.
-
-    The transition is spelled out rather than left inside ``info`` because a
-    viewer needs to replay it, and reconstructing episodes from a bag of
-    environment-specific keys would make the host care which environment ran.
-    """
-
-    info: Any = None
-    normalization: Any = None
-    observation: Any = None
-    next_observation: Any = None
-    action: Any = None
-    reward: Any = None
-    done: Any = None
-    terminal: Any = None
 
 
 @dataclass(frozen=True)

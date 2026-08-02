@@ -40,15 +40,19 @@ GOLDEN = Path(__file__).with_name("golden") / "stream_ac_rtu"
 # Named by the snapshot, not chosen here: the quantities one transition passes
 # through, and where the kernel reports each of them now.
 OBSERVED = {
-    "value": lambda metrics: metrics.value,
-    "next_value": lambda metrics: metrics.next_value,
-    "td": lambda metrics: metrics.td_error,
-    "logprob": lambda metrics: metrics.log_prob,
-    "sampled_action": lambda metrics: metrics.action_decision.sampled_action,
-    "logprob_action": lambda metrics: metrics.action_decision.logprob_action,
-    "env_action": lambda metrics: metrics.action_decision.env_action,
+    "value": lambda metrics: metrics.forward.value,
+    "next_value": lambda metrics: metrics.forward.next_value,
+    "td": lambda metrics: metrics.update.td_error,
+    "logprob": lambda metrics: metrics.forward.log_prob,
+    "sampled_action": (
+        lambda metrics: metrics.interaction.action_decision.sampled_action
+    ),
+    "logprob_action": (
+        lambda metrics: metrics.interaction.action_decision.logprob_action
+    ),
+    "env_action": lambda metrics: metrics.interaction.action_decision.env_action,
     "feedback_action": (
-        lambda metrics: metrics.action_decision.bootstrap_feedback_action
+        lambda metrics: metrics.interaction.action_decision.bootstrap_feedback_action
     ),
 }
 

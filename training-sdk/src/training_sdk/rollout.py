@@ -31,6 +31,7 @@ def complete_episodes(
     num_envs: int,
     stride: int | None = None,
     first_number: int = 1,
+    transitions: str = "",
     reward: str = "reward",
     terminal: str = "terminal",
     series: Iterable[str] = (),
@@ -52,11 +53,17 @@ def complete_episodes(
     ``terminal`` names the failure ending; what is done without being terminal
     was truncated. A kernel that does not tell the two apart reports every
     ending as a termination, which is what it knew.
+
+    ``transitions`` is where the transition sits, for a kernel that groups what
+    a step observed by what produced it. The names below are read under it, and
+    ``reward`` and ``terminal`` are read whole, since an entry that keeps the
+    environment's own reward somewhere else knows the whole path to it.
     """
 
     stride = num_envs if stride is None else stride
+    under = f"{transitions}." if transitions else ""
     rewards = np.asarray(read(summary, reward))
-    dones = np.asarray(read(summary, "done")).astype(bool)
+    dones = np.asarray(read(summary, f"{under}done")).astype(bool)
     found = read(summary, terminal)
     terminals = dones if found is None else np.asarray(found).astype(bool)
     steps = dones.shape[0]
@@ -66,7 +73,8 @@ def complete_episodes(
         if (found := read(summary, name)) is not None
     }
     walked = [
-        read(summary, name) for name in ("observation", "next_observation", "action")
+        read(summary, f"{under}{name}")
+        for name in ("observation", "next_observation", "action")
     ]
     trajectory = all(one is not None for one in walked)
     if trajectory:

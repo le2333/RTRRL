@@ -136,7 +136,7 @@ PROGRAMS = [
         id="stream_ac_memoryless",
     ),
     pytest.param(
-        lambda: rtrrl_program(record=("observation", "reward", "done")),
+        lambda: rtrrl_program(record=("interaction.observation",)),
         id="rtrrl_trajectory",
     ),
 ]
@@ -168,7 +168,7 @@ def test_evaluation_runs_without_training(build):
     _, summary = jax.jit(evaluate, static_argnums=2)(jax.random.key(2), state, 4)
 
     assert finite(summary)
-    assert summary.info is not None
+    assert summary.interaction.info is not None
 
 
 def test_evaluation_reports_the_reward_the_environment_gave():
@@ -190,7 +190,7 @@ def test_evaluation_reports_the_reward_the_environment_gave():
     for init, _, evaluate in (plain, normalized):
         state = jax.jit(init)(jax.random.key(0))
         _, summary = jax.jit(evaluate, static_argnums=2)(jax.random.key(2), state, 8)
-        rewards.append(summary.reward)
+        rewards.append(summary.interaction.reward)
 
     assert jnp.allclose(rewards[0], rewards[1])
 
@@ -243,10 +243,10 @@ def test_the_two_heads_report_how_they_pull_on_the_shared_torso():
     state = jax.jit(init)(jax.random.key(0))
     _, metrics = jax.jit(train, static_argnums=2)(jax.random.key(1), state, 8)
 
-    assert finite(metrics.diag_grad_cosine), "the angle went non-finite"
-    assert jnp.all(jnp.abs(metrics.diag_grad_cosine) <= 1.0 + 1e-5)
-    assert jnp.all(metrics.diag_grad_actor_rnn > 0.0)
-    assert jnp.all(metrics.diag_grad_critic_rnn > 0.0)
+    assert finite(metrics.update.diag_grad_cosine), "the angle went non-finite"
+    assert jnp.all(jnp.abs(metrics.update.diag_grad_cosine) <= 1.0 + 1e-5)
+    assert jnp.all(metrics.update.diag_grad_actor_rnn > 0.0)
+    assert jnp.all(metrics.update.diag_grad_critic_rnn > 0.0)
 
 
 def test_the_two_rules_agree_on_their_contract():
@@ -293,13 +293,21 @@ def test_the_algorithm_restarts_the_environment_when_an_episode_ends():
     """
 
     horizon = TinyContinuousEnv().default_params.horizon
-    init, train, _ = stream_ac_program(record=("reward", "done", "terminal"))
+    init, train, _ = stream_ac_program()
     state = jax.jit(init)(jax.random.key(0))
     _, metrics = jax.jit(train, static_argnums=2)(
         jax.random.key(1), state, 2 * horizon + 2
     )
 
     episodes = list(
-        complete_episodes(metrics, phase="train", start_env_steps=0, num_envs=1)
+        complete_episodes(
+            metrics,
+            phase="train",
+            start_env_steps=0,
+            num_envs=1,
+            transitions="interaction",
+            reward="interaction.reward",
+            terminal="interaction.terminal",
+        )
     )
     assert [len(episode.rewards) for episode in episodes] == [horizon, horizon]

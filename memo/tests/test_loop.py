@@ -55,22 +55,23 @@ EVAL_STEPS = EVAL_DONE.shape[0]
 SERIES = ("loss", "by_part.torso", "only_sometimes")
 
 
-class Metrics(NamedTuple):
+class Interaction(NamedTuple):
+    """Where the kernels group the transition, which is all the loop reads."""
+
     reward: Any
     done: Any
-    loss: Any
+    terminal: Any = None
+    observation: Any = None
+    next_observation: Any = None
+    action: Any = None
     paid: Any = None
+
+
+class Metrics(NamedTuple):
+    interaction: Interaction
+    loss: Any = None
     by_part: Any = None
     only_sometimes: Any = None
-
-
-class Rollout(NamedTuple):
-    observation: Any
-    next_observation: Any
-    action: Any
-    reward: Any
-    done: Any
-    paid: Any = None
 
 
 def arithmetic():
@@ -83,10 +84,13 @@ def arithmetic():
     def train_fn(key, state, num_steps):
         del key, num_steps
         return state + EPOCH_STEPS, Metrics(
-            reward=TRAIN_REWARD,
-            done=TRAIN_DONE,
+            interaction=Interaction(
+                reward=TRAIN_REWARD,
+                done=TRAIN_DONE,
+                terminal=TRAIN_DONE,
+                paid=TRAIN_REWARD / 10,
+            ),
             loss=TRAIN_LOSS,
-            paid=TRAIN_REWARD / 10,
             by_part={"torso": TRAIN_LOSS},
         )
 
@@ -94,13 +98,16 @@ def arithmetic():
         del key
         column = jnp.arange(num_steps * NUM_ENVS, dtype=jnp.float32)
         grid = column.reshape(num_steps, NUM_ENVS)
-        return state, Rollout(
-            observation=grid[..., None],
-            next_observation=grid[..., None] + 1,
-            action=grid[..., None],
-            reward=EVAL_REWARD,
-            done=EVAL_DONE,
-            paid=EVAL_REWARD / 10,
+        return state, Metrics(
+            interaction=Interaction(
+                observation=grid[..., None],
+                next_observation=grid[..., None] + 1,
+                action=grid[..., None],
+                reward=EVAL_REWARD,
+                done=EVAL_DONE,
+                terminal=EVAL_DONE,
+                paid=EVAL_REWARD / 10,
+            )
         )
 
     return init_fn, train_fn, evaluate_fn
@@ -236,7 +243,7 @@ def test_an_episode_is_worth_what_was_paid_not_what_the_algorithm_was_shown():
 
     shown, paid = Recorder(), Recorder()
     run_arithmetic(shown)
-    run_arithmetic(paid, reward="paid")
+    run_arithmetic(paid, reward="interaction.paid")
 
     assert [episode.rewards for episode in paid.episodes] != [
         episode.rewards for episode in shown.episodes

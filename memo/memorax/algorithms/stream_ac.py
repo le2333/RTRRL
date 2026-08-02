@@ -40,7 +40,13 @@ from memorax.utils.axes import (
 )
 from memorax.utils.trees import subtree_norms
 
-from .contract import ActionDecision, EvalSummary, EvaluationConfig, terminal_of
+from .contract import (
+    ActionDecision,
+    EvaluationConfig,
+    Interaction,
+    StepMetrics,
+    terminal_of,
+)
 
 
 @dataclass(frozen=True)
@@ -122,33 +128,31 @@ class StreamACState:
 
 
 @struct.dataclass(frozen=True)
-class StreamACStepMetrics:
-    """Fixed-shape observables from one transition.
+class StreamACForward:
+    """What the two networks answered about this step."""
 
-    Scalars and one step of trajectory only. The kernel runs under
-    ``lax.scan``, so whole parameter and trace trees returned from here would
-    be stacked once per step.
-    """
-
-    action_decision: ActionDecision | None = None
-    log_prob: Any = None
-    entropy: Any = None
     value: Any = None
     next_value: Any = None
+    log_prob: Any = None
+    entropy: Any = None
+
+
+@struct.dataclass(frozen=True)
+class StreamACUpdate:
+    """What the update produced. Absent during evaluation, where none runs.
+
+    Scalars and one step of trajectory only. The kernel runs under ``lax.scan``,
+    so whole parameter and trace trees returned from here would be stacked once
+    per step.
+    """
+
     td_error: Any = None
-    terminal: Any = None
     actor_step_size: Any = None
     critic_step_size: Any = None
     actor_grad_norm: Any = None
     critic_grad_norm: Any = None
     actor_trace_norm: Any = None
     critic_trace_norm: Any = None
-    observation: Any = None
-    reward: Any = None
-    done: Any = None
-    info: Any = None
-    raw_episode_return: Any = None
-    normalization: Any = None
 
 
 def _per_stream(direction, params, *streamed):
@@ -524,6 +528,43 @@ class StreamAC:
             delta,
         )
 
+    def _interaction(
+        self,
+        *,
+        observation,
+        next_observation,
+        action,
+        reward,
+        done,
+        terminal,
+        info,
+        normalizer_state,
+        action_decision=None,
+        raw_episode_return=None,
+    ) -> Interaction:
+        """One transition, with the trajectory kept only if something reads it.
+
+        The two observations are a vector per stream per step and the only
+        expensive thing here, so they are behind the declaration; a name nobody
+        declared is never stacked.
+        """
+
+        walked = "interaction.observation" in self.record
+        return Interaction(
+            observation=observation if walked else None,
+            next_observation=next_observation if walked else None,
+            action=action if walked else None,
+            action_decision=action_decision,
+            reward=reward,
+            done=done,
+            terminal=terminal,
+            info=info,
+            normalization=normalization_metrics(
+                normalizer_state, self.normalizer.config.eps
+            ),
+            raw_episode_return=raw_episode_return,
+        )
+
     def _restarted(self, key, state, *, update=True):
         """Begin again wherever an episode ended, at the top of the act.
 
@@ -558,6 +599,7 @@ class StreamAC:
     def _step(self, state: Any, key):
         restart_key, action_key, env_key = jax.random.split(key, 3)
         state = self._restarted(restart_key, state)
+        obs_before = state.timestep.obs
         obs, done, previous_action, reward = state.timestep.to_sequence()
         reset_before = state.timestep.done
         pre_actor_carry = jax.lax.stop_gradient(state.actor_carry)
@@ -751,27 +793,33 @@ class StreamAC:
             critic_sensitivity=critic_sensitivity,
             normalizer_state=normalizer_state,
         )
-        return next_state, StreamACStepMetrics(
-            action_decision=action_decision,
-            log_prob=log_prob,
-            entropy=entropy,
-            value=value,
-            next_value=next_value,
-            td_error=td_error,
-            terminal=next_terminal if "terminal" in self.record else None,
-            actor_step_size=actor_step.metrics["step_size"],
-            critic_step_size=critic_step.metrics["step_size"],
-            actor_grad_norm=subtree_norms(actor_grads, streams=True),
-            critic_grad_norm=subtree_norms(critic_grads, streams=True),
-            actor_trace_norm=subtree_norms(actor_traces, streams=True),
-            critic_trace_norm=subtree_norms(critic_traces, streams=True),
-            observation=next_obs if "observation" in self.record else None,
-            reward=environment_reward if "reward" in self.record else None,
-            done=next_done if "done" in self.record else None,
-            info=info,
-            raw_episode_return=raw_episode_return,
-            normalization=normalization_metrics(
-                normalizer_state, self.normalizer.config.eps
+        return next_state, StepMetrics(
+            interaction=self._interaction(
+                observation=obs_before,
+                next_observation=next_obs,
+                action=sampled_action,
+                action_decision=action_decision,
+                reward=environment_reward,
+                done=next_done,
+                terminal=next_terminal,
+                info=info,
+                normalizer_state=normalizer_state,
+                raw_episode_return=raw_episode_return,
+            ),
+            forward=StreamACForward(
+                value=value,
+                next_value=next_value,
+                log_prob=log_prob,
+                entropy=entropy,
+            ),
+            update=StreamACUpdate(
+                td_error=td_error,
+                actor_step_size=actor_step.metrics["step_size"],
+                critic_step_size=critic_step.metrics["step_size"],
+                actor_grad_norm=subtree_norms(actor_grads, streams=True),
+                critic_grad_norm=subtree_norms(critic_grads, streams=True),
+                actor_trace_norm=subtree_norms(actor_traces, streams=True),
+                critic_trace_norm=subtree_norms(critic_traces, streams=True),
             ),
         )
 
@@ -840,17 +888,18 @@ class StreamAC:
             actor_carry=actor_carry,
             actor_sensitivity=actor_sensitivity,
             normalizer_state=next_normalizer_state,
-        ), EvalSummary(
-            info=info,
-            normalization=normalization_metrics(
-                next_normalizer_state, self.normalizer.config.eps
+        ), StepMetrics(
+            interaction=self._interaction(
+                observation=current.timestep.obs,
+                next_observation=next_obs,
+                action=chosen,
+                reward=environment_reward,
+                done=next_done,
+                terminal=terminal_of(info, next_done),
+                info=info,
+                normalizer_state=next_normalizer_state,
             ),
-            observation=current.timestep.obs,
-            next_observation=next_obs,
-            action=chosen,
-            reward=environment_reward,
-            done=next_done,
-            terminal=terminal_of(info, next_done),
+            forward=StreamACForward(),
         )
 
     def evaluate(self, key, state: Any, num_steps: int):
