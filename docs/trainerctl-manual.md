@@ -162,7 +162,7 @@ score:
 logging:
   aim: aim://172.31.62.192:53801
   enable_rerun: true
-  rerun_every_episodes: 1
+  rerun_every_steps: 32
 ```
 
 **Identity.** `experiment` is the Aim experiment the runs are filed under; `name` is the
@@ -242,7 +242,7 @@ if it is not.
 | --- | --- | --- |
 | `aim` | yes | `aim://host:port` of the Aim server |
 | `enable_rerun` | no | Turns the Rerun sink on; defaults to off |
-| `rerun_every_episodes` | no | How many episodes one recording covers |
+| `rerun_every_steps` | with `enable_rerun` | Stride in environment steps between sample points |
 
 ### The search space
 
@@ -432,7 +432,7 @@ the worker; your script never sets them. It wires up the sinks automatically:
 - **metrics file** — always. Every `report()` is appended to `metrics.jsonl` in the
   scratch directory. This is what the score is computed from.
 - **Aim** — always, over the network to the configured server.
-- **Rerun** — only when `rerun_every_episodes` is set.
+- **Rerun** — only when `enable_rerun` is set.
 
 To record a trajectory, hand over a complete episode:
 

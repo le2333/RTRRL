@@ -20,6 +20,9 @@ class Episode:
     rewards: Sequence[Any]
     terminals: Sequence[bool]
     truncations: Sequence[bool]
+    # Which stream ran it. An episode belongs to one, and a sample step -- the
+    # step counter numbers every stream's every step -- names one.
+    stream: int = 0
     series: Mapping[str, Sequence[Any]] = field(default_factory=dict)
     observations: Sequence[Any] | None = None
     actions: Sequence[Any] | None = None

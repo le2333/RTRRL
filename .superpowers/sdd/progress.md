@@ -114,3 +114,31 @@ consumer.
 
 验证:training-sdk 141 passed,control-plane 194 passed,memo test_loop/test_upstream 17
 passed(catalog 那条仍是阶段 3 的红);ruff、black、isort 全绿。
+
+--- rerun 改为按环境步采样 ---
+
+原来是 `episode.number % rerun_every_episodes`。序号是先按流、再按时间数的
+(`complete_episodes` 外层循环是流),所以取模采到的是"(流, 时间)"这个枚举顺序上的均匀,
+不是训练进度上的均匀。
+
+新规则一句话:每 `rerun_every_steps` 个环境步取一个采样点,该步属于哪条流、落在那条流的
+哪个回合里,就记那个回合。环境步计数把每条流的每一步都数了进去,所以第 S 步是第
+`S // num_envs` 行、第 `S % num_envs` 条流 —— 一个采样点恰好指定一条流和一个回合。
+
+两件事是推论而不是另外的规则:
+- **不记评估。** 评估回合的跨度为零(标在它所测量的那个边界上,自己不花训练步),没有采样点
+  落在 `[start, end)` 里。
+- **流会轮转。** 步长不是 `num_envs` 倍数时采样点在流之间移动;是倍数时固定在一条流上。
+  这是取值的后果,不是藏在代码里的政策。
+
+`Episode` 增 `stream`,否则 sink 分不出手上这个回合是谁的。`LoggingConfig` 与 `LoggingSpec`
+的 `rerun_every_episodes` 改名为 `rerun_every_steps`,21 个实验文件的取值按 `total_steps/100`
+重设(2M 的给 20000,约一百份记录)。
+
+采样点决定流的算术里有一条值得记住:**一个回合跨越 `num_envs × 回合长度` 个环境步**。16 条流、
+hopper 约 500 步的回合,就是 8000 环境步。步长要按 `num_envs` 放大才是稀疏采样。
+
+mock-trainer 不受影响:它用自己的 `RecordingRerun` 假 sink,从不走真的 `RerunSink`。
+
+验证:training-sdk 144 passed,control-plane 194 passed,memo test_loop/test_upstream 17
+passed(catalog 那条仍是阶段 3 的红);ruff、black、isort 全绿。

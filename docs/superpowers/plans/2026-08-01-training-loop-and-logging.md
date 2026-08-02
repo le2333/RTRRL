@@ -139,6 +139,16 @@ steps.
 `enable_rerun` became the rerun switch. It was in the contract with no consumer while a
 destination turned the sink on by accident.
 
+Rerun samples by environment step rather than by episode number:
+`rerun_every_steps` sets a stride, and the episode recorded is the one the sampled step
+falls inside, on the stream that step belongs to. Numbering counts each stream's episodes
+in turn, so a stride over numbers is uniform over an enumeration order rather than over
+training. The step counter numbers every stream's every step, so a sample step names one
+stream and therefore at most one episode. Evaluation episodes cover no interval -- they
+are dated at the boundary they measured rather than spending steps -- so no sample step is
+inside one and none is recorded; that falls out of the rule rather than sitting beside it.
+`Episode` gained `stream` so a sink can tell whose episode it is holding.
+
 ## Open
 
 The AAAI arm's `eval_model` discards episode length, so it cannot report

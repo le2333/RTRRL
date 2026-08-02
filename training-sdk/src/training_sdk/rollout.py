@@ -80,6 +80,7 @@ def complete_episodes(
             yield Episode(
                 number=number,
                 phase=phase,
+                stream=env,
                 start_env_steps=start_env_steps + start * stride,
                 end_env_steps=start_env_steps + (end + 1) * stride,
                 rewards=[float(rewards[step, env]) for step in span],

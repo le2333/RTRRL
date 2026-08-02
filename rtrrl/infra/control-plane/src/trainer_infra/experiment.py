@@ -62,7 +62,7 @@ class ScoreSpec(_Frozen):
 class LoggingSpec(_Frozen):
     aim: str
     enable_rerun: bool = False
-    rerun_every_episodes: int | None = None
+    rerun_every_steps: int | None = None
 
 
 RESERVED = frozenset(

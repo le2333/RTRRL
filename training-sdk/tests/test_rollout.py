@@ -116,6 +116,18 @@ def test_a_chunk_without_a_trajectory_still_cuts():
     assert episodes[0].rewards == (1.0, 1.0)
 
 
+def test_every_episode_says_which_stream_it_came_from():
+    """An episode belongs to one stream, so it has to be able to say which.
+
+    Without it a sink cannot tell two streams' episodes apart, and a sample
+    step -- which names one stream -- has no way to pick out its own.
+    """
+
+    episodes = cut(chunk([[0, 0], [1, 0], [0, 1], [0, 0]]))
+
+    assert [episode.stream for episode in episodes] == [0, 1]
+
+
 def test_numbering_continues_where_the_last_chunk_stopped():
     episodes = cut(chunk([[0, 0], [1, 0], [0, 1], [0, 0]]), first_number=7)
 

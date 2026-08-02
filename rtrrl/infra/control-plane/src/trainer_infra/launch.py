@@ -119,7 +119,7 @@ def build_run_config(
             aim=experiment.logging.aim,
             enable_rerun=experiment.logging.enable_rerun,
             rerun_s3=rerun_s3,
-            rerun_every_episodes=experiment.logging.rerun_every_episodes,
+            rerun_every_steps=experiment.logging.rerun_every_steps,
         ),
         score=ScoreConfig(
             metric=experiment.score.metric,

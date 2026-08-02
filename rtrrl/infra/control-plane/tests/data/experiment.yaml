@@ -44,4 +44,4 @@ score:
 logging:
   aim: aim://10.0.0.1:53801
   enable_rerun: true
-  rerun_every_episodes: 1
+  rerun_every_steps: 4

@@ -75,4 +75,4 @@ score:
 logging:
   aim: aim://172.31.62.192:53801
   enable_rerun: true
-  rerun_every_episodes: 16
+  rerun_every_steps: 2000

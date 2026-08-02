@@ -330,7 +330,9 @@ Hopper 的奖励是存活、前进、控制代价三项之和,Brax 在 `info` �
 
 `seed` 只作为 `environment.seed` 出现,一个值,不是列表,任何时候都不进搜索。因此不存在"多 seed 实验"这种文件:仅靠改变 seed 来重复的实验就是重复启动同一个文件。原先四个 `streamac-hopper-seeds-*` 实验的 `space` 是十八个钉死的值加 `seed: [0,1,2,3,4]`,拿 grid 采样器的 trial 数当重复循环,seed 注入之后无可搜索,已删除。多 seed 的聚合语义不在本设计范围内,也不用复制文件的方式补回来。
 
-`LoggingSpec` 拆成两个组件,Aim 与 Rerun 各自完整,各自可关:今天 `rerun_every_episodes` 是一个可选整数,靠"是否为 None"兼任开关,而 Aim 没有开关。新增 `enable_rerun`,两个 sink 的启用与参数分别声明。
+`LoggingSpec` 拆成两个组件,Aim 与 Rerun 各自完整,各自可关:原先 `rerun_every_episodes` 是一个可选整数,靠"是否为 None"兼任开关,而 Aim 没有开关。新增 `enable_rerun`,两个 sink 的启用与参数分别声明。
+
+Rerun 的采样从回合序号改成环境步:`rerun_every_steps` 每隔这么多环境步取一个采样点,该步属于哪条流、落在那条流的哪个回合里就记那个回合。按序号取模采到的是"(流, 时间)"这个枚举顺序上的均匀,不是时间上的均匀;而环境步计数把每条流的每一步都数了进去,所以一个采样点恰好指定一条流和一个回合。评估回合的跨度为零(它标在它所测量的那个边界上,自己不花步数),任何采样点都不落在它里面,于是不进 rerun——这是规则的推论,不是另一条规则。
 
 `normalization_statistics`、`STATISTICS` 表、`feature_dim` 作为公共编码宽度的用法一并处理:前两者删除并换成三个参数,`feature_dim` 保留但归入 `rtu` 分支。`RTUCell` 与 `LRUCell` 去掉 `activation_fn` 字段。
 
