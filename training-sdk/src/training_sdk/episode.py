@@ -5,6 +5,7 @@ from dataclasses import dataclass, field
 from typing import Any
 
 WINDOW = "episode"
+WINDOWS: tuple[str, ...] = (WINDOW,)
 VARIANCE = "_variance"
 TOTALS: tuple[str, ...] = ("length", "return")
 SPREAD: tuple[str, ...] = ("return_per_step",)
@@ -60,6 +61,22 @@ class Episode:
             )
         if self.end_env_steps < self.start_env_steps:
             raise ValueError("end_env_steps must not precede start_env_steps")
+
+
+def check_names(names: Iterable[str]) -> None:
+    for name in names:
+        parts = name.split("/")
+        if len(parts) != 3 or not all(parts):
+            raise ValueError(
+                f"metric {name!r} is not <phase>/<window>/<quantity>; the middle "
+                "part is the window a number was reduced over, and a name "
+                "without one says nothing about what it measured"
+            )
+        if parts[1] not in WINDOWS:
+            raise ValueError(
+                f"metric {name!r} names the window {parts[1]!r}, which nothing "
+                f"reduces over; the windows are {', '.join(WINDOWS)}"
+            )
 
 
 def metric_names(phase: str, series: Iterable[str] = ()) -> tuple[str, ...]:

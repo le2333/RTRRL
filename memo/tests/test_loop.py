@@ -14,14 +14,13 @@ from __future__ import annotations
 from typing import Any, NamedTuple
 
 import jax.numpy as jnp
-import numpy as np
 import pytest
 from training_sdk.contract import Catalog
-from training_sdk.episode import statistics
+from training_sdk.episode import check_names, statistics
 
 import entries
+from entries import stream_ac
 from runner.catalog import build_catalog, discover
-from runner.episodes import complete_episodes
 from runner.loop import drive, whole_epochs
 
 
@@ -263,6 +262,16 @@ def test_a_budget_that_divides_lands_on_the_last_step():
     assert list(epochs) == [4, 8]
 
 
+def test_the_names_an_entry_declares_are_names_a_sink_will_accept():
+    """Three parts, and the middle one a window something is reduced over.
+
+    The rule lives in the SDK because the sinks are where a name is finally
+    read; an entry that spells one itself would be a second vocabulary.
+    """
+
+    check_names(stream_ac.METRICS)
+
+
 def test_the_catalog_is_the_entries_directory_and_nothing_written_down():
     catalog = Catalog.model_validate(build_catalog().model_dump(mode="json"))
     modules = discover()
@@ -273,34 +282,3 @@ def test_the_catalog_is_the_entries_directory_and_nothing_written_down():
         assert entry.command == ("python", "-m", f"{entries.__name__}.{name}")
         assert set(entry.parameters) == set(modules[name].PARAMETERS)
         assert entry.metrics == tuple(modules[name].METRICS)
-
-
-class Summary:
-    def __init__(self, before, after, action, reward, done):
-        self.observation = before
-        self.next_observation = after
-        self.action = action
-        self.reward = reward
-        self.done = done
-
-
-def test_a_partial_episode_at_either_end_is_left_out():
-    #                   env 0: done at 1 and 4     env 1: never done
-    done = np.array([[0, 0], [1, 0], [0, 0], [0, 0], [1, 0]], dtype=bool)
-    steps, envs = done.shape
-    summary = Summary(
-        before=np.arange(steps * envs, dtype=float).reshape(steps, envs, 1),
-        after=np.arange(steps * envs, dtype=float).reshape(steps, envs, 1) + 100,
-        action=np.zeros((steps, envs, 1)),
-        reward=np.ones((steps, envs)),
-        done=done,
-    )
-    episodes = list(
-        complete_episodes(summary, phase="eval", start_env_steps=0, num_envs=envs)
-    )
-
-    # Steps 2 and 3 of env 0 run past the end without terminating, and env 1
-    # never terminates at all; neither is a return anyone can report.
-    assert [len(episode.actions) for episode in episodes] == [2, 3]
-    assert [episode.number for episode in episodes] == [1, 2]
-    assert episodes[0].observations[-1] == [102.0]

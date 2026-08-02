@@ -15,6 +15,7 @@ import jax.numpy as jnp
 import numpy as np
 import pytest
 from conftest import TinyDiscreteEnv
+from training_sdk.rollout import complete_episodes
 
 from memorax.algorithms.upstream_stream_ac import (
     UpstreamStreamAC,
@@ -28,7 +29,6 @@ from memorax.networks import (
     RTUConfig,
     heads,
 )
-from runner.episodes import complete_episodes
 
 HORIZON = TinyDiscreteEnv().default_params.horizon
 ENVS = 2

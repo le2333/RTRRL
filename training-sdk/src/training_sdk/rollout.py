@@ -1,13 +1,17 @@
 """Cut a stacked rollout into the complete episodes that are worth reporting.
 
-The kernels run a fixed number of steps across a fixed number of streams and
-never stop at an episode boundary, so a chunk holds whole episodes, partial ones
-at both ends, and nothing marking which is which except the done flag. Only the
+A kernel runs a fixed number of steps across a fixed number of streams and never
+stops at an episode boundary, so a chunk holds whole episodes, partial ones at
+both ends, and nothing marking which is which except the done flag. Only the
 whole ones are reported; a partial episode would either invent a terminal that
 did not happen or claim a return that is not one.
 
 An episode belongs to one stream, which is why the stream axis survives here and
 is never averaged: two streams that ended at different steps are two answers.
+
+This is arithmetic on an array of that shape and nothing about any one trainer,
+so it lives beside the episode it produces rather than inside whichever trainer
+needed it first.
 """
 
 from __future__ import annotations
@@ -15,6 +19,7 @@ from __future__ import annotations
 from collections.abc import Iterable, Iterator, Mapping
 
 import numpy as np
+
 from training_sdk.episode import Episode
 
 

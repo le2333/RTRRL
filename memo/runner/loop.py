@@ -16,8 +16,7 @@ from typing import Any, Protocol
 
 import jax
 from training_sdk.episode import Episode
-
-from .episodes import complete_episodes
+from training_sdk.rollout import complete_episodes
 
 
 class Destination(Protocol):

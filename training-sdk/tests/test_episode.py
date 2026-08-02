@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
+import re
+
 import pytest
 
-from training_sdk.episode import Episode, metric_names, statistics
+from training_sdk.episode import Episode, check_names, metric_names, statistics
 
 
 def make(**overrides) -> Episode:
@@ -106,3 +108,30 @@ def test_a_trajectory_that_does_not_span_the_episode_is_refused():
 def test_an_unfinished_episode_is_refused():
     with pytest.raises(ValueError, match="complete"):
         make(terminals=[False, False])
+
+
+def test_what_the_names_generate_is_what_the_check_accepts():
+    check_names(metric_names("train", ("td_error", "actor_grad_norm.torso")))
+    check_names(statistics(make(series={"td_error": [0.0, 2.0]})))
+
+
+@pytest.mark.parametrize(
+    "name",
+    [
+        "episode_return",
+        "train/return",
+        "train/episode/return/torso",
+        "train/step/return",
+        "train/chunk/return",
+        "train//return",
+    ],
+)
+def test_a_name_that_claims_a_window_nothing_measures_at_is_refused(name):
+    """The middle segment is the window a number was reduced over.
+
+    There is one, and it is the episode. A name with fewer parts says nothing
+    about its window and a name with more has stopped being three axes.
+    """
+
+    with pytest.raises(ValueError, match=re.escape(name)):
+        check_names([name])

@@ -82,3 +82,35 @@ than folded into this commit; phase 3 does not touch them either.
 Left open: the AAAI arm's training scalars keep two-part names, being per scanned
 iteration rather than reduced over an episode; `evaluation.num_envs` still has no
 consumer.
+
+--- 记录面统一到 SDK ---
+
+问过是否该让"记录什么"从配置文件传入。答案是不:preflight 在花钱之前用 `entry.metrics`
+校验 `score.metric`,实验文件若能新增指标名这条校验就空了;而且指标名要绑到内核对象上的
+一条路径(`actor_grad_norm.torso`),让实验文件写这条路径就等于让它知道实现的拼写。声明留
+在代码里,实验只做窄化 —— 与 `PARAMETERS` 同一个论证。算法内部量本来就由 `TRAINING_METRICS`
+承担,加一条只需往元组里写一个名字。
+
+真正搬动的两样:
+
+- `training_sdk/rollout.py` —— `complete_episodes` 与 `read` 从 `memo/runner/episodes.py`
+  搬进 SDK。它是纯 numpy over `(T, num_envs)` 加一个点号读取器,没有一处是 memo 专有的;
+  搬完之后第二个 trainer 继承的是同一条边界规则,而不是在旁边另发明一条。切分的测试跟着
+  搬到 `training-sdk/tests/test_rollout.py`。
+- `training_sdk/episode.py` 增 `WINDOWS` 与 `check_names()` —— 三段、中段必须是一个真有东西
+  在其上归约的窗口。词汇归 SDK,因为 sink 才是名字最终被读的地方。
+
+两道闸**故意没接**,因为它们会打死这次不重构的部分:
+
+1. `EntryDescriptor` 用 `check_names` 校验 `metrics`。会让 mock-trainer 的 catalog
+   (`episode_return`/`episode_length`)构建失败。
+2. `RunConfig` 增 `metrics`,`Reporter.report` 拒绝未声明的名字。这是唯一还敞着的贵洞——
+   "声明 X 上报 Y",preflight 抓不到,要等打分时才炸。接上会打死 mock-trainer 的 100 个
+   用例和 control-plane 里那个内联 fake trainer(约 17 个),而它们验证的正是控制面本身。
+   需要 `CONTRACT_VERSION` → 7。
+
+两道闸各自等对应 trainer 迁移时接,那时每个只值一次改动。memo 侧现在由构造保证:`METRICS`
+从 `TRAINING_METRICS` 推出,`test_loop.py` 直接对 `stream_ac.METRICS` 跑 `check_names`。
+
+验证:training-sdk 141 passed,control-plane 194 passed,memo test_loop/test_upstream 17
+passed(catalog 那条仍是阶段 3 的红);ruff、black、isort 全绿。
