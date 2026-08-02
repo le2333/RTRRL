@@ -43,7 +43,7 @@ from memorax.utils.trees import subtree_norms
 from .contract import (
     ActionDecision,
     EvaluationConfig,
-    Interaction,
+    InteractionMetrics,
     StepMetrics,
     terminal_of,
 )
@@ -128,7 +128,7 @@ class StreamACState:
 
 
 @struct.dataclass(frozen=True)
-class StreamACForward:
+class ForwardMetrics:
     """What the two networks answered about this step."""
 
     value: Any = None
@@ -138,7 +138,7 @@ class StreamACForward:
 
 
 @struct.dataclass(frozen=True)
-class StreamACUpdate:
+class UpdateMetrics:
     """What the update produced. Absent during evaluation, where none runs.
 
     Scalars and one step of trajectory only. The kernel runs under ``lax.scan``,
@@ -541,7 +541,7 @@ class StreamAC:
         normalizer_state,
         action_decision=None,
         raw_episode_return=None,
-    ) -> Interaction:
+    ) -> InteractionMetrics:
         """One transition, with the trajectory kept only if something reads it.
 
         The two observations are a vector per stream per step and the only
@@ -550,7 +550,7 @@ class StreamAC:
         """
 
         walked = "interaction.observation" in self.record
-        return Interaction(
+        return InteractionMetrics(
             observation=observation if walked else None,
             next_observation=next_observation if walked else None,
             action=action if walked else None,
@@ -806,13 +806,13 @@ class StreamAC:
                 normalizer_state=normalizer_state,
                 raw_episode_return=raw_episode_return,
             ),
-            forward=StreamACForward(
+            forward=ForwardMetrics(
                 value=value,
                 next_value=next_value,
                 log_prob=log_prob,
                 entropy=entropy,
             ),
-            update=StreamACUpdate(
+            update=UpdateMetrics(
                 td_error=td_error,
                 actor_step_size=actor_step.metrics["step_size"],
                 critic_step_size=critic_step.metrics["step_size"],
@@ -899,7 +899,7 @@ class StreamAC:
                 info=info,
                 normalizer_state=next_normalizer_state,
             ),
-            forward=StreamACForward(),
+            forward=ForwardMetrics(),
         )
 
     def evaluate(self, key, state: Any, num_steps: int):

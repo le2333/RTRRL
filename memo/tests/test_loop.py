@@ -55,7 +55,7 @@ EVAL_STEPS = EVAL_DONE.shape[0]
 SERIES = ("loss", "by_part.torso", "only_sometimes")
 
 
-class Interaction(NamedTuple):
+class InteractionMetrics(NamedTuple):
     """Where the kernels group the transition, which is all the loop reads."""
 
     reward: Any
@@ -68,7 +68,7 @@ class Interaction(NamedTuple):
 
 
 class Metrics(NamedTuple):
-    interaction: Interaction
+    interaction: InteractionMetrics
     loss: Any = None
     by_part: Any = None
     only_sometimes: Any = None
@@ -84,7 +84,7 @@ def arithmetic():
     def train_fn(key, state, num_steps):
         del key, num_steps
         return state + EPOCH_STEPS, Metrics(
-            interaction=Interaction(
+            interaction=InteractionMetrics(
                 reward=TRAIN_REWARD,
                 done=TRAIN_DONE,
                 terminal=TRAIN_DONE,
@@ -99,7 +99,7 @@ def arithmetic():
         column = jnp.arange(num_steps * NUM_ENVS, dtype=jnp.float32)
         grid = column.reshape(num_steps, NUM_ENVS)
         return state, Metrics(
-            interaction=Interaction(
+            interaction=InteractionMetrics(
                 observation=grid[..., None],
                 next_observation=grid[..., None] + 1,
                 action=grid[..., None],

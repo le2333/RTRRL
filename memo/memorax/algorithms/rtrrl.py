@@ -38,7 +38,7 @@ from memorax.utils.axes import (
 from .contract import (
     ActionDecision,
     EvaluationConfig,
-    Interaction,
+    InteractionMetrics,
     StepMetrics,
     terminal_of,
 )
@@ -281,7 +281,7 @@ class RTRRLState:
 
 
 @struct.dataclass
-class RTRRLForward:
+class ForwardMetrics:
     """What the shared torso and its two heads answered, and how they stand."""
 
     value: Any = None
@@ -301,7 +301,7 @@ class RTRRLForward:
 
 
 @struct.dataclass
-class RTRRLUpdate:
+class UpdateMetrics:
     """What the update produced. Absent during evaluation, where none runs.
 
     Everything here is a scalar or one step of trajectory. The kernel runs under
@@ -543,11 +543,11 @@ class RTRRL:
         normalizer_state,
         action_decision=None,
         raw_episode_return=None,
-    ) -> Interaction:
+    ) -> InteractionMetrics:
         """One transition, with the trajectory kept only if something reads it."""
 
         walked = "interaction.observation" in self.record
-        return Interaction(
+        return InteractionMetrics(
             observation=observation if walked else None,
             next_observation=next_observation if walked else None,
             action=action if walked else None,
@@ -824,7 +824,7 @@ class RTRRL:
                 normalizer_state=normalizer_state,
                 raw_episode_return=raw_episode_return,
             ),
-            forward=RTRRLForward(
+            forward=ForwardMetrics(
                 value=value,
                 next_value=next_value,
                 log_prob=log_prob,
@@ -846,7 +846,7 @@ class RTRRL:
                     jnp.max(jnp.exp(gamma_log)) if gamma_log is not None else jnp.nan
                 ),
             ),
-            update=RTRRLUpdate(
+            update=UpdateMetrics(
                 td_error=td_error,
                 emphasis=state.emphasis.mean(),
                 step_size=outputs["rnn"].metrics.get("step_size"),
@@ -952,7 +952,7 @@ class RTRRL:
                 },
                 normalizer_state=next_normalizer_state,
             ),
-            forward=RTRRLForward(),
+            forward=ForwardMetrics(),
         )
 
     def evaluate(self, key, state: Any, num_steps: int):

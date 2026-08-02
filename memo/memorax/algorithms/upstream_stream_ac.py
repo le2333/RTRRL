@@ -51,7 +51,7 @@ from memorax.utils.axes import (
 )
 from memorax.utils.typing import Array, Discrete, EnvState, Key, PyTree
 
-from .contract import ActionDecision, Interaction, StepMetrics, terminal_of
+from .contract import ActionDecision, InteractionMetrics, StepMetrics, terminal_of
 
 
 @struct.dataclass(frozen=True)
@@ -98,7 +98,7 @@ class UpstreamStreamACState:
 
 
 @struct.dataclass
-class UpstreamForward:
+class ForwardMetrics:
     """What upstream's two networks answered about this step."""
 
     value: Any = None
@@ -108,7 +108,7 @@ class UpstreamForward:
 
 
 @struct.dataclass
-class UpstreamUpdate:
+class UpdateMetrics:
     """What upstream's update produced.
 
     The step sizes and the per-part norms the other entry reports are not here:
@@ -192,7 +192,7 @@ class UpstreamStreamAC:
         )
         next_reward = jnp.asarray(reward, dtype=jnp.float32)
         summary = StepMetrics(
-            interaction=Interaction(
+            interaction=InteractionMetrics(
                 observation=state.timestep.obs,
                 next_observation=next_obs,
                 action=action,
@@ -201,7 +201,7 @@ class UpstreamStreamAC:
                 terminal=terminal_of(info, done),
                 info=info,
             ),
-            forward=UpstreamForward(),
+            forward=ForwardMetrics(),
         )
         state = state.replace(
             step=state.step + self.cfg.num_envs,
@@ -483,7 +483,7 @@ class UpstreamStreamAC:
         )
 
         metrics = StepMetrics(
-            interaction=Interaction(
+            interaction=InteractionMetrics(
                 observation=obs_before,
                 next_observation=next_obs,
                 action=action,
@@ -499,13 +499,13 @@ class UpstreamStreamAC:
                 terminal=terminal_of(info, next_done),
                 info=info,
             ),
-            forward=UpstreamForward(
+            forward=ForwardMetrics(
                 value=value,
                 next_value=next_value,
                 log_prob=log_prob,
                 entropy=entropy,
             ),
-            update=UpstreamUpdate(td_error=td_error),
+            update=UpdateMetrics(td_error=td_error),
         )
         return state, metrics
 

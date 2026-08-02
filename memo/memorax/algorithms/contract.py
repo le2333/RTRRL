@@ -45,7 +45,7 @@ class ActionDecision:
 
 
 @struct.dataclass
-class Interaction:
+class InteractionMetrics:
     """One transition, as the environment and its preprocessing produced it.
 
     The transition is spelled out rather than left inside ``info`` because a
@@ -79,7 +79,7 @@ class StepMetrics:
     does not. ``update`` is absent during evaluation, where nothing is updated.
     """
 
-    interaction: Interaction = Interaction()
+    interaction: InteractionMetrics = InteractionMetrics()
     forward: Any = None
     update: Any = None
 
