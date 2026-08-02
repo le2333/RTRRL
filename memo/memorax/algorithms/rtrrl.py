@@ -35,15 +35,7 @@ from memorax.utils.axes import (
     remove_time_axis,
 )
 
-from .contract import (
-    ActionDecision,
-    EvalSummary,
-    EvaluationConfig,
-)
-from .contract import ended_in as ended_in_of
-from .contract import (
-    terminal_of,
-)
+from .contract import ActionDecision, EvalSummary, EvaluationConfig, terminal_of
 
 RECURRENT_DOMAINS = ("feature_extractor", "torso")
 
@@ -85,6 +77,14 @@ class TraceDirections:
 
     carried: Any
     update: Any
+
+
+def _where_done(done, fresh, carried):
+    """Take the fresh one for the streams that ended, the carried one for the rest."""
+
+    return jax.tree.map(
+        lambda new, old: jnp.where(_broadcast_env(done, old), new, old), fresh, carried
+    )
 
 
 def _broadcast_env(values, leaf):
@@ -436,7 +436,7 @@ class RTRRL:
             (self.cfg.num_envs, *action_space.shape), dtype=action_space.dtype
         )
         reward = jnp.zeros((self.cfg.num_envs,), dtype=jnp.float32)
-        done = jnp.ones((self.cfg.num_envs,), dtype=jnp.bool_)
+        done = jnp.zeros((self.cfg.num_envs,), dtype=jnp.bool_)
         timestep = Timestep(
             obs=obs, action=action, reward=reward, done=done
         ).to_sequence()
@@ -526,10 +526,39 @@ class RTRRL:
             normalizer_state=arrays["normalizer_state"],
         )
 
+    def _restarted(self, key, state, *, update=True):
+        """Begin again wherever an episode ended, at the top of the act.
+
+        The environment hands back the state its episode ended in, because that
+        is what the bootstrap has to value; starting the next one belongs here,
+        on the same flag the carry and the traces already read.
+        """
+
+        keys = jax.random.split(key, self.cfg.num_envs)
+        obs, env_state = jax.vmap(self.env.reset, in_axes=(0, None))(
+            keys, self.env_params
+        )
+        normalizer_state = state.normalizer_state
+        if self.normalizing:
+            obs, normalizer_state = self.normalizer.reset(
+                obs, normalizer_state, update=update
+            )
+        done = state.timestep.done
+        return state.replace(
+            timestep=state.timestep.replace(
+                obs=_where_done(done, obs, state.timestep.obs)
+            ),
+            env_state=_where_done(done, env_state, state.env_state),
+            normalizer_state=_where_done(
+                done, normalizer_state, state.normalizer_state
+            ),
+        )
+
     def _step(self, state: Any, key):
         """Act once in every environment, then credit the step that produced it."""
 
-        action_key, env_key = jax.random.split(key)
+        restart_key, action_key, env_key = jax.random.split(key, 3)
+        state = self._restarted(restart_key, state)
         obs, done, previous_action, reward = state.timestep.to_sequence()
         forward_params = slow_view(state.params, state.slow_torso)
         pre_carry = jax.lax.stop_gradient(state.carry)
@@ -564,7 +593,6 @@ class RTRRL:
         # The failure ending, and the observation the episode ended in before
         # the auto-reset replaced it. At a truncation the bootstrap survives.
         next_terminal = terminal_of(info, next_done)
-        ended_in = ended_in_of(info, next_obs)
         normalizer_state = state.normalizer_state
         raw_episode_return = None
         if self.normalizing:
@@ -578,9 +606,8 @@ class RTRRL:
             next_reward = normalized.reward
             normalizer_state = normalized.state
             raw_episode_return = normalized.raw_episode_return
-            ended_in = self.normalizer.normalize_observation(normalizer_state, ended_in)
-        ended_in_s, next_done_s, next_action_s, next_reward_s = Timestep(
-            obs=ended_in,
+        next_obs_s, next_done_s, next_action_s, next_reward_s = Timestep(
+            obs=next_obs,
             action=env_action,
             reward=next_reward,
             done=next_done,
@@ -590,7 +617,7 @@ class RTRRL:
             _bootstrap_sensitivity,
         ), (_, next_value_raw) = self._forward(
             jax.lax.stop_gradient(forward_params),
-            ended_in_s,
+            next_obs_s,
             next_action_s,
             next_reward_s,
             next_done_s,
@@ -801,8 +828,11 @@ class RTRRL:
         return jax.lax.scan(self._step, state, keys)
 
     def _evaluate_step(self, current: Any, step_key):
-        action_key, env_key = jax.random.split(step_key)
+        restart_key, action_key, env_key = jax.random.split(step_key, 3)
         del action_key
+        current = self._restarted(
+            restart_key, current, update=self.normalizer.config.update_during_eval
+        )
         obs_s, done_s, action_s, reward_s = current.timestep.to_sequence()
         (carry, sensitivity), (dist, _) = self._forward(
             slow_view(current.params, current.slow_torso),
@@ -903,7 +933,7 @@ class RTRRL:
             obs=obs,
             action=action,
             reward=jnp.zeros((self.cfg.num_envs,), dtype=jnp.float32),
-            done=jnp.ones((self.cfg.num_envs,), dtype=jnp.bool_),
+            done=jnp.zeros((self.cfg.num_envs,), dtype=jnp.bool_),
         )
         carry_shape = (self.cfg.num_envs, None)
         eval_state = state.replace(

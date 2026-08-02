@@ -130,9 +130,12 @@ def test_the_evaluation_rollout_reports_the_reward_the_environment_gave():
 
     assert actions.shape == (steps, ENVS)
     np.testing.assert_allclose(np.asarray(summary.reward), expected, rtol=0, atol=1e-6)
-    # The rollout starts from a reset, so the step it reports is its own.
+    # The rollout starts from a reset, so the step it reports is its own, and it
+    # starts from one again at the horizon: the environment resets nothing, so
+    # beginning the next episode is the acting step's business.
+    restarted = np.array([(step % HORIZON) + 1 for step in range(steps)])
     np.testing.assert_array_equal(
-        counts, np.broadcast_to(np.arange(1, steps + 1)[:, None], counts.shape)
+        counts, np.broadcast_to(restarted[:, None], counts.shape)
     )
 
 

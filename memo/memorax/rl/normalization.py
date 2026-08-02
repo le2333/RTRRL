@@ -190,18 +190,6 @@ class Normalizer:
             raw_episode_return=accumulated_return,
         )
 
-    def normalize_observation(self, state, observation):
-        """Normalise without updating, for a second observation of one step.
-
-        The bootstrap values the state an episode ended in, which is not the
-        state the agent goes on to act from, and both have to be on the scale
-        the network was fed.
-        """
-
-        if state.observation is None:
-            return observation
-        return self._normalize_observation(state.observation, jnp.asarray(observation))
-
     def _open(self, mean, M2, count, sample):
         if self.config.cold_start == "seeded":
             return mean, M2

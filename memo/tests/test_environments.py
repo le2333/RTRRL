@@ -113,25 +113,18 @@ def test_a_step_that_ends_nothing_is_neither():
     assert not bool(info["truncation"])
 
 
-def test_the_observation_the_episode_ended_in_survives_the_reset():
-    """The auto-reset overwrites it, and the bootstrap needs the one it lost.
+def test_the_step_hands_back_the_state_its_episode_ended_in():
+    """The wrapper resets nothing, so there is only one observation to hand back.
 
-    At a truncation the critic is asked what the future is worth from where the
-    episode stopped. The reset state is a different state and valuing it is a
-    different question.
+    Brax's auto-reset would have replaced this with the next episode's opening,
+    which is a different state and valuing it is a different question. Starting
+    the next episode belongs to whoever is about to act.
     """
 
-    obs, _, _, _, info = one_step(done=True, truncation=True)
+    obs, _, _, done, _ = one_step(done=True, truncation=True)
 
-    assert obs.tolist() == RESET.tolist()
-    assert info["next_observation"].tolist() == ENDED_IN.tolist()
-
-
-def test_nothing_is_replaced_while_the_episode_runs():
-    obs, _, _, _, info = one_step(done=False, truncation=False)
-
+    assert bool(done)
     assert obs.tolist() == ENDED_IN.tolist()
-    assert info["next_observation"].tolist() == ENDED_IN.tolist()
 
 
 def test_brax_reports_its_own_step_limit_as_a_truncation():
@@ -155,7 +148,7 @@ def test_brax_reports_its_own_step_limit_as_a_truncation():
     assert not bool(info["terminal"])
 
 
-def test_the_mask_reaches_the_observation_the_episode_ended_in():
+def test_the_mask_reaches_what_the_step_hands_back():
     """A masked task is masked everywhere or the critic sees what the actor cannot."""
 
     env, params = make(
@@ -163,7 +156,6 @@ def test_the_mask_reaches_the_observation_the_episode_ended_in():
     )
     _, state = jax.jit(env.reset)(jax.random.key(0), params)
     action = jnp.zeros(env.action_space(params).shape)
-    obs, _, _, _, info = jax.jit(env.step)(jax.random.key(1), state, action, params)
+    obs, _, _, _, _ = jax.jit(env.step)(jax.random.key(1), state, action, params)
 
     assert obs.shape == (2,)
-    assert info["next_observation"].shape == (2,)

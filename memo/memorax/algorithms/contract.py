@@ -48,16 +48,6 @@ def terminal_of(info, done):
     return info.get("terminal", done)
 
 
-def ended_in(info, observation):
-    """The observation the episode ended in, before any auto-reset replaced it.
-
-    An environment that does not reset underneath the caller never lost it, so
-    the one it handed back is the one.
-    """
-
-    return info.get("next_observation", observation)
-
-
 @struct.dataclass
 class EvalSummary:
     """One evaluation step, stacked by the caller's scan.

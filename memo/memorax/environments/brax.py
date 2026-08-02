@@ -1,6 +1,5 @@
 from typing import Any
 
-import jax
 import jax.numpy as jnp
 from gymnax.environments import EnvParams, spaces
 
@@ -9,17 +8,12 @@ from memorax.utils.typing import Array, Key
 
 
 class BraxGymnaxWrapper(GymnaxWrapper):
-    """Brax behind the gymnax interface, keeping what its auto-reset discards.
+    """Brax behind the gymnax interface, resetting nothing.
 
-    Brax's own ``AutoResetWrapper`` overwrites the observation the episode ended
-    in with the one the next episode starts from, and our old wrapper threw away
-    the ``truncation`` flag underneath it. Both are needed: an episode cut off at
-    its step limit was about to go on earning, so the value of where it stopped
-    is the best statement anyone has about the rest, and that value is a question
-    about an observation that no longer exists by the time the caller sees one.
-
-    So the auto-reset is done here rather than below, on the same stored first
-    state brax uses, and both observations come back.
+    Brax's ``AutoResetWrapper`` hands back the state the next episode starts
+    from and destroys the one it ended in, which is the one a bootstrap has to
+    value. Restarting belongs to whoever is about to act, not to the step that
+    just ended, so it happens in the algorithm and this stays an adapter.
     """
 
     def __init__(self, env, episode_length: int = 1000):
@@ -34,48 +28,20 @@ class BraxGymnaxWrapper(GymnaxWrapper):
 
     def reset(self, key: Key, params) -> tuple[Array, Any]:
         state = self._env.reset(key)
-        state.info["first_pipeline_state"] = state.pipeline_state
-        state.info["first_obs"] = state.obs
         return state.obs, state
 
     def step(
         self, key: Key, state, action: Array, params
     ) -> tuple[Array, Any, Array, Array, dict]:
-        if "steps" in state.info:
-            steps = state.info["steps"]
-            state.info.update(
-                steps=jnp.where(state.done, jnp.zeros_like(steps), steps)
-            )
-        next_state = self._env.step(state.replace(done=jnp.zeros_like(state.done)), action)
-
+        next_state = self._env.step(state, action)
         done = next_state.done.astype(jnp.bool)
         truncation = jnp.asarray(next_state.info["truncation"]).astype(jnp.bool)
-        ended_in = next_state.obs
-
-        def restored(first, running):
-            mask = done
-            if mask.shape:
-                mask = jnp.reshape(mask, [running.shape[0]] + [1] * (running.ndim - 1))
-            return jnp.where(mask, first, running)
-
-        next_state = next_state.replace(
-            pipeline_state=jax.tree.map(
-                restored,
-                next_state.info["first_pipeline_state"],
-                next_state.pipeline_state,
-            ),
-            obs=restored(next_state.info["first_obs"], next_state.obs),
-        )
         return (
             next_state.obs,
             next_state,
             next_state.reward,
             done,
-            {
-                "terminal": done & ~truncation,
-                "truncation": truncation,
-                "next_observation": ended_in,
-            },
+            {"terminal": done & ~truncation, "truncation": truncation},
         )
 
     def observation_space(self, params) -> spaces.Box:

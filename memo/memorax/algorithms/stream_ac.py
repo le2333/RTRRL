@@ -40,15 +40,7 @@ from memorax.utils.axes import (
 )
 from memorax.utils.trees import subtree_norms
 
-from .contract import (
-    ActionDecision,
-    EvalSummary,
-    EvaluationConfig,
-)
-from .contract import ended_in as ended_in_of
-from .contract import (
-    terminal_of,
-)
+from .contract import ActionDecision, EvalSummary, EvaluationConfig, terminal_of
 
 
 @dataclass(frozen=True)
@@ -83,6 +75,18 @@ class TraceDirections:
 
 def _broadcast_env(values, leaf):
     return values[(slice(None),) + (None,) * (leaf.ndim - 1)]
+
+
+def _where_done(done, fresh, carried):
+    """Take the fresh one for the streams that ended, the carried one for the rest.
+
+    Not a branch: both are computed and one is selected per stream, which is
+    what every reset in this stack already is.
+    """
+
+    return jax.tree.map(
+        lambda new, old: jnp.where(_broadcast_env(done, old), new, old), fresh, carried
+    )
 
 
 @struct.dataclass(frozen=True)
@@ -391,7 +395,7 @@ class StreamAC:
             obs=obs,
             action=action,
             reward=jnp.zeros((self.cfg.num_envs,), dtype=jnp.float32),
-            done=jnp.ones((self.cfg.num_envs,), dtype=jnp.bool_),
+            done=jnp.zeros((self.cfg.num_envs,), dtype=jnp.bool_),
         ).to_sequence()
         actor = self._initialize_network(
             self.actor_network,
@@ -520,8 +524,40 @@ class StreamAC:
             delta,
         )
 
+    def _restarted(self, key, state, *, update=True):
+        """Begin again wherever an episode ended, at the top of the act.
+
+        The environment hands back the state its episode ended in, because that
+        is what the bootstrap has to value; starting the next one is the act
+        phase's business and belongs here, on the same flag the carry and the
+        traces already read. The statistics take the observation the agent is
+        about to act on, one stream at a time, so the streams still running are
+        not counted twice.
+        """
+
+        keys = jax.random.split(key, self.cfg.num_envs)
+        obs, env_state = jax.vmap(self.env.reset, in_axes=(0, None))(
+            keys, self.env_params
+        )
+        normalizer_state = state.normalizer_state
+        if self.normalizing:
+            obs, normalizer_state = self.normalizer.reset(
+                obs, normalizer_state, update=update
+            )
+        done = state.timestep.done
+        return state.replace(
+            timestep=state.timestep.replace(
+                obs=_where_done(done, obs, state.timestep.obs)
+            ),
+            env_state=_where_done(done, env_state, state.env_state),
+            normalizer_state=_where_done(
+                done, normalizer_state, state.normalizer_state
+            ),
+        )
+
     def _step(self, state: Any, key):
-        action_key, env_key = jax.random.split(key)
+        restart_key, action_key, env_key = jax.random.split(key, 3)
+        state = self._restarted(restart_key, state)
         obs, done, previous_action, reward = state.timestep.to_sequence()
         reset_before = state.timestep.done
         pre_actor_carry = jax.lax.stop_gradient(state.actor_carry)
@@ -568,7 +604,6 @@ class StreamAC:
         # auto-reset replaced. At a truncation the bootstrap survives, so it has
         # to value where the episode stopped rather than where the next starts.
         next_terminal = terminal_of(info, next_done)
-        ended_in = ended_in_of(info, next_obs)
         normalizer_state = state.normalizer_state
         raw_episode_return = None
         if self.normalizing:
@@ -582,25 +617,25 @@ class StreamAC:
             next_reward = normalized.reward
             normalizer_state = normalized.state
             raw_episode_return = normalized.raw_episode_return
-            ended_in = self.normalizer.normalize_observation(normalizer_state, ended_in)
-        ended_in_s, next_done_s, next_action_s, next_reward_s = Timestep(
-            obs=ended_in,
+        next_obs_s, next_done_s, next_action_s, next_reward_s = Timestep(
+            obs=next_obs,
             action=sampled_action,
             reward=next_reward,
             done=next_done,
         ).to_sequence()
 
-        # The bootstrap runs the critic forward on the observation the agent
-        # has not answered yet, under the parameters from before this step's
-        # update, and throws away the carry it produced. The next step repeats
-        # that forward pass from the same carry but with updated parameters,
-        # which is the pass whose recurrent state is kept.
+        # The bootstrap runs the critic forward on the state the transition
+        # ended in -- which is the one the environment hands back, because it
+        # resets nothing -- under the parameters from before this step's update,
+        # and throws away the carry it produced. The next step repeats that
+        # forward pass from the same carry but with updated parameters, which is
+        # the pass whose recurrent state is kept.
         (
             _bootstrap_carry,
             _bootstrap_sensitivity,
         ), (next_value_raw, _) = self._critic_forward(
             jax.lax.stop_gradient(state.critic_params),
-            ended_in_s,
+            next_obs_s,
             next_action_s,
             next_reward_s,
             next_done_s,
@@ -745,8 +780,11 @@ class StreamAC:
         return jax.lax.scan(self._step, state, keys)
 
     def _evaluate_step(self, current: Any, step_key):
-        action_key, env_key = jax.random.split(step_key)
+        restart_key, action_key, env_key = jax.random.split(step_key, 3)
         del action_key
+        current = self._restarted(
+            restart_key, current, update=self.normalizer.config.update_during_eval
+        )
         obs_s, done_s, action_s, reward_s = current.timestep.to_sequence()
         (actor_carry, actor_sensitivity), (dist, _) = self._actor_forward(
             current.actor_params,
@@ -839,7 +877,7 @@ class StreamAC:
             obs=obs,
             action=action,
             reward=jnp.zeros((self.cfg.num_envs,), dtype=jnp.float32),
-            done=jnp.ones((self.cfg.num_envs,), dtype=jnp.bool_),
+            done=jnp.zeros((self.cfg.num_envs,), dtype=jnp.bool_),
         )
         carry_shape = (self.cfg.num_envs, None)
         eval_state = state.replace(

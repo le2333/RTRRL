@@ -16,6 +16,7 @@ import jax.numpy as jnp
 import optax
 import pytest
 from conftest import TinyContinuousEnv
+from training_sdk.rollout import complete_episodes
 
 from memorax.algorithms.rtrrl import RTRRL, RTRRLConfig
 from memorax.algorithms.stream_ac import StreamAC, StreamACConfig
@@ -66,7 +67,7 @@ def rtrrl_program(*, record=(), **overrides):
     return agent.init, agent.train, agent.evaluate
 
 
-def stream_ac_program(normalization=None, backbone="rtu", **overrides):
+def stream_ac_program(normalization=None, backbone="rtu", record=(), **overrides):
     env = TinyContinuousEnv()
 
     def network(head):
@@ -96,6 +97,7 @@ def stream_ac_program(normalization=None, backbone="rtu", **overrides):
         network(heads.Gaussian(action_dim=2)),
         network(heads.VNetwork()),
         normalization=normalization,
+        record=record,
     )
     return agent.init, agent.train, agent.evaluate
 
@@ -279,3 +281,25 @@ def test_the_bound_never_lets_obgd_step_past_its_learning_rate():
         params={"w": jnp.zeros((8,))},
     )
     assert float(jnp.max(output.metrics["step_size"])) <= 0.5
+
+
+def test_the_algorithm_restarts_the_environment_when_an_episode_ends():
+    """Nothing below the algorithm resets, so a run that did not would stall.
+
+    The environment hands back the state its episode ended in and keeps handing
+    back an ended one; only the act phase can begin the next. Two whole episodes
+    of the horizon's length is what restarting looks like, and one long dead one
+    is what not restarting looks like.
+    """
+
+    horizon = TinyContinuousEnv().default_params.horizon
+    init, train, _ = stream_ac_program(record=("reward", "done", "terminal"))
+    state = jax.jit(init)(jax.random.key(0))
+    _, metrics = jax.jit(train, static_argnums=2)(
+        jax.random.key(1), state, 2 * horizon + 2
+    )
+
+    episodes = list(
+        complete_episodes(metrics, phase="train", start_env_steps=0, num_envs=1)
+    )
+    assert [len(episode.rewards) for episode in episodes] == [horizon, horizon]

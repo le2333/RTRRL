@@ -69,6 +69,18 @@ class UpstreamStreamACConfig:
     eps: float = 1e-8
 
 
+def _where_done(done, fresh, carried):
+    """Take the fresh one for the streams that ended, the carried one for the rest."""
+
+    return jax.tree.map(
+        lambda new, old: jnp.where(
+            done[(slice(None),) + (None,) * (old.ndim - 1)], new, old
+        ),
+        fresh,
+        carried,
+    )
+
+
 @struct.dataclass(frozen=True)
 class UpstreamStreamACState:
     step: int
@@ -137,10 +149,32 @@ class UpstreamStreamAC:
         state = state.replace(actor_carry=actor_carry)
         return state, action, log_prob, None
 
+    def _restarted(self, key: Key, state: Any) -> Any:
+        """Begin again wherever an episode ended, at the top of the act.
+
+        The environment resets nothing, so this is where the next episode
+        starts. Normalisation is in wrappers on this arm, so the reset
+        observation comes out of them already scaled.
+        """
+
+        num_envs, *_ = state.timestep.obs.shape
+        keys = jax.random.split(key, num_envs)
+        obs, env_state = jax.vmap(self.env.reset, in_axes=(0, None))(
+            keys, self.env_params
+        )
+        done = state.timestep.done
+        return state.replace(
+            timestep=state.timestep.replace(
+                obs=_where_done(done, obs, state.timestep.obs)
+            ),
+            env_state=_where_done(done, env_state, state.env_state),
+        )
+
     def _step(
         self, state: Any, key: Key, *, policy: Callable
     ) -> tuple[UpstreamStreamACState, EvalSummary]:
-        action_key, step_key = jax.random.split(key)
+        restart_key, action_key, step_key = jax.random.split(key, 3)
+        state = self._restarted(restart_key, state)
         state, action, log_prob, value = policy(action_key, state)
         del log_prob, value
 
@@ -312,9 +346,10 @@ class UpstreamStreamAC:
     def _update_step(
         self, state: Any, key: Key
     ) -> tuple[UpstreamStreamACState, UpstreamStreamACStepMetrics]:
-        action_key, step_key, actor_torso_key, critic_torso_key = jax.random.split(
-            key, 4
+        restart_key, action_key, step_key, actor_torso_key, critic_torso_key = (
+            jax.random.split(key, 5)
         )
+        state = self._restarted(restart_key, state)
 
         obs, done, ts_action, reward = state.timestep.to_sequence()
 
@@ -478,7 +513,7 @@ class UpstreamStreamAC:
             dtype=self.env.action_space(self.env_params).dtype,
         )
         reward = jnp.zeros((self.cfg.num_envs,), dtype=jnp.float32)
-        done = jnp.ones((self.cfg.num_envs,), dtype=jnp.bool_)
+        done = jnp.zeros((self.cfg.num_envs,), dtype=jnp.bool_)
         timestep = Timestep(
             obs=obs, action=action, reward=reward, done=done
         ).to_sequence()
@@ -551,7 +586,7 @@ class UpstreamStreamAC:
             dtype=self.env.action_space(self.env_params).dtype,
         )
         reward = jnp.zeros((self.cfg.num_envs,), dtype=jnp.float32)
-        done = jnp.ones((self.cfg.num_envs,), dtype=jnp.bool_)
+        done = jnp.zeros((self.cfg.num_envs,), dtype=jnp.bool_)
         timestep = Timestep(obs=obs, action=action, reward=reward, done=done)
         initial_actor_carry = self.actor_network.initialize_carry(
             (self.cfg.num_envs, None)
