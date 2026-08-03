@@ -337,3 +337,21 @@ placeholder 取 `lecun` 而不是 `sparse`:不让默认行为悄悄变。实验�
 **另一处顺带查清的**:memorax 的 `Gaussian` 头是一个 Dense 加全局可学 `log_std` 再 `exp`,跟我们
 的 `bound=False` 一致 —— 之前说"他们的 actor 头是两个独立 Linear"只指 streaming-drl,不包括
 memorax。这条差异是我们对 streaming-drl 的,不是对 memorax 的。
+
+--- actor 头改成结构 ---
+
+`heads.Gaussian` 原来用一个 `bound: bool` 装两种参数化,按"组件内不混合"拆成三个类:
+
+- `Gaussian` —— 一个 Dense 给均值 + 全局可学 `log_std`,`std = exp(log_std)`。**恢复成 memorax 的原样**
+  (`bound`/`loc_bounds`/`log_std_bounds` 三个字段是我们加的,现在挪走了)。
+- `StateStdGaussian` —— 两个 Dense,第二个过 `softplus`。**这是 streaming-drl 的**,之前仓库里没有。
+- `BoundedGaussian` —— 原来的 `bound=True` 那条路,loc 与 log_scale 各自 sigmoid 到区间再 softplus。
+
+`memorax/networks/policy.py` 里 `ACTOR_HEAD_BRANCHES = {"global_std": (), "state_std": (), "bounded": ()}`,
+入口声明 `actor_head: structure(placeholder="global_std", ...)`。placeholder 取 `global_std`
+(= memorax 的 = 现状),默认行为不变。
+
+`entries/rtrrl.py` 的 `bound_actor` 布尔改成在两个类之间选(那个入口本来就是红的)。
+
+测试 `test_policy_head.py` 九条,按"尺度从哪来"区分三条分支:`global_std` 换一个观测尺度不变,
+另外两条会变;`bounded` 的 loc 落在区间内;还有一条断言 `Gaussian` 上没有 `bound` 字段。

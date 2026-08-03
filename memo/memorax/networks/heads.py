@@ -312,27 +312,66 @@ class Categorical(nn.Module):
 
 
 class Gaussian(nn.Module):
-    """连续策略头：对角高斯分布。
+    """对角高斯策略头:均值由状态线性映射给出,log_std 为与状态无关的全局可学习参数。"""
 
-    两种参数化(由 ``bound`` 选择):
+    action_dim: int
+    kernel_init: nn.initializers.Initializer = nn.initializers.lecun_normal()
+    bias_init: nn.initializers.Initializer = nn.initializers.zeros_init()
 
-    * ``bound=False``(默认,保持既有行为):均值由状态线性映射给出,log_std 为
-      与状态无关的全局可学习标量向量,std=exp(log_std)(无界)。
-    * ``bound=True``(复刻 streaming-rtrrl 的 RNNActorCritic):网络输出
-      ``2*action_dim``,拆成 loc 与 log_scale;loc 经 ``sigmoid_between`` bound 到
-      ``loc_bounds``、log_scale bound 到 ``log_std_bounds``,再 ``std=softplus(log_scale)``。
-      这把均值与标准差都限制在有界区间内,切断"动作头无界放大→循环状态发散"的正反馈臂。
+    @nn.compact
+    def __call__(
+        self, x: Array, **kwargs
+    ) -> tuple[distrax.MultivariateNormalDiag, dict]:
+        mean = nn.Dense(
+            self.action_dim, kernel_init=self.kernel_init, bias_init=self.bias_init
+        )(x)
+
+        log_std = self.param("log_std", nn.initializers.zeros, self.action_dim)
+        std = jnp.exp(log_std)
+
+        return distrax.MultivariateNormalDiag(loc=mean, scale_diag=std), {}
+
+
+class StateStdGaussian(nn.Module):
+    """均值与标准差各由一个 Dense 给出,标准差过 softplus 保证为正。"""
+
+    action_dim: int
+    kernel_init: nn.initializers.Initializer = nn.initializers.lecun_normal()
+    bias_init: nn.initializers.Initializer = nn.initializers.zeros_init()
+
+    @nn.compact
+    def __call__(
+        self, x: Array, **kwargs
+    ) -> tuple[distrax.MultivariateNormalDiag, dict]:
+        mean = nn.Dense(
+            self.action_dim,
+            kernel_init=self.kernel_init,
+            bias_init=self.bias_init,
+            name="mean",
+        )(x)
+        pre_std = nn.Dense(
+            self.action_dim,
+            kernel_init=self.kernel_init,
+            bias_init=self.bias_init,
+            name="pre_std",
+        )(x)
+        return (
+            distrax.MultivariateNormalDiag(
+                loc=mean, scale_diag=jax.nn.softplus(pre_std)
+            ),
+            {},
+        )
+
+
+class BoundedGaussian(nn.Module):
+    """loc 与 log_scale 都由状态给出,并各自 sigmoid bound 到区间后 softplus。
 
     Args:
-        action_dim: 连续动作维度。
-        bound: 是否启用有界(状态相关 loc+log_scale)参数化。
-        loc_bounds: bound 时 loc 的 sigmoid 区间(hopper 动作 ∈ [-1,1])。
-        log_std_bounds: bound 时 log_scale 的 sigmoid 区间(softplus 前);
-            [-2,2] 对应 std∈[softplus(-2),softplus(2)]≈[0.13,2.13]。
+        loc_bounds: loc 的 sigmoid 区间。
+        log_std_bounds: log_scale 的 sigmoid 区间(softplus 之前)。
     """
 
     action_dim: int
-    bound: bool = False
     loc_bounds: tuple[float, float] = (-1.0, 1.0)
     log_std_bounds: tuple[float, float] = (-2.0, 2.0)
     kernel_init: nn.initializers.Initializer = nn.initializers.lecun_normal()
@@ -342,29 +381,20 @@ class Gaussian(nn.Module):
     def __call__(
         self, x: Array, **kwargs
     ) -> tuple[distrax.MultivariateNormalDiag, dict]:
-        """返回对角高斯分布;bound 决定 loc/std 是否被限制在有界区间。"""
-        if self.bound:
-            # 状态相关的 loc 与 log_scale(单个 Dense 输出 2*action_dim 后拆分)。
-            out = nn.Dense(
-                2 * self.action_dim,
-                kernel_init=self.kernel_init,
-                bias_init=self.bias_init,
-            )(x)
-            loc, log_scale = jnp.split(out, 2, axis=-1)
-            loc = sigmoid_between(loc, *self.loc_bounds)
-            log_scale = sigmoid_between(log_scale, *self.log_std_bounds)
-            std = jax.nn.softplus(log_scale)
-            return distrax.MultivariateNormalDiag(loc=loc, scale_diag=std), {}
-
-        mean = nn.Dense(
-            self.action_dim, kernel_init=self.kernel_init, bias_init=self.bias_init
+        out = nn.Dense(
+            2 * self.action_dim,
+            kernel_init=self.kernel_init,
+            bias_init=self.bias_init,
         )(x)
-
-        # log_std 为与状态无关的可学习参数，指数化保证 std 为正。
-        log_std = self.param("log_std", nn.initializers.zeros, self.action_dim)
-        std = jnp.exp(log_std)
-
-        return distrax.MultivariateNormalDiag(loc=mean, scale_diag=std), {}
+        loc, log_scale = jnp.split(out, 2, axis=-1)
+        loc = sigmoid_between(loc, *self.loc_bounds)
+        log_scale = sigmoid_between(log_scale, *self.log_std_bounds)
+        return (
+            distrax.MultivariateNormalDiag(
+                loc=loc, scale_diag=jax.nn.softplus(log_scale)
+            ),
+            {},
+        )
 
 
 class SquashedGaussian(nn.Module):

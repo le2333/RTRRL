@@ -29,6 +29,7 @@ from memorax.networks.initialization import (
     INITIALIZATION_BRANCHES,
     declared_initializer,
 )
+from memorax.networks.policy import ACTOR_HEAD_BRANCHES, actor_head
 from memorax.networks.sequence import PLACES
 from memorax.rl import CREDITS, declared_normalizer
 from memorax.rl.normalization import (
@@ -49,6 +50,7 @@ class StreamACParameters:
     initialization: str = structure(
         placeholder="lecun", branches=INITIALIZATION_BRANCHES
     )
+    actor_head: str = structure(placeholder="global_std", branches=ACTOR_HEAD_BRANCHES)
     meta_rl: bool = param(valid=[False, True], search=[False, True], placeholder=False)
     credit: str = structure(placeholder="tbptt", branches=CREDIT_BRANCHES)
     gamma: float = param(valid=(0.5, 0.9999), search=(0.9, 0.9999), placeholder=0.99)
@@ -162,7 +164,13 @@ def build(params: Mapping[str, Any], environment, training) -> StreamAC:
         ),
         env,
         env_params,
-        network(heads.Gaussian(action_dim=action_dim, kernel_init=kernel_init)),
+        network(
+            actor_head(
+                read_branch(params, "actor_head", ACTOR_HEAD_BRANCHES)[0],
+                action_dim=action_dim,
+                kernel_init=kernel_init,
+            )
+        ),
         network(heads.VNetwork(kernel_init=kernel_init)),
         observation_normalization=_estimator(
             params, "observation_normalization", NORMALIZATION_BRANCHES

@@ -176,9 +176,8 @@ def build(params: Mapping[str, Any], environment, training) -> RTRRL:
             hidden_dim=int(params["hidden_dim"]),
             output_dim=feature_dim,
         )[0],
-        heads.Gaussian(
-            action_dim=int(env.action_space(env_params).shape[0]),
-            bound=bool(params["bound_actor"]),
+        (heads.BoundedGaussian if bool(params["bound_actor"]) else heads.Gaussian)(
+            action_dim=int(env.action_space(env_params).shape[0])
         ),
         heads.VNetwork(),
         activation=jax.nn.silu,
