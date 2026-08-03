@@ -8,6 +8,11 @@ offer the choice and the value it would have needed is not in the manifest.
 including the heads and zeroes every bias, and memorax's MinAtar example passes
 ``sparse(sparsity=0.9)`` to its convolution, its dense layer and both heads.
 
+Both of them round the number of *zeros* up, which at a narrow fan-in rounds it
+up to all of them: six observed dimensions at 0.9 leaves an output unit with no
+input at all. Ours rounds the number of survivors up instead, so the share is
+the same wherever there is room for it to be and a unit always keeps one.
+
 ``lecun`` is the framework default rather than anyone's choice -- flax's
 ``nn.Dense`` initialises its kernel with ``lecun_normal()`` unless told
 otherwise, and memorax's other StreamAC example passes a bare ``nn.Dense``.
@@ -58,15 +63,17 @@ def test_the_key_only_exists_under_the_branch_that_has_it():
     assert not [key for key in flat if key.startswith("backbone.rtu.initialization")]
 
 
-def test_sparse_zeroes_the_declared_share_of_every_output_unit():
-    """Their loop zeroes ``ceil(sparsity * fan_in)`` inputs per output unit."""
+def kept(sparsity: float, fan_in: int) -> int:
+    return math.ceil((1.0 - sparsity) * fan_in)
 
+
+def test_sparse_keeps_the_declared_share_of_every_output_unit():
     fan_in, fan_out = SHAPE
     weights = drawn(Sparse(sparsity=0.9))
-    zeros = (weights == 0.0).sum(axis=0)
+    alive = (weights != 0.0).sum(axis=0)
 
-    assert zeros.shape == (fan_out,)
-    assert jnp.all(zeros == math.ceil(0.9 * fan_in))
+    assert alive.shape == (fan_out,)
+    assert jnp.all(alive == kept(0.9, fan_in))
 
 
 def test_the_other_branch_leaves_every_weight_in_place():
@@ -84,7 +91,19 @@ def test_the_share_is_the_one_that_was_declared(sparsity):
     fan_in, _ = SHAPE
     weights = drawn(Sparse(sparsity=sparsity))
 
-    assert jnp.all((weights == 0.0).sum(axis=0) == math.ceil(sparsity * fan_in))
+    assert jnp.all((weights != 0.0).sum(axis=0) == kept(sparsity, fan_in))
+
+
+@pytest.mark.parametrize("fan_in", (2, 6, 11))
+def test_a_narrow_fan_in_keeps_something_rather_than_nothing(fan_in):
+    """Where rounding the zeros up would have left the layer with no input."""
+
+    weights = declared_initializer(Sparse(sparsity=0.9))(
+        jax.random.key(0), (fan_in, 4), jnp.float32
+    )
+
+    assert jnp.all((weights != 0.0).sum(axis=0) >= 1)
+    assert jnp.any(weights != 0.0)
 
 
 def test_a_component_takes_the_initialiser_it_was_given():
@@ -93,4 +112,4 @@ def test_a_component_takes_the_initialiser_it_was_given():
     params = layer.init(jax.random.key(0), x)
     kernel = params["params"]["Dense_0"]["kernel"]
 
-    assert jnp.all((kernel == 0.0).sum(axis=0) == math.ceil(0.9 * 16))
+    assert jnp.all((kernel != 0.0).sum(axis=0) == kept(0.9, 16))

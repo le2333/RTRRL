@@ -46,6 +46,7 @@ jobs:
         memorax/networks/backbones.py
         memorax/networks/components.py
         memorax/networks/initialization.py
+        memorax/networks/initializers/sparse.py
         memorax/networks/readouts.py
         memorax/networks/sequence.py
         entries

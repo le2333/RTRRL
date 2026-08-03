@@ -1,3 +1,12 @@
+"""Sparse initialisation, rounding the survivors up rather than the zeros.
+
+streaming-drl and memorax both take ``ceil(sparsity * fan_in)`` zeros, which at
+a narrow fan-in is every one of them: six inputs at 0.9 leaves an output unit
+with nothing to read. Taking ``ceil((1 - sparsity) * fan_in)`` survivors instead
+is the same share wherever there is room for it, and never an empty unit. The
+two differ by at most one weight per unit.
+"""
+
 import math
 from typing import Callable
 
@@ -19,7 +28,7 @@ def sparse(sparsity: float = 0.9) -> Callable:
             weight_key, shape, dtype, minval=-limit, maxval=limit
         )
 
-        n_zero = math.ceil(sparsity * fan_in)
+        n_zero = fan_in - math.ceil((1.0 - sparsity) * fan_in)
         weights_flat = weights.reshape(fan_in, fan_out)
 
         perms = jax.vmap(lambda k: jax.random.permutation(k, fan_in))(

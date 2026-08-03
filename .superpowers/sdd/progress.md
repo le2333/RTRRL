@@ -448,7 +448,14 @@ critic_head.value.initialization[.sparse.sparsity]
 有一条测试逼"各自声明"这件事:钉 `backbone=rtu` + `actor_head.global_std.initialization=sparse`
 + `critic_head.value.initialization=lecun`,断言 actor 头的核零占比 >0.5 而 critic 头 =0.0。
 
-**未处理的坑**:`sparse` 的 `n_zero = ceil(sparsity * fan_in)`,`observed` 6 维时
-`ceil(0.9×6)=6`,mlp 第一层会被整个置零(5 维上实测零占比 1.00)。逐行照抄 streaming-drl 的
-`sparse_init`,他们跑完整观测(11 维加时间信息)所以不会踩。掩码观测 + 0.9 稀疏这个组合要么给
-`n_zero` 封顶,要么降 sparsity,是取值决定,没动。
+**`sparse` 改成非零数向上取整。** 原来是 `n_zero = ceil(sparsity * fan_in)` —— 零的个数向上取整,
+窄 fan_in 下就取到全部:`observed` 6 维、sparsity 0.9 时 `ceil(5.4)=6`,mlp 第一层整个置零
+(5 维上实测零占比 1.00)。改成 `n_zero = fan_in - ceil((1 - sparsity) * fan_in)`:有余量的地方
+份额不变,窄的地方每个输出单元至少留一个输入。两者每个单元最多差一个权重。
+
+这是对 memorax 和 streaming-drl **共同**的一处有意偏离 —— 改之前确认过我们的 `sparse.py` 跟
+memorax 的逐字节相同,而 memorax 的 `sparse_init` 与 streaming-drl 的算术一致。他们跑完整观测
+(hopper 11 维加时间信息)所以碰不到这个边界。`sparse.py` 加进 memo-ci 的 CHECKED。
+
+实测(观测 6 维、mlp、sparse):第一层 fan_in=6 每单元存活 1(原来 0),第二层 fan_in=128 存活 13
+(原规则 12)。
