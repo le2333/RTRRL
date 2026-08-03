@@ -1,15 +1,7 @@
-"""The leaves a sequence is built from, each doing one thing.
-
-A layer, a normalisation and an activation are three components rather than one
-block that does all three, because the three published backbones order them
-differently and any block that fused two of them would fit at most one of the
-three. It is also what makes a network describable as data later: a fixed
-arrangement cannot be written down as a list.
+"""The leaves a sequence is built from: one operation per component.
 
 ``reads`` is what a component asks for beyond its input. Nothing here asks for
-anything, which is why nothing here has a second argument to accept: a component
-that is handed an ending it cannot use is a component that had to be written to
-ignore one.
+anything, so nothing here takes a second argument.
 """
 
 from __future__ import annotations
@@ -33,7 +25,7 @@ class Stateless(nn.Module):
 
 
 class FFN(Stateless):
-    """One affine map. The nonlinearity, if any, is the next component."""
+    """One affine map."""
 
     features: int
     use_bias: bool = True
@@ -83,12 +75,7 @@ class SiLU(Stateless):
 
 
 class Readout(Stateless):
-    """The last component, whose output is whatever its module answers with.
-
-    Value and policy heads predate this protocol and hand back a pair of their
-    own; wrapping one is cheaper than teaching fifteen of them to carry a carry
-    they have no use for.
-    """
+    """Adapts a head, which returns ``(output, aux)``, to the carry protocol."""
 
     module: nn.Module
 

@@ -1,27 +1,8 @@
-"""
-What this file fixes is the wiring: the actor and the critic get a sequence
-each, sharing nothing. Change that and it is a different algorithm, which is why
-it is written here rather than exposed. Every hyperparameter is in
-``PARAMETERS``, and an experiment file narrows it by pinning single values.
+"""StreamAC entry: declares the parameter surface and builds the agent.
 
-``credit`` is what makes one entry enough for what used to be two. Under
-``rtrl`` a sensitivity is carried forward and recurrent parameters are credited
-exactly; under ``tbptt`` nothing is carried and the gradient stops at the
-incoming carry. Same objective, same bounded update, same everything else, so a
-pair of runs that differ only here is an ablation of exact recurrent credit
-rather than a comparison of two programs.
-
-``tbptt`` is not StreamAC as published. The published algorithm is feedforward
--- ``test_paper_parity`` drives its own file, which takes a width and no carry
--- so there is nothing in it to truncate, and under the ``mlp`` backbone the two
-settings are the same computation. What ``tbptt`` reproduces is StreamAC's
-update with a recurrent backbone and no sensitivity carried, which is the
-recurrent baseline this repository inherited. The published baseline is ``mlp``,
-and it is a different comparison from this one.
-
-``PARAMETERS`` is the only place these names and their limits are written down.
-The constructor call below is the only place they are read. Both are on one
-screen, which is the whole of the arrangement.
+The actor and the critic each get their own sequence, sharing nothing.
+``PARAMETERS`` is the only place the names and their limits are written down;
+``build`` is the only place they are read.
 """
 
 from __future__ import annotations
@@ -88,9 +69,8 @@ class StreamACParameters:
 
 PARAMETERS = describe_parameters(StreamACParameters)
 
-# Where in a sequence a parameter sits, rather than which component it belongs
-# to: exact recurrent credit treats the three places differently, and naming the
-# components instead would make a declared metric depend on which backbone ran.
+# Position groups, not component names: the component count varies with the
+# backbone and METRICS is fixed at import.
 PARTS: tuple[str, ...] = PLACES
 
 TRAINING_METRICS: tuple[str, ...] = (

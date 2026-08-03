@@ -64,10 +64,7 @@ class StreamACConfig:
     critic_base: Any = None
     entropy_coefficient: float = 0.01
     credit: str = "rtrl"
-    # Whether the previous action and reward arrive beside the observation.
-    # Composing the input is the kernel's doing -- those values are already
-    # here -- and a network that had a slot for them would be a network that
-    # knew what its caller feeds it.
+    # Concatenate the previous action and reward onto the observation.
     meta_rl: bool = False
     # Whose running statistics to normalise with. Read by ``make_normalizer``
     # when no explicit config is passed, and only meaningful when one of the two
@@ -246,10 +243,8 @@ class StreamAC:
     def _input(self, obs, action, reward):
         """The one vector a sequence sees.
 
-        Under ``meta_rl`` the previous action and reward arrive beside the
-        observation. That is composition of an input, done where those values
-        already are; a network with a slot for each of them would be a network
-        that knew what it was being fed.
+        Under ``meta_rl`` the previous action and reward are concatenated onto
+        the observation.
         """
 
         if not self.cfg.meta_rl:
@@ -521,12 +516,7 @@ class StreamAC:
         )
 
     def _readings(self, network, tree):
-        """One norm per place the credit treats differently, per stream.
-
-        Split by position rather than by component, so the reading keeps its
-        shape whatever a sequence is composed of and a declared metric name
-        stays a name whichever backbone is running.
-        """
+        """One norm per position group, per stream."""
 
         return subtree_norms(network.split(tree), streams=True)
 

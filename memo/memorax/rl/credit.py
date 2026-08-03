@@ -1,22 +1,9 @@
-"""How a recurrent parameter learns from a step it can no longer see.
+"""Two recurrent credit adapters behind one interface.
 
-Two answers, behind one interface, so that choosing between them is a setting
-rather than a rewrite. Neither computes anything here: the Jacobian of a carry
-with respect to its parameters belongs to the cell that owns the recurrence and
-every cell in this package already implements it, while truncating the credit is
-the absence of a computation. This file only says which of a cell's methods
-stands for credit, so a kernel can ask without naming the cell.
-
-``ExactRTRL`` carries a sensitivity forward, so a parameter is credited for its
-effect on every carry it ever helped produce. ``TruncatedBPTT`` carries nothing
-and lets the gradient stop at the incoming carry, which is one step of
-backpropagation through time. Swapping one for the other is the recurrent half
-of a gradient ablation: same objective, same update rule, and the recurrent path
-either credited exactly or cut to a step.
-
-Neither is the published StreamAC, which is feedforward and so has no carry to
-credit either way. Truncating is what the recurrent implementations this
-repository inherited do, and they do it by construction rather than by setting.
+Neither computes anything here. ``ExactRTRL`` calls the cell's own
+``local_jacobian`` and carries the sensitivity it returns; ``TruncatedBPTT``
+calls the cell's forward and carries nothing. This file only says which of a
+cell's methods stands for credit, so a kernel can ask without naming the cell.
 """
 
 from __future__ import annotations

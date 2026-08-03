@@ -1,12 +1,8 @@
 """Name a backbone and get the components it contributes to a sequence.
 
-Which wrapper a cell needs, and which keyword it takes, is knowledge about the
-cells and belongs beside them. A caller that had to know RTU goes in an ``RNN``
-while LRU goes in a ``Memoroid``, and that only one of the two reads
-``output_dim``, would be maintaining a copy of this file.
-
-``mlp`` is here so that an algorithm which takes a backbone can be run without
-memory, as the ablation of every recurrent one.
+Which wrapper a cell needs and which keyword it takes is knowledge about the
+cells: RTU goes in an ``RNN``, LRU in a ``Memoroid``, and only the second reads
+``output_dim``. Kept here so a caller does not hold a copy of it.
 """
 
 from __future__ import annotations
@@ -32,12 +28,8 @@ from memorax.networks.sequence_models import (
 RECURRENT_BACKBONES = ("lru", "rtu")
 BACKBONES = (*RECURRENT_BACKBONES, "mlp")
 
-# The RTRRL authors' two revisions of the LRU, each ours with one line put back
-# the way theirs has it. Deliberately outside ``BACKBONES``: they are not
-# backbones to train with, they are arms to compare a reproduction against, and
-# only the entry running that comparison should offer them. What makes them
-# usable as arms is that they take the same config and build the same parameter
-# tree as ``lru``, which is visible below rather than asserted here.
+# Outside ``BACKBONES`` so only the entry that asks for them by name gets them.
+# They take the same config and build the same parameter tree as ``lru``.
 UPSTREAM_BACKBONES = ("lru_published", "lru_rewritten")
 
 

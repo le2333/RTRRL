@@ -1,18 +1,14 @@
 """A network as an ordered list of components.
 
-The step is ``(carries, x) -> (carries, y)`` and nothing else crosses it. What a
-component needs beyond ``x`` it declares in ``reads``, and only the declaring
-component is handed it; the three fixed slots this replaces were given the
-observation, the ending, the previous action and the previous reward alike, so
-every slot had to accept four things to use one.
+The step is ``(carries, x) -> (carries, y)``. What a component needs beyond
+``x`` it declares in ``reads``, and only the declaring component is handed it.
 
-The carry is one entry per component. A stateless component hands back the entry
-it was given and a recurrent one hands back a new one, which is what turns "a
-stateless component ignores the carry" into something a caller can check.
+The carry is one entry per component: a stateless component hands back the entry
+it was given, a recurrent one hands back a new one.
 
-Exactly one component may be recurrent. Carrying an exact sensitivity through
-two of them needs a dense cross-layer Jacobian, so a pair is refused here rather
-than credited as though the second were not there.
+At most one component may be recurrent. Carrying an exact sensitivity through
+two would need a dense cross-layer Jacobian, which nothing here implements, so a
+second one is refused at construction.
 """
 
 from __future__ import annotations
@@ -54,7 +50,7 @@ class Sequence(nn.Module):
 
     @property
     def core(self) -> nn.Module | None:
-        """The component whose Jacobian a credit carries a sensitivity through."""
+        """The recurrent component, if there is one."""
 
         index = self.recurrent
         return None if index is None else self.components[index]
@@ -72,11 +68,7 @@ class Sequence(nn.Module):
 
     @nn.nowrap
     def walk(self, params, x: Array, *, done, carries, sensitivity, credit):
-        """The same order, with the recurrence driven through its credit.
-
-        The credit reaches one component, not the sequence: it carries a
-        sensitivity through one Jacobian, and a list of components has none.
-        """
+        """The same order, with the recurrent component driven through ``credit``."""
 
         tree = params["params"] if "params" in params else params
         carries = self._entries(carries)
@@ -105,13 +97,10 @@ class Sequence(nn.Module):
 
     @nn.nowrap
     def split(self, tree) -> dict:
-        """A parameter-shaped tree in the three places credit treats apart.
+        """A parameter-shaped tree grouped by position: before, at, after.
 
-        With exact recurrent credit the recurrence's own parameters are credited
-        for every step they helped produce while everything around them is
-        credited for one, so a single reading over the whole tree averages the
-        distinction away. Splitting by position rather than by component name
-        keeps the reading the same shape whatever the sequence holds.
+        Keyed by position rather than by component name, so the grouping has the
+        same three keys whatever the sequence holds.
         """
 
         tree = tree["params"] if "params" in tree else tree
