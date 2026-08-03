@@ -25,6 +25,10 @@ from memorax.algorithms.stream_ac import StreamAC, StreamACConfig
 from memorax.environments import make
 from memorax.networks import Readout, Sequence, backbone, heads
 from memorax.networks.backbones import Mlp, Rtu
+from memorax.networks.initialization import (
+    INITIALIZATION_BRANCHES,
+    declared_initializer,
+)
 from memorax.networks.sequence import PLACES
 from memorax.rl import CREDITS, declared_normalizer
 from memorax.rl.normalization import (
@@ -42,6 +46,9 @@ CREDIT_BRANCHES = {name: () for name in CREDITS}
 @dataclass(frozen=True)
 class StreamACParameters:
     backbone: str = structure(placeholder="rtu", branches=BACKBONE_BRANCHES)
+    initialization: str = structure(
+        placeholder="lecun", branches=INITIALIZATION_BRANCHES
+    )
     meta_rl: bool = param(valid=[False, True], search=[False, True], placeholder=False)
     credit: str = structure(placeholder="tbptt", branches=CREDIT_BRANCHES)
     gamma: float = param(valid=(0.5, 0.9999), search=(0.9, 0.9999), placeholder=0.99)
@@ -122,6 +129,9 @@ def build(params: Mapping[str, Any], environment, training) -> StreamAC:
         int(params[f"backbone.{chosen}.feature_dim"]) if chosen == "rtu" else hidden_dim
     )
 
+    _, declared = read_branch(params, "initialization", INITIALIZATION_BRANCHES)
+    kernel_init = declared_initializer(declared)
+
     def network(head):
         return Sequence(
             components=(
@@ -130,6 +140,7 @@ def build(params: Mapping[str, Any], environment, training) -> StreamAC:
                     features=feature_dim,
                     hidden_dim=hidden_dim,
                     output_dim=feature_dim,
+                    kernel_init=kernel_init,
                 ),
                 Readout(module=head),
             )
@@ -151,8 +162,8 @@ def build(params: Mapping[str, Any], environment, training) -> StreamAC:
         ),
         env,
         env_params,
-        network(heads.Gaussian(action_dim=action_dim)),
-        network(heads.VNetwork()),
+        network(heads.Gaussian(action_dim=action_dim, kernel_init=kernel_init)),
+        network(heads.VNetwork(kernel_init=kernel_init)),
         observation_normalization=_estimator(
             params, "observation_normalization", NORMALIZATION_BRANCHES
         ),

@@ -7,6 +7,7 @@ from training_sdk.contract import ChoiceSpec, ParameterSpec, StructureSpec
 from training_sdk.parameters import describe_parameters, read_branch
 
 from memorax.networks.backbones import Lru, Mlp, Rtu
+from memorax.networks.initialization import Sparse
 from memorax.rl.normalization import DiscountedNormalization, RunningNormalization
 from memorax.rl.updates import Adam, AdaptiveObBound, ObBound, Sgd
 
@@ -20,6 +21,7 @@ COMPONENTS = (
     Adam,
     RunningNormalization,
     DiscountedNormalization,
+    Sparse,
 )
 
 

@@ -57,16 +57,23 @@ _LRU_CELLS = {
 
 
 def backbone(
-    name: str, *, features: int, hidden_dim: int, output_dim: int | None = None
+    name: str,
+    *,
+    features: int,
+    hidden_dim: int,
+    output_dim: int | None = None,
+    kernel_init=None,
 ) -> tuple[nn.Module, ...]:
     """The components this backbone puts into a sequence, in order.
 
     The head that follows is the caller's; nothing here appends one.
     """
 
+    drawn = {} if kernel_init is None else {"kernel_init": kernel_init}
+
     if name == "rtu":
         return (
-            FFN(features=features),
+            FFN(features=features, **drawn),
             ReLU(),
             RNN(
                 cell=RTUCell(config=RTUConfig(features=features, hidden_dim=hidden_dim))
@@ -86,10 +93,10 @@ def backbone(
         )
     if name == "mlp":
         return (
-            FFN(features=hidden_dim),
+            FFN(features=hidden_dim, **drawn),
             LayerNorm(),
             LeakyReLU(),
-            FFN(features=hidden_dim),
+            FFN(features=hidden_dim, **drawn),
             LayerNorm(),
             LeakyReLU(),
         )

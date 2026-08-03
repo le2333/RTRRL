@@ -317,3 +317,23 @@ memorax 有这个字段、默认 `jnp.tanh`,删掉它是计划的主张而不是
 **教训**:spec §4 那张表不是对来源的转写,不能当转写读。我按它改了 `rtu` 的非线性和归一化位置,
 是照转述改数值。凡是"对齐来源",先去读来源。
 
+
+--- 初始化改成结构 ---
+
+`memorax/networks/initialization.py`:`INITIALIZATION_BRANCHES = {"lecun": (), "sparse": Sparse}`,
+`Sparse` 带一个 `sparsity` 参数(`search=[0.9]`,单点)。入口声明
+`initialization: str = structure(placeholder="lecun", branches=...)`,读出来的初始化器传给
+backbone 里每个 `FFN` 和两个头。
+
+placeholder 取 `lecun` 而不是 `sparse`:不让默认行为悄悄变。实验要复现 streaming-drl 就在
+`space` 里钉 `initialization: [sparse]`。
+
+偏置两边都是零,所以只有 kernel 有分支。
+
+`Sparse` 加进 `test_component_contract.py` 的 COMPONENTS。契约测试 `test_initialization.py` 六条,
+其中"是不是 StructureSpec"和"稀疏的份额对不对"在实现前是红的;稀疏那条按 streaming-drl 的
+`sparse_init` 语义断言:每个输出单元的 fan_in 里恰好 `ceil(sparsity * fan_in)` 个零。
+
+**另一处顺带查清的**:memorax 的 `Gaussian` 头是一个 Dense 加全局可学 `log_std` 再 `exp`,跟我们
+的 `bound=False` 一致 —— 之前说"他们的 actor 头是两个独立 Linear"只指 streaming-drl,不包括
+memorax。这条差异是我们对 streaming-drl 的,不是对 memorax 的。
