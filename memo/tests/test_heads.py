@@ -1,4 +1,4 @@
-"""Which policy head, as a structure with a branch per parameterisation.
+"""Which head, as a structure per role with a branch per parameterisation.
 
 Three exist and they differ in where the scale comes from:
 
@@ -8,11 +8,19 @@ Three exist and they differ in where the scale comes from:
   through ``softplus``.
 - ``bounded`` is the one this repository added: loc and log-scale both squashed
   into an interval before ``softplus``.
+
+The critic has one today. It is declared anyway: a role with one choice and a
+role with none are different things, and this is where a second one goes.
+
+A head has kernels, so it declares how they are drawn, and it declares that for
+itself. Reading it off the backbone would mean a branch of the backbone decided
+something about a layer that is not in it.
 """
 
 from __future__ import annotations
 
 import dataclasses
+from types import SimpleNamespace
 
 import jax
 import jax.numpy as jnp
@@ -21,7 +29,11 @@ from training_sdk.contract import StructureSpec
 
 from entries import stream_ac
 from memorax.networks import heads
-from memorax.networks.policy import ACTOR_HEAD_BRANCHES, actor_head
+from memorax.networks.readouts import (
+    ACTOR_HEAD_BRANCHES,
+    CRITIC_HEAD_BRANCHES,
+    actor_head,
+)
 
 ACTIONS = 3
 WIDTH = 6
@@ -87,3 +99,58 @@ def test_the_actor_head_is_declared_as_a_structure():
 
     assert isinstance(node, StructureSpec)
     assert set(node.branches) == set(ACTOR_HEAD_BRANCHES)
+
+
+def test_the_critic_head_is_declared_too():
+    node = stream_ac.PARAMETERS["critic_head"]
+
+    assert isinstance(node, StructureSpec)
+    assert set(node.branches) == set(CRITIC_HEAD_BRANCHES)
+
+
+@pytest.mark.parametrize(
+    "role, branches",
+    (("actor_head", ACTOR_HEAD_BRANCHES), ("critic_head", CRITIC_HEAD_BRANCHES)),
+)
+def test_every_head_declares_how_its_kernels_are_drawn(role, branches):
+    declared = stream_ac.PARAMETERS[role].branches
+
+    for name in branches:
+        assert "initialization" in declared[name], f"{role}.{name} declares none"
+
+
+def test_a_head_is_drawn_the_way_its_own_branch_says():
+    """Not the way the backbone's does, and not the same as the other role's."""
+
+    import jax.tree_util
+    from conftest import TinyContinuousEnv
+    from training_sdk.parameters import expand, flatten
+
+    del TinyContinuousEnv
+    base = flatten(expand(stream_ac.PARAMETERS))
+    pinned = {
+        **base,
+        "backbone": "rtu",
+        "actor_head": "global_std",
+        "actor_head.global_std.initialization": "sparse",
+        "critic_head": "value",
+        "critic_head.value.initialization": "lecun",
+    }
+    environment = SimpleNamespace(
+        id="brax::hopper",
+        observed=[0, 1, 2, 3, 4],
+        backend="spring",
+        episode_length=1000,
+        seed=0,
+    )
+    agent = stream_ac.build(pinned, environment, SimpleNamespace(num_envs=2))
+    state = agent.init(jax.random.key(0))
+
+    def kernel(params):
+        for path, leaf in jax.tree_util.tree_leaves_with_path(params):
+            if leaf.ndim == 2 and "module" in [str(getattr(k, "key", k)) for k in path]:
+                return leaf
+        raise AssertionError("no head kernel found")
+
+    assert float((kernel(state.actor_params) == 0.0).mean()) > 0.5
+    assert float((kernel(state.critic_params) == 0.0).mean()) == 0.0

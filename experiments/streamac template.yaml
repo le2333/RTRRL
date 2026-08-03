@@ -41,8 +41,9 @@ space:
   backbone: [rtu]
   backbone.rtu.hidden_dim: [32]
   meta_rl: [false]
-  initialization: [lecun]
   actor_head: [global_std]
+  # 初始化归有权重可抽的那条分支；rtu 的递推核自己抽，所以这条分支没有这一项。
+  # 换到 mlp 时是 backbone.mlp.initialization: [lecun|sparse]。
 
   # 梯度信用
   credit: [tbptt]

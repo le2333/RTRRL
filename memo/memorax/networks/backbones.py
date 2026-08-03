@@ -13,6 +13,7 @@ import flax.linen as nn
 from training_sdk.parameters import param
 
 from memorax.networks.components import FFN, LayerNorm, LeakyReLU
+from memorax.networks.initialization import initialization
 from memorax.networks.sequence_models import (
     RNN,
     LRUCell,
@@ -46,6 +47,7 @@ class Lru:
 @dataclass(frozen=True)
 class Mlp:
     hidden_dim: int = param(valid=(1, 4096), search=(32, 512), placeholder=128)
+    initialization: str = initialization()
 
 
 _LRU_CELLS = {

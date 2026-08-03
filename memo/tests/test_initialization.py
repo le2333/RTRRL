@@ -1,4 +1,7 @@
-"""How weights are drawn is a structure, so both ways are selectable.
+"""How weights are drawn belongs to the layers that have weights to draw.
+
+Declared under the backbone branch that has any, so a branch with none does not
+offer the choice and the value it would have needed is not in the manifest.
 
 ``sparse`` is chosen on both sides at 0.9: streaming-drl's
 ``initialize_weights`` puts ``sparse_init(sparsity=0.9)`` on every ``nn.Linear``
@@ -18,6 +21,7 @@ import jax
 import jax.numpy as jnp
 import pytest
 from training_sdk.contract import StructureSpec
+from training_sdk.parameters import expand, flatten
 
 from entries import stream_ac
 from memorax.networks.components import FFN
@@ -34,11 +38,24 @@ def drawn(component) -> jax.Array:
     return declared_initializer(component)(jax.random.key(0), SHAPE, jnp.float32)
 
 
-def test_initialization_is_declared_as_a_structure():
-    node = stream_ac.PARAMETERS["initialization"]
+def test_the_branch_with_layers_declares_it_and_the_branch_without_does_not():
+    backbone = stream_ac.PARAMETERS["backbone"]
+    mlp = backbone.branches["mlp"]["initialization"]
 
-    assert isinstance(node, StructureSpec)
-    assert set(node.branches) == set(INITIALIZATION_BRANCHES)
+    assert isinstance(mlp, StructureSpec)
+    assert set(mlp.branches) == set(INITIALIZATION_BRANCHES)
+    # ``rtu`` is the cell and a head; the cell draws its own and memorax fixes
+    # how, so there is nothing here for a branch to choose between.
+    assert "initialization" not in backbone.branches["rtu"]
+    assert "initialization" not in stream_ac.PARAMETERS
+
+
+def test_the_key_only_exists_under_the_branch_that_has_it():
+    flat = flatten(expand(stream_ac.PARAMETERS))
+
+    assert "backbone.mlp.initialization" in flat
+    assert "backbone.mlp.initialization.sparse.sparsity" in flat
+    assert not [key for key in flat if key.startswith("backbone.rtu.initialization")]
 
 
 def test_sparse_zeroes_the_declared_share_of_every_output_unit():

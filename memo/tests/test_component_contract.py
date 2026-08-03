@@ -74,8 +74,13 @@ def test_a_component_reads_back_as_what_it_declared(component) -> None:
     tree = describe_parameters(component)
     manifest = {"chosen": "only"}
     for name, node in tree.items():
-        assert not isinstance(node, StructureSpec), "nested here needs a path walk"
+        # A nested structure reads back as the branch it names, which is what a
+        # component holds: the branch's own parameters are read from its path.
         manifest[f"chosen.only.{name}"] = node.placeholder
+        if isinstance(node, StructureSpec):
+            for branch, subtree in node.branches.items():
+                for sub, spec in subtree.items():
+                    manifest[f"chosen.only.{name}.{branch}.{sub}"] = spec.placeholder
 
     _, read = read_branch(manifest, "chosen", {"only": component})
 

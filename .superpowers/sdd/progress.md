@@ -422,3 +422,33 @@ critic_optimizer_base.sgd.lr [1e-05, 1.0]
 ```
 
 这五个是超参数取值,不是我该编的。要么在 `space` 里钉成离散列表,要么把 `sampler` 换成 tpe/random。
+
+--- 初始化归有权重的那一层;头按角色各自声明 ---
+
+`initialization` 从顶层的全局开关拆开,交给有 kernel 可抽的东西各自声明:
+
+```
+backbone.mlp.initialization[.sparse.sparsity]      有 FFN
+backbone.rtu 没有                                   递推核的 B_real/B_imag 是 memorax 写死的
+actor_head.<三个分支>.initialization[.sparse.sparsity]
+critic_head.value.initialization[.sparse.sparsity]
+```
+
+起因是实测:`rtu` 下那个全局开关只动得了头(`cell/B_imag`、`cell/B_real` 两个设置下零占比都是
+0.00),等于一个几乎空转的旋钮;现在 rtu 分支下连键都不存在。
+
+**结构可以嵌在分支里,实测整条链都支持** —— `describe_parameters` 对分支 dataclass 递归调自己,
+`flatten`/`walk`/控制面 `_grid` 也都递归。唯一挡路的是 `test_component_contract.py` 里
+`assert not isinstance(node, StructureSpec), "nested here needs a path walk"`,改成真的走一层路径。
+
+`policy.py` → `readouts.py`(它现在也装 critic 头),`test_policy_head.py` → `test_heads.py`,
+都用 `git mv`。新增 `critic_head` 结构,今天只有 `value` 一个分支 —— "有一个选择"和"没有选择"
+是两回事,而且这是第二个进来的地方。
+
+有一条测试逼"各自声明"这件事:钉 `backbone=rtu` + `actor_head.global_std.initialization=sparse`
++ `critic_head.value.initialization=lecun`,断言 actor 头的核零占比 >0.5 而 critic 头 =0.0。
+
+**未处理的坑**:`sparse` 的 `n_zero = ceil(sparsity * fan_in)`,`observed` 6 维时
+`ceil(0.9×6)=6`,mlp 第一层会被整个置零(5 维上实测零占比 1.00)。逐行照抄 streaming-drl 的
+`sparse_init`,他们跑完整观测(11 维加时间信息)所以不会踩。掩码观测 + 0.9 稀疏这个组合要么给
+`n_zero` 封顶,要么降 sparsity,是取值决定,没动。

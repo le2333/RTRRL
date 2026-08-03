@@ -23,13 +23,15 @@ from training_sdk.reporter import Reporter
 
 from memorax.algorithms.stream_ac import StreamAC, StreamACConfig
 from memorax.environments import make
-from memorax.networks import Readout, Sequence, backbone, heads
+from memorax.networks import Readout, Sequence, backbone
 from memorax.networks.backbones import Mlp, Rtu
-from memorax.networks.initialization import (
-    INITIALIZATION_BRANCHES,
-    declared_initializer,
+from memorax.networks.initialization import initializer_at
+from memorax.networks.readouts import (
+    ACTOR_HEAD_BRANCHES,
+    CRITIC_HEAD_BRANCHES,
+    actor_head,
+    critic_head,
 )
-from memorax.networks.policy import ACTOR_HEAD_BRANCHES, actor_head
 from memorax.networks.sequence import PLACES
 from memorax.rl import CREDITS, declared_normalizer
 from memorax.rl.normalization import (
@@ -43,14 +45,12 @@ BACKBONE_BRANCHES = {"rtu": Rtu, "mlp": Mlp}
 CREDIT_BRANCHES = {name: () for name in CREDITS}
 
 
-# 算法接线参数
+# 接线参数
 @dataclass(frozen=True)
 class StreamACParameters:
     backbone: str = structure(placeholder="rtu", branches=BACKBONE_BRANCHES)
-    initialization: str = structure(
-        placeholder="lecun", branches=INITIALIZATION_BRANCHES
-    )
     actor_head: str = structure(placeholder="global_std", branches=ACTOR_HEAD_BRANCHES)
+    critic_head: str = structure(placeholder="value", branches=CRITIC_HEAD_BRANCHES)
     meta_rl: bool = param(valid=[False, True], search=[False, True], placeholder=False)
     credit: str = structure(placeholder="tbptt", branches=CREDIT_BRANCHES)
     gamma: float = param(valid=(0.5, 0.9999), search=(0.9, 0.9999), placeholder=0.99)
@@ -70,6 +70,7 @@ class StreamACParameters:
     critic_optimizer_base: str = structure(placeholder="sgd", branches=BASE_BRANCHES)
 
 
+# 展开完整参数表
 PARAMETERS = describe_parameters(StreamACParameters)
 
 # Position groups, not component names: the component count varies with the
@@ -134,8 +135,12 @@ def build(params: Mapping[str, Any], environment, training) -> StreamAC:
     if bool(params["meta_rl"]):
         width += action_dim + 1
 
-    _, declared = read_branch(params, "initialization", INITIALIZATION_BRANCHES)
-    kernel_init = declared_initializer(declared)
+    # Declared by whatever has kernels: ``mlp`` does, ``rtu`` is the cell and a
+    # head and the cell draws its own. A branch that declares none is handed
+    # none, and its layers keep the framework's default.
+    kernel_init = initializer_at(params, f"backbone.{chosen}.")
+    acting = read_branch(params, "actor_head", ACTOR_HEAD_BRANCHES)[0]
+    valuing = read_branch(params, "critic_head", CRITIC_HEAD_BRANCHES)[0]
 
     def network(head):
         return Sequence(
@@ -168,12 +173,16 @@ def build(params: Mapping[str, Any], environment, training) -> StreamAC:
         env_params,
         network(
             actor_head(
-                read_branch(params, "actor_head", ACTOR_HEAD_BRANCHES)[0],
+                acting,
                 action_dim=action_dim,
-                kernel_init=kernel_init,
+                kernel_init=initializer_at(params, f"actor_head.{acting}."),
             )
         ),
-        network(heads.VNetwork(kernel_init=kernel_init)),
+        network(
+            critic_head(
+                valuing, kernel_init=initializer_at(params, f"critic_head.{valuing}.")
+            )
+        ),
         observation_normalization=_estimator(
             params, "observation_normalization", NORMALIZATION_BRANCHES
         ),
