@@ -249,3 +249,13 @@ carry"因此是可检查的而不是约定。序列里只允许一个循环组�
 拼法录。`test_blocks` 里的翻译函数 `as_sequence` 就是这次改名的对照表。
 
 memo-ci 的 CHECKED 里 `memorax/networks/torso.py` 换成三个新文件加 `slots.py`。
+
+**一处归属写错了,顺手改掉。** `entries/stream_ac.py` 和 `memorax/rl/credit.py` 都写着 `tbptt`
+"就是已发表的 StreamAC"。不是。已发表的 StreamAC 是前馈的 —— `test_paper_parity` 驱动的是论文
+自己的 `stream_ac_continuous.py`,构造参数只有 `n_obs / n_actions / hidden_size`,没有 carry
+—— 所以里面没有东西可截断,`mlp` backbone 下 `rtrl` 与 `tbptt` 是同一个计算。`tbptt` 复现的是
+"StreamAC 的更新 + 循环 backbone + 不带敏感度",也就是这个仓库继承来的那条循环基线
+(`entries/upstream_stream_ac.py` 的注释本来就写对了:upstream 是 by construction 截断的)。
+
+**这影响消融怎么读**:照原来那句话,`rtrl` vs `tbptt` 像是"我们的方法 vs 已发表基线";实际上
+`tbptt` 那一臂已经是循环扩展了。对已发表版本的基线是 `mlp` backbone,是另一个比较。

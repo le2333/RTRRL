@@ -10,9 +10,13 @@ stands for credit, so a kernel can ask without naming the cell.
 ``ExactRTRL`` carries a sensitivity forward, so a parameter is credited for its
 effect on every carry it ever helped produce. ``TruncatedBPTT`` carries nothing
 and lets the gradient stop at the incoming carry, which is one step of
-backpropagation through time -- what StreamAC as published does. Swapping one
-for the other is the recurrent half of a gradient ablation: same objective, same
-update rule, and the recurrent path either credited exactly or cut to a step.
+backpropagation through time. Swapping one for the other is the recurrent half
+of a gradient ablation: same objective, same update rule, and the recurrent path
+either credited exactly or cut to a step.
+
+Neither is the published StreamAC, which is feedforward and so has no carry to
+credit either way. Truncating is what the recurrent implementations this
+repository inherited do, and they do it by construction rather than by setting.
 """
 
 from __future__ import annotations
