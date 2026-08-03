@@ -259,3 +259,26 @@ memo-ci 的 CHECKED 里 `memorax/networks/torso.py` 换成三个新文件加 `sl
 
 **这影响消融怎么读**:照原来那句话,`rtrl` vs `tbptt` 像是"我们的方法 vs 已发表基线";实际上
 `tbptt` 那一臂已经是循环扩展了。对已发表版本的基线是 `mlp` backbone,是另一个比较。
+
+--- credit 从参数改成结构 ---
+
+`credit` 原本是 `param(search=list(CREDITS))`,两个值都在搜索域里,而同文件其它计算图选择
+(backbone、两个归一化、四条优化器轴)都是 `structure`。规格 §4 把梯度门控列在结构里,并且
+结构不参与搜索、一个 study 内固定。
+
+两条代码上的证据说它是结构:`rtrl` 与 `tbptt` 的 `actor_sensitivity` pytree 结构不同
+(`TruncatedBPTT.initialize` 返回 None,`ExactRTRL.initialize` 返回敏感度树);两者初始化
+递推单元走的方法也不同(`ExactRTRL.initialization()` 装 `_delegate_rtu_init_forward`,按
+`local_jacobian` 建参数)。
+
+改成 `structure(placeholder="tbptt", branches={"rtrl": (), "tbptt": ()})`,读取用
+`read_branch`。效果:`space` 里给两个分支现在会被 preflight 拒
+(`control-plane/space.py:133`),给一个分支照旧。`experiments/streamac template.yaml:47`
+本来就是 `credit: [tbptt]`,不受影响。manifest 仍带裸键 `credit`。
+
+契约测试 `memo/tests/test_credit.py` 三条,声明那条改之前是红的。
+
+**顺带纠正一处我读错的**:那些 `stop_gradient(carry)`(stream_ac 4 处、rtrrl 5 处、
+independent_rtrrl 7 处)不起作用 —— 三个内核都是 `jax.grad`/`jax.jacobian` 只对参数树求导,
+carry 是另一个位置参数、在那次求导里是常数。实测把它们摘掉梯度不变。真正的"一步 BPTT"来自
+逐步更新本身,不来自这些调用。

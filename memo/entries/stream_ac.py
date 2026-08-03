@@ -42,6 +42,7 @@ from memorax.rl.updates import BASE_BRANCHES, BOUND_BRANCHES
 from runner.loop import EPISODE_FIELDS, drive
 
 BACKBONE_BRANCHES = {"rtu": Rtu, "mlp": Mlp}
+CREDIT_BRANCHES = {name: () for name in CREDITS}
 
 
 # 算法接线参数
@@ -49,7 +50,7 @@ BACKBONE_BRANCHES = {"rtu": Rtu, "mlp": Mlp}
 class StreamACParameters:
     backbone: str = structure(placeholder="rtu", branches=BACKBONE_BRANCHES)
     meta_rl: bool = param(valid=[False, True], search=[False, True], placeholder=False)
-    credit: str = param(valid=list(CREDITS), search=list(CREDITS), placeholder="tbptt")
+    credit: str = structure(placeholder="tbptt", branches=CREDIT_BRANCHES)
     gamma: float = param(valid=(0.5, 0.9999), search=(0.9, 0.9999), placeholder=0.99)
     trace_lambda: float = param(valid=(0.0, 1.0), search=(0.0, 1.0), placeholder=0.9)
     entropy_coefficient: float = param(
@@ -154,7 +155,7 @@ def build(params: Mapping[str, Any], environment, training) -> StreamAC:
             critic_bound=_optimizer(params, "critic", "bound"),
             critic_base=_optimizer(params, "critic", "base"),
             entropy_coefficient=float(params["entropy_coefficient"]),
-            credit=str(params["credit"]),
+            credit=read_branch(params, "credit", CREDIT_BRANCHES)[0],
             meta_rl=bool(params["meta_rl"]),
         ),
         env,
