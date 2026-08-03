@@ -221,65 +221,11 @@ def test_the_grid_sampler_enumerates_a_pinned_branch() -> None:
     assert list(built["optimizer_bound.ob.kappa"].choices) == [1.0, 2.0]
 
 
-def test_the_grid_sampler_asks_for_a_resolution_before_it_refuses_a_range() -> None:
-    """A range is not a thing a grid cannot take, it is one it needs a count for."""
-
+def test_the_grid_sampler_refuses_a_range() -> None:
     entry = make_entry({"learning_rate": learning_rate()})
 
-    with pytest.raises(SpaceError, match="points"):
+    with pytest.raises(SpaceError, match="learning_rate"):
         grid_distributions(resolve_parameters(entry, {}))
-
-
-def test_a_float_range_is_laid_out_the_way_it_was_declared() -> None:
-    """Log-spaced, because the declaration says the search is."""
-
-    entry = make_entry({"learning_rate": learning_rate()})
-
-    built = grid_distributions(resolve_parameters(entry, {}), points=3)
-
-    drawn = list(built["learning_rate"].choices)
-    assert drawn == pytest.approx([1e-4, 1e-3, 1e-2])
-
-
-def test_a_linear_range_is_laid_out_linearly() -> None:
-    entry = make_entry({"kappa": kappa(1.0)})
-
-    built = grid_distributions(resolve_parameters(entry, {}), points=3)
-
-    assert list(built["kappa"].choices) == pytest.approx([0.5, 5.25, 10.0])
-
-
-def test_an_integer_range_gives_integers_and_no_duplicates() -> None:
-    entry = make_entry(
-        {
-            "hidden_dim": {
-                "kind": "param",
-                "value_type": "int",
-                "valid": {"type": "int", "low": 1, "high": 4096, "step": 1},
-                "search": {"type": "int", "low": 1, "high": 3, "step": 1},
-                "placeholder": 2,
-            }
-        }
-    )
-
-    built = grid_distributions(resolve_parameters(entry, {}), points=8)
-    drawn = list(built["hidden_dim"].choices)
-
-    assert drawn == [1, 2, 3]
-    assert all(isinstance(one, int) for one in drawn)
-
-
-def test_a_pinned_list_is_untouched_by_the_resolution() -> None:
-    entry = make_entry({"learning_rate": learning_rate()})
-
-    built = grid_distributions(
-        resolve_parameters(
-            entry, {"learning_rate": ChoiceSpec.model_validate([0.1, 0.2])}
-        ),
-        points=5,
-    )
-
-    assert list(built["learning_rate"].choices) == [0.1, 0.2]
 
 
 def _spec(raw: dict):

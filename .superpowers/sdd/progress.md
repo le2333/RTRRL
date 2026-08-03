@@ -459,28 +459,3 @@ memorax 的逐字节相同,而 memorax 的 `sparse_init` 与 streaming-drl 的�
 
 实测(观测 6 维、mlp、sparse):第一层 fan_in=6 每单元存活 1(原来 0),第二层 fan_in=128 存活 13
 (原规则 12)。
-
---- 网格采样不再要求参数是离散的 ---
-
-原来 `grid_distributions` 遇到区间就报「the grid sampler needs every parameter to be a fixed
-list of values」,让实验把参数在 `space` 里重新声明成列表 —— 采样器的需要反过来规定了声明的形态。
-
-改成:`grid_distributions(resolved, points=...)` 把每个区间按它**声明的间距**切开(`log=True`
-走对数,否则线性);整数区间的值不足 `points` 时就给它有的那些,去重且取整。已经钉成列表的不受影响。
-
-`points` 来自 `hpo.points`,**没有默认值**。切多细是实验的事,声明回答不了,所以不设时仍然拒绝,
-但错误信息指名三条出路:设 `hpo.points`、把该参数钉成列表、或换 tpe/random。
-—— 有多个说得通的答案时要求输入,而不是替使用者挑一个。
-
-`check_sampler` 里那条连续区间的检查退化成兜底(`grid_distributions` 要么交出 categorical 要么
-抛错,还能走到那里说明空间是从别的路子建的)。
-
-spec §4 里原本明写「`check_sampler` 保持原样,仍然只拒绝……grid 下的连续区间」,这条被推翻,
-spec 一并改了。
-
-control-plane 175 passed(原 171 加 4 条新的)。拿真 template 验过:不设 points 时报新错误,
-`points=3` 时 20 个维度全部解出,`gamma` 线性 `[0.9, 0.94995, 0.9999]`、
-`entropy_coefficient` 对数 `[1e-8, 1e-5, 1e-2]`。
-
-**没动 template**:设成几是取值决定。注意 `points=3` 下网格有 432 个组合,而
-`rounds × trials_per_round = 20`,走不完 —— 这也是实验自己的事。

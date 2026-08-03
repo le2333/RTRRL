@@ -235,11 +235,7 @@ critic_optimizer.sgd.lr          critic 那一路的
 
 现状 `ask_round` 调用 `study.ask(dict(distributions))`,一次给出固定分布集(`study.py:79`),`distributions` 由整个 space 一次性构造(`space.py:34`)。改为 `study.ask()` 取得 trial 后按结构树逐层调用 `trial.suggest_*`。条件性在控制面解析完毕,作业提交前参数已全部确定,worker 不受影响。
 
-结构既然不搜,网格就总是给得出:`grid_distributions` 只枚举被选中分支下的参数。
-
-**采样器不规定参数必须是离散的。** 声明说一个参数是某区间内的浮点数,那是它的定义域;网格要走一个有限集,是采样器的需要,不该反过来要求实验把参数重新声明成列表。`grid_distributions` 收一个 `hpo.points`,把每个区间按它声明的间距(`log` 决定对数还是线性)切成那么多个值;整数区间的值不足这个数时就给它有的那些。
-
-`hpo.points` 没有默认值。切多细是实验的事,声明回答不了,所以不设时网格遇到区间就拒绝,并指名要 `hpo.points`、或把该参数钉成列表、或换 tpe/random —— 有多个说得通的答案时要求输入,而不是替使用者挑一个。`check_sampler` 里那条连续区间的检查退化成兜底。
+结构既然不搜,网格就总是给得出:`grid_distributions` 只枚举被选中分支下的参数。`check_sampler`(`study.py:14`)保持原样,仍然只拒绝非法采样器名与 grid 下的连续区间。
 
 本轮不引入通用跨参数约束语言。算法参数之间若存在"某选择下该参数才有意义",用结构树表达;训练循环的整除性归 `TrainingConfig` 校验;除此之外,参数声明保持独立。preflight 可以拒绝显然不成立的固定结构组合,但不把这类检查扩展成一套任意布尔/算术约束系统。
 

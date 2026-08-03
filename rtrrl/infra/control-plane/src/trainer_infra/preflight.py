@@ -62,7 +62,7 @@ def check_offline(experiment: Experiment, catalog: Catalog) -> ResolvedParameter
     check_sampler(
         experiment.hpo.sampler,
         grid_space=(
-            grid_distributions(resolved, points=experiment.hpo.points)
+            grid_distributions(resolved)
             if experiment.hpo.sampler == "grid"
             else None
         ),
