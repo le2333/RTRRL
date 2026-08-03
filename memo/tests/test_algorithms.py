@@ -44,6 +44,8 @@ def stream_ac_program(
     record=(),
     adaptive=False,
     fixed=False,
+    unbounded=False,
+    rate=None,
     **overrides,
 ):
     env = TinyContinuousEnv()
@@ -58,7 +60,7 @@ def stream_ac_program(
             )
         )
 
-    bound = ObBound(kappa=2.0)
+    bound = None if unbounded else ObBound(kappa=2.0)
     if adaptive:
         maker = AdaptiveObBoundFixed if fixed else AdaptiveObBound
         bound = maker(kappa=2.0, beta2=0.95, eps=1e-6)
@@ -67,9 +69,9 @@ def stream_ac_program(
         gamma=0.89,
         trace_lambda=0.71,
         actor_bound=bound,
-        actor_base=Sgd(lr=0.15),
+        actor_base=Sgd(lr=0.15 if rate is None else rate),
         critic_bound=bound,
-        critic_base=Sgd(lr=0.12),
+        critic_base=Sgd(lr=0.12 if rate is None else rate),
         entropy_coefficient=0.02,
         **overrides,
     )
@@ -107,6 +109,15 @@ PROGRAMS = [
     pytest.param(
         lambda: stream_ac_program(credit="tbptt"),
         id="stream_ac_truncated",
+    ),
+    # ``optimizer_bound=none`` is a branch the surface offers, and the rule it
+    # builds carries an optimiser state rather than a second moment. At a rate
+    # of its own: keeping a single update from crossing the TD target is what
+    # the bound does, and without one the rates the bounded variants use here
+    # walk this environment's growing reward straight to a non-finite value.
+    pytest.param(
+        lambda: stream_ac_program(unbounded=True, rate=1e-4),
+        id="stream_ac_unbounded",
     ),
     # A torso with nothing to carry, under the credit that expects to carry
     # something: there is no sensitivity, and the kernel should not need one.

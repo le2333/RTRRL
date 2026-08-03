@@ -322,7 +322,9 @@ class StreamAC:
             metrics={"entropy": entropy},
         )
 
-    def _initialize_network(self, network, credit, keys, timestep) -> NetworkState:
+    def _initialize_network(
+        self, network, credit, rule, keys, timestep
+    ) -> NetworkState:
         carry_shape = (self.cfg.num_envs, None)
         carry = network.initialize_carry(jax.random.key(0), carry_shape)
         param_key, torso_key, dropout_key = keys
@@ -342,7 +344,10 @@ class StreamAC:
         return NetworkState(
             params=params,
             traces=traces,
-            v=jax.tree.map(jnp.zeros_like, traces),
+            # Asked for rather than assumed: a bounded rule carries a second
+            # moment shaped like the traces, an unbounded one carries whatever
+            # its base transformation built.
+            v=rule.init(params=params, traces=traces),
             carry=carry,
             sensitivity=sensitivity,
         )
@@ -390,12 +395,14 @@ class StreamAC:
         actor = self._initialize_network(
             self.actor_network,
             self.actor_credit,
+            self.actor_rule,
             (actor_key, actor_torso_key, actor_dropout_key),
             timestep,
         )
         critic = self._initialize_network(
             self.critic_network,
             self.critic_credit,
+            self.critic_rule,
             (critic_key, critic_torso_key, critic_dropout_key),
             timestep,
         )

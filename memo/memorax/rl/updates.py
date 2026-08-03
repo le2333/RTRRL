@@ -80,12 +80,17 @@ def _combine(traced, direct, delta):
     )
 
 
-def make_optax_rule(transform) -> UpdateRule:
+def make_optax_rule(transform, *, rate=None) -> UpdateRule:
     """Step along delta * trace through any optax transformation.
 
     The transformation sees one finished ascent direction per parameter, so
     whatever an algorithm expresses through optax -- Adam, clipping, freezing
     a subtree -- it expresses by composing the transformation it passes in.
+
+    ``rate`` is the scalar the transformation multiplies the ascent by, when the
+    caller knows it. Given, the rule reports it as the step size it took, which
+    is the same reading a bound reports and lets a caller read one name whether
+    or not a bound is in the way.
     """
 
     def init(*, params, traces):
@@ -99,7 +104,8 @@ def make_optax_rule(transform) -> UpdateRule:
             _combine(traced, direct, delta),
         )
         updates, state = transform.update(ascent, state, params)
-        return RuleOutput(updates=updates, state=state, metrics={})
+        metrics = {} if rate is None else {"step_size": jnp.full_like(delta, rate)}
+        return RuleOutput(updates=updates, state=state, metrics=metrics)
 
     return UpdateRule(init=init, apply=apply)
 
@@ -190,7 +196,7 @@ def make_bounded_rule(*, bound, base) -> UpdateRule:
     """
 
     if bound is None:
-        return make_optax_rule(base_transform(base))
+        return make_optax_rule(base_transform(base), rate=base.lr)
     if not isinstance(base, Sgd):
         raise ValueError(
             "the overshooting bound is written over a plain rate; putting it "

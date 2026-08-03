@@ -33,20 +33,25 @@ hpo:
   parallel_jobs: 4
 
 space:
-  normalize_observation: [true]
-  normalize_reward: [true]
-  normalization_statistics: ["ours"] # ours是什么算法，not reset when eval?
+  # 归一化
+  observation_normalization: [running]
+  reward_normalization: [running]
 
-  # rnn
+  # 网络
   backbone: [rtu]
-  hidden_dim: [32]
-  feature_dim: [32] # 这个参数是什么？
+  backbone.rtu.hidden_dim: [32]
   meta_rl: [false]
+  initialization: [lecun]
+  actor_head: [global_std]
 
-  # optimize
+  # 梯度信用
   credit: [tbptt]
-  optimizer_bound: [none]
-  optimizer_base: [sgd]
+
+  # 优化器：两个角色各一条界、一条底
+  actor_optimizer_bound: [none]
+  actor_optimizer_base: [sgd]
+  critic_optimizer_bound: [none]
+  critic_optimizer_base: [sgd]
 
 score:
   metric: eval/episode/return_per_step

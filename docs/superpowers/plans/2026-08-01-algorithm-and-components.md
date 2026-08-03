@@ -290,35 +290,57 @@ not a transcription of its sources and should not be read as one.
 
 ### Task 6: `stream_ac` Runs From the Target Experiment File
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
-Load `experiments/streamac template.yaml` through the control plane, resolve it against
-`stream_ac.PARAMETERS`, sample a trial, and run the entry on that manifest for a few
-steps. That is the whole loader and the whole entry in one assertion.
+`memo/tests/test_template.py`. Not through the control plane: `trainer_infra` is not in
+memo's environment, and resolution is tested where it lives. What is here is the half
+that needs the entry -- the file's names are ones the entry declares, every structure is
+pinned to one branch, the score reads a metric it reports, and it builds and steps on a
+manifest honouring the pins.
 
-- [ ] **Step 2: Reconcile the template with what the entry declares**
+- [x] **Step 2: Reconcile the template with what the entry declares**
 
-- [ ] **Step 3: Green**
+Every name in `space` was the pre-phase-2 one. `normalization_statistics` and
+`feature_dim` are gone from the entry and gone from the file; `optimizer_bound` and
+`optimizer_base` became one pair per role; `hidden_dim` became `backbone.rtu.hidden_dim`;
+`initialization` and `actor_head` are new.
+
+**Correcting the names made the pins take effect, and that found two real defects.**
+
+The kernel never asked a rule for its initial state: it built `v` as zeros shaped like
+the traces. Every bounded rule's `init` returns exactly that, so it was invisible;
+`optimizer_bound: none` builds an optax rule whose state is the base transformation's,
+and zeros are not it. `_initialize_network` now takes the rule and calls `init`.
+
+The unbounded rule reported no `step_size`, which the kernel reads unconditionally.
+`make_optax_rule` takes `rate=`, and `make_bounded_rule` passes the base's own, which is
+the scalar it multiplies the ascent by when nothing bounds it.
+
+- [x] **Step 3: Green**
+
+**Checked against the control plane's own resolver**, by exporting `PARAMETERS` and
+running it in that package's environment: `resolve_parameters` passes. `grid_distributions`
+does not, and this is left for whoever sets the experiment rather than guessed. The file
+asks for `sampler: grid`, which needs every active parameter to be a fixed list, and five
+are ranges: `gamma`, `trace_lambda`, `entropy_coefficient`, and both roles'
+`optimizer_base.sgd.lr`. Pin them or use `tpe`.
 
 ---
 
-## Open, decide before Task 6
-
-The template scores on `eval/episode/return_per_step`, which phase 4 introduces. Either
-phase 4 lands first, or Task 5 scores on a metric this entry already reports and the
-template is adjusted when phase 4 arrives. Nothing else in the template depends on
-phase 4.
+## Open
 
 `evaluation.num_envs` still has no consumer: `drive()` evaluates on the training stream
-count. Spec §8 has it open, and running from the target file is the first thing that
-makes it visible.
+count. Spec §8 has it open.
+
+`test_experiments.py` and `test_entries.py` still read `SPACE` and are excluded from
+runs. They cover the entries that have not been migrated.
 
 ## Self-Review
 
-**Spec coverage.** Covers §4's component rules, the three backbone sources, and §5's
-bound and base decomposition. Does not cover the metric surface, which is phase 4, nor
-multiple recurrent layers, which the spec defers because exact RTRL across two of them
-needs a dense cross-layer sensitivity.
+**Spec coverage.** Covers §4's component rules and §5's bound and base decomposition.
+Does not cover the metric surface, which is phase 4, nor multiple recurrent layers, which
+the spec defers because exact RTRL across two of them needs a dense cross-layer
+sensitivity.
 
 **Scope.** One entry. Every task names what it deletes, so the old path cannot survive
 beside the new one.

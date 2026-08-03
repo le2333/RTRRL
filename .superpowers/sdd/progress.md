@@ -380,3 +380,45 @@ memorax。这条差异是我们对 streaming-drl 的,不是对 memorax 的。
 MinAtar 的那条例子里就用它,而且 `sparse.py` 本来就是 memorax 的文件。准确的说法:
 `lecun` = flax 默认(memorax gymnasium 例子的裸 `nn.Dense` 吃它),`sparse(0.9)` = 两边都明确选的。
 同一个 minatar 例子里也有 `LayerNorm → leaky_relu`,所以 streaming-drl 那套形状 memorax 里已经有。
+
+--- 阶段 3 task 6:template 与入口对齐 ---
+
+`experiments/streamac template.yaml` 的 `space` 全是旧名,重写成入口现在声明的:
+
+```
+observation_normalization / reward_normalization: [running]
+backbone: [rtu] + backbone.rtu.hidden_dim: [32]
+meta_rl / initialization / actor_head / credit
+actor_optimizer_bound / base、critic_optimizer_bound / base
+```
+
+删掉的:`normalization_statistics`(规格里已删)、`feature_dim`(编码器没了)。
+拆开的:`optimizer_bound`/`optimizer_base` 各变成 actor/critic 两条。
+
+**名字改对之后钉的值才真正生效,于是暴露了两个真 bug:**
+
+1. **内核从不问规则要初始状态**,自己造 `v = zeros_like(traces)`。有界规则的 `init` 正好返回这个
+   (`test_the_initial_second_moment_is_upstreams` 断言的就是它),所以一直看不出来;
+   `optimizer_bound: none` 走 optax,`init` 返回的是 transform 的链式状态,零树对不上,
+   报 "The number of updates and states has to be the same in chain"。改成
+   `_initialize_network` 收 rule 并调 `rule.init(params=, traces=)`。有界那条数值不变。
+2. **无界规则不报 `step_size`**,而内核无条件读 `metrics["step_size"]`。`make_optax_rule` 加
+   `rate=` 参数,`make_bounded_rule(bound=None, base=)` 把 `base.lr` 传进去 —— 没有界压着时,
+   规则乘在上升方向上的标量就是它,跟有界那条报的是同一个量。
+
+`test_algorithms.py` 加了 `stream_ac_unbounded` 变体(用自己的学习率 1e-4:没有界压着,有界变体
+那套 0.15/0.12 在这个环境上直接跑到非有限,那正是界存在的理由)。
+
+**用控制面自己的解析器实测过**(memo 的 venv 里没有 `trainer_infra`,所以是把 `PARAMETERS`
+导出成 JSON 再在 cp 的 venv 里跑):`resolve_parameters` 通过 —— 名字全对、每个结构都钉在一个分支。
+`grid_distributions` **不通过**,因为 template 写的是 `sampler: grid`,而这五个激活的连续参数没钉:
+
+```
+gamma                        [0.9, 0.9999]
+trace_lambda                 [0.0, 1.0]
+entropy_coefficient          [1e-08, 0.01]
+actor_optimizer_base.sgd.lr  [1e-05, 1.0]
+critic_optimizer_base.sgd.lr [1e-05, 1.0]
+```
+
+这五个是超参数取值,不是我该编的。要么在 `space` 里钉成离散列表,要么把 `sampler` 换成 tpe/random。

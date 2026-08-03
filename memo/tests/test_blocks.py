@@ -639,7 +639,7 @@ def test_no_bound_is_the_base_on_its_own():
     params = jax.tree.map(lambda leaf: jnp.zeros(leaf.shape[1:]), traces)
     for base in (Sgd(lr=0.1), Adam(lr=0.001)):
         rule = make_bounded_rule(bound=None, base=base)
-        rule.apply(
+        output = rule.apply(
             traces,
             jax.tree.map(jnp.zeros_like, traces),
             rule.init(params=params, traces=traces),
@@ -647,6 +647,9 @@ def test_no_bound_is_the_base_on_its_own():
             step=1,
             params=params,
         )
+        # The kernel reads one name whether or not a bound is in the way, and
+        # with nothing bounding it the step it took is the base's own rate.
+        assert jnp.allclose(output.metrics["step_size"], base.lr)
 
 
 def test_bounding_an_adaptive_base_is_refused_rather_than_guessed():
