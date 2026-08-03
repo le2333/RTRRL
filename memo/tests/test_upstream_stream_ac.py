@@ -17,12 +17,18 @@ import pytest
 from conftest import TinyDiscreteEnv
 from training_sdk.rollout import complete_episodes
 
-from memorax.algorithms.slots import FeatureExtractor, Network
 from memorax.algorithms.upstream_stream_ac import (
     UpstreamStreamAC,
     UpstreamStreamACConfig,
 )
-from memorax.networks import RNN, RTUCell, RTUConfig, heads
+from memorax.networks import (
+    RNN,
+    FeatureExtractor,
+    Network,
+    RTUCell,
+    RTUConfig,
+    heads,
+)
 
 HORIZON = TinyDiscreteEnv().default_params.horizon
 ENVS = 2

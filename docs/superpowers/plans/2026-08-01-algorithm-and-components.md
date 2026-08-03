@@ -192,13 +192,28 @@ how `done` reaches the recurrence and reaches nothing else. Detection had to be 
 declaration -- what the tests check is the behaviour it licenses, that every
 entry but one comes back the way it went in.
 
-*The three slots moved rather than vanished.* `upstream_stream_ac` and `rtrrl`
-still take their modules that way, and `test_blocks` drives the first as the
-arithmetic reference for every block we rearranged. `Network` and
-`FeatureExtractor` now live in `memorax/algorithms/slots.py`, beside the kernels
-that speak them and out of the component package, and nothing new builds them.
-`blocks/stack.py` was deleted outright: it was the same idea without the carry
-contract, the naming or the refusal.
+*The three slots are gone, and what only they could reach went with them.*
+They were briefly kept beside the kernels that still speak them; that was
+overruled, since those kernels are getting rewritten anyway. `Network`,
+`FeatureExtractor`, `torso.py` and `blocks/stack.py` are all deleted. What that
+costs, written down so it is not rediscovered:
+
+- `entries/upstream_stream_ac.py` and `entries/rtrrl.py` no longer import. They
+  were already refused by `discover()` for declaring `SPACE`, so the catalog
+  test's one red is unchanged; the failure is now at import instead.
+- `test_upstream_stream_ac.py` joins the excluded set: it drives upstream's
+  kernel end to end and there is no network for it to drive.
+- `test_blocks.py` keeps every block comparison -- upstream is built with
+  `None` networks, because those blocks are arithmetic on quantities already
+  computed and none of them reaches one. Two comparisons are gone: the
+  truncated gradient against upstream's, which was the seam the rest of the
+  file leaves open, and the same-seed same-start claim. Both need upstream's
+  forward. `test_exact_credit_is_not_the_truncated_one` survives on a state
+  built by our own `init`.
+- `test_algorithms.py` loses RTRRL's two programs and its two gate ablations.
+  RTRRL routes its three-domain gradient by slot name -- `RECURRENT_DOMAINS` is
+  `("feature_extractor", "torso")` -- so it cannot take a sequence without
+  being rewritten. Restore them with that rewrite.
 
 *One seed no longer buys both kernels the same start.* Flax draws a parameter
 from the path of the module holding it, and a position in a sequence is not

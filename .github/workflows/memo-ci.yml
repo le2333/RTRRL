@@ -42,7 +42,6 @@ jobs:
         memorax/algorithms/stream_ac.py
         memorax/algorithms/upstream_stream_ac.py
         memorax/algorithms/independent_rtrrl.py
-        memorax/algorithms/slots.py
         memorax/utils/trees.py
         memorax/networks/backbones.py
         memorax/networks/components.py

@@ -218,9 +218,21 @@ carry"因此是可检查的而不是约定。序列里只允许一个循环组�
 `meta_rl` 的拼接移进内核:上一步动作与奖励并到观测旁边是输入组合,发生在这些值已经在的地方,
 序列看到一个向量。
 
-**三个槽是搬走而不是消失。** `upstream_stream_ac` 与 `rtrrl` 还是那样收模块,而 `test_blocks`
-把前者当作我们拆开的每一块算术的参照在驱动。`Network` 与 `FeatureExtractor` 现在在
-`memorax/algorithms/slots.py`,挨着说这套话的内核,离开组件包,没有新东西建它。
+**三个槽全删,只有它们能驱动的东西一起没了。** 我先把 `Network`/`FeatureExtractor` 搬到
+`memorax/algorithms/slots.py` 想保住 `test_blocks` 的对照,被否了 —— 那些内核反正要重构。
+现在 `Network`、`FeatureExtractor`、`torso.py`、`blocks/stack.py` 全删。代价写在这里:
+
+- `entries/upstream_stream_ac.py` 与 `entries/rtrrl.py` 不再能 import。它们本来就因为还声明
+  `SPACE` 被 `discover()` 拒,catalog 那条红不变,只是失败点从"拒绝"变成"导入"。
+- `test_upstream_stream_ac.py` 进排除集:它端到端驱动 upstream 的内核,没有网络可驱动了。
+- `test_blocks.py` 保住了每一块算术的比对 —— upstream 用 `None` 网络构造,因为那些块比的是
+  已经算出来的量,没有一块碰网络。丢掉两条:**截断梯度对 upstream 的比对**(这是其余所有块
+  留下的那道缝 —— 别的比算术,只有它比"参数的信用是怎么拿到的"),和"一个种子给两个内核同一个
+  起点"。两条都要 upstream 的前向。`test_exact_credit_is_not_the_truncated_one` 改用我们
+  自己的 `init` 造状态,活下来了。
+- `test_algorithms.py` 丢掉 RTRRL 的两个 program 和两条门控消融。RTRRL 按槽名路由它的三域
+  梯度(`RECURRENT_DOMAINS` 就是 `("feature_extractor", "torso")`),不重写就收不了序列。
+  重写时把它们加回来。
 
 **一个种子不再给两个内核同一个起点。** flax 按持有参数的模块路径抽参数,序列里的位置和具名
 的槽拼法不同。组合是同一个 —— 截断梯度经测试里的一次改名之后仍然逐叶等于 upstream —— 但抽出来

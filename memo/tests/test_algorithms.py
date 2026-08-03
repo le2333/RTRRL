@@ -1,16 +1,17 @@
-"""Both online kernels run end to end and answer the same contract.
+"""The online kernel runs end to end and answers the contract.
 
-These are wiring tests, not numerical ones. They exist because the kernels are
+These are wiring tests, not numerical ones. They exist because the kernel is
 assembled from a config, a set of modules, and a choice of update rule, and a
 mistake in that assembly shows up as a shape error or a silent NaN rather than
 as an import failure.
 
-Each builder below hands back the three functions the driver takes, which is
-all either kernel has to have in common: one is a class with methods and the
-other a record of closures.
+RTRRL was here too, and is not. Its kernel takes four modules in named slots and
+routes its three-domain gradient by those names -- ``RECURRENT_DOMAINS`` is
+``("feature_extractor", "torso")`` -- so it cannot be handed a sequence without
+being rewritten, and the shape it does take no longer exists. Its programs and
+the two gate ablations come back when that rewrite does.
 """
 
-import flax.linen as nn
 import jax
 import jax.numpy as jnp
 import optax
@@ -18,14 +19,9 @@ import pytest
 from conftest import TinyContinuousEnv
 from training_sdk.rollout import complete_episodes
 
-from memorax.algorithms.rtrrl import RTRRL, RTRRLConfig
-from memorax.algorithms.slots import FeatureExtractor
 from memorax.algorithms.stream_ac import StreamAC, StreamACConfig
 from memorax.networks import (
     FFN,
-    LRUCell,
-    LRUConfig,
-    Memoroid,
     Readout,
     Sequence,
     Tanh,
@@ -39,41 +35,6 @@ from memorax.rl.updates import (
     ObBound,
     Sgd,
 )
-
-
-def rtrrl_program(*, record=(), **overrides):
-    env = TinyContinuousEnv()
-    config = RTRRLConfig(
-        num_envs=1,
-        gamma=0.91,
-        lambda_pi=0.73,
-        lambda_v=0.67,
-        lambda_rnn=0.61,
-        td_lr=2e-4,
-        rnn_lr=3e-5,
-        eta_pi=0.4,
-        eta_f=0.6,
-        entropy_rate=1e-4,
-        update_period=0.2,
-        **overrides,
-    )
-    agent = RTRRL(
-        config,
-        env,
-        env.default_params,
-        FeatureExtractor(
-            observation_extractor=nn.Sequential((nn.Dense(3), nn.tanh)),
-            action_extractor=nn.Sequential((nn.Dense(3), nn.tanh)),
-            reward_extractor=nn.Sequential((nn.Dense(3), nn.tanh)),
-        ),
-        Memoroid(
-            cell=LRUCell(config=LRUConfig(features=9, hidden_dim=2, output_dim=3))
-        ),
-        heads.Gaussian(action_dim=2),
-        heads.VNetwork(),
-        record=record,
-    )
-    return agent.init, agent.train, agent.evaluate
 
 
 def stream_ac_program(
@@ -134,12 +95,7 @@ def finite(tree):
 # carried can be trainable and unevaluable at once: the truncated credit was,
 # and it reached a Batch queue to say so.
 PROGRAMS = [
-    pytest.param(rtrrl_program, id="rtrrl"),
     pytest.param(stream_ac_program, id="stream_ac"),
-    pytest.param(
-        lambda: rtrrl_program(update_rule="obgd", kappa=2.0),
-        id="rtrrl_obgd",
-    ),
     pytest.param(
         lambda: stream_ac_program(adaptive=True),
         id="stream_ac_adaptive",
@@ -157,10 +113,6 @@ PROGRAMS = [
     pytest.param(
         lambda: stream_ac_program(chosen="mlp"),
         id="stream_ac_memoryless",
-    ),
-    pytest.param(
-        lambda: rtrrl_program(record=("interaction.observation",)),
-        id="rtrrl_trajectory",
     ),
 ]
 
@@ -217,60 +169,6 @@ def test_evaluation_reports_the_reward_the_environment_gave():
         rewards.append(summary.interaction.reward)
 
     assert jnp.allclose(rewards[0], rewards[1])
-
-
-def test_closing_both_gates_leaves_the_shared_torso_still():
-    """With neither head steering it, nothing reaches the recurrent core.
-
-    This is the ablation's floor. If the torso still moved here, some other
-    path would be feeding it and the gates would not mean what they say.
-    """
-
-    init, train, _ = rtrrl_program(actor_to_recurrent=False, critic_to_recurrent=False)
-    state = jax.jit(init)(jax.random.key(0))
-    trained, _ = jax.jit(train, static_argnums=2)(jax.random.key(1), state, 8)
-
-    for name in ("feature_extractor", "torso"):
-        for before, after in zip(
-            jax.tree.leaves(state.params[name]),
-            jax.tree.leaves(trained.params[name]),
-        ):
-            assert jnp.allclose(before, after), f"{name} moved with both gates shut"
-
-    assert any(
-        not jnp.allclose(before, after)
-        for before, after in zip(
-            jax.tree.leaves(state.params["actor"]),
-            jax.tree.leaves(trained.params["actor"]),
-        )
-    ), "the actor should still learn from a frozen representation"
-
-
-def test_one_gate_still_reaches_the_shared_torso():
-    for gates in ({"critic_to_recurrent": False}, {"actor_to_recurrent": False}):
-        init, train, _ = rtrrl_program(**gates)
-        state = jax.jit(init)(jax.random.key(0))
-        trained, _ = jax.jit(train, static_argnums=2)(jax.random.key(1), state, 8)
-        assert any(
-            not jnp.allclose(before, after)
-            for before, after in zip(
-                jax.tree.leaves(state.params["torso"]),
-                jax.tree.leaves(trained.params["torso"]),
-            )
-        ), f"the torso stopped learning with {gates}"
-
-
-def test_the_two_heads_report_how_they_pull_on_the_shared_torso():
-    """The cosine and the two shared-torso norms are reported and in range."""
-
-    init, train, _ = rtrrl_program()
-    state = jax.jit(init)(jax.random.key(0))
-    _, metrics = jax.jit(train, static_argnums=2)(jax.random.key(1), state, 8)
-
-    assert finite(metrics.update.diag_grad_cosine), "the angle went non-finite"
-    assert jnp.all(jnp.abs(metrics.update.diag_grad_cosine) <= 1.0 + 1e-5)
-    assert jnp.all(metrics.update.diag_grad_actor_rnn > 0.0)
-    assert jnp.all(metrics.update.diag_grad_critic_rnn > 0.0)
 
 
 def test_the_two_rules_agree_on_their_contract():

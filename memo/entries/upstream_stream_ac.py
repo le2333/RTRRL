@@ -38,7 +38,6 @@ import flax.linen as nn
 from training_sdk.episode import metric_names
 from training_sdk.reporter import Reporter
 
-from memorax.algorithms.slots import FeatureExtractor, Network
 from memorax.algorithms.upstream_stream_ac import (
     UpstreamStreamAC,
     UpstreamStreamACConfig,
@@ -48,7 +47,13 @@ from memorax.environments.wrappers.normalize_observation import (
     NormalizeObservationWrapper,
 )
 from memorax.environments.wrappers.normalize_reward import NormalizeRewardWrapper
-from memorax.networks import BACKBONES, backbone, heads
+from memorax.networks import (
+    BACKBONES,
+    FeatureExtractor,
+    Network,
+    backbone,
+    heads,
+)
 from runner.loop import drive
 
 _UNIT = {"type": "float", "low": 0.0, "high": 1.0}
