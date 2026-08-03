@@ -238,21 +238,47 @@ place -- and a declared metric name stays a name whichever backbone runs.
 **Interfaces:**
 - Produces: `rtu`, `lru` and `mlp` branches whose sequences are their published ones.
 
-- [ ] **Step 1: Write the failing parity tests**
+- [x] **Step 1: Write the failing tests**
 
-Each branch is driven against its source rather than asserted to look like it:
-`rtu` against `arXiv 2605.24709`'s Masked MuJoCo settings, `lru` against RTRRL AAAI's
-`OnlineLRULayer` path including the SiLU after the readout, `mlp` against
-streaming-drl's two `Linear → LayerNorm → LeakyReLU` blocks. `test_paper_parity.py`
-covers the optimiser and the normalisation today and nothing about architecture.
+`memo/tests/test_backbones.py`, seven tests, five red before the change.
 
-- [ ] **Step 2: Implement**
+**Not driven against their sources, and could not be.** The step as planned said
+each branch would be driven against its source. Neither of `stream_ac`'s two can be:
+the RTU settings are a paper with no code in this repository, and streaming-drl's
+file is fetched from a checkout `STREAMING_DRL` points at, which is absent here --
+every test in `test_paper_parity.py` that needs it skips. So these compare the
+composition against the recipe written in spec §4, and the file says so.
 
-`stream_ac`'s backbone offers `rtu` and `mlp`; `lru` belongs to the rtrrl line.
-`RTUCell` and `LRUCell` lose `activation_fn`: RTU's nonlinearity is part of its
-recurrence and LRU has none.
+- [x] **Step 2: Implement**
 
-- [ ] **Step 3: Green**
+`backbone()` returns each branch's whole front, so the entry no longer prepends an
+encoder of its own:
+
+- `rtu`: `FFN(feature_dim) → LayerNorm → Tanh → RNN(RTUCell)`
+- `mlp`: `FFN(hidden) → LayerNorm → LeakyReLU` twice
+
+`RTUCell` loses `activation_fn` and applies `tanh` directly. `LRUCell` never had
+one, so the plan's claim that both did was half right. `Memoryless` -- the six
+operations fused into one block, with the layer count written into it -- had no
+users left and is deleted.
+
+- [x] **Step 3: Green**
+
+**Left open, both because they are not mine to settle.**
+
+*90% sparse initialisation.* Spec §4 lists it among the RTU source's settings, and
+`test_paper_parity.py` records that the published StreamAC's own initialiser zeroes
+ninety per cent of every weight, so it belongs to `mlp` as well. `initializers/sparse.py`
+implements it and nothing uses it. Which layers it applies to changes every number a
+run produces, so it is asked rather than guessed.
+
+*Which revision `lru` reproduces.* Spec §4 says "按 AAAI 版的通路" and then describes a
+`C` readout plus a `D` skip followed by a SiLU. This repository's two transcriptions
+disagree with that pairing: `upstream_lru.py` is `b71fd6e`, the revision the paper was
+published at, and its `OnlineLRULayer` is `y_t = (h_t @ C.T).real` -- no `D`, no SiLU.
+`upstream_lru_rewritten.py` is their HEAD `4301943`, and that one has both. So the
+spec describes their HEAD while naming the paper. `lru` is not one of `stream_ac`'s
+branches, so this waits for the rtrrl line.
 
 ---
 

@@ -4,7 +4,6 @@ from .lru import LRUCarry, LRUCell, LRUConfig
 from .lru_upstream import PublishedLRUCell, RewrittenLRUCell
 from .mamba2 import Mamba2Carry, Mamba2Cell, Mamba2Config
 from .mamba3 import Mamba3Carry, Mamba3Cell, Mamba3Config
-from .memoryless import Memoryless, MemorylessConfig
 from .memoroid import Memoroid, MemoroidCellBase
 from .min_gru import MinGRUCarry, MinGRUCell, MinGRUConfig
 from .mlstm import mLSTMCarry, mLSTMCell, mLSTMConfig

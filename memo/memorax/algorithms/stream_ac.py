@@ -625,14 +625,9 @@ class StreamAC:
             self.env.step,
             in_axes=(0, 0, 0, None),
         )(step_keys, state.env_state, sampled_action, self.env_params)
-        # What the environment paid, kept before normalisation overwrites it. An
-        # episode's return is a statement about the task, not about the scale
-        # this algorithm happens to be learning on.
+
         environment_reward = jnp.asarray(next_reward, dtype=jnp.float32)
-        # The failure ending, which is the only one that says the future is
-        # worth nothing, and the observation the episode ended in, which the
-        # auto-reset replaced. At a truncation the bootstrap survives, so it has
-        # to value where the episode stopped rather than where the next starts.
+
         next_terminal = terminal_of(info, next_done)
         observation_statistics = state.observation_statistics
         reward_statistics = state.reward_statistics

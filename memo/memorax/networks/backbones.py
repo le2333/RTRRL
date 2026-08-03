@@ -12,13 +12,12 @@ from dataclasses import dataclass
 import flax.linen as nn
 from training_sdk.parameters import param
 
+from memorax.networks.components import FFN, LayerNorm, LeakyReLU, Tanh
 from memorax.networks.sequence_models import (
     RNN,
     LRUCell,
     LRUConfig,
     Memoroid,
-    Memoryless,
-    MemorylessConfig,
     PublishedLRUCell,
     RewrittenLRUCell,
     RTUCell,
@@ -60,10 +59,16 @@ _LRU_CELLS = {
 def backbone(
     name: str, *, features: int, hidden_dim: int, output_dim: int | None = None
 ) -> tuple[nn.Module, ...]:
-    """The components this backbone puts into a sequence, in order."""
+    """The components this backbone puts into a sequence, in order.
+
+    The head that follows is the caller's; nothing here appends one.
+    """
 
     if name == "rtu":
         return (
+            FFN(features=features),
+            LayerNorm(),
+            Tanh(),
             RNN(
                 cell=RTUCell(config=RTUConfig(features=features, hidden_dim=hidden_dim))
             ),
@@ -82,9 +87,12 @@ def backbone(
         )
     if name == "mlp":
         return (
-            Memoryless(
-                config=MemorylessConfig(features=features, hidden_dim=hidden_dim)
-            ),
+            FFN(features=hidden_dim),
+            LayerNorm(),
+            LeakyReLU(),
+            FFN(features=hidden_dim),
+            LayerNorm(),
+            LeakyReLU(),
         )
     registered = ", ".join((*BACKBONES, *UPSTREAM_BACKBONES))
     raise ValueError(f"unknown backbone {name!r}; registered: {registered}")

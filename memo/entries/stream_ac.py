@@ -23,14 +23,7 @@ from training_sdk.reporter import Reporter
 
 from memorax.algorithms.stream_ac import StreamAC, StreamACConfig
 from memorax.environments import make
-from memorax.networks import (
-    FFN,
-    Readout,
-    ReLU,
-    Sequence,
-    backbone,
-    heads,
-)
+from memorax.networks import Readout, Sequence, backbone, heads
 from memorax.networks.backbones import Mlp, Rtu
 from memorax.networks.sequence import PLACES
 from memorax.rl import CREDITS, declared_normalizer
@@ -132,8 +125,6 @@ def build(params: Mapping[str, Any], environment, training) -> StreamAC:
     def network(head):
         return Sequence(
             components=(
-                FFN(features=feature_dim),
-                ReLU(),
                 *backbone(
                     chosen,
                     features=feature_dim,

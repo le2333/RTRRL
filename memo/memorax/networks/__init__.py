@@ -66,8 +66,6 @@ from memorax.networks.sequence_models import (
     Mamba3Config,
     Memoroid,
     MemoroidCellBase,
-    Memoryless,
-    MemorylessConfig,
     MinGRUCarry,
     MinGRUCell,
     MinGRUConfig,

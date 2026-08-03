@@ -282,3 +282,29 @@ memo-ci 的 CHECKED 里 `memorax/networks/torso.py` 换成三个新文件加 `sl
 independent_rtrrl 7 处)不起作用 —— 三个内核都是 `jax.grad`/`jax.jacobian` 只对参数树求导,
 carry 是另一个位置参数、在那次求导里是常数。实测把它们摘掉梯度不变。真正的"一步 BPTT"来自
 逐步更新本身,不来自这些调用。
+
+--- 阶段 3 task 5:backbone 对齐来源 ---
+
+`backbone()` 现在交出每条分支自己的完整前段,入口不再自己加编码器:
+
+- `rtu`:`FFN(feature_dim) → LayerNorm → Tanh → RNN(RTUCell)`
+- `mlp`:`FFN(hidden) → LayerNorm → LeakyReLU` 两遍
+
+`RTUCell` 去掉 `activation_fn` 字段,直接用 `tanh`。`LRUCell` 本来就没有这个字段,计划里说
+"两个都有"只对了一半。`Memoryless`(六件事焊在一起、层数写死为二)没有使用者了,删除。
+
+**没能按计划"驱动着对照来源"**,两条都不行:RTU 那篇论文的代码不在仓库里;streaming-drl 的文件
+要 `STREAMING_DRL` 指向一个 checkout,这里没有,`test_paper_parity` 里需要它的每一条都 skip。
+所以 `test_backbones.py` 比的是组合对不对得上规格 §4 写下的配方,文件开头写明了这一点。
+
+**两件留给用户定的:**
+
+1. **90% 稀疏初始化。** 规格 §4 把它列在 RTU 来源的设置里,而 `test_paper_parity.py` 记着已发表
+   的 StreamAC 自己的初始化就是"把每个权重的九成置零",所以 `mlp` 也该有。
+   `initializers/sparse.py` 已实现,没人用。加在哪些层会改掉每一个数,所以问而不猜。
+
+2. **`lru` 复现哪个 revision。** 规格说"按 AAAI 版的通路",然后描述的是 `C` 读出 + `D` 直连
+   再 SiLU。仓库里两份转写不支持这个配对:`upstream_lru.py` 是 `b71fd6e`(论文发表时那版),
+   它的 `OnlineLRULayer` 是 `y_t = (h_t @ C.T).real`,没有 `D` 也没有 SiLU;
+   `upstream_lru_rewritten.py` 是 HEAD `4301943`,两样都有。所以规格描述的是 HEAD 而写的是论文。
+   `lru` 不在 `stream_ac` 的分支里,等 rtrrl 那条线。
