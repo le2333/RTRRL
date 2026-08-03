@@ -12,7 +12,7 @@ from dataclasses import dataclass
 import flax.linen as nn
 from training_sdk.parameters import param
 
-from memorax.networks.components import FFN, LayerNorm, LeakyReLU, Tanh
+from memorax.networks.components import FFN, LayerNorm, LeakyReLU, ReLU
 from memorax.networks.sequence_models import (
     RNN,
     LRUCell,
@@ -67,8 +67,7 @@ def backbone(
     if name == "rtu":
         return (
             FFN(features=features),
-            LayerNorm(),
-            Tanh(),
+            ReLU(),
             RNN(
                 cell=RTUCell(config=RTUConfig(features=features, hidden_dim=hidden_dim))
             ),

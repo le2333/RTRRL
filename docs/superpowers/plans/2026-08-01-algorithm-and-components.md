@@ -264,23 +264,29 @@ users left and is deleted.
 
 - [x] **Step 3: Green**
 
-**Left open, both because they are not mine to settle.**
+**What the sources actually say, read from them rather than from the spec's table.**
 
-*90% sparse initialisation.* Spec §4 lists it among the RTU source's settings, and
-`test_paper_parity.py` records that the published StreamAC's own initialiser zeroes
-ninety per cent of every weight, so it belongs to `mlp` as well. `initializers/sparse.py`
-implements it and nothing uses it. Which layers it applies to changes every number a
-run produces, so it is asked rather than guessed.
+`mlp` -- `mohmdelsayed/streaming-drl`, `stream_ac_continuous.py`. Both nets are
+`Linear(obs,128) -> layer_norm -> leaky_relu -> Linear(128,128) -> layer_norm ->
+leaky_relu`, then the head. That is what landed. What this repository had before was
+that plus a leading `Dense -> relu`, which is a layer their agent does not have.
 
-*Which revision `lru` reproduces.* Spec §4 says "按 AAAI 版的通路" and then describes a
-`C` readout plus a `D` skip followed by a SiLU. This repository's two transcriptions
-disagree with that pairing: `upstream_lru.py` is `b71fd6e`, the revision the paper was
-published at, and its `OnlineLRULayer` is `y_t = (h_t @ C.T).real` -- no `D`, no SiLU.
-`upstream_lru_rewritten.py` is their HEAD `4301943`, and that one has both. So the
-spec describes their HEAD while naming the paper. `lru` is not one of `stream_ac`'s
-branches, so this waits for the rtrrl line.
+Two further gaps, outside a backbone and so outside this task: their
+`initialize_weights` applies `sparse_init(sparsity=0.9)` to every `nn.Linear`
+including the heads and zeroes every bias, where ours are `lecun_normal`; and their
+actor head is two separate `Linear`s with `softplus`, where `heads.Gaussian` is one
+`Dense` and a global learnable `log_std`.
 
----
+`rtu` -- nothing to check it against. Its settings come from a paper that publishes
+no code, and memorax, which this repository tracks, defines an `RTUCell` and no
+composition around it: its own StreamAC example is a `FeatureExtractor` of
+`Dense(120) -> relu -> Dense(84) -> relu` and a `Stack` of `Residual(RNN(GRUCell))`.
+So `rtu` keeps the composition this repository already had, `FFN -> ReLU -> RNN`,
+and `RTUConfig` keeps `activation_fn` -- memorax has that field with `jnp.tanh` as
+its default, and removing it was this plan's opinion rather than a source's.
+
+Task 5 therefore changed one graph and left the other alone. The spec §4 table is
+not a transcription of its sources and should not be read as one.
 
 ### Task 6: `stream_ac` Runs From the Target Experiment File
 

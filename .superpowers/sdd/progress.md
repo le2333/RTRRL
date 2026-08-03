@@ -297,14 +297,23 @@ carry 是另一个位置参数、在那次求导里是常数。实测把它们�
 要 `STREAMING_DRL` 指向一个 checkout,这里没有,`test_paper_parity` 里需要它的每一条都 skip。
 所以 `test_backbones.py` 比的是组合对不对得上规格 §4 写下的配方,文件开头写明了这一点。
 
-**两件留给用户定的:**
+**去 GitHub 读了原版,结论跟 spec §4 那张表对不上,按原版改回来。**
 
-1. **90% 稀疏初始化。** 规格 §4 把它列在 RTU 来源的设置里,而 `test_paper_parity.py` 记着已发表
-   的 StreamAC 自己的初始化就是"把每个权重的九成置零",所以 `mlp` 也该有。
-   `initializers/sparse.py` 已实现,没人用。加在哪些层会改掉每一个数,所以问而不猜。
+`mlp` —— `mohmdelsayed/streaming-drl` 的 `stream_ac_continuous.py`。actor 和 critic 都是
+`Linear(obs,128) → layer_norm → leaky_relu → Linear(128,128) → layer_norm → leaky_relu`
+再接头。落地的就是这个。改之前我们在前面还多一层 `Dense → relu`,他们没有。
 
-2. **`lru` 复现哪个 revision。** 规格说"按 AAAI 版的通路",然后描述的是 `C` 读出 + `D` 直连
-   再 SiLU。仓库里两份转写不支持这个配对:`upstream_lru.py` 是 `b71fd6e`(论文发表时那版),
-   它的 `OnlineLRULayer` 是 `y_t = (h_t @ C.T).real`,没有 `D` 也没有 SiLU;
-   `upstream_lru_rewritten.py` 是 HEAD `4301943`,两样都有。所以规格描述的是 HEAD 而写的是论文。
-   `lru` 不在 `stream_ac` 的分支里,等 rtrrl 那条线。
+另外两处不一致,不在 backbone 里所以不属于本 task:他们的 `initialize_weights` 对每个
+`nn.Linear`(含头)做 `sparse_init(sparsity=0.9)`、bias 全零,我们是 `lecun_normal`;他们的
+actor 头是两个独立 `Linear` 加 `softplus`,我们的 `heads.Gaussian` 是一个 Dense 加一个全局可学
+的 `log_std`。
+
+`rtu` —— 没有东西可核对。它的设置出自一篇不公开代码的论文;而 memorax(这个仓库跟踪的上游)
+只定义了 `RTUCell`,没有任何围绕它的组合 —— 它自己的 StreamAC 例子是
+`FeatureExtractor(Dense(120)→relu→Dense(84)→relu)` 加 `Stack(Residual(RNN(GRUCell)))`。
+所以 `rtu` 保持仓库原有的 `FFN → ReLU → RNN`,`RTUConfig` 也把 `activation_fn` 放回去 ——
+memorax 有这个字段、默认 `jnp.tanh`,删掉它是计划的主张而不是任何来源的。
+
+**教训**:spec §4 那张表不是对来源的转写,不能当转写读。我按它改了 `rtu` 的非线性和归一化位置,
+是照转述改数值。凡是"对齐来源",先去读来源。
+

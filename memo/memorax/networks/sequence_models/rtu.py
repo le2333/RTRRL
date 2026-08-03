@@ -1,5 +1,5 @@
 from functools import partial
-
+from typing import Callable
 
 import jax
 import jax.numpy as jnp
@@ -8,7 +8,7 @@ from flax import struct
 from flax.typing import Dtype
 from jax.nn.initializers import lecun_normal
 
-from memorax.utils.typing import Array
+from memorax.utils.typing import Array, Carry
 
 from .rnn import RNNCellBase
 
@@ -33,6 +33,7 @@ class RTUConfig:
     eps: float = 1e-8
     dtype: Dtype | None = None
     param_dtype: Dtype = jnp.float32
+    activation_fn: Callable = struct.field(pytree_node=False, default=jnp.tanh)
 
 
 @struct.dataclass
@@ -86,7 +87,7 @@ class RTUCell(RNNCellBase):
         theta = jnp.exp(self.theta_log)
         pre_real = g * carry.real - phi * carry.imaginary + norm * (inputs @ self.B_real.T)
         pre_imaginary = g * carry.imaginary + phi * carry.real + norm * (inputs @ self.B_imag.T)
-        f = jnp.tanh
+        f = self.config.activation_fn
         new_carry = RTUCarry(real=f(pre_real), imaginary=f(pre_imaginary))
         output = jnp.concatenate([new_carry.real, new_carry.imaginary], axis=-1)
         return new_carry, output
@@ -124,7 +125,7 @@ class RTUCell(RNNCellBase):
     ) -> tuple[RTUCarry, Array, dict[str, Array]]:
         g, phi, norm, r = self._g_phi_norm()
 
-        f = jnp.tanh
+        f = self.config.activation_fn
 
         u_real = inputs @ self.B_real.T
         u_imaginary = inputs @ self.B_imag.T
