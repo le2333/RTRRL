@@ -127,9 +127,12 @@ def build(params: Mapping[str, Any], environment, training) -> StreamAC:
     gamma = float(params["gamma"])
     chosen = str(params["backbone"])
     hidden_dim = int(params[f"backbone.{chosen}.hidden_dim"])
-    feature_dim = (
-        int(params[f"backbone.{chosen}.feature_dim"]) if chosen == "rtu" else hidden_dim
-    )
+    action_dim = int(env.action_space(env_params).shape[0])
+    # What the first component is handed: the observation, and beside it the
+    # previous action and reward when the kernel composes them in.
+    width = int(env.observation_space(env_params).shape[0])
+    if bool(params["meta_rl"]):
+        width += action_dim + 1
 
     _, declared = read_branch(params, "initialization", INITIALIZATION_BRANCHES)
     kernel_init = declared_initializer(declared)
@@ -139,16 +142,15 @@ def build(params: Mapping[str, Any], environment, training) -> StreamAC:
             components=(
                 *backbone(
                     chosen,
-                    features=feature_dim,
+                    features=width,
                     hidden_dim=hidden_dim,
-                    output_dim=feature_dim,
+                    output_dim=hidden_dim,
                     kernel_init=kernel_init,
                 ),
                 Readout(module=head),
             )
         )
 
-    action_dim = int(env.action_space(env_params).shape[0])
     return StreamAC(
         StreamACConfig(
             num_envs=training.num_envs,

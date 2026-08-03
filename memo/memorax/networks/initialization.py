@@ -1,7 +1,8 @@
 """How a weight is drawn, as a structure with a branch per way.
 
-``lecun`` is flax's own default for ``nn.Dense``; ``sparse`` is the one
-streaming-drl chose. Biases are zero either way, so only the kernel branches.
+``lecun`` is flax's own default for ``nn.Dense``. ``sparse`` is the one both
+streaming-drl and memorax's MinAtar example choose, at 0.9 in each. Biases are
+zero either way, so only the kernel branches.
 """
 
 from __future__ import annotations

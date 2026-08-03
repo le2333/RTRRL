@@ -3,10 +3,10 @@
 ``mlp`` is streaming-drl's, checked against ``stream_ac_continuous.py``:
 ``Linear(128) -> layer_norm -> leaky_relu`` twice, then the head.
 
-``rtu`` is not checked against anything. The paper its settings come from
-publishes no code, and memorax -- which this repository tracks -- defines an
-``RTUCell`` but no composition around it. So what is asserted for it is the
-composition this repository already had.
+``rtu`` is the cell and nothing else. The paper its settings come from publishes
+no code, and memorax defines an ``RTUCell`` but composes nothing around it --
+neither of its StreamAC examples uses one. An encoder in front would be this
+repository's invention, so there is not one.
 """
 
 from __future__ import annotations
@@ -14,13 +14,13 @@ from __future__ import annotations
 import pytest
 
 from memorax.networks.backbones import backbone
-from memorax.networks.components import FFN, LayerNorm, LeakyReLU, ReLU
+from memorax.networks.components import FFN, LayerNorm, LeakyReLU
 from memorax.networks.sequence_models import RNN
 
 FEATURES = 8
 HIDDEN = 16
 
-RTU = (FFN, ReLU, RNN)
+RTU = (RNN,)
 
 # ``Linear(128) -> layer_norm -> leaky_relu``, twice.
 MLP = (FFN, LayerNorm, LeakyReLU, FFN, LayerNorm, LeakyReLU)
@@ -31,16 +31,15 @@ def kinds(name: str) -> tuple[type, ...]:
     return tuple(type(component) for component in built)
 
 
-def test_rtu_is_an_encoder_an_activation_and_one_recurrent_layer():
+def test_rtu_is_the_recurrent_cell_and_nothing_else():
     assert kinds("rtu") == RTU
 
 
-def test_the_rtu_encoder_is_the_width_it_was_asked_for():
-    encoder, *_ = backbone(
-        "rtu", features=FEATURES, hidden_dim=HIDDEN, output_dim=FEATURES
-    )
+def test_the_rtu_cell_takes_the_input_width_it_was_given():
+    (recurrence,) = backbone("rtu", features=FEATURES, hidden_dim=HIDDEN)
 
-    assert encoder.features == FEATURES
+    assert recurrence.cell.config.features == FEATURES
+    assert recurrence.cell.config.hidden_dim == HIDDEN
 
 
 def test_mlp_is_two_feedforward_blocks():

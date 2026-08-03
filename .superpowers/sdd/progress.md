@@ -361,3 +361,22 @@ memorax。这条差异是我们对 streaming-drl 的,不是对 memorax 的。
 
 测试 `test_policy_head.py` 九条,按"尺度从哪来"区分三条分支:`global_std` 换一个观测尺度不变,
 另外两条会变;`bounded` 的 loc 落在区间内;还有一条断言 `Gaussian` 上没有 `bound` 字段。
+
+--- rtu 只剩递推单元 ---
+
+`backbone("rtu")` 从 `(FFN, ReLU, RNN)` 变成 `(RNN,)`。理由:memorax 没有任何 RTU 的组合可对
+—— 它两个 StreamAC 例子一个用 `GRUCell`、一个完全没有递推,全库搜 `RTUCell(` 只有定义和文档里
+一行孤立示例。前面那层编码器是这个仓库自己加的,没有出处,删掉。
+
+连带:`Rtu` 的 `feature_dim` 没有消费者了(它就是编码器宽度),删掉声明 —— 参数树现在只有
+`backbone.rtu.hidden_dim`。RTU 的 `features` 变成真正的输入宽度,由入口从
+`env.observation_space` 算,`meta_rl` 打开时再加上 `action_dim + 1`。
+
+用真 hopper(5 维观测)构建验证过:`components: ['RNN', 'Readout']`。
+
+**顺带纠正 `315a858` 的一句。** memorax 的 minatar 例子第 47 行
+`sparse_init = sparse(sparsity=0.9)`(`from memorax.networks.initializers import sparse`),
+传给 Conv、Dense 和两个头。所以 `sparse` 不只是 streaming-drl 的,memorax 在对标 streaming-drl
+MinAtar 的那条例子里就用它,而且 `sparse.py` 本来就是 memorax 的文件。准确的说法:
+`lecun` = flax 默认(memorax gymnasium 例子的裸 `nn.Dense` 吃它),`sparse(0.9)` = 两边都明确选的。
+同一个 minatar 例子里也有 `LayerNorm → leaky_relu`,所以 streaming-drl 那套形状 memorax 里已经有。
