@@ -29,7 +29,13 @@ from memorax.networks import (
     heads,
     make_torso,
 )
-from memorax.rl import NormalizationConfig, make_obgd_rule, make_optax_rule
+from memorax.rl import NormalizationConfig, make_bounded_rule, make_optax_rule
+from memorax.rl.updates import (
+    AdaptiveObBound,
+    AdaptiveObBoundFixed,
+    ObBound,
+    Sgd,
+)
 
 
 def rtrrl_program(*, record=(), **overrides):
@@ -67,7 +73,14 @@ def rtrrl_program(*, record=(), **overrides):
     return agent.init, agent.train, agent.evaluate
 
 
-def stream_ac_program(normalization=None, backbone="rtu", record=(), **overrides):
+def stream_ac_program(
+    normalization=None,
+    backbone="rtu",
+    record=(),
+    adaptive=False,
+    fixed=False,
+    **overrides,
+):
     env = TinyContinuousEnv()
 
     def network(head):
@@ -79,15 +92,19 @@ def stream_ac_program(normalization=None, backbone="rtu", record=(), **overrides
             head=head,
         )
 
+    bound = ObBound(kappa=2.0)
+    if adaptive:
+        maker = AdaptiveObBoundFixed if fixed else AdaptiveObBound
+        bound = maker(kappa=2.0, beta2=0.95, eps=1e-6)
     config = StreamACConfig(
         num_envs=1,
         gamma=0.89,
         trace_lambda=0.71,
-        actor_lr=0.15,
-        critic_lr=0.12,
+        actor_bound=bound,
+        actor_base=Sgd(lr=0.15),
+        critic_bound=bound,
+        critic_base=Sgd(lr=0.12),
         entropy_coefficient=0.02,
-        beta2=0.95,
-        eps=1e-6,
         **overrides,
     )
     agent = StreamAC(
@@ -118,11 +135,11 @@ PROGRAMS = [
         id="rtrrl_obgd",
     ),
     pytest.param(
-        lambda: stream_ac_program(bounded_rule="adaptive_obgd"),
+        lambda: stream_ac_program(adaptive=True),
         id="stream_ac_adaptive",
     ),
     pytest.param(
-        lambda: stream_ac_program(bounded_rule="adaptive_obgd_fixed"),
+        lambda: stream_ac_program(adaptive=True, fixed=True),
         id="stream_ac_adaptive_fixed",
     ),
     pytest.param(
@@ -257,7 +274,7 @@ def test_the_two_rules_agree_on_their_contract():
     delta = jnp.array([0.5, -0.25])
     rules = {
         "adam": make_optax_rule(optax.scale(0.1)),
-        "obgd": make_obgd_rule(learning_rate=0.1, kappa=2.0),
+        "obgd": make_bounded_rule(bound=ObBound(kappa=2.0), base=Sgd(lr=0.1)),
     }
     for name, rule in rules.items():
         state = rule.init(params={"w": jnp.ones((3,))}, traces=traces)
@@ -269,7 +286,7 @@ def test_the_two_rules_agree_on_their_contract():
 
 
 def test_the_bound_never_lets_obgd_step_past_its_learning_rate():
-    rule = make_obgd_rule(learning_rate=0.5, kappa=2.0)
+    rule = make_bounded_rule(bound=ObBound(kappa=2.0), base=Sgd(lr=0.5))
     traces = {"w": jnp.full((1, 8), 4.0)}
     state = rule.init(params={"w": jnp.zeros((8,))}, traces=traces)
     output = rule.apply(

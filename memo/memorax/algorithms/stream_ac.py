@@ -26,9 +26,9 @@ from flax import struct
 from memorax.rl import (
     ObjectiveDirections,
     environment_owns_normalization,
+    make_bounded_rule,
     make_credit,
     make_normalizer,
-    make_obgd_rule,
     make_td0,
     normalization_metrics,
 )
@@ -56,15 +56,15 @@ class StreamACConfig:
     num_envs: int
     gamma: float
     trace_lambda: float
-    actor_lr: float
-    critic_lr: float
-    actor_kappa: float = 3.0
-    critic_kappa: float = 2.0
+    # One bound and one base per role. The two roles are independent: the shared
+    # triple that used to sit here was the only reason asking for different
+    # bounds had to be refused, and it was never a limit of the arithmetic.
+    actor_bound: Any = None
+    actor_base: Any = None
+    critic_bound: Any = None
+    critic_base: Any = None
     entropy_coefficient: float = 0.01
     credit: str = "rtrl"
-    bounded_rule: str = "obgd"
-    beta2: float = 0.999
-    eps: float = 1e-8
     # Whose running statistics to normalise with. Read by ``make_normalizer``
     # when no explicit config is passed, and only meaningful when one of the two
     # normalisation switches is on.
@@ -224,19 +224,9 @@ class StreamAC:
 
         self.actor_credit = make_credit(cfg.credit, actor_network.torso)
         self.critic_credit = make_credit(cfg.credit, critic_network.torso)
-        self.actor_rule = make_obgd_rule(
-            learning_rate=cfg.actor_lr,
-            kappa=cfg.actor_kappa,
-            beta2=cfg.beta2,
-            eps=cfg.eps,
-            rule=cfg.bounded_rule,
-        )
-        self.critic_rule = make_obgd_rule(
-            learning_rate=cfg.critic_lr,
-            kappa=cfg.critic_kappa,
-            beta2=cfg.beta2,
-            eps=cfg.eps,
-            rule=cfg.bounded_rule,
+        self.actor_rule = make_bounded_rule(bound=cfg.actor_bound, base=cfg.actor_base)
+        self.critic_rule = make_bounded_rule(
+            bound=cfg.critic_bound, base=cfg.critic_base
         )
         self.td0 = make_td0()
         self.trace_decay = cfg.gamma * cfg.trace_lambda

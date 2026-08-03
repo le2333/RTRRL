@@ -142,3 +142,30 @@ mock-trainer 不受影响:它用自己的 `RecordingRerun` 假 sink,从不走真
 
 验证:training-sdk 144 passed,control-plane 194 passed,memo test_loop/test_upstream 17
 passed(catalog 那条仍是阶段 3 的红);ruff、black、isort 全绿。
+
+--- 阶段 3 task 2:终止与截断分开(以及跟着掉出来的两件) ---
+
+提交 3499943、57629b7、46893be、8a156a1。
+
+**终止与截断。** brax 的 `EpisodeWrapper` 把"跑满 episode_length"也写进 `done`,而旧的
+`gamma * (1 - done)` 因此在截断那一步把 bootstrap 抹成 0 —— 等于教 critic"跑满和摔倒一样
+糟"。wrapper 现在带出 `truncation`,`td0` 收 `terminal` 与 `gamma` 而不是乘好的 discount。
+不区分两种结束的环境,`terminal_of` 读成"每次结束都是失败",所以仓库里其他环境一个都不用改。
+`episode_length` 进 `environment` 段:同一个策略在 500 与 1000 下的回报不是同一个数。
+
+**重置挪出环境。** 先是把 brax 的 auto-reset 搬进我们的 wrapper(为了留住回合结束时那个被
+覆盖的观测),然后按"rst 是给 act 的、旧 state 是给 learn 的"这条分解,重置移到 `_step` 顶上,
+和 carry、迹读同一个 flag —— wrapper 因此比动手之前还小。行为变化:每个回合从新采的初始状态
+开始,brax 那套把 hopper 的初始分布塌成每条流一个固定点。
+
+**指标容器按出处重切。** `terminal` 是训练容器和评估容器不得不各存一份的第二个字段,而旧形状里
+"读不到"分不出"没有更新发生"和"这个容器没这个字段"。现在是 `InteractionMetrics`(在契约里,
+每个算法一样,切分器读它)加各算法自己的 `ForwardMetrics` / `UpdateMetrics`,由 `StepMetrics`
+装起来。指标名带上出处:`update.td_error`、`forward.value`。`EvalSummary` 与三个
+`*StepMetrics` 删除。
+
+验证:training-sdk 146、control-plane 171 passed;memo 七条红,与开工前同一批 —— 5 条
+golden(现在是数值上的,因为重置与 terminal 都改了行为)、1 条 paper_parity 归一化(阶段 2 的)、
+1 条 catalog(阶段 3 的)。ruff / black / isort 全绿。
+
+`test_hopper_reproduction.py` 读的实验文件已被删除,按指示不管。

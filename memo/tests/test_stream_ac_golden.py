@@ -34,6 +34,7 @@ from memorax.networks import (
     RTUConfig,
     heads,
 )
+from memorax.rl.updates import AdaptiveObBound, ObBound, Sgd
 
 GOLDEN = Path(__file__).with_name("golden") / "stream_ac_rtu"
 
@@ -152,14 +153,31 @@ def agent_for(manifest: dict, variant: str) -> StreamAC:
             head=head,
         )
 
-    # The snapshot was recorded when the bounded rule was a boolean. Its two
-    # values are the two rules that existed then, under the names they have now.
+    # The snapshot was recorded when the bounded rule was a boolean and the
+    # optimiser was seven flat fields. Its two values are the two bounds that
+    # existed then, and the rate was the base all along.
     recorded_config = dict(manifest["config"]["algorithm"]["variants"][variant])
-    was_adaptive = bool(recorded_config.pop("adaptive"))
-    recorded_config["bounded_rule"] = "adaptive_obgd" if was_adaptive else "obgd"
+    adaptive = bool(recorded_config.pop("adaptive"))
+    beta2 = recorded_config.pop("beta2")
+    eps = recorded_config.pop("eps")
+
+    def bound(role: str):
+        kappa = recorded_config.pop(f"{role}_kappa")
+        if not adaptive:
+            return ObBound(kappa=kappa)
+        return AdaptiveObBound(kappa=kappa, beta2=beta2, eps=eps)
+
+    optimiser = {
+        f"{role}_{axis}": component
+        for role in ("actor", "critic")
+        for axis, component in (
+            ("bound", bound(role)),
+            ("base", Sgd(lr=recorded_config.pop(f"{role}_lr"))),
+        )
+    }
 
     return StreamAC(
-        StreamACConfig(**recorded_config),
+        StreamACConfig(**recorded_config, **optimiser),
         env,
         env.default_params,
         network(

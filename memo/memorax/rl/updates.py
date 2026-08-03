@@ -104,9 +104,6 @@ def make_optax_rule(transform) -> UpdateRule:
     return UpdateRule(init=init, apply=apply)
 
 
-BOUNDED_RULES = ("obgd", "adaptive_obgd", "adaptive_obgd_fixed")
-
-
 @dataclass(frozen=True)
 class ObBound:
     kappa: float = param(valid=(0.0, 100.0), search=(0.5, 10.0), placeholder=2.0)
@@ -117,6 +114,16 @@ class AdaptiveObBound:
     kappa: float = param(valid=(0.0, 100.0), search=(0.5, 10.0), placeholder=2.0)
     beta2: float = param(valid=(0.0, 1.0), search=(0.9, 0.9999), placeholder=0.999)
     eps: float = param(valid=(1e-12, 1e-2), search=[1e-8], placeholder=1e-8, log=True)
+
+
+@dataclass(frozen=True)
+class AdaptiveObBoundFixed(AdaptiveObBound):
+    """The published placement of eps: inside the root rather than beside it.
+
+    Identical to declare and identical to read, and a different component all
+    the same, because it is a different denominator. A branch that shared a
+    class with another could not be told apart by what it hands back.
+    """
 
 
 @dataclass(frozen=True)
@@ -134,53 +141,68 @@ class Adam:
     eps: float = param(valid=(1e-12, 1e-2), search=[1e-8], placeholder=1e-8, log=True)
 
 
+def base_transform(base):
+    """The optax transform a base names, for the paths that have no bound."""
+
+    import optax
+
+    if isinstance(base, Adam):
+        return optax.adam(base.lr, b1=base.b1, b2=base.b2, eps=base.eps)
+    return optax.sgd(base.lr)
+
+
 BOUND_BRANCHES = {
     "none": (),
     "ob": ObBound,
     "adaptive_ob": AdaptiveObBound,
-    "adaptive_ob_fixed": AdaptiveObBound,
+    "adaptive_ob_fixed": AdaptiveObBoundFixed,
 }
 
 BASE_BRANCHES = {"sgd": Sgd, "adam": Adam}
 
 
-def make_obgd_rule(
-    *,
-    learning_rate,
-    kappa,
-    beta2=0.0,
-    eps=1e-8,
-    rule="obgd",
-) -> UpdateRule:
+def make_bounded_rule(*, bound, base) -> UpdateRule:
     """Step along delta * trace under an overshooting bound on the step size.
 
-    The bound shrinks the step whenever ``|delta| * ||z||_1 * lr * kappa``
-    exceeds one, which keeps a single update from crossing the TD target. The
-    two adaptive rules normalise the trace by a second moment before measuring
-    its norm, and differ only in where they place eps:
+    Two axes rather than one name. The bound shrinks the step whenever
+    ``|delta| * ||z||_1 * lr * kappa`` exceeds one, which keeps a single update
+    from crossing the TD target; the base is what it is written over. One name
+    for the pair meant nothing could ask for a different bound without also
+    changing the base, or the other way round.
 
-    ``obgd``
+    ``bound=None``
+        No bound: the base alone, which is what an experiment asks for by
+        naming ``optimizer_bound: none``.
+    ``ObBound``
         No second moment and no eps at all, as published.
-    ``adaptive_obgd``
+    ``AdaptiveObBound``
         Divides by ``sqrt(v_hat) + eps``, which is what memorax and everything
         forked from it compute. Kept exactly as it is because the recorded runs
         and the golden snapshot answer to it.
-    ``adaptive_obgd_fixed``
+    ``AdaptiveObBoundFixed``
         Divides by ``sqrt(v_hat + eps)``, which is what AdaptiveObGD as
         published computes. The difference is not a rounding. While the second
         moment is near eps the two denominators stand a factor apart, and the
-        step with it: measured against the published optimiser, this rule and
+        step with it: measured against the published optimiser, this bound and
         the one above are about a factor of two apart there. They agree again
         once the second moment clears eps, where both denominators are
         ``sqrt(v_hat)``.
     """
 
-    if rule not in BOUNDED_RULES:
+    if bound is None:
+        return make_optax_rule(base_transform(base))
+    if not isinstance(base, Sgd):
         raise ValueError(
-            f"unknown bounded rule {rule!r}; use {', '.join(BOUNDED_RULES)}"
+            "the overshooting bound is written over a plain rate; putting it "
+            f"over {type(base).__name__.lower()} is a different rule and none "
+            "is published, so it is refused rather than guessed at"
         )
-    adaptive = rule != "obgd"
-    eps_inside_root = rule == "adaptive_obgd_fixed"
+    learning_rate = base.lr
+    kappa = bound.kappa
+    adaptive = isinstance(bound, AdaptiveObBound)
+    beta2 = getattr(bound, "beta2", 0.0)
+    eps = getattr(bound, "eps", 1e-8)
+    eps_inside_root = isinstance(bound, AdaptiveObBoundFixed)
 
     def denominator(second):
         if eps_inside_root:
@@ -193,13 +215,20 @@ def make_obgd_rule(
 
     def apply(traced, direct, state, *, delta, step, params):
         del params
-        moment = jax.tree.map(
-            lambda old, trace: (
-                beta2 * old
-                + (1 - beta2) * jnp.square(_broadcast_env(delta, trace) * trace)
-            ),
-            state,
-            traced,
+        # An unbounded second moment is only carried where something reads it.
+        # Under the plain bound the step never does, and accumulating one there
+        # meant the rule needed a decay rate that changed nothing.
+        moment = (
+            jax.tree.map(
+                lambda old, trace: (
+                    beta2 * old
+                    + (1 - beta2) * jnp.square(_broadcast_env(delta, trace) * trace)
+                ),
+                state,
+                traced,
+            )
+            if adaptive
+            else state
         )
 
         if adaptive:

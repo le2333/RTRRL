@@ -64,7 +64,7 @@ entry's `_RULES` table, `_optimizer` and `_rate`.
 - Consumes: brax's `truncation`, and the state the auto-reset wrapper replaces.
 - Produces: a wrapper that emits both endings and the true next observation; `td0(*, reward, value, next_value, terminal, gamma)`.
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 Step an environment to its step limit and assert the wrapper reports the ending as a
 truncation, not a termination, and hands back the observation from before the reset.
@@ -74,7 +74,7 @@ environment returns one either way.
 
 Asserting on a single `done` means the two are still conflated and the test is wrong.
 
-- [ ] **Step 2: Implement**
+- [x] **Step 2: Implement**
 
 `BraxGymnaxWrapper.step` returns an empty `info` today and throws both away.
 `bootstrap_discount = gamma * (1 - next_done)` in the kernel becomes the TD component's
@@ -89,7 +89,23 @@ say that between two components.
 policy's return under a limit of 500 and of 1000 is not the same number -- so a literal
 in a wrapper is the wrong place for it.
 
-- [ ] **Step 3: Green**
+- [x] **Step 3: Green**
+
+**What landed, beyond what was planned.** Two things followed from the split and
+are recorded here because they are not in the steps above.
+
+Restarting moved out of the environment entirely. The wrapper first grew brax's
+auto-reset so the observation the episode ended in could survive it; then the
+reset moved to the top of the acting step, where the carry and the traces already
+restart on the same flag, and the wrapper shrank back below where it started. An
+episode now begins from a freshly drawn initial state rather than the one stored
+at the first reset, which had collapsed hopper's initial distribution to one point
+per stream for a whole run.
+
+The metrics containers were regrouped by what produced them -- interaction,
+forward, update -- because terminal was the second field the training and
+evaluation containers had to carry twice, and absence in the old shape could not
+distinguish "no update ran" from "this container lacks the field".
 
 ---
 

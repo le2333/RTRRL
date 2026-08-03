@@ -54,9 +54,15 @@ from test_blocks import ours as ours_kernel
 
 from memorax.rl import (
     NormalizationConfig,
+    make_bounded_rule,
     make_normalizer,
-    make_obgd_rule,
     make_td0,
+)
+from memorax.rl.updates import (
+    AdaptiveObBound,
+    AdaptiveObBoundFixed,
+    ObBound,
+    Sgd,
 )
 
 # What crossing frameworks costs, in float32 last bits. Chosen to be loose
@@ -65,6 +71,15 @@ from memorax.rl import (
 FRAMEWORKS = 64.0
 
 SETTINGS = {"learning_rate": 0.12, "kappa": 2.0, "beta2": 0.95, "eps": 1e-6}
+BOUNDS = {
+    "obgd": ObBound(kappa=SETTINGS["kappa"]),
+    "adaptive_obgd": AdaptiveObBound(
+        kappa=SETTINGS["kappa"], beta2=SETTINGS["beta2"], eps=SETTINGS["eps"]
+    ),
+    "adaptive_obgd_fixed": AdaptiveObBoundFixed(
+        kappa=SETTINGS["kappa"], beta2=SETTINGS["beta2"], eps=SETTINGS["eps"]
+    ),
+}
 # gamma * lambda, as the trace recurrence uses it. Taken from the settings our
 # kernel is built with, since the trace being driven below is now our kernel's.
 DECAY = KERNEL_SETTINGS["gamma"] * KERNEL_SETTINGS["trace_lambda"]
@@ -216,7 +231,9 @@ def mine(rule_name: str, scale: float):
         f"published optimiser below is built with {DECAY}"
     )
 
-    rule = make_obgd_rule(**SETTINGS, rule=rule_name)
+    rule = make_bounded_rule(
+        bound=BOUNDS[rule_name], base=Sgd(lr=SETTINGS["learning_rate"])
+    )
     trace = {
         name: jnp.zeros((1,) + leaf.shape, dtype=jnp.float32)
         for name, leaf in grads(scale)[0].items()

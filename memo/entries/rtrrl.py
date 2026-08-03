@@ -29,7 +29,7 @@ from memorax.networks import (
     heads,
     make_torso,
 )
-from memorax.rl import BOUNDED_RULES, NormalizationConfig
+from memorax.rl import NormalizationConfig
 from runner.loop import EPISODE_FIELDS, drive
 
 _UNIT = {"type": "float", "low": 0.0, "high": 1.0}
@@ -69,7 +69,7 @@ SPACE: dict[str, Any] = {
     "update_rule": ["adam", "obgd"],
     "kappa": {"type": "float", "low": 0.0, "high": 100.0},
     "obgd_beta2": _UNIT,
-    "obgd_rule": list(BOUNDED_RULES),
+    "obgd_rule": ["obgd", "adaptive_obgd", "adaptive_obgd_fixed"],
     # The ablation this entry exists to run.
     "actor_to_recurrent": [False, True],
     "critic_to_recurrent": [False, True],

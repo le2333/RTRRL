@@ -22,16 +22,14 @@ from .normalization import (
 from .targets import delayed_update, periodic_incremental_update
 from .td import make_td0
 from .updates import (
-    BOUNDED_RULES,
     ObjectiveDirections,
     RuleOutput,
     UpdateRule,
-    make_obgd_rule,
+    make_bounded_rule,
     make_optax_rule,
 )
 
 __all__ = [
-    "BOUNDED_RULES",
     "CREDITS",
     "NormalizationConfig",
     "NormalizationMetrics",
@@ -50,7 +48,7 @@ __all__ = [
     "make_credit",
     "make_exact_rtrl_credit",
     "make_normalizer",
-    "make_obgd_rule",
+    "make_bounded_rule",
     "make_optax_rule",
     "make_td0",
     "normalization_metrics",

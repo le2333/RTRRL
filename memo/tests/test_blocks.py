@@ -48,7 +48,14 @@ from memorax.environments.wrappers.normalize_observation import (
 )
 from memorax.environments.wrappers.normalize_reward import NormalizeRewardWrapper
 from memorax.networks import RNN, FeatureExtractor, Network, RTUCell, RTUConfig, heads
-from memorax.rl import NormalizationConfig, make_normalizer, make_obgd_rule, make_td0
+from memorax.rl import NormalizationConfig, make_bounded_rule, make_normalizer, make_td0
+from memorax.rl.updates import (
+    Adam,
+    AdaptiveObBound,
+    AdaptiveObBoundFixed,
+    ObBound,
+    Sgd,
+)
 
 ENVS = 3
 
@@ -91,12 +98,32 @@ def upstream(**overrides) -> UpstreamStreamAC:
     )
 
 
-def ours(**overrides) -> StreamAC:
+def bound_of(role: str, *, adaptive: bool = False, fixed: bool = False):
+    """The same numbers upstream is built from, in the shape ours now takes."""
+
+    kappa = SETTINGS[f"{role}_kappa"]
+    if not adaptive:
+        return ObBound(kappa=kappa)
+    maker = AdaptiveObBoundFixed if fixed else AdaptiveObBound
+    return maker(kappa=kappa, beta2=SETTINGS["beta2"], eps=SETTINGS["eps"])
+
+
+def ours(*, adaptive: bool = False, fixed: bool = False, **overrides) -> StreamAC:
     """Our kernel, built for its methods; nothing here initialises it."""
 
     env = TinyContinuousEnv()
+    settings = {
+        "num_envs": SETTINGS["num_envs"],
+        "gamma": SETTINGS["gamma"],
+        "trace_lambda": SETTINGS["trace_lambda"],
+        "entropy_coefficient": SETTINGS["entropy_coefficient"],
+        "actor_bound": bound_of("actor", adaptive=adaptive, fixed=fixed),
+        "actor_base": Sgd(lr=SETTINGS["actor_lr"]),
+        "critic_bound": bound_of("critic", adaptive=adaptive, fixed=fixed),
+        "critic_base": Sgd(lr=SETTINGS["critic_lr"]),
+    }
     return StreamAC(
-        StreamACConfig(**{**SETTINGS, **overrides}),
+        StreamACConfig(**{**settings, **overrides}),
         env,
         env.default_params,
         network(heads.Gaussian(action_dim=2)),
@@ -254,12 +281,11 @@ def test_the_bounded_step_is_upstreams(rule_name, magnitude, step, surprise):
     adaptive = rule_name != "obgd"
     theirs = upstream(adaptive=adaptive)
     cfg = theirs.cfg
-    rule = make_obgd_rule(
-        learning_rate=cfg.critic_lr,
-        kappa=cfg.critic_kappa,
-        beta2=cfg.beta2,
-        eps=cfg.eps,
-        rule=rule_name,
+    rule = make_bounded_rule(
+        bound=bound_of(
+            "critic", adaptive=adaptive, fixed=rule_name == "adaptive_obgd_fixed"
+        ),
+        base=Sgd(lr=cfg.critic_lr),
     )
 
     traces = tree(jax.random.key(7), scale=magnitude)
@@ -272,7 +298,13 @@ def test_the_bounded_step_is_upstreams(rule_name, magnitude, step, surprise):
     output = rule.apply(traces, None, moment, delta=td_error, step=step, params=None)
 
     what = f"{rule_name} trace={magnitude} step={step} td={surprise}"
-    assert_within(flattened(output.state), flattened(their_moment), f"{what} moment")
+    if adaptive:
+        # Only the adaptive bounds read a second moment. Upstream accumulates one
+        # under the plain bound too and never looks at it; ours does not carry
+        # what nothing reads, so there is nothing to compare there.
+        assert_within(
+            flattened(output.state), flattened(their_moment), f"{what} moment"
+        )
     assert_within(
         flattened(output.updates), flattened(their_updates), f"{what} updates"
     )
@@ -495,7 +527,7 @@ def test_the_initial_second_moment_is_upstreams():
     """
 
     traces = tree(jax.random.key(11))
-    rule = make_obgd_rule(learning_rate=0.1, kappa=2.0)
+    rule = make_bounded_rule(bound=ObBound(kappa=2.0), base=Sgd(lr=0.1))
     assert_within(
         flattened(rule.init(params=None, traces=traces)),
         flattened(jax.tree.map(jnp.zeros_like, traces)),
@@ -648,3 +680,96 @@ def test_the_bootstrap_survives_a_truncation_and_not_a_termination():
 
     assert float(td0(terminal=jnp.bool_(False), **paid)) == pytest.approx(2.3)
     assert float(td0(terminal=jnp.bool_(True), **paid)) == pytest.approx(0.5)
+
+
+BOUNDS = {
+    "obgd": ObBound(kappa=2.0),
+    "adaptive_obgd": AdaptiveObBound(kappa=2.0, beta2=0.95, eps=1e-6),
+    "adaptive_obgd_fixed": AdaptiveObBoundFixed(kappa=2.0, beta2=0.95, eps=1e-6),
+}
+
+
+def test_the_bound_and_the_base_are_two_axes():
+    """One string could not say which of two independent things changed.
+
+    A name like ``adaptive_obgd`` bundles the bound with the base it is written
+    over, so nothing could ask for one without the other. Asserting on a rule
+    named ``obgd``, or on a table of such names, is asserting the surface this
+    replaced.
+    """
+
+    traces = tree(jax.random.key(3))
+    for bound in BOUNDS.values():
+        rule = make_bounded_rule(bound=bound, base=Sgd(lr=0.1))
+        moment = rule.init(params=None, traces=traces)
+        output = rule.apply(
+            traces,
+            None,
+            moment,
+            delta=jnp.array([0.5, -1.5, 0.0], dtype=jnp.float32),
+            step=1,
+            params=None,
+        )
+        assert "step_size" in output.metrics
+
+
+def test_where_eps_sits_is_which_component_it_is():
+    """The two adaptive bounds differ in one place and nowhere else.
+
+    ``sqrt(v + eps)`` and ``sqrt(v) + eps`` stand a factor apart while the second
+    moment is near eps, so they are two components rather than two spellings.
+    """
+
+    traces = tree(jax.random.key(5), scale=1e-6)
+    delta = jnp.array([1e-3, -1e-3, 0.0], dtype=jnp.float32)
+    steps = {}
+    for name in ("adaptive_obgd", "adaptive_obgd_fixed"):
+        rule = make_bounded_rule(bound=BOUNDS[name], base=Sgd(lr=0.1))
+        moment = rule.init(params=None, traces=traces)
+        steps[name] = rule.apply(
+            traces, None, moment, delta=delta, step=1, params=None
+        ).metrics["step_size"]
+
+    assert not jnp.allclose(steps["adaptive_obgd"], steps["adaptive_obgd_fixed"])
+
+
+def test_no_bound_is_the_base_on_its_own():
+    """``optimizer_bound=none`` is a choice the surface offers, so it must build."""
+
+    traces = tree(jax.random.key(9))
+    params = jax.tree.map(lambda leaf: jnp.zeros(leaf.shape[1:]), traces)
+    for base in (Sgd(lr=0.1), Adam(lr=0.001)):
+        rule = make_bounded_rule(bound=None, base=base)
+        rule.apply(
+            traces,
+            jax.tree.map(jnp.zeros_like, traces),
+            rule.init(params=params, traces=traces),
+            delta=jnp.array([0.5, -1.5, 0.0], dtype=jnp.float32),
+            step=1,
+            params=params,
+        )
+
+
+def test_bounding_an_adaptive_base_is_refused_rather_than_guessed():
+    """The bound is written over a plain rate; over Adam it is a different rule.
+
+    Refusing says so at the point the two were asked for, rather than running
+    something nobody published.
+    """
+
+    with pytest.raises(ValueError, match="adam"):
+        make_bounded_rule(bound=ObBound(kappa=2.0), base=Adam(lr=0.001))
+
+
+def test_two_roles_may_ask_for_different_bounds():
+    """Ordinary, not an error: the kernel carries one bound per role.
+
+    The shared triple was the only reason the entry had to refuse this, and it
+    was never a limit of the arithmetic.
+    """
+
+    kernel = ours(
+        actor_bound=ObBound(kappa=3.0),
+        critic_bound=AdaptiveObBound(kappa=1.5, beta2=0.9, eps=1e-8),
+    )
+    assert kernel.actor_rule is not kernel.critic_rule

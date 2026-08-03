@@ -21,12 +21,18 @@ from memorax.rl import (
     NormalizationConfig,
     ObjectiveDirections,
     environment_owns_normalization,
+    make_bounded_rule,
     make_exact_rtrl_credit,
     make_normalizer,
-    make_obgd_rule,
     make_optax_rule,
     make_td0,
     normalization_metrics,
+)
+from memorax.rl.updates import (
+    AdaptiveObBound,
+    AdaptiveObBoundFixed,
+    ObBound,
+    Sgd,
 )
 from memorax.utils import Timestep, find_leaf, tree_cosine, tree_norm
 from memorax.utils.axes import (
@@ -90,6 +96,21 @@ def _where_done(done, fresh, carried):
 
     return jax.tree.map(
         lambda new, old: jnp.where(_broadcast_env(done, old), new, old), fresh, carried
+    )
+
+
+def _bound(config):
+    """This kernel's flat obgd settings as the component the rule now takes.
+
+    Its own parameter surface is not part of this batch, so the translation
+    lives here rather than being spread over the rule.
+    """
+
+    if config.obgd_rule == "obgd":
+        return ObBound(kappa=config.kappa)
+    fixed = config.obgd_rule == "adaptive_obgd_fixed"
+    return (AdaptiveObBoundFixed if fixed else AdaptiveObBound)(
+        kappa=config.kappa, beta2=config.obgd_beta2, eps=config.eps
     )
 
 
@@ -218,13 +239,7 @@ def make_rtrrl_update_rules(config, abstract_params):
                 "group at once and cannot hold one leaf still"
             )
         return {
-            group: make_obgd_rule(
-                learning_rate=rate,
-                kappa=config.kappa,
-                beta2=config.obgd_beta2,
-                eps=config.eps,
-                rule=config.obgd_rule,
-            )
+            group: make_bounded_rule(bound=_bound(config), base=Sgd(lr=rate))
             for group, rate in (("rnn", config.rnn_lr), ("td", config.td_lr))
         }
     if config.update_rule != "adam":

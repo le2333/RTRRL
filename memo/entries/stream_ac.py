@@ -105,31 +105,12 @@ METRICS: tuple[str, ...] = metric_names("train", TRAINING_METRICS) + metric_name
 RECORD = frozenset(EPISODE_FIELDS) | set(TRAINING_METRICS)
 
 
-_RULES = {
-    "ob": "obgd",
-    "adaptive_ob": "adaptive_obgd",
-    "adaptive_ob_fixed": "adaptive_obgd_fixed",
-}
+def _optimizer(params: Mapping[str, Any], role: str, axis: str):
+    """One axis of one role's optimiser, read back as the component it names."""
 
-
-def _optimizer(
-    params: Mapping[str, Any], role: str
-) -> tuple[str, float, float, float, float]:
-    bound_name, bound = read_branch(params, f"{role}_optimizer_bound", BOUND_BRANCHES)
-    base_name, base = read_branch(params, f"{role}_optimizer_base", BASE_BRANCHES)
-    if bound is None:
-        raise ValueError(
-            f"{role}_optimizer_bound=none needs the bound and base decomposition; "
-            "this kernel always applies a bound"
-        )
-    if base_name != "sgd":
-        raise ValueError(
-            f"{role}_optimizer_base={base_name} needs the bound and base "
-            "decomposition; this kernel folds the rate into the bound"
-        )
-    beta2 = getattr(bound, "beta2", 0.0)
-    eps = getattr(bound, "eps", 1e-8)
-    return _RULES[bound_name], base.lr, bound.kappa, beta2, eps
+    branches = BOUND_BRANCHES if axis == "bound" else BASE_BRANCHES
+    _, component = read_branch(params, f"{role}_optimizer_{axis}", branches)
+    return component
 
 
 def _normalization(params: Mapping[str, Any], *, reward_gamma: float):
@@ -207,33 +188,18 @@ def build(params: Mapping[str, Any], environment, training) -> StreamAC:
             head=head,
         )
 
-    actor_rule, actor_lr, actor_kappa, actor_beta2, actor_eps = _optimizer(
-        params, "actor"
-    )
-    critic_rule, critic_lr, critic_kappa, critic_beta2, critic_eps = _optimizer(
-        params, "critic"
-    )
-    if (actor_rule, actor_beta2, actor_eps) != (critic_rule, critic_beta2, critic_eps):
-        raise ValueError(
-            "this kernel carries one bounded rule for both roles; actor and "
-            f"critic ask for {actor_rule} and {critic_rule}"
-        )
-
     action_dim = int(env.action_space(env_params).shape[0])
     return StreamAC(
         StreamACConfig(
             num_envs=training.num_envs,
             gamma=gamma,
             trace_lambda=float(params["trace_lambda"]),
-            actor_lr=actor_lr,
-            critic_lr=critic_lr,
-            actor_kappa=actor_kappa,
-            critic_kappa=critic_kappa,
+            actor_bound=_optimizer(params, "actor", "bound"),
+            actor_base=_optimizer(params, "actor", "base"),
+            critic_bound=_optimizer(params, "critic", "bound"),
+            critic_base=_optimizer(params, "critic", "base"),
             entropy_coefficient=float(params["entropy_coefficient"]),
             credit=str(params["credit"]),
-            bounded_rule=actor_rule,
-            beta2=actor_beta2,
-            eps=actor_eps,
         ),
         env,
         env_params,
