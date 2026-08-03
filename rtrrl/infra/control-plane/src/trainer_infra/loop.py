@@ -39,7 +39,9 @@ def run_launch(
         },
         round_size=experiment.hpo.trials_per_round,
         grid_space=(
-            grid_distributions(launch.plan.parameters)
+            grid_distributions(
+                launch.plan.parameters, points=experiment.hpo.points
+            )
             if experiment.hpo.sampler == "grid"
             else None
         ),

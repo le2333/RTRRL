@@ -23,6 +23,8 @@ def check_sampler(
         return
     if grid_space is None:
         return
+    # A backstop. ``grid_distributions`` hands back categoricals or raises, so
+    # anything else here means something built a space by another route.
     continuous = sorted(
         key
         for key, dist in grid_space.items()
@@ -30,9 +32,8 @@ def check_sampler(
     )
     if continuous:
         raise ValueError(
-            f"the grid sampler needs every parameter to be a fixed list of values, "
-            f"but these are ranges: {', '.join(continuous)}; either pin them to lists "
-            f"or use the tpe or random sampler"
+            "the grid sampler walks a finite set, and these arrived as ranges: "
+            f"{', '.join(continuous)}"
         )
 
 

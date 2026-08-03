@@ -35,11 +35,18 @@ class Hpo(_Frozen):
     # whatever separates them is which points they happened to try. Left unset the
     # sampler seeds itself, which is right for a search that answers to nobody.
     seed: int | None = None
+    # How many values to cut a searched range into, for the grid sampler. A
+    # declaration says a parameter is a float between two bounds; how finely to
+    # walk that is the experiment's to say, and nothing else can answer it.
+    # Unset, a grid over a range is refused rather than resolved by a guess.
+    points: int | None = None
 
     @model_validator(mode="after")
     def _consistent(self) -> "Hpo":
         if min(self.rounds, self.trials_per_round, self.parallel_jobs) < 1:
             raise ValueError("rounds, trials_per_round and parallel_jobs must be positive")
+        if self.points is not None and self.points < 1:
+            raise ValueError("points must be positive")
         if self.parallel_jobs > self.trials_per_round:
             raise ValueError("parallel_jobs must not exceed trials_per_round")
         return self

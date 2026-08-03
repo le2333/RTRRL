@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import math
+
 from dataclasses import dataclass, field
 
 from optuna.distributions import CategoricalDistribution
@@ -62,10 +64,19 @@ def sample_parameters(trial: Trial, resolved: ResolvedParameters) -> dict[str, S
 
 
 def grid_distributions(
-    resolved: ResolvedParameters,
+    resolved: ResolvedParameters, *, points: int | None = None
 ) -> dict[str, CategoricalDistribution]:
+    """Every searched parameter as a finite set the grid can walk.
+
+    A list is already one. A range is laid out over ``points`` values, spaced
+    the way the declaration says it is searched, and an integer range that has
+    fewer values than that gives the values it has. Without ``points`` a range
+    is refused, because how finely to cut one is a question the declaration
+    does not answer and this should not invent.
+    """
+
     built: dict[str, CategoricalDistribution] = {}
-    _grid(resolved.tree, resolved.overrides, built, prefix="")
+    _grid(resolved.tree, resolved.overrides, built, prefix="", points=points)
     return built
 
 
@@ -107,21 +118,57 @@ def _grid(
     built: dict[str, CategoricalDistribution],
     *,
     prefix: str,
+    points: int | None,
 ) -> None:
     for name, node in tree.items():
         key = f"{prefix}{name}"
         if isinstance(node, StructureSpec):
             branch = branch_of(key, node, overrides)
-            _grid(node.branches[branch], overrides, built, prefix=f"{key}.{branch}.")
+            _grid(
+                node.branches[branch],
+                overrides,
+                built,
+                prefix=f"{key}.{branch}.",
+                points=points,
+            )
             continue
         spec = overrides.get(key, node.search)
-        if not isinstance(spec, ChoiceSpec):
+        if isinstance(spec, ChoiceSpec):
+            built[key] = CategoricalDistribution(list(spec.choices))
+            continue
+        if points is None:
             raise SpaceError(
-                "the grid sampler needs every parameter to be a fixed list of "
-                f"values, but {key} is a range; either pin it or use tpe or random"
+                f"the grid sampler needs a finite set for every parameter, and {key} "
+                "is a range; set hpo.points to say how many values to cut it into, "
+                "or pin it to a list, or use the tpe or random sampler"
             )
-        built[key] = CategoricalDistribution(list(spec.choices))
+        built[key] = CategoricalDistribution(_cut(spec, points))
 
+
+
+def _cut(spec: SpaceEntry, points: int) -> list[Scalar]:
+    """A range as evenly spaced values, in the spacing it declares."""
+
+    if points < 1:
+        raise SpaceError(f"hpo.points must be positive, not {points}")
+    low, high = float(spec.low), float(spec.high)
+    if getattr(spec, "log", False):
+        drawn = [
+            math.exp(
+                math.log(low)
+                + (math.log(high) - math.log(low)) * index / max(points - 1, 1)
+            )
+            for index in range(points)
+        ]
+    else:
+        drawn = [low + (high - low) * index / max(points - 1, 1) for index in range(points)]
+    if points == 1:
+        drawn = [low]
+    if isinstance(spec, IntSpec):
+        step = spec.step or 1
+        rounded = sorted({int(spec.low + round((one - spec.low) / step) * step) for one in drawn})
+        return [one for one in rounded if spec.low <= one <= spec.high]
+    return drawn
 
 
 def _check_structure_override(
