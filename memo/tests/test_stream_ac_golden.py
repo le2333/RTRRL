@@ -18,7 +18,6 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-import flax.linen as nn
 import jax
 import jax.numpy as jnp
 import numpy as np
@@ -27,11 +26,13 @@ from conftest import TinyDiscreteEnv, assert_within, deviations, flattened
 
 from memorax.algorithms.stream_ac import StreamAC, StreamACConfig
 from memorax.networks import (
+    FFN,
     RNN,
-    FeatureExtractor,
-    Network,
+    Readout,
     RTUCell,
     RTUConfig,
+    Sequence,
+    Tanh,
     heads,
 )
 from memorax.rl.updates import AdaptiveObBound, ObBound, Sgd
@@ -139,18 +140,19 @@ def agent_for(manifest: dict, variant: str) -> StreamAC:
     env = TinyDiscreteEnv()
 
     def network(head):
-        return Network(
-            feature_extractor=FeatureExtractor(
-                observation_extractor=nn.Sequential((nn.Dense(features), nn.tanh))
-            ),
-            torso=RNN(
-                cell=RTUCell(
-                    config=RTUConfig(
-                        features=features, hidden_dim=int(torso["hidden_dim"])
+        return Sequence(
+            components=(
+                FFN(features=features),
+                Tanh(),
+                RNN(
+                    cell=RTUCell(
+                        config=RTUConfig(
+                            features=features, hidden_dim=int(torso["hidden_dim"])
+                        )
                     )
-                )
-            ),
-            head=head,
+                ),
+                Readout(module=head),
+            )
         )
 
     # The snapshot was recorded when the bounded rule was a boolean and the

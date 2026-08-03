@@ -35,8 +35,7 @@ if TYPE_CHECKING:
     from memorax.algorithms import StreamACConfig as StreamACConfig
     from memorax.algorithms import StreamACState as StreamACState
     from memorax.environments import make as make
-    from memorax.networks import FeatureExtractor as FeatureExtractor
-    from memorax.networks import Network as Network
+    from memorax.networks import Sequence as Sequence
     from memorax.networks import SequenceModel as SequenceModel
     from memorax.networks import SequenceModelWrapper as SequenceModelWrapper
 
@@ -76,8 +75,7 @@ _ALGORITHM_EXPORTS = {
     "StreamACState",
 }
 _NETWORK_EXPORTS = {
-    "FeatureExtractor",
-    "Network",
+    "Sequence",
     "SequenceModel",
     "SequenceModelWrapper",
 }
@@ -92,7 +90,6 @@ __all__ = [
     "SAC",
     "DQNConfig",
     "DQNState",
-    "FeatureExtractor",
     "GradientPPO",
     "GradientPPOConfig",
     "GradientPPOState",
@@ -101,7 +98,7 @@ __all__ = [
     "IndependentRTRRLState",
     "MAPPOConfig",
     "MAPPOState",
-    "Network",
+    "Sequence",
     "PPOConfig",
     "PPOState",
     "PQNConfig",

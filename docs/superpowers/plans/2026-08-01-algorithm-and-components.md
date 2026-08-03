@@ -28,7 +28,7 @@
 - `memo/memorax/rl/td.py`: `td0` takes `terminal` and `gamma` rather than a discount its caller already multiplied.
 - `memo/memorax/rl/updates.py`: `make_bounded_rule(*, bound, base)` over component instances. `make_obgd_rule`, its `rule` string and `BOUNDED_RULES` are deleted.
 - `memo/memorax/rl/normalization.py`: a running estimator that centres or does not, and a discounted trace. Neither names an observation or a reward.
-- `memo/memorax/networks/`: components compose into a sequence. `Network`, `torso.py`'s `TORSOS`/`make_torso`, and `FeatureExtractor` are deleted.
+- `memo/memorax/networks/`: components compose into a sequence. `sequence.py` holds the composition, `components.py` the leaves, `backbones.py` what each branch contributes. `Network` and `FeatureExtractor` move to `memorax/algorithms/slots.py`; `torso.py` and `blocks/stack.py` are deleted.
 - `memo/memorax/algorithms/stream_ac.py`: `StreamACConfig` holds component instances.
 - `memo/entries/stream_ac.py`: declares structures, reads components with `read_branch`, composes. No translation table, no reconciliation.
 
@@ -163,7 +163,7 @@ both kernels; the credit call in both; the `network()` builders in three entries
 `test_blocks`, `test_paper_parity`, `test_lru_parity`, `test_stream_ac_golden` and
 `test_algorithms`, all of which build a network by naming the three slots.
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 Composition is by list, not by three slots. A stateless component ignores the carry; a
 recurrent one is the only thing that contributes to it. `done` reaches the recurrent
@@ -171,13 +171,50 @@ component because it declares that input, not because the network pushes it at e
 stage. Nothing carries `action`, `reward` or an embedding dictionary through. A sequence
 with two recurrent components is refused.
 
-- [ ] **Step 2: Implement, and delete what named its call sites**
+`memo/tests/test_sequence.py`, fourteen tests, red at collection before the modules
+existed.
+
+- [x] **Step 2: Implement, and delete what named its call sites**
 
 `Network`, `FeatureExtractor`, `TORSOS` and `make_torso` are deleted. `meta_rl`'s
 concatenation of the previous action and reward is input composition and moves outside
 the network.
 
-- [ ] **Step 3: Green**
+- [x] **Step 3: Green**
+
+**What landed, beyond what was planned.** Four things, recorded here because they
+are decisions rather than steps.
+
+*A component declares recurrence and what it reads.* `recurrent` and `reads` are
+class attributes, not fields, so a component says whether it carries anything and
+what it needs beyond `x`; the sequence supplies only what was declared, which is
+how `done` reaches the recurrence and reaches nothing else. Detection had to be a
+declaration -- what the tests check is the behaviour it licenses, that every
+entry but one comes back the way it went in.
+
+*The three slots moved rather than vanished.* `upstream_stream_ac` and `rtrrl`
+still take their modules that way, and `test_blocks` drives the first as the
+arithmetic reference for every block we rearranged. `Network` and
+`FeatureExtractor` now live in `memorax/algorithms/slots.py`, beside the kernels
+that speak them and out of the component package, and nothing new builds them.
+`blocks/stack.py` was deleted outright: it was the same idea without the carry
+contract, the naming or the refusal.
+
+*One seed no longer buys both kernels the same start.* Flax draws a parameter
+from the path of the module holding it, and a position in a sequence is not
+spelled the way a named slot is. The composition is identical -- the truncated
+gradient is still upstream's leaf for leaf, through a rename in the test -- but
+the draw is not, so `stream_ac` and `upstream_stream_ac` can no longer be
+compared at a single seed. Task 5 ends that comparison anyway by putting each
+backbone back the way its source has it. The test now asserts what survived and
+says in its name that the rest did not.
+
+*Per-part gradient norms are per place, not per component.* `PARTS` was three
+slot names; a sequence has as many parts as it has components and the count
+changes with the backbone, while `METRICS` is a module constant the catalog
+reads. So `Sequence.split` groups a tree into `before`, `recurrence` and
+`after` -- which is the distinction `subtree_norms` was split for in the first
+place -- and a declared metric name stays a name whichever backbone runs.
 
 ---
 

@@ -19,15 +19,18 @@ from conftest import TinyContinuousEnv
 from training_sdk.rollout import complete_episodes
 
 from memorax.algorithms.rtrrl import RTRRL, RTRRLConfig
+from memorax.algorithms.slots import FeatureExtractor
 from memorax.algorithms.stream_ac import StreamAC, StreamACConfig
 from memorax.networks import (
-    FeatureExtractor,
+    FFN,
     LRUCell,
     LRUConfig,
     Memoroid,
-    Network,
+    Readout,
+    Sequence,
+    Tanh,
+    backbone,
     heads,
-    make_torso,
 )
 from memorax.rl import NormalizationConfig, make_bounded_rule, make_optax_rule
 from memorax.rl.updates import (
@@ -76,7 +79,7 @@ def rtrrl_program(*, record=(), **overrides):
 def stream_ac_program(
     observation_normalization=None,
     reward_normalization=None,
-    backbone="rtu",
+    chosen="rtu",
     record=(),
     adaptive=False,
     fixed=False,
@@ -85,12 +88,13 @@ def stream_ac_program(
     env = TinyContinuousEnv()
 
     def network(head):
-        return Network(
-            feature_extractor=FeatureExtractor(
-                observation_extractor=nn.Sequential((nn.Dense(3), nn.tanh))
-            ),
-            torso=make_torso(backbone, features=3, hidden_dim=2, output_dim=3),
-            head=head,
+        return Sequence(
+            components=(
+                FFN(features=3),
+                Tanh(),
+                *backbone(chosen, features=3, hidden_dim=2, output_dim=3),
+                Readout(module=head),
+            )
         )
 
     bound = ObBound(kappa=2.0)
@@ -151,7 +155,7 @@ PROGRAMS = [
     # A torso with nothing to carry, under the credit that expects to carry
     # something: there is no sensitivity, and the kernel should not need one.
     pytest.param(
-        lambda: stream_ac_program(backbone="mlp"),
+        lambda: stream_ac_program(chosen="mlp"),
         id="stream_ac_memoryless",
     ),
     pytest.param(

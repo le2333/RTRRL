@@ -1,9 +1,8 @@
 """
-What this file fixes is the wiring: the actor and the critic get their own
-feature extractor, their own torso and their own head, sharing nothing. Change
-that and it is a different algorithm, which is why it is written here rather
-than exposed. Every hyperparameter is in ``PARAMETERS``, and an experiment file
-narrows it by pinning single values.
+What this file fixes is the wiring: the actor and the critic get a sequence
+each, sharing nothing. Change that and it is a different algorithm, which is why
+it is written here rather than exposed. Every hyperparameter is in
+``PARAMETERS``, and an experiment file narrows it by pinning single values.
 
 ``credit`` is what makes one entry enough for what used to be two. Under
 ``rtrl`` a sensitivity is carried forward and recurrent parameters are credited
@@ -24,7 +23,6 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Any
 
-import flax.linen as nn
 from training_sdk.episode import metric_names
 from training_sdk.parameters import (
     describe_parameters,
@@ -37,12 +35,15 @@ from training_sdk.reporter import Reporter
 from memorax.algorithms.stream_ac import StreamAC, StreamACConfig
 from memorax.environments import make
 from memorax.networks import (
-    FeatureExtractor,
-    Network,
+    FFN,
+    Readout,
+    ReLU,
+    Sequence,
+    backbone,
     heads,
-    make_torso,
 )
-from memorax.networks.torso import Mlp, Rtu
+from memorax.networks.backbones import Mlp, Rtu
+from memorax.networks.sequence import PLACES
 from memorax.rl import CREDITS, declared_normalizer
 from memorax.rl.normalization import (
     DISCOUNTED_NORMALIZATION_BRANCHES,
@@ -79,8 +80,10 @@ class StreamACParameters:
 
 PARAMETERS = describe_parameters(StreamACParameters)
 
-# 这里要改吧？
-PARTS: tuple[str, ...] = ("feature_extractor", "torso", "head")
+# Where in a sequence a parameter sits, rather than which component it belongs
+# to: exact recurrent credit treats the three places differently, and naming the
+# components instead would make a declared metric depend on which backbone ran.
+PARTS: tuple[str, ...] = PLACES
 
 TRAINING_METRICS: tuple[str, ...] = (
     "update.td_error",
@@ -123,6 +126,7 @@ def _estimator(params: Mapping[str, Any], name: str, branches, *, discount=None)
 def build(params: Mapping[str, Any], environment, training) -> StreamAC:
     """Assemble the agent this file is about."""
 
+    # 参数
     env, env_params = make(
         environment.id,
         observed=environment.observed,
@@ -130,32 +134,25 @@ def build(params: Mapping[str, Any], environment, training) -> StreamAC:
         episode_length=environment.episode_length,
     )
     gamma = float(params["gamma"])
-    backbone = str(params["backbone"])
-    hidden_dim = int(params[f"backbone.{backbone}.hidden_dim"])
+    chosen = str(params["backbone"])
+    hidden_dim = int(params[f"backbone.{chosen}.hidden_dim"])
     feature_dim = (
-        int(params[f"backbone.{backbone}.feature_dim"])
-        if backbone == "rtu"
-        else hidden_dim
+        int(params[f"backbone.{chosen}.feature_dim"]) if chosen == "rtu" else hidden_dim
     )
-    meta_rl = bool(params["meta_rl"])
-
-    def encoder():
-        return nn.Sequential((nn.Dense(feature_dim), nn.relu))
 
     def network(head):
-        return Network(
-            feature_extractor=FeatureExtractor(
-                observation_extractor=encoder(),
-                action_extractor=encoder() if meta_rl else None,
-                reward_extractor=encoder() if meta_rl else None,
-            ),
-            torso=make_torso(
-                backbone,
-                features=feature_dim * (3 if meta_rl else 1),
-                hidden_dim=hidden_dim,
-                output_dim=feature_dim,
-            ),
-            head=head,
+        return Sequence(
+            components=(
+                FFN(features=feature_dim),
+                ReLU(),
+                *backbone(
+                    chosen,
+                    features=feature_dim,
+                    hidden_dim=hidden_dim,
+                    output_dim=feature_dim,
+                ),
+                Readout(module=head),
+            )
         )
 
     action_dim = int(env.action_space(env_params).shape[0])
@@ -170,6 +167,7 @@ def build(params: Mapping[str, Any], environment, training) -> StreamAC:
             critic_base=_optimizer(params, "critic", "base"),
             entropy_coefficient=float(params["entropy_coefficient"]),
             credit=str(params["credit"]),
+            meta_rl=bool(params["meta_rl"]),
         ),
         env,
         env_params,

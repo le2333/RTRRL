@@ -1,7 +1,7 @@
 import flax.linen as nn
 import jax.numpy as jnp
 
-from memorax.networks.blocks import FFN
+from memorax.networks.blocks import TransformerFFN
 from memorax.networks.identity import Identity
 from memorax.utils.typing import Array
 
@@ -62,7 +62,7 @@ class ViT(nn.Module):
 
             skip = x
             x = nn.LayerNorm()(x)
-            _, x = FFN(
+            _, x = TransformerFFN(
                 features=self.features, expansion_factor=int(self.expansion_factor)
             )(x)
             x = skip + x

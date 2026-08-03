@@ -33,6 +33,8 @@ class MemorylessConfig:
 
 
 class Memoryless(SequenceModel):
+    recurrent = False
+    reads = ()
 
     config: MemorylessConfig
 

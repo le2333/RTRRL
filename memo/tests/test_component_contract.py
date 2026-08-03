@@ -6,7 +6,7 @@ import pytest
 from training_sdk.contract import ChoiceSpec, ParameterSpec, StructureSpec
 from training_sdk.parameters import describe_parameters, read_branch
 
-from memorax.networks.torso import Lru, Mlp, Rtu
+from memorax.networks.backbones import Lru, Mlp, Rtu
 from memorax.rl.normalization import DiscountedNormalization, RunningNormalization
 from memorax.rl.updates import Adam, AdaptiveObBound, ObBound, Sgd
 

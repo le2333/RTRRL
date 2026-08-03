@@ -198,3 +198,42 @@ helper 是已删除的 upstream statistics 臂的死代码)、1 catalog(阶段 3
 
 Task 4 的设计已写进计划文件(序列的 carry 是逐组件的列表、信用包住那一个循环组件、meta_rl 的
 拼接移出网络、以及 blast radius),留待下一段执行。
+
+--- 阶段 3 task 4:网络是一个序列 ---
+
+`Sequence(components=(...))`,一步是 `(carries, x) -> (carries, y)`,别的什么都不过这条线。
+组件超出 `x` 需要什么由自己用 `reads` 声明,序列只递声明过的东西;被替掉的三个固定槽是把观测、
+结束、上一步动作、上一步奖励一起推给每一级,所以每个槽为了用一个而得接四个。
+
+carry 是逐组件一条。无状态组件把拿到的那条原样交回,循环组件交回新的 —— "无状态组件不理会
+carry"因此是可检查的而不是约定。序列里只允许一个循环组件:跨两个的精确敏感度要一个稠密的层间
+雅可比,规格把它推迟了,所以在被要求的地方拒绝,而不是把第二个做的事记到第一个头上。
+
+新增 `memorax/networks/{sequence,components,backbones}.py`;`components.py` 里一层只做一件事
+(`FFN` 只是一个仿射、`LayerNorm`、四个激活各自一个、`Readout` 把先于这套协议存在的头包一下)。
+`torso.py` 与 `blocks/stack.py` 删除 —— 后者是同一个想法但没有 carry 契约、没有命名、也不拒绝。
+`blocks/ffn.py` 里那个 Dense→激活→Dense 改名 `TransformerFFN`:它是另一个东西,不该跟序列的
+前馈层同名。
+
+`meta_rl` 的拼接移进内核:上一步动作与奖励并到观测旁边是输入组合,发生在这些值已经在的地方,
+序列看到一个向量。
+
+**三个槽是搬走而不是消失。** `upstream_stream_ac` 与 `rtrrl` 还是那样收模块,而 `test_blocks`
+把前者当作我们拆开的每一块算术的参照在驱动。`Network` 与 `FeatureExtractor` 现在在
+`memorax/algorithms/slots.py`,挨着说这套话的内核,离开组件包,没有新东西建它。
+
+**一个种子不再给两个内核同一个起点。** flax 按持有参数的模块路径抽参数,序列里的位置和具名
+的槽拼法不同。组合是同一个 —— 截断梯度经测试里的一次改名之后仍然逐叶等于 upstream —— 但抽出来
+的值不同,所以 `stream_ac` 与 `upstream_stream_ac` 不能再在单个种子上比。Task 5 把每条 backbone
+按各自来源摆回去,本来也会终结这个比较。那条测试改成断言还成立的部分,并在名字里说清剩下的不成立了。
+
+**逐部件的梯度范数改成逐位置。** `PARTS` 原来是三个槽名;序列的部件数随 backbone 变,而
+`METRICS` 是 catalog 读的模块常量。`Sequence.split` 把树分成 `before` / `recurrence` / `after`
+—— 这本来就是 `subtree_norms` 当初要拆的那个区别 —— 声明出去的指标名因此不随 backbone 变。
+
+验证:`test_sequence.py` 十四条,建立前在收集期就是红的。之后 memo 仍是同一批七条红。
+其中 5 条 golden 现在是**名字**上的红而不只是数值上的:快照记的是
+`actor_params/params/feature_extractor/...`,这些叶子路径已经不存在了。重录金快照时要按序列的
+拼法录。`test_blocks` 里的翻译函数 `as_sequence` 就是这次改名的对照表。
+
+memo-ci 的 CHECKED 里 `memorax/networks/torso.py` 换成三个新文件加 `slots.py`。

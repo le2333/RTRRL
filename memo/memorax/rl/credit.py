@@ -101,13 +101,19 @@ class TruncatedBPTT:
 
 
 def make_credit(kind: str, core):
-    """Build the recurrent credit a kernel asked for by name."""
+    """Build the recurrent credit a kernel asked for by name.
 
-    if kind == "rtrl":
-        return ExactRTRL(core)
-    if kind == "tbptt":
+    A sequence with nothing recurrent in it has no Jacobian to carry anything
+    through, so both settings collapse to the one that carries nothing. That is
+    not a special case being handled: the two differ only in what a carry
+    contributes, and there is no carry.
+    """
+
+    if kind not in CREDITS:
+        raise ValueError(f"unknown credit {kind!r}; use {', '.join(CREDITS)}")
+    if core is None or kind == "tbptt":
         return TruncatedBPTT(core)
-    raise ValueError(f"unknown credit {kind!r}; use {', '.join(CREDITS)}")
+    return ExactRTRL(core)
 
 
 def make_exact_rtrl_credit(core):

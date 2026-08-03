@@ -21,13 +21,13 @@ from training_sdk.episode import metric_names
 from training_sdk.reporter import Reporter
 
 from memorax.algorithms.rtrrl import RTRRL, RTRRLConfig
+from memorax.algorithms.slots import FeatureExtractor
 from memorax.environments import make
 from memorax.networks import (
-    RECURRENT_TORSOS,
-    UPSTREAM_TORSOS,
-    FeatureExtractor,
+    RECURRENT_BACKBONES,
+    UPSTREAM_BACKBONES,
+    backbone,
     heads,
-    make_torso,
 )
 from memorax.rl import NormalizationConfig
 from runner.loop import EPISODE_FIELDS, drive
@@ -38,7 +38,7 @@ _RATE = {"type": "float", "low": 1e-9, "high": 10.0, "log": True}
 SPACE: dict[str, Any] = {
     # The two published revisions of the LRU are offered here and nowhere else:
     # this is the entry whose reproduction they are the reference for.
-    "backbone": [*RECURRENT_TORSOS, *UPSTREAM_TORSOS],
+    "backbone": [*RECURRENT_BACKBONES, *UPSTREAM_BACKBONES],
     "hidden_dim": {"type": "int", "low": 1, "high": 512},
     "feature_dim": {"type": "int", "low": 1, "high": 512},
     "meta_rl": [False, True],
@@ -170,12 +170,12 @@ def build(params: Mapping[str, Any], environment, training) -> RTRRL:
             action_extractor=encoder() if meta_rl else None,
             reward_extractor=encoder() if meta_rl else None,
         ),
-        make_torso(
+        backbone(
             str(params["backbone"]),
             features=feature_dim * (3 if meta_rl else 1),
             hidden_dim=int(params["hidden_dim"]),
             output_dim=feature_dim,
-        ),
+        )[0],
         heads.Gaussian(
             action_dim=int(env.action_space(env_params).shape[0]),
             bound=bool(params["bound_actor"]),

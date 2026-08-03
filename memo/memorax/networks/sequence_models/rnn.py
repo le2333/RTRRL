@@ -46,6 +46,9 @@ class RNNCellBase(nn.recurrent.RNNCellBase):
 
 
 class RNN(SequenceModel):
+    recurrent = True
+    reads = ("done",)
+
     cell: nn.RNNCellBase
     unroll: int = 1
     variable_axes: Mapping[CollectionFilter, InOutScanAxis] = FrozenDict()

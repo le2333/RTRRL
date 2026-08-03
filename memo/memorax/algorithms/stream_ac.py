@@ -1,6 +1,6 @@
 """StreamAC-RTRL: an actor and a critic with separate recurrent networks.
 
-Neither network sees the other's gradient, so there is no shared torso to
+Neither network sees the other's gradient, so there is no shared backbone to
 target and no emphasis to carry. Each keeps its own eligibility trace and each
 steps under its own overshooting bound, which is what lets the pair learn from
 a single transition at a time without a replay buffer.
@@ -64,6 +64,11 @@ class StreamACConfig:
     critic_base: Any = None
     entropy_coefficient: float = 0.01
     credit: str = "rtrl"
+    # Whether the previous action and reward arrive beside the observation.
+    # Composing the input is the kernel's doing -- those values are already
+    # here -- and a network that had a slot for them would be a network that
+    # knew what its caller feeds it.
+    meta_rl: bool = False
     # Whose running statistics to normalise with. Read by ``make_normalizer``
     # when no explicit config is passed, and only meaningful when one of the two
     # normalisation switches is on.
@@ -229,8 +234,8 @@ class StreamAC:
                 "are both enabled"
             )
 
-        self.actor_credit = make_credit(cfg.credit, actor_network.torso)
-        self.critic_credit = make_credit(cfg.credit, critic_network.torso)
+        self.actor_credit = make_credit(cfg.credit, actor_network.core)
+        self.critic_credit = make_credit(cfg.credit, critic_network.core)
         self.actor_rule = make_bounded_rule(bound=cfg.actor_bound, base=cfg.actor_base)
         self.critic_rule = make_bounded_rule(
             bound=cfg.critic_bound, base=cfg.critic_base
@@ -238,41 +243,28 @@ class StreamAC:
         self.td0 = make_td0()
         self.trace_decay = cfg.gamma * cfg.trace_lambda
 
-    def _forward(
-        self,
-        network,
-        credit,
-        params,
-        obs,
-        action,
-        reward,
-        done,
-        carry,
-        sensitivity,
-    ):
-        parameter_tree = params.get("params", params)
-        features, _ = network.feature_extractor.apply(
-            {"params": parameter_tree["feature_extractor"]},
-            observation=obs,
-            action=action,
-            reward=reward,
+    def _input(self, obs, action, reward):
+        """The one vector a sequence sees.
+
+        Under ``meta_rl`` the previous action and reward arrive beside the
+        observation. That is composition of an input, done where those values
+        already are; a network with a slot for each of them would be a network
+        that knew what it was being fed.
+        """
+
+        if not self.cfg.meta_rl:
+            return obs
+        return jnp.concatenate([obs, action, reward], axis=-1)
+
+    def _forward(self, network, credit, params, obs, action, reward, done, carry, s):
+        return network.walk(
+            params,
+            self._input(obs, action, reward),
             done=done,
+            carries=carry,
+            sensitivity=s,
+            credit=credit,
         )
-        next_carry, hidden, next_sensitivity = credit(
-            parameter_tree["torso"],
-            features,
-            done,
-            carry,
-            sensitivity,
-        )
-        output = network.head.apply(
-            {"params": parameter_tree["head"]},
-            hidden,
-            action=action,
-            reward=reward,
-            done=done,
-        )
-        return (next_carry, next_sensitivity), output
 
     def _actor_forward(self, params, obs, action, reward, done, carry, sensitivity):
         return self._forward(
@@ -337,16 +329,14 @@ class StreamAC:
 
     def _initialize_network(self, network, credit, keys, timestep) -> NetworkState:
         carry_shape = (self.cfg.num_envs, None)
-        carry = network.initialize_carry(carry_shape)
+        carry = network.initialize_carry(jax.random.key(0), carry_shape)
         param_key, torso_key, dropout_key = keys
         sensitivity = credit.initialize(param_key, carry_shape)
         obs, done, action, reward = timestep
         with credit.initialization():
             params = network.init(
                 {"params": param_key, "torso": torso_key, "dropout": dropout_key},
-                observation=obs,
-                action=action,
-                reward=reward,
+                self._input(obs, action, reward),
                 done=done,
                 initial_carry=carry,
             )
@@ -529,6 +519,16 @@ class StreamAC:
             sensitivity,
             delta,
         )
+
+    def _readings(self, network, tree):
+        """One norm per place the credit treats differently, per stream.
+
+        Split by position rather than by component, so the reading keeps its
+        shape whatever a sequence is composed of and a declared metric name
+        stays a name whichever backbone is running.
+        """
+
+        return subtree_norms(network.split(tree), streams=True)
 
     def _interaction(
         self,
@@ -810,10 +810,10 @@ class StreamAC:
                 td_error=td_error,
                 actor_step_size=actor_step.metrics["step_size"],
                 critic_step_size=critic_step.metrics["step_size"],
-                actor_grad_norm=subtree_norms(actor_grads, streams=True),
-                critic_grad_norm=subtree_norms(critic_grads, streams=True),
-                actor_trace_norm=subtree_norms(actor_traces, streams=True),
-                critic_trace_norm=subtree_norms(critic_traces, streams=True),
+                actor_grad_norm=self._readings(self.actor_network, actor_grads),
+                critic_grad_norm=self._readings(self.critic_network, critic_grads),
+                actor_trace_norm=self._readings(self.actor_network, actor_traces),
+                critic_trace_norm=self._readings(self.critic_network, critic_traces),
             ),
         )
 
@@ -933,10 +933,14 @@ class StreamAC:
         eval_state = state.replace(
             timestep=timestep,
             env_state=env_state,
-            actor_carry=self.actor_network.initialize_carry(carry_shape),
-            critic_carry=self.critic_network.initialize_carry(carry_shape),
+            actor_carry=self.actor_network.initialize_carry(
+                jax.random.key(0), carry_shape
+            ),
+            critic_carry=self.critic_network.initialize_carry(
+                jax.random.key(0), carry_shape
+            ),
             # Through the credit, not around it: a truncated credit carries no
-            # sensitivity at all, and asking the torso directly hands back a tree
+            # sensitivity at all, and asking the recurrence directly hands back a tree
             # the evaluation step will not produce, which scan rejects.
             actor_sensitivity=self.actor_credit.initialize(
                 jax.random.key(0), carry_shape

@@ -55,6 +55,9 @@ class MemoroidCellBase(nn.Module):
 
 
 class Memoroid(SequenceModel):
+    recurrent = True
+    reads = ("done",)
+
     cell: MemoroidCellBase
 
     def scan_fn(self, z, initial_carry, done):

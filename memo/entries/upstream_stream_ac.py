@@ -38,6 +38,7 @@ import flax.linen as nn
 from training_sdk.episode import metric_names
 from training_sdk.reporter import Reporter
 
+from memorax.algorithms.slots import FeatureExtractor, Network
 from memorax.algorithms.upstream_stream_ac import (
     UpstreamStreamAC,
     UpstreamStreamACConfig,
@@ -47,13 +48,7 @@ from memorax.environments.wrappers.normalize_observation import (
     NormalizeObservationWrapper,
 )
 from memorax.environments.wrappers.normalize_reward import NormalizeRewardWrapper
-from memorax.networks import (
-    TORSOS,
-    FeatureExtractor,
-    Network,
-    heads,
-    make_torso,
-)
+from memorax.networks import BACKBONES, backbone, heads
 from runner.loop import drive
 
 _UNIT = {"type": "float", "low": 0.0, "high": 1.0}
@@ -63,7 +58,7 @@ _RATE = {"type": "float", "low": 1e-9, "high": 10.0, "log": True}
 # upstream does not have, so that one experiment file can be pointed at either
 # entry and mean the same thing.
 SPACE: dict[str, Any] = {
-    "backbone": list(TORSOS),
+    "backbone": list(BACKBONES),
     "hidden_dim": {"type": "int", "low": 1, "high": 512},
     "feature_dim": {"type": "int", "low": 1, "high": 512},
     "meta_rl": [False, True],
@@ -128,12 +123,12 @@ def build(params: Mapping[str, Any], environment, training) -> UpstreamStreamAC:
                 action_extractor=encoder() if meta_rl else None,
                 reward_extractor=encoder() if meta_rl else None,
             ),
-            torso=make_torso(
+            torso=backbone(
                 str(params["backbone"]),
                 features=feature_dim * (3 if meta_rl else 1),
                 hidden_dim=int(params["hidden_dim"]),
                 output_dim=feature_dim,
-            ),
+            )[0],
             head=head,
         )
 

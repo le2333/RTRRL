@@ -15,7 +15,7 @@ from typing import Any, cast
 import jax
 import jax.numpy as jnp
 import pytest
-from test_blocks import ours, upstream
+from test_blocks import ours
 
 from memorax.networks.sequence_models.lru import LRUCarry, LRUCell, LRUConfig
 from memorax.networks.sequence_models.memoroid import Memoroid
@@ -38,8 +38,8 @@ def flops(fn, *args) -> float:
 def gradient_cost(streams: int) -> float:
     """One actor gradient, for a kernel running this many parallel streams."""
 
-    state = upstream(num_envs=streams).init(jax.random.key(0))
     mine = ours(num_envs=streams, credit="tbptt")
+    state = mine.init(jax.random.key(0))
     action = jax.random.normal(jax.random.key(1), (streams, 2), dtype=jnp.float32)
     delta = jax.random.normal(jax.random.key(2), (streams,), dtype=jnp.float32)
 

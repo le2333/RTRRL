@@ -8,7 +8,7 @@ from memorax.utils.typing import Array, Carry, Key
 from .base import Block
 
 
-class FFN(nn.Module, Block):
+class TransformerFFN(nn.Module, Block):
     """Standard feed-forward network: Dense -> Activation -> Dense."""
 
     features: int

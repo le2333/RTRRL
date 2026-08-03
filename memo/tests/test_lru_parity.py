@@ -66,6 +66,7 @@ import pytest
 from conftest import deviations, flattened
 from flax import traverse_util
 
+from memorax.networks.backbones import backbone
 from memorax.networks.sequence_models.lru import LRUCarry, LRUCell, LRUConfig
 from memorax.networks.sequence_models.lru_upstream import (
     PublishedLRUCell,
@@ -76,7 +77,6 @@ from memorax.networks.sequence_models.upstream_lru import OnlineLRULayer
 from memorax.networks.sequence_models.upstream_lru_rewritten import (
     OnlineLRULayer as RewrittenLayer,
 )
-from memorax.networks.torso import make_torso
 
 # The published layer reads out with one matrix whose row count is the field it
 # was constructed with, so its output width and its hidden width are the same
@@ -903,7 +903,9 @@ def test_one_seed_buys_every_arm_the_same_start():
     carry, sensitivity = cold_start(jnp.complex64)
     starts = {}
     for arm in ARMS:
-        torso = make_torso(arm, features=FEATURES, hidden_dim=HIDDEN, output_dim=HIDDEN)
+        (torso,) = backbone(
+            arm, features=FEATURES, hidden_dim=HIDDEN, output_dim=HIDDEN
+        )
         shaped = cast(
             dict,
             torso.init(

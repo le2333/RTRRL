@@ -1,7 +1,15 @@
 import memorax.networks.heads as heads
 import memorax.networks.initializers as initializers
+from memorax.networks.backbones import (
+    BACKBONES,
+    RECURRENT_BACKBONES,
+    UPSTREAM_BACKBONES,
+    Lru,
+    Mlp,
+    Rtu,
+    backbone,
+)
 from memorax.networks.blocks import (
-    FFN,
     GLU,
     GatedResidual,
     MoE,
@@ -10,10 +18,19 @@ from memorax.networks.blocks import (
     Projection,
     Residual,
     SegmentRecurrence,
-    Stack,
     TopKRouter,
+    TransformerFFN,
 )
-from memorax.networks.feature_extractor import FeatureExtractor
+from memorax.networks.components import (
+    FFN,
+    LayerNorm,
+    LeakyReLU,
+    Readout,
+    ReLU,
+    SiLU,
+    Stateless,
+    Tanh,
+)
 from memorax.networks.identity import Identity
 from memorax.networks.layers import (
     BlockDiagonalDense,
@@ -23,12 +40,12 @@ from memorax.networks.layers import (
     MultiHeadLayerNorm,
     ParallelCausalConv1d,
 )
-from memorax.networks.network import Network
 from memorax.networks.positional_embeddings import (
     ALiBi,
     LearnablePositionalEmbedding,
     RoPE,
 )
+from memorax.networks.sequence import Sequence
 from memorax.networks.sequence_models import (
     RNN,
     RTRL,
@@ -77,11 +94,5 @@ from memorax.networks.sequence_models import (
     sLSTMCarry,
     sLSTMCell,
     sLSTMConfig,
-)
-from memorax.networks.torso import (
-    RECURRENT_TORSOS,
-    TORSOS,
-    UPSTREAM_TORSOS,
-    make_torso,
 )
 from memorax.networks.vit import PatchEmbedding, ViT

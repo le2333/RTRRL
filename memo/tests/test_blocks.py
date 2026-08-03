@@ -38,6 +38,7 @@ import jax.numpy as jnp
 import pytest
 from conftest import TinyContinuousEnv, assert_within, deviations, flattened
 
+from memorax.algorithms.slots import FeatureExtractor, Network
 from memorax.algorithms.stream_ac import StreamAC, StreamACConfig
 from memorax.algorithms.upstream_stream_ac import (
     UpstreamStreamAC,
@@ -47,7 +48,16 @@ from memorax.environments.wrappers.normalize_observation import (
     NormalizeObservationWrapper,
 )
 from memorax.environments.wrappers.normalize_reward import NormalizeRewardWrapper
-from memorax.networks import RNN, FeatureExtractor, Network, RTUCell, RTUConfig, heads
+from memorax.networks import (
+    FFN,
+    RNN,
+    Readout,
+    RTUCell,
+    RTUConfig,
+    Sequence,
+    Tanh,
+    heads,
+)
 from memorax.rl import NormalizationConfig, make_bounded_rule, make_normalizer, make_td0
 from memorax.rl.updates import (
     Adam,
@@ -75,7 +85,9 @@ SETTINGS = {
 }
 
 
-def network(head):
+def slotted(head):
+    """Upstream's three slots, which is the shape its kernel is written for."""
+
     return Network(
         feature_extractor=FeatureExtractor(
             observation_extractor=nn.Sequential((nn.Dense(3), nn.tanh))
@@ -83,6 +95,48 @@ def network(head):
         torso=RNN(cell=RTUCell(config=RTUConfig(features=3, hidden_dim=2))),
         head=head,
     )
+
+
+def network(head):
+    """The same composition as a sequence, which is the shape ours takes."""
+
+    return Sequence(
+        components=(
+            FFN(features=3),
+            Tanh(),
+            RNN(cell=RTUCell(config=RTUConfig(features=3, hidden_dim=2))),
+            Readout(module=head),
+        )
+    )
+
+
+def as_sequence(tree):
+    """Upstream's three slots spelled as our four components.
+
+    The same composition either way -- one dense layer, a tanh, the cell, the
+    head -- so this renames and does not rearrange. It exists because the
+    comparisons below hand one implementation's tree to the other, and a slot
+    and a position are two ways of saying where a parameter sits.
+    """
+
+    tree = tree["params"] if "params" in tree else tree
+    return {
+        "params": {
+            "components_0": {
+                "Dense_0": tree["feature_extractor"]["observation_extractor"][
+                    "layers_0"
+                ]
+            },
+            "components_2": tree["torso"],
+            "components_3": {"module": tree["head"]},
+        }
+    }
+
+
+def as_carries(carry):
+    """One carry in the slot that had it, as one entry per component."""
+
+    return [None, None, carry, None]
 
 
 def upstream(**overrides) -> UpstreamStreamAC:
@@ -93,8 +147,8 @@ def upstream(**overrides) -> UpstreamStreamAC:
         UpstreamStreamACConfig(**{**SETTINGS, **overrides}),
         env,
         env.default_params,
-        network(heads.Gaussian(action_dim=2)),
-        network(heads.VNetwork()),
+        slotted(heads.Gaussian(action_dim=2)),
+        slotted(heads.VNetwork()),
     )
 
 
@@ -378,36 +432,39 @@ def test_the_observation_statistics_are_upstreams():
             )
 
 
-def test_one_seed_buys_both_kernels_the_same_start():
-    """The same seed should start the two kernels in the same place.
+def test_one_seed_buys_both_kernels_the_same_shapes_and_no_longer_the_same_draw():
+    """What survived of the same-start claim, and what did not.
 
-    Two implementations of one algorithm can be compared at a single seed only
-    if the seed buys them the same starting parameters; otherwise a run of each
-    at matched hyperparameters compares two different draws, and on a task whose
-    seed spread is hundreds of points that comparison says nothing. The seed is
-    spent here by splitting it seven ways in the reference's order, two of those
-    keys feeding rng streams our networks never ask for, so that every stream
-    both kernels do use receives the same key.
+    The seed is still spent the same way -- split seven ways in the reference's
+    order, two of those keys feeding rng streams our networks never ask for --
+    so both kernels' environments start in the same place and both draw the same
+    parameters in the same shapes.
 
-    Asserted for truncated credit, which is the setting the reference computes.
-    Exact credit initialises the recurrent cell through its Jacobian instead of
-    its forward, and is not claimed to land on the same parameters.
+    The values no longer coincide, and cannot. Flax draws a parameter from the
+    path of the module that owns it, and a position in a sequence is not spelled
+    the way a named slot is; the composition is identical and the draw is not.
+    So a run of each at matched hyperparameters is a comparison of two draws,
+    and on a task whose seed spread is hundreds of points that is not a
+    comparison of the two implementations. Comparing them at one seed was
+    already going to end with the backbones being put back the way their sources
+    have them, which is the next task; this is where it ended.
     """
 
     key = jax.random.key(11)
     mine = ours(credit="tbptt").init(key)
     theirs = upstream().init(key)
 
-    counted = assert_within(
-        flattened(mine.actor_params),
-        flattened(theirs.actor_params),
-        "the actor's start",
-    ) + assert_within(
-        flattened(mine.critic_params),
-        flattened(theirs.critic_params),
-        "the critic's start",
-    )
-    assert counted > 4, f"only {counted} parameters were compared"
+    shapes = {
+        name: leaf.shape
+        for name, leaf in flattened(as_sequence(theirs.actor_params)).items()
+    }
+    assert len(shapes) > 4, f"only {len(shapes)} parameters were compared"
+    assert {
+        name: leaf.shape for name, leaf in flattened(mine.actor_params).items()
+    } == shapes
+    assert deviations(
+        flattened(mine.actor_params), flattened(as_sequence(theirs.actor_params))
+    ), "the two draws agree after all, so this is asserting the wrong thing"
     assert_within(
         flattened(mine.env_state),
         flattened(theirs.env_state),
@@ -549,7 +606,7 @@ def transition(seed: int, done: str):
 # than a batch of many. The gap that leaves is a fraction of a last bit -- 0.5 at
 # worst over the seeds below -- and it appears on that decay alone, because it is
 # the only parameter whose gradient is a reduction rather than an outer product.
-REASSOCIATED = {"params/torso/cell/nu_log": 1.0}
+REASSOCIATED = {"params/components_2/cell/nu_log": 1.0}
 
 
 @pytest.mark.parametrize("seed", range(4))
@@ -578,24 +635,37 @@ def test_the_truncated_gradient_is_upstreams(seed, done):
         "actor": deviations(
             flattened(
                 mine._actor_gradient(
-                    state.actor_params, timestep, state.actor_carry, None, action, delta
+                    as_sequence(state.actor_params),
+                    timestep,
+                    as_carries(state.actor_carry),
+                    None,
+                    action,
+                    delta,
                 )
             ),
             flattened(
-                theirs._actor_gradient(
-                    state.actor_params, timestep, state.actor_carry, action, delta
+                as_sequence(
+                    theirs._actor_gradient(
+                        state.actor_params, timestep, state.actor_carry, action, delta
+                    )
                 )
             ),
         ),
         "critic": deviations(
             flattened(
                 mine._critic_gradient(
-                    state.critic_params, timestep, state.critic_carry, None, delta
+                    as_sequence(state.critic_params),
+                    timestep,
+                    as_carries(state.critic_carry),
+                    None,
+                    delta,
                 )
             ),
             flattened(
-                theirs._critic_gradient(
-                    state.critic_params, timestep, state.critic_carry
+                as_sequence(
+                    theirs._critic_gradient(
+                        state.critic_params, timestep, state.critic_carry
+                    )
                 )
             ),
         ),
@@ -635,12 +705,11 @@ def test_exact_credit_is_not_the_truncated_one():
         empty,
     )
 
+    params, carries = as_sequence(state.actor_params), as_carries(state.actor_carry)
     carried = exact._actor_gradient(
-        state.actor_params, timestep, state.actor_carry, sensitivity, action, delta
+        params, timestep, carries, sensitivity, action, delta
     )
-    cut = truncated._actor_gradient(
-        state.actor_params, timestep, state.actor_carry, None, action, delta
-    )
+    cut = truncated._actor_gradient(params, timestep, carries, None, action, delta)
     assert deviations(flattened(carried), flattened(cut)), (
         "exact and truncated credit produced the same gradient from a "
         "sensitivity that was not zero, so one of them is not doing its job"
