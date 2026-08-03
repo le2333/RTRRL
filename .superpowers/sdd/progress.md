@@ -169,3 +169,32 @@ golden(现在是数值上的,因为重置与 terminal 都改了行为)、1 条 p
 1 条 catalog(阶段 3 的)。ruff / black / isort 全绿。
 
 `test_hopper_reproduction.py` 读的实验文件已被删除,按指示不管。
+
+--- 阶段 3 task 1 与 task 3 ---
+
+提交 761d88f(优化器两轴)、a7c185d(归一化器一个估计器两个实例),中间 8a156a1 是指标容器改名。
+
+**Task 1.** `make_bounded_rule(bound=, base=)` 收组件而不是一个把两件事捆在一起的字符串。
+`StreamACConfig` 每个角色一个界一个基;原先共享的 `bounded_rule`/`beta2`/`eps` 三元组是入口
+必须拒绝"两个角色要不同界"的唯一原因。`adaptive_ob` 与 `adaptive_ob_fixed` 原本共用一个组件
+类,分支交回来的东西说不出自己是哪个 —— 拆出 `AdaptiveObBoundFixed`。朴素界不再累它从来没读过
+的第二矩(那让规则需要一个什么都不改变的衰减率),`test_blocks` 的矩比对因此只对两个自适应界成立。
+`optimizer_bound=none` 走通,界套在 adam 上被拒绝而不是猜。
+
+**Task 3.** 一个估计器两个实例:`center` 决定减不减均值,`discount` 决定它看到的是单步值还是
+折扣累加。`reset`/`step` 变 `begin`/`observe`。奖励估计器从不 begin —— 它看的是累加,回合结束
+时丢掉累加是 `reset_on_done` 的事,而旧的 `reset` 只更新观测那一路,悄悄跳过了奖励那路。内核各
+持两个实例两份统计量。入口的调和整个消失,那条"这个内核只带一套统计量"的 raise 是这个面上最后
+一条。`raw_episode_return` 与每步归一化指标删除:没有入口声明,却每步都算。
+
+契约测试 `test_normalization.py` 直接断言组件不认识自己的调用场景:`Normalizer` 的方法名和三个
+配置类的字段名里不许出现 observation 或 reward(改之前命中七个)。
+
+验证:每一步之后 memo 都是同一批七条红 —— 5 golden、1 paper_parity 归一化(阶段 2 遗留,它的
+helper 是已删除的 upstream statistics 臂的死代码)、1 catalog(阶段 3 的)。ruff/black/isort 全绿。
+
+**一次自造的麻烦:** 跑 black 时给了整个 `memorax` 而 memo-ci 只检查其中一部分,42 个无关文件被
+重排;按 CHECKED 逐一还原了。格式化只按 CI 的范围跑。
+
+Task 4 的设计已写进计划文件(序列的 carry 是逐组件的列表、信用包住那一个循环组件、meta_rl 的
+拼接移出网络、以及 blast radius),留待下一段执行。

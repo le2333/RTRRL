@@ -40,7 +40,7 @@
 - Consumes: `ObBound`, `AdaptiveObBound`, `Sgd`, `Adam` from `memorax/rl/updates.py`.
 - Produces: `make_bounded_rule(*, bound, base)`; `StreamACConfig` with `actor_bound`, `actor_base`, `critic_bound`, `critic_base`.
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 The rule takes the components and the names the configuration surface uses. `bound=None`
 is the unbounded path. Asserting on `BOUNDED_RULES` or on a string named `obgd` means the
@@ -49,12 +49,12 @@ old surface survived and the test is wrong.
 Two roles asking for different bounds is ordinary, not an error: build a config with an
 `ObBound` on one role and an `AdaptiveObBound` on the other and assert it constructs.
 
-- [ ] **Step 2: Implement and delete the old path**
+- [x] **Step 2: Implement and delete the old path**
 
 `make_bounded_rule` replaces `make_obgd_rule`. `BOUNDED_RULES` goes, and with it the
 entry's `_RULES` table, `_optimizer` and `_rate`.
 
-- [ ] **Step 3: Green, and the golden failures are still exactly five**
+- [x] **Step 3: Green, and the golden failures are still exactly five**
 
 ---
 
@@ -114,18 +114,18 @@ distinguish "no update ran" from "this container lacks the field".
 **Interfaces:**
 - Produces: a running estimator parameterised by `center`, and a discounted trace carrying `gamma` and `reset_on_done`.
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 One estimator, instantiated twice. Centred, it subtracts the mean; uncentred it only
 scales. Fed a discounted trace it is the reward path; fed values directly it is the
 observation path. No method and no field may contain the word observation or reward.
 
-- [ ] **Step 2: Implement**
+- [x] **Step 2: Implement**
 
 `_update_observation`/`_normalize_observation` and `_update_reward`/`_scale_reward`
 collapse to one pair. `step`'s two near-identical blocks go with them.
 
-- [ ] **Step 3: Green**
+- [x] **Step 3: Green**
 
 ---
 
@@ -134,12 +134,42 @@ collapse to one pair. `step`'s two near-identical blocks go with them.
 **Interfaces:**
 - Produces: a sequence whose step is `(carries, x) -> (carries, y)`; `FFN`, `LayerNorm`, and the activations as components.
 
+**The shape, worked out against the code it replaces.** Written down here because
+the analysis is most of the work and the wiring is the rest.
+
+`Network.__call__` takes `observation, done, action, reward, initial_carry` and hands
+every one of them to all three slots, so a slot that wants none of them still has to
+accept them, and a slot that wants `done` gets it whether or not it is recurrent. The
+sequence's step is `(carries, x) -> (carries, y)` and nothing else crosses it. What a
+component needs beyond `x` it declares, and the sequence supplies only what it declared.
+
+**The carry is a list, one entry per component.** A stateless component returns the entry
+it was given; a recurrent one returns a new one. That is what makes "a stateless
+component ignores the carry" checkable rather than a convention.
+
+**The credit wraps the recurrent component, not the sequence.** `make_credit(kind, core)`
+takes the thing whose Jacobian the sensitivity is carried through, and today the kernel
+hands it `network.torso`. Under a sequence it is handed the one recurrent entry, which
+the sequence has to be able to name. A sequence with two recurrent components is refused
+here rather than silently credited wrongly -- exact RTRL across two of them needs a dense
+cross-layer sensitivity, which the spec defers.
+
+**`meta_rl` moves out.** Concatenating the previous action and reward with the
+observation is input composition; it happens in the kernel, where those values already
+are, and the sequence sees one vector.
+
+**Blast radius.** `memorax/networks/{network,feature_extractor,torso}.py`; `_forward` in
+both kernels; the credit call in both; the `network()` builders in three entries;
+`test_blocks`, `test_paper_parity`, `test_lru_parity`, `test_stream_ac_golden` and
+`test_algorithms`, all of which build a network by naming the three slots.
+
 - [ ] **Step 1: Write the failing tests**
 
 Composition is by list, not by three slots. A stateless component ignores the carry; a
 recurrent one is the only thing that contributes to it. `done` reaches the recurrent
 component because it declares that input, not because the network pushes it at every
-stage. Nothing carries `action`, `reward` or an embedding dictionary through.
+stage. Nothing carries `action`, `reward` or an embedding dictionary through. A sequence
+with two recurrent components is refused.
 
 - [ ] **Step 2: Implement, and delete what named its call sites**
 
