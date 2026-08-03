@@ -25,7 +25,6 @@ compute:
   timeout_minutes: 30
 
 hpo:
-  sampler: tpe
   rounds: 1
   trials_per_round: 1
   parallel_jobs: 1

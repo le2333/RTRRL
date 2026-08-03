@@ -27,7 +27,6 @@ compute:
   timeout_minutes: 90
 
 hpo:
-  sampler: grid
   rounds: 5
   trials_per_round: 4
   parallel_jobs: 4

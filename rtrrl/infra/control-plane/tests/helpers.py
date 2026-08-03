@@ -60,7 +60,6 @@ def _document() -> dict:
         "evaluation": {"steps": 100, "num_envs": 1},
         "compute": {"instance_type": "c7a.medium", "timeout_minutes": 60},
         "hpo": {
-            "sampler": "tpe",
             "rounds": 1,
             "trials_per_round": 1,
             "parallel_jobs": 1,

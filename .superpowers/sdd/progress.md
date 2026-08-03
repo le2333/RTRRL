@@ -459,3 +459,28 @@ memorax 的逐字节相同,而 memorax 的 `sparse_init` 与 streaming-drl 的�
 
 实测(观测 6 维、mlp、sparse):第一层 fan_in=6 每单元存活 1(原来 0),第二层 fan_in=128 存活 13
 (原规则 12)。
+
+--- 只留 TPE ---
+
+`hpo.sampler` 整个删掉,`grid` 与 `random` 一起删。理由是用户的:那两个都不读已经付过钱的分数
+—— 一个枚举一个均匀抽 —— 那是搜索不是优化;而 TPE 区间与固定集合都吃,于是"参数是离散还是
+连续"完全由声明说了算,采样器对此没有意见。这也就从根上解掉了最初那句"hpo 不该规定参数必须
+离散或连续"。
+
+删除面:`study.py` 的 `SAMPLERS`/`check_sampler`/`_sampler` 的分支、`space.py` 的
+`grid_distributions`/`_grid`、`experiment.py` 的 `Hpo.sampler`、`launch.py` 记录里的
+`sampler` 字段、preflight 与 loop 的接线,以及所有 yaml 里的 `sampler:` 行(examples 三个、
+experiments 两个模板、测试 fixture 一个;archive 是历史记录,没动)。
+
+**连带删掉的**:采样器不会耗尽,所以 `tell_value` 原来返回的"该收手了"标志和 `loop` 里那条
+提前 break 的分支都成了死路,一并删除。
+
+**走过的两段弯路,都记在这里:**
+
+1. 我先做了 `hpo.points`,让网格把区间切成 N 份 —— 那是替用户发明了一个他不会用的旋钮。
+   列表有几个元素就是搜几个点,范围就是连续的,没有第三种。已 revert(`2d77a4c`)。
+2. 然后按"离散空间只有 grid 可用"实现采样器推导,结果 `tests/helpers.py` 的 fixture 直接红了
+   —— 它把 space 全钉成列表却写 `sampler: tpe`,而 TPE 在离散空间上本来就能跑。这说明按
+   "分区"划分可用性是错的,按"能不能搜"才对。这一段也没保留。
+
+control-plane 161 passed(原 171,减去 grid/random/耗尽相关的测试),ruff 全绿。memo 不受影响。

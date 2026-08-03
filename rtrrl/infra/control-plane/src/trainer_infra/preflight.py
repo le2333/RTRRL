@@ -19,10 +19,8 @@ from trainer_infra.space import (
     ResolvedParameters,
     branch_of,
     flatten,
-    grid_distributions,
     resolve_parameters,
 )
-from trainer_infra.study import check_sampler
 
 
 class PreflightError(ValueError):
@@ -59,14 +57,6 @@ def check_offline(experiment: Experiment, catalog: Catalog) -> ResolvedParameter
             f"{experiment.score.metric!r}; it reports: {reported}"
         )
     resolved = resolve_parameters(entry, experiment.space)
-    check_sampler(
-        experiment.hpo.sampler,
-        grid_space=(
-            grid_distributions(resolved)
-            if experiment.hpo.sampler == "grid"
-            else None
-        ),
-    )
     if experiment.score.window_steps[1] > experiment.training.total_steps:
         raise PreflightError(
             f"score window upper bound {experiment.score.window_steps[1]} exceeds "

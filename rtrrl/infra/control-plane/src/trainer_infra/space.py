@@ -2,7 +2,6 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 
-from optuna.distributions import CategoricalDistribution
 from optuna.trial import Trial
 from training_sdk.parameters import flatten, walk
 from training_sdk.contract import (
@@ -61,15 +60,6 @@ def sample_parameters(trial: Trial, resolved: ResolvedParameters) -> dict[str, S
     )
 
 
-def grid_distributions(
-    resolved: ResolvedParameters,
-) -> dict[str, CategoricalDistribution]:
-    built: dict[str, CategoricalDistribution] = {}
-    _grid(resolved.tree, resolved.overrides, built, prefix="")
-    return built
-
-
-
 def branch_of(key: str, node: StructureSpec, overrides: dict[str, SpaceEntry]) -> str:
     override = overrides.get(key)
     if override is None:
@@ -98,30 +88,6 @@ def _suggest(trial: Trial, key: str, spec: SpaceEntry) -> Scalar:
     if isinstance(spec, ChoiceSpec):
         return trial.suggest_categorical(key, list(spec.choices))
     raise SpaceError(f"unsupported space entry for {key}")
-
-
-
-def _grid(
-    tree: dict[str, ParameterNode],
-    overrides: dict[str, SpaceEntry],
-    built: dict[str, CategoricalDistribution],
-    *,
-    prefix: str,
-) -> None:
-    for name, node in tree.items():
-        key = f"{prefix}{name}"
-        if isinstance(node, StructureSpec):
-            branch = branch_of(key, node, overrides)
-            _grid(node.branches[branch], overrides, built, prefix=f"{key}.{branch}.")
-            continue
-        spec = overrides.get(key, node.search)
-        if not isinstance(spec, ChoiceSpec):
-            raise SpaceError(
-                "the grid sampler needs every parameter to be a fixed list of "
-                f"values, but {key} is a range; either pin it or use tpe or random"
-            )
-        built[key] = CategoricalDistribution(list(spec.choices))
-
 
 
 def _check_structure_override(

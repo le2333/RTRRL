@@ -6,7 +6,6 @@ from training_sdk.contract import ChoiceSpec, EntryDescriptor
 
 from trainer_infra.space import (
     SpaceError,
-    grid_distributions,
     resolve_parameters,
     sample_parameters,
 )
@@ -203,29 +202,6 @@ def test_a_structure_may_not_be_given_more_than_one_branch() -> None:
         resolve_parameters(
             entry, {"optimizer_bound": ChoiceSpec.model_validate(["ob", "none"])}
         )
-
-
-def test_the_grid_sampler_enumerates_a_pinned_branch() -> None:
-    entry = make_entry({"optimizer_bound": bound()})
-    resolved = resolve_parameters(
-        entry,
-        {
-            "optimizer_bound": ChoiceSpec.model_validate(["ob"]),
-            "optimizer_bound.ob.kappa": ChoiceSpec.model_validate([1.0, 2.0]),
-        },
-    )
-
-    built = grid_distributions(resolved)
-
-    assert sorted(built) == ["optimizer_bound.ob.kappa"]
-    assert list(built["optimizer_bound.ob.kappa"].choices) == [1.0, 2.0]
-
-
-def test_the_grid_sampler_refuses_a_range() -> None:
-    entry = make_entry({"learning_rate": learning_rate()})
-
-    with pytest.raises(SpaceError, match="learning_rate"):
-        grid_distributions(resolve_parameters(entry, {}))
 
 
 def _spec(raw: dict):

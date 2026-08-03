@@ -235,7 +235,9 @@ critic_optimizer.sgd.lr          critic 那一路的
 
 现状 `ask_round` 调用 `study.ask(dict(distributions))`,一次给出固定分布集(`study.py:79`),`distributions` 由整个 space 一次性构造(`space.py:34`)。改为 `study.ask()` 取得 trial 后按结构树逐层调用 `trial.suggest_*`。条件性在控制面解析完毕,作业提交前参数已全部确定,worker 不受影响。
 
-结构既然不搜,网格就总是给得出:`grid_distributions` 只枚举被选中分支下的参数。`check_sampler`(`study.py:14`)保持原样,仍然只拒绝非法采样器名与 grid 下的连续区间。
+**只留 TPE 一个采样器。** `grid` 与 `random` 都不读已经付过钱的分数 —— 一个枚举,一个均匀抽 —— 那不是优化,是搜索,而这个循环存在的目的是优化。TPE 同时接受区间与固定集合,于是"参数是离散还是连续"完全由声明决定,采样器对此没有意见:`hpo.sampler` 整个字段删除,`grid_distributions` 与 `check_sampler` 一并删除。
+
+采样器不会耗尽,所以 `tell_value` 原来那条"网格走完了就提前收手"的返回值,以及 `loop` 里对应的分支,也随之删除。
 
 本轮不引入通用跨参数约束语言。算法参数之间若存在"某选择下该参数才有意义",用结构树表达;训练循环的整除性归 `TrainingConfig` 校验;除此之外,参数声明保持独立。preflight 可以拒绝显然不成立的固定结构组合,但不把这类检查扩展成一套任意布尔/算术约束系统。
 

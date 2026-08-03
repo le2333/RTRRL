@@ -26,7 +26,6 @@ class Compute(_Frozen):
 
 
 class Hpo(_Frozen):
-    sampler: Literal["tpe", "random", "grid"]
     rounds: int
     trials_per_round: int
     parallel_jobs: int

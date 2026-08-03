@@ -10,7 +10,7 @@ from trainer_infra.backends.base import Backend
 from trainer_infra.launch import Launch, build_run_config
 from trainer_infra.packing import publish_round
 from trainer_infra.report import Report, TrialRecord
-from trainer_infra.space import grid_distributions, sample_parameters
+from trainer_infra.space import sample_parameters
 from trainer_infra.study import ask_round, create_study, tell_value
 
 LOG_TAIL_LINES = 200
@@ -28,7 +28,6 @@ def run_launch(
     study = create_study(
         name=f"{experiment.name}-{launch.launch_id}",
         storage_path=launch.archive / "study.db",
-        sampler=experiment.hpo.sampler,
         direction=experiment.score.direction,
         user_attrs={
             "experiment": experiment.experiment,
@@ -38,11 +37,6 @@ def run_launch(
             "digest": launch.plan.digest,
         },
         round_size=experiment.hpo.trials_per_round,
-        grid_space=(
-            grid_distributions(launch.plan.parameters)
-            if experiment.hpo.sampler == "grid"
-            else None
-        ),
         seed=experiment.hpo.seed,
     )
 
@@ -90,10 +84,9 @@ def run_launch(
                 for trial_number in plan.trials
             }
             submitted = []
-            exhausted = False
             for trial, config, chosen in zip(trials, configs, drawn, strict=True):
                 value = _read_score(config.score.s3)
-                exhausted |= tell_value(study, trial, value)
+                tell_value(study, trial, value)
                 result = owner[trial.number]
                 records.append(
                     TrialRecord(
@@ -105,16 +98,6 @@ def run_launch(
                     )
                 )
                 printer(f"trial {trial.number}: {chosen} -> {value}")
-            if exhausted:
-                # A grid with nothing left would spend the remaining rounds
-                # re-running points it has already paid for.
-                remaining = experiment.hpo.rounds - round_index - 1
-                if remaining:
-                    printer(
-                        f"the search space is exhausted; skipping {remaining} "
-                        f"remaining round(s)"
-                    )
-                break
     except BaseException as failure:
         # Every abnormal end leaves the same evidence behind: an unexpected
         # exception on a paid run is exactly when an archived report matters, and

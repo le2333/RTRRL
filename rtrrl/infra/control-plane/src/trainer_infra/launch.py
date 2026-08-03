@@ -60,7 +60,6 @@ def create_launch(
         "digest": plan.digest,
         "queue": plan.queue,
         "job_definition": plan.job_definition,
-        "sampler": experiment.hpo.sampler,
         "rounds": experiment.hpo.rounds,
         "trials_per_round": experiment.hpo.trials_per_round,
         "parallel_jobs": experiment.hpo.parallel_jobs,
