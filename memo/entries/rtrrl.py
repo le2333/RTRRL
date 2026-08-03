@@ -182,10 +182,15 @@ def build(params: Mapping[str, Any], environment, training) -> RTRRL:
         ),
         heads.VNetwork(),
         activation=jax.nn.silu,
-        normalization=NormalizationConfig(
-            normalize_observation=bool(params["normalize_observation"]),
-            normalize_reward=bool(params["normalize_reward"]),
-            reward_gamma=gamma,
+        observation_normalization=(
+            NormalizationConfig(center=True)
+            if bool(params["normalize_observation"])
+            else None
+        ),
+        reward_normalization=(
+            NormalizationConfig(center=False, discount=gamma)
+            if bool(params["normalize_reward"])
+            else None
         ),
         record=RECORD,
     )

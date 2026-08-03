@@ -324,9 +324,7 @@ def test_the_observation_statistics_are_upstreams():
 
     epsilon = 1e-8
     wrapper = NormalizeObservationWrapper(TinyContinuousEnv(), eps=epsilon)
-    normalizer = make_normalizer(
-        NormalizationConfig(normalize_observation=True, eps=epsilon)
-    )
+    normalizer = make_normalizer(NormalizationConfig(center=True, eps=epsilon))
 
     key = jax.random.key(3)
     rollout = [
@@ -352,19 +350,12 @@ def test_the_observation_statistics_are_upstreams():
         for env in range(ENVS)
     ]
 
-    normalized, state = normalizer.reset(rollout[0])
+    normalized, statistics = normalizer.begin(rollout[0])
     for step, observation in enumerate(rollout):
         if step:
-            outcome = normalizer.step(
-                state,
-                observation=observation,
-                reward=jnp.zeros((ENVS,), dtype=jnp.float32),
-                done=jnp.zeros((ENVS,), dtype=bool),
+            normalized, statistics = normalizer.observe(
+                statistics, observation, done=jnp.zeros((ENVS,), dtype=bool)
             )
-            normalized, state = outcome.observation, outcome.state
-
-        statistics = state.observation
-        assert statistics is not None, "the normaliser stopped keeping statistics"
 
         for env in range(ENVS):
             upstream_stats[env], expected = theirs(
@@ -449,11 +440,10 @@ def test_the_reward_scale_is_upstreams():
     params: Any = env.default_params
     wrapper = NormalizeRewardWrapper(env, gamma=gamma, eps=epsilon)
     normalizer = make_normalizer(
-        NormalizationConfig(normalize_reward=True, reward_gamma=gamma, eps=epsilon)
+        NormalizationConfig(center=False, discount=gamma, eps=epsilon)
     )
 
     actions = jax.random.normal(jax.random.key(5), (6, ENVS, 2), dtype=jnp.float32)
-    nothing = jnp.zeros((ENVS, 2), dtype=jnp.float32)
 
     def row(state, action):
         """One stream through the wrapper, which is written for one."""
@@ -481,27 +471,23 @@ def test_the_reward_scale_is_upstreams():
         )
 
     # Ours: the whole batch at once, fed the reward the wrapper says was paid.
-    _, state = normalizer.reset(nothing)
+    # No opening value: what this estimator sees is the accumulation, and an
+    # episode's first step is where that starts.
+    statistics = normalizer.initial(jnp.zeros((ENVS,), dtype=jnp.float32))
     for step, theirs in enumerate(rollout):
-        outcome = normalizer.step(
-            state,
-            observation=nothing,
-            reward=theirs["paid"],
-            done=theirs["done"],
+        scaled, statistics = normalizer.observe(
+            statistics, theirs["paid"], done=theirs["done"]
         )
-        state = outcome.state
-        statistics = state.reward
-        assert (
-            statistics is not None
-        ), "the normaliser stopped keeping reward statistics"
         assert_within(
             flattened(
                 {
-                    "scaled": outcome.reward,
+                    "scaled": scaled,
                     "mean": statistics.mean,
                     "M2": statistics.M2,
                     "count": statistics.count,
-                    "G": statistics.G,
+                    # The accumulation the estimator is fed, which upstream
+                    # keeps under its own name.
+                    "G": statistics.trace,
                 }
             ),
             flattened(

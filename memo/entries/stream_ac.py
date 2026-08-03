@@ -43,11 +43,10 @@ from memorax.networks import (
     make_torso,
 )
 from memorax.networks.torso import Mlp, Rtu
-from memorax.rl import CREDITS, NormalizationConfig
+from memorax.rl import CREDITS, declared_normalizer
 from memorax.rl.normalization import (
+    DISCOUNTED_NORMALIZATION_BRANCHES,
     NORMALIZATION_BRANCHES,
-    REWARD_NORMALIZATION_BRANCHES,
-    RunningNormalization,
 )
 from memorax.rl.updates import BASE_BRANCHES, BOUND_BRANCHES
 from runner.loop import EPISODE_FIELDS, drive
@@ -70,7 +69,7 @@ class StreamACParameters:
         placeholder="running", branches=NORMALIZATION_BRANCHES
     )
     reward_normalization: str = structure(
-        placeholder="running", branches=REWARD_NORMALIZATION_BRANCHES
+        placeholder="running", branches=DISCOUNTED_NORMALIZATION_BRANCHES
     )
     actor_optimizer_bound: str = structure(placeholder="ob", branches=BOUND_BRANCHES)
     actor_optimizer_base: str = structure(placeholder="sgd", branches=BASE_BRANCHES)
@@ -113,41 +112,12 @@ def _optimizer(params: Mapping[str, Any], role: str, axis: str):
     return component
 
 
-def _normalization(params: Mapping[str, Any], *, reward_gamma: float):
-    _, observation = read_branch(
-        params, "observation_normalization", NORMALIZATION_BRANCHES
-    )
-    _, reward = read_branch(
-        params, "reward_normalization", REWARD_NORMALIZATION_BRANCHES
-    )
-    running = [one for one in (observation, reward) if one is not None]
-    shared = {
-        (
-            one.cold_start,
-            one.variance,
-            one.eps,
-            one.reset_on_start,
-            one.update_during_eval,
-        )
-        for one in running
-    }
-    if len(shared) > 1:
-        raise ValueError(
-            "this kernel carries one set of running statistics for both streams, "
-            "and the two normalisers ask for different ones"
-        )
-    first = running[0] if running else RunningNormalization()
-    return NormalizationConfig(
-        normalize_observation=observation is not None,
-        normalize_reward=reward is not None,
-        eps=first.eps,
-        reward_gamma=reward_gamma,
-        reset_on_start=first.reset_on_start,
-        update_during_eval=first.update_during_eval,
-        cold_start=first.cold_start,
-        variance=first.variance,
-        reward_trace_reset_on_done=True if reward is None else reward.reset_on_done,
-    )
+def _estimator(params: Mapping[str, Any], name: str, branches, *, discount=None):
+    """The estimator one stream declared, or none if it declared none."""
+
+    _, component = read_branch(params, name, branches)
+    normalizer = declared_normalizer(component, discount=discount)
+    return None if normalizer is None else normalizer.config
 
 
 def build(params: Mapping[str, Any], environment, training) -> StreamAC:
@@ -205,7 +175,15 @@ def build(params: Mapping[str, Any], environment, training) -> StreamAC:
         env_params,
         network(heads.Gaussian(action_dim=action_dim)),
         network(heads.VNetwork()),
-        normalization=_normalization(params, reward_gamma=gamma),
+        observation_normalization=_estimator(
+            params, "observation_normalization", NORMALIZATION_BRANCHES
+        ),
+        reward_normalization=_estimator(
+            params,
+            "reward_normalization",
+            DISCOUNTED_NORMALIZATION_BRANCHES,
+            discount=gamma,
+        ),
         record=RECORD,
     )
 

@@ -66,8 +66,6 @@ class InteractionMetrics:
     done: Any = None
     terminal: Any = None
     info: Any = None
-    normalization: Any = None
-    raw_episode_return: Any = None
 
 
 @struct.dataclass

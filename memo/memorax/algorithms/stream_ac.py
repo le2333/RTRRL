@@ -30,7 +30,6 @@ from memorax.rl import (
     make_credit,
     make_normalizer,
     make_td0,
-    normalization_metrics,
 )
 from memorax.utils import Timestep
 from memorax.utils.axes import (
@@ -124,7 +123,8 @@ class StreamACState:
     critic_v: Any
     critic_carry: Any
     critic_sensitivity: Any
-    normalizer_state: Any = None
+    observation_statistics: Any = None
+    reward_statistics: Any = None
 
 
 @struct.dataclass(frozen=True)
@@ -189,7 +189,8 @@ class StreamAC:
         actor_network: Any,
         critic_network: Any,
         *,
-        normalization: Any = None,
+        observation_normalization: Any = None,
+        reward_normalization: Any = None,
         evaluation: EvaluationConfig | None = None,
         record: Iterable[str] = (),
     ) -> None:
@@ -204,18 +205,24 @@ class StreamAC:
         # reduces is never stacked and a field somebody does is never missing.
         self.record = frozenset(record)
 
-        declared = make_normalizer(normalization or cfg)
-        self.normalizer = make_normalizer(
-            replace(
-                declared.config,
-                reset_on_start=evaluation.reset_on_start,
-                update_during_eval=evaluation.update_during_eval,
+        # One estimator per stream, each knowing nothing about the other. The
+        # kernel names them because it is the thing that holds them.
+        def estimator(declared):
+            if declared is None:
+                return None
+            return make_normalizer(
+                replace(
+                    declared,
+                    reset_on_start=evaluation.reset_on_start,
+                    update_during_eval=evaluation.update_during_eval,
+                )
             )
-        )
-        self.normalizing = (
-            self.normalizer.config.normalize_observation
-            or self.normalizer.config.normalize_reward
-        )
+
+        self.observation_normalizer = estimator(observation_normalization)
+        self.reward_normalizer = estimator(reward_normalization)
+        self.normalizing = bool(self.observation_normalizer or self.reward_normalizer)
+        self._resets_on_start = evaluation.reset_on_start
+        self._updates_during_eval = evaluation.update_during_eval
         if self.normalizing and environment_owns_normalization(env):
             raise ValueError(
                 "normalization owner conflict: wrapper and program normalization "
@@ -377,9 +384,13 @@ class StreamAC:
             env_keys,
             self.env_params,
         )
-        normalizer_state = None
-        if self.normalizing:
-            obs, normalizer_state = self.normalizer.reset(obs)
+        observation_statistics = reward_statistics = None
+        if self.observation_normalizer is not None:
+            obs, observation_statistics = self.observation_normalizer.begin(obs)
+        if self.reward_normalizer is not None:
+            reward_statistics = self.reward_normalizer.initial(
+                jnp.zeros((self.cfg.num_envs,), dtype=jnp.float32)
+            )
         action_space = self.env.action_space(self.env_params)
         action = jnp.zeros(
             (self.cfg.num_envs, *action_space.shape),
@@ -418,7 +429,8 @@ class StreamAC:
             critic_v=critic.v,
             critic_carry=critic.carry,
             critic_sensitivity=critic.sensitivity,
-            normalizer_state=normalizer_state,
+            observation_statistics=observation_statistics,
+            reward_statistics=reward_statistics,
         )
 
     def _actor_gradient(self, params, timestep, carry, sensitivity, action, delta):
@@ -528,9 +540,7 @@ class StreamAC:
         done,
         terminal,
         info,
-        normalizer_state,
         action_decision=None,
-        raw_episode_return=None,
     ) -> InteractionMetrics:
         """One transition, with the trajectory kept only if something reads it.
 
@@ -549,10 +559,6 @@ class StreamAC:
             done=done,
             terminal=terminal,
             info=info,
-            normalization=normalization_metrics(
-                normalizer_state, self.normalizer.config.eps
-            ),
-            raw_episode_return=raw_episode_return,
         )
 
     def _restarted(self, key, state, *, update=True):
@@ -570,19 +576,21 @@ class StreamAC:
         obs, env_state = jax.vmap(self.env.reset, in_axes=(0, None))(
             keys, self.env_params
         )
-        normalizer_state = state.normalizer_state
-        if self.normalizing:
-            obs, normalizer_state = self.normalizer.reset(
-                obs, normalizer_state, update=update
+        statistics = state.observation_statistics
+        if self.observation_normalizer is not None:
+            obs, statistics = self.observation_normalizer.begin(
+                obs, statistics, update=update
             )
+        # The reward estimator is not begun: what it sees is an accumulation,
+        # and dropping that at an ending is ``reset_on_done``'s business.
         done = state.timestep.done
         return state.replace(
             timestep=state.timestep.replace(
                 obs=_where_done(done, obs, state.timestep.obs)
             ),
             env_state=_where_done(done, env_state, state.env_state),
-            normalizer_state=_where_done(
-                done, normalizer_state, state.normalizer_state
+            observation_statistics=_where_done(
+                done, statistics, state.observation_statistics
             ),
         )
 
@@ -636,19 +644,16 @@ class StreamAC:
         # auto-reset replaced. At a truncation the bootstrap survives, so it has
         # to value where the episode stopped rather than where the next starts.
         next_terminal = terminal_of(info, next_done)
-        normalizer_state = state.normalizer_state
-        raw_episode_return = None
-        if self.normalizing:
-            normalized = self.normalizer.step(
-                normalizer_state,
-                observation=next_obs,
-                reward=next_reward,
-                done=next_done,
+        observation_statistics = state.observation_statistics
+        reward_statistics = state.reward_statistics
+        if self.observation_normalizer is not None:
+            next_obs, observation_statistics = self.observation_normalizer.observe(
+                observation_statistics, next_obs, done=next_done
             )
-            next_obs = normalized.observation
-            next_reward = normalized.reward
-            normalizer_state = normalized.state
-            raw_episode_return = normalized.raw_episode_return
+        if self.reward_normalizer is not None:
+            next_reward, reward_statistics = self.reward_normalizer.observe(
+                reward_statistics, next_reward, done=next_done
+            )
         next_obs_s, next_done_s, next_action_s, next_reward_s = Timestep(
             obs=next_obs,
             action=sampled_action,
@@ -781,7 +786,8 @@ class StreamAC:
             critic_v=critic_v,
             critic_carry=critic_carry,
             critic_sensitivity=critic_sensitivity,
-            normalizer_state=normalizer_state,
+            observation_statistics=observation_statistics,
+            reward_statistics=reward_statistics,
         )
         return next_state, StepMetrics(
             interaction=self._interaction(
@@ -793,8 +799,6 @@ class StreamAC:
                 done=next_done,
                 terminal=next_terminal,
                 info=info,
-                normalizer_state=normalizer_state,
-                raw_episode_return=raw_episode_return,
             ),
             forward=ForwardMetrics(
                 value=value,
@@ -821,7 +825,7 @@ class StreamAC:
         restart_key, action_key, env_key = jax.random.split(step_key, 3)
         del action_key
         current = self._restarted(
-            restart_key, current, update=self.normalizer.config.update_during_eval
+            restart_key, current, update=self._updates_during_eval
         )
         obs_s, done_s, action_s, reward_s = current.timestep.to_sequence()
         (actor_carry, actor_sensitivity), (dist, _) = self._actor_forward(
@@ -841,23 +845,27 @@ class StreamAC:
         next_obs, next_env_state, next_reward, next_done, info = jax.vmap(
             self.env.step, in_axes=(0, 0, 0, None)
         )(step_keys, current.env_state, chosen, self.env_params)
-        next_normalizer_state = current.normalizer_state
+        observation_statistics = current.observation_statistics
+        reward_statistics = current.reward_statistics
         # What the environment paid, kept before normalisation overwrites
         # it. Episode returns and the score are read off the summary below,
         # and those are statements about the task, not about the scale the
         # agent happens to be learning on.
         environment_reward = jnp.asarray(next_reward, dtype=jnp.float32)
-        if self.normalizing:
-            normalized = self.normalizer.step(
-                next_normalizer_state,
-                observation=next_obs,
-                reward=next_reward,
+        if self.observation_normalizer is not None:
+            next_obs, observation_statistics = self.observation_normalizer.observe(
+                observation_statistics,
+                next_obs,
                 done=next_done,
-                update=self.normalizer.config.update_during_eval,
+                update=self._updates_during_eval,
             )
-            next_obs = normalized.observation
-            next_reward = normalized.reward
-            next_normalizer_state = normalized.state
+        if self.reward_normalizer is not None:
+            next_reward, reward_statistics = self.reward_normalizer.observe(
+                reward_statistics,
+                next_reward,
+                done=next_done,
+                update=self._updates_during_eval,
+            )
         broadcast_dims = tuple(
             range(current.timestep.done.ndim, current.timestep.action.ndim)
         )
@@ -877,7 +885,8 @@ class StreamAC:
             env_state=next_env_state,
             actor_carry=actor_carry,
             actor_sensitivity=actor_sensitivity,
-            normalizer_state=next_normalizer_state,
+            observation_statistics=observation_statistics,
+            reward_statistics=reward_statistics,
         ), StepMetrics(
             interaction=self._interaction(
                 observation=current.timestep.obs,
@@ -887,7 +896,6 @@ class StreamAC:
                 done=next_done,
                 terminal=terminal_of(info, next_done),
                 info=info,
-                normalizer_state=next_normalizer_state,
             ),
             forward=ForwardMetrics(),
         )
@@ -898,16 +906,19 @@ class StreamAC:
         obs, env_state = jax.vmap(self.env.reset, in_axes=(0, None))(
             reset_keys, self.env_params
         )
-        normalizer_state = state.normalizer_state
-        if self.normalizing:
-            if self.normalizer.config.reset_on_start:
-                obs, normalizer_state = self.normalizer.reset(obs)
-            else:
-                obs, normalizer_state = self.normalizer.reset(
-                    obs,
-                    normalizer_state,
-                    update=self.normalizer.config.update_during_eval,
-                )
+        # A rollout either opens on statistics of its own or carries the ones
+        # training built; either way the observation it opens on goes through.
+        fresh = self._resets_on_start
+        observation_statistics = None if fresh else state.observation_statistics
+        reward_statistics = None if fresh else state.reward_statistics
+        if self.observation_normalizer is not None:
+            obs, observation_statistics = self.observation_normalizer.begin(
+                obs, observation_statistics, update=fresh or self._updates_during_eval
+            )
+        if self.reward_normalizer is not None and reward_statistics is None:
+            reward_statistics = self.reward_normalizer.initial(
+                jnp.zeros((self.cfg.num_envs,), dtype=jnp.float32)
+            )
         action_space = self.env.action_space(self.env_params)
         action = jnp.zeros(
             (self.cfg.num_envs, *action_space.shape), dtype=action_space.dtype
@@ -933,7 +944,8 @@ class StreamAC:
             critic_sensitivity=self.critic_credit.initialize(
                 jax.random.key(0), carry_shape
             ),
-            normalizer_state=normalizer_state,
+            observation_statistics=observation_statistics,
+            reward_statistics=reward_statistics,
         )
         step_keys = jax.random.split(eval_key, num_steps)
         return jax.lax.scan(self._evaluate_step, eval_state, step_keys)

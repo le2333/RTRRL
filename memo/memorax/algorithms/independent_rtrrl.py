@@ -127,8 +127,9 @@ class IndependentRTRRL:
     normalizer: Any = field(default=None, init=False)
 
     def __post_init__(self):
-        config = self.program_normalization or NormalizationConfig()
-        self.normalizer = make_normalizer(config)
+        self.normalizer = make_normalizer(
+            self.program_normalization or NormalizationConfig()
+        )
 
     def _forward(
         self,

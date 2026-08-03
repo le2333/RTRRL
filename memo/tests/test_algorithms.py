@@ -74,7 +74,8 @@ def rtrrl_program(*, record=(), **overrides):
 
 
 def stream_ac_program(
-    normalization=None,
+    observation_normalization=None,
+    reward_normalization=None,
     backbone="rtu",
     record=(),
     adaptive=False,
@@ -113,7 +114,8 @@ def stream_ac_program(
         env.default_params,
         network(heads.Gaussian(action_dim=2)),
         network(heads.VNetwork()),
-        normalization=normalization,
+        observation_normalization=observation_normalization,
+        reward_normalization=reward_normalization,
         record=record,
     )
     return agent.init, agent.train, agent.evaluate
@@ -196,9 +198,10 @@ def test_evaluation_reports_the_reward_the_environment_gave():
     it incomparable to anything recorded before.
     """
 
-    normalization = NormalizationConfig(normalize_reward=True)
     plain = stream_ac_program()
-    normalized = stream_ac_program(normalization=normalization)
+    normalized = stream_ac_program(
+        reward_normalization=NormalizationConfig(center=False, discount=0.9)
+    )
 
     # The networks here read observations only, so scaling the reward cannot
     # move the policy: the two rollouts differ in what they report, not in
