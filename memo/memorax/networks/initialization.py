@@ -1,7 +1,7 @@
 """How a weight is drawn, as a structure with a branch per way.
 
-Biases are zero either way, which is what both sources do, so only the kernel
-has a branch here.
+``lecun`` is flax's own default for ``nn.Dense``; ``sparse`` is the one
+streaming-drl chose. Biases are zero either way, so only the kernel branches.
 """
 
 from __future__ import annotations

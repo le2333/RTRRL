@@ -1,9 +1,13 @@
 """How weights are drawn is a structure, so both ways are selectable.
 
-streaming-drl's ``initialize_weights`` puts ``sparse_init(sparsity=0.9)`` on
-every ``nn.Linear`` including the heads and zeroes every bias; memorax draws
-``lecun_normal``. Both are here as branches rather than one being written into
-the components.
+``sparse`` is streaming-drl's: ``initialize_weights`` puts
+``sparse_init(sparsity=0.9)`` on every ``nn.Linear`` including the heads and
+zeroes every bias.
+
+``lecun`` is the framework default rather than anyone's choice -- flax's
+``nn.Dense`` initialises its kernel with ``lecun_normal()`` unless told
+otherwise, and memorax writes that same default down in its blocks and heads
+while its own StreamAC example passes a bare ``nn.Dense``.
 """
 
 from __future__ import annotations

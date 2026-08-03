@@ -328,6 +328,12 @@ backbone 里每个 `FFN` 和两个头。
 placeholder 取 `lecun` 而不是 `sparse`:不让默认行为悄悄变。实验要复现 streaming-drl 就在
 `space` 里钉 `initialization: [sparse]`。
 
+**`lecun` 是框架默认,不是谁的方案。** flax 的 `nn.Dense` 默认 kernel 初始化就是
+`lecun_normal()`(源码 `default_kernel_init = initializers.lecun_normal()`,同 key 抽出来
+逐位相同)。memorax 在 `blocks/ffn.py` 和 `heads.py` 里把这个默认值显式写了一遍,而它自己的
+StreamAC 例子用裸 `nn.Dense`,吃的还是它。所以这条分支的含义是"没人选过",跟 `sparse`
+(streaming-drl 专门写了 `sparse_init.py` 挑的)不是一个性质。
+
 偏置两边都是零,所以只有 kernel 有分支。
 
 `Sparse` 加进 `test_component_contract.py` 的 COMPONENTS。契约测试 `test_initialization.py` 六条,
