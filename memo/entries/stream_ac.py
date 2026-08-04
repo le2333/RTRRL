@@ -45,7 +45,7 @@ BACKBONE_BRANCHES = {"rtu": Rtu, "mlp": Mlp}
 CREDIT_BRANCHES = {name: () for name in CREDITS}
 
 
-# 接线参数
+# 结构参数表
 @dataclass(frozen=True)
 class StreamACParameters:
     backbone: str = structure(placeholder="rtu", branches=BACKBONE_BRANCHES)
@@ -77,6 +77,7 @@ PARAMETERS = describe_parameters(StreamACParameters)
 # backbone and METRICS is fixed at import.
 PARTS: tuple[str, ...] = PLACES
 
+# 需记录的字段
 TRAINING_METRICS: tuple[str, ...] = (
     "update.td_error",
     "update.actor_step_size",
@@ -92,6 +93,7 @@ TRAINING_METRICS: tuple[str, ...] = (
     ),
 )
 
+# 指标汇总
 METRICS: tuple[str, ...] = metric_names("train", TRAINING_METRICS) + metric_names(
     "eval"
 )
