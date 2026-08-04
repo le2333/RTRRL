@@ -12,6 +12,7 @@
 /logs/
 /archive/
 /__pycache__/
+/.worktrees/
 
 # Ephemeral Aim "test" repo for debug runs (AIM_SCRATCH_REPO, see logging_util).
 # Validation-only, never backed up to S3; safe to delete anytime.
