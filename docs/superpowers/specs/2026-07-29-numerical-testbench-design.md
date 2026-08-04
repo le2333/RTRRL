@@ -352,10 +352,9 @@ whole verdict available to the golden comparison; a recording of one point does
 not, whatever tooling is later put around it.
 
 **Bit-identity across environments is not claimed.** It is not achievable in
-float32 under XLA, and this is already the repository's position: the golden
-test asserts the jax version matches the recording, and
-`memo/docs/superpowers/specs/2026-07-20-rtrrl-numerical-modularization-design.md`
-states that snapshots are regression tests rather than proof.
+float32 under XLA. The golden test only asserts that the JAX version matches a
+fixed recording, so the snapshot is a regression test rather than proof of
+cross-environment bit identity.
 
 **The deferred precision test needs precision to be injectable.**
 `memo/memorax/` names `float32` or `complex64` in 137 places, so precision is
