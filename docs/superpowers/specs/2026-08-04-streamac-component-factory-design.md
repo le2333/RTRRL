@@ -97,9 +97,11 @@ StreamACFactory
 ```
 
 The precise contents of actor, critic, and normalization are opaque to this layer.
-Generic fake factories prove recursion without relying on their implementation. A
-real child is not considered migrated merely because a compatibility adapter makes
-an end-to-end test pass.
+Tiny fake children may observe recursive calls, but the generic contract suite,
+StreamAC-specific tests, and entry delegation tests all exercise the same concrete
+`StreamACFactory` implementation. There is no test-only StreamAC factory and no
+second entry-facing implementation. A real child is not considered migrated
+merely because a compatibility adapter makes an end-to-end test pass.
 
 Private StreamAC-only subgraphs may live beside the algorithm and do not require
 registration. A discovery registry can locate components, but the factory's
@@ -124,6 +126,11 @@ behavior.
 
 No helper module is added under `memo/entries`, so automatic scanning cannot
 mistake it for another executable algorithm.
+
+The `STREAM_AC` object bound by the entry is the same factory implementation
+covered by the generic and StreamAC-specific tests. The adapter translates calls;
+it does not reimplement `param()` or `build()` and it does not own a shadow copy of
+the graph.
 
 ## Dependency rule
 
@@ -175,8 +182,9 @@ missing behavior.
 
 ## Reusable contract tests
 
-Implementation-independent tests use tiny fake factories and a reusable contract
-suite. They verify that any factory:
+Implementation-independent tests use a reusable contract suite. The suite is
+applied directly to the production `StreamACFactory`; tiny fake child factories
+only supply observable child behavior. The suite verifies that a factory:
 
 - exposes callable `param(structure)` and `build(params, context)` operations;
 - returns a parameter tree from `param()`;
