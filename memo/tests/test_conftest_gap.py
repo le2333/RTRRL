@@ -3,8 +3,8 @@
 ``last_bits`` widened both sides to float64 before subtracting. numpy discards
 the imaginary part of a complex array on that cast and only warns, so every
 disagreement that lived in the imaginary part was measured as no disagreement
-at all -- across the hidden state and all five sensitivities, which are the
-quantities ``test_lru_parity.py`` exists to compare.
+at all -- across the hidden state and all five sensitivities, which is every
+complex quantity a recurrent cell carries.
 """
 
 import numpy as np

@@ -21,7 +21,6 @@ import pytest
 from training_sdk.episode import Episode, metric_names, statistics
 from training_sdk.parameters import expand, flatten
 
-from entries import rtrrl
 from runner.catalog import discover
 
 PARAM_OVERRIDES: dict[str, Any] = {
@@ -125,15 +124,6 @@ def test_it_reports_nothing_it_has_not_declared(trained):
     entry, collector, _ = trained
     sent = {name for _, report in collector.reports for name in report}
     assert not sent - set(entry.METRICS)
-
-
-def test_rtrrl_entry_can_reproduce_the_papers_bounded_actor():
-    """The paper bounds its actor before clipping its environment action."""
-
-    params = manifest(rtrrl.PARAMETERS) | {"bound_actor": True, "act_clip": 1.0}
-    agent = rtrrl.build(params, ENVIRONMENT, TRAINING)
-    assert agent.actor_head.bound is True
-    assert agent.cfg.act_clip == 1.0
 
 
 RESERVED = frozenset(

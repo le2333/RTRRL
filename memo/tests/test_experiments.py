@@ -6,6 +6,7 @@ from typing import Any
 
 import pytest
 import yaml
+from training_sdk.parameters import flatten
 
 from runner.catalog import discover
 
@@ -18,9 +19,16 @@ FOREIGN_CATALOGS = (ROOT / "rtrrl" / "catalog.json",)
 
 
 def declared_spaces() -> dict[str, set[str]]:
-    """What each entry accepts, whichever image it is carried by."""
+    """What each entry accepts, whichever image it is carried by.
 
-    spaces = {name: set(module.SPACE) for name, module in discover().items()}
+    Flattened, because an experiment names a leaf: a nested declaration reaches
+    the file as ``backbone.rtu.hidden_dim`` and the top-level key alone would
+    make every leaf below it look undeclared.
+    """
+
+    spaces = {
+        name: set(flatten(module.PARAMETERS)) for name, module in discover().items()
+    }
     for path in FOREIGN_CATALOGS:
         catalog = json.loads(path.read_text(encoding="utf-8"))
         for name, entry in catalog["entries"].items():
@@ -29,7 +37,11 @@ def declared_spaces() -> dict[str, set[str]]:
                     f"two images both carry an entry called {name!r}; an "
                     "experiment naming it would be ambiguous about what runs it"
                 )
-            spaces[name] = set(entry["space"])
+            # An image built before the rename still labels its declaration
+            # ``space``; it is read here rather than rebuilt because nothing in
+            # this repository builds it.
+            declared = entry.get("parameters", entry.get("space"))
+            spaces[name] = set(flatten(declared))
     return spaces
 
 

@@ -79,7 +79,11 @@ class Sequence(nn.Module):
                     tree[name], x, done, carries[index], sensitivity
                 )
             else:
-                carry, x = component.apply(
+                # Applied against its own slice of the tree, a component is its
+                # own root and has no name. The name is this sequence's to give
+                # either way, so give it: a component that can say which
+                # position it is on one traversal can say it on both.
+                carry, x = component.clone(name=name).apply(
                     {"params": tree.get(name, {})},
                     x,
                     initial_carry=carries[index],

@@ -283,8 +283,10 @@ def test_the_catalog_is_the_entries_directory_and_nothing_written_down():
     catalog = Catalog.model_validate(build_catalog().model_dump(mode="json"))
     modules = discover()
 
+    # Naming the entries here would be the written-down copy this test exists to
+    # refuse; that the directory is not empty is discover()'s own guarantee.
+    assert modules
     assert set(catalog.entries) == set(modules)
-    assert set(catalog.entries) == {"rtrrl", "stream_ac", "upstream_stream_ac"}
     for name, entry in catalog.entries.items():
         assert entry.command == ("python", "-m", f"{entries.__name__}.{name}")
         assert set(entry.parameters) == set(modules[name].PARAMETERS)

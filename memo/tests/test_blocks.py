@@ -35,8 +35,8 @@ how a parameter's credit is obtained -- and the claim that one seed starts both
 kernels in the same place. The second was already false the moment a position
 in a sequence stopped being spelled the way a slot is, because flax draws a
 parameter from its module's path. Both return only if upstream's kernel is
-given a sequence too; until then the gradient is covered against the golden
-snapshot and against `test_lru_parity`, and not against upstream.
+given a sequence too; until then how a parameter's credit is obtained is
+covered nowhere.
 """
 
 from __future__ import annotations

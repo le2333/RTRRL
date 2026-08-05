@@ -18,6 +18,7 @@ from __future__ import annotations
 import dataclasses
 import inspect
 
+import flax.linen as nn
 import jax
 import jax.numpy as jnp
 import pytest
@@ -196,6 +197,68 @@ def test_walking_with_truncated_credit_is_walking_plainly():
     assert sensitivity is None
     assert not deviations(flattened({"y": walk_output}), flattened({"y": plain}))
     assert not deviations(flattened(walked), flattened(plain_carries))
+
+
+def test_a_component_knows_its_own_name_on_both_ways_through():
+    """The name is the sequence's, and both traversals have to hand it over.
+
+    ``__call__`` composes through flax, so a component is bound under its name
+    and can read it. ``walk`` applies each component against its own slice of
+    the parameter tree, which re-roots it, and a re-rooted module has no name
+    unless it is given one. A component that cannot say which position it is
+    cannot label anything it produces, and the two traversals disagreeing about
+    that would make the label depend on which one ran.
+    """
+
+    seen: dict[str, list] = {"call": [], "walk": []}
+
+    class Reporting(FFN):
+        """A component that reads its own name, and nothing else."""
+
+        where: str = "call"
+
+        @nn.compact
+        def __call__(self, x, initial_carry=None):
+            seen[self.where].append(self.name)
+            return initial_carry, nn.Dense(self.features)(x)
+
+    sequence = built(
+        Reporting(features=FEATURES),
+        Tanh(),
+        Reporting(features=FEATURES),
+        recurrent(),
+        Readout(module=heads.VNetwork()),
+    )
+    x = jnp.reshape(
+        jnp.linspace(-1.0, 1.0, ENVS * FEATURES, dtype=jnp.float32), (ENVS, 1, FEATURES)
+    )
+    ended = jnp.zeros((ENVS, 1), dtype=jnp.bool_)
+    carries = sequence.initialize_carry(jax.random.key(0), SHAPE)
+    params = sequence.init(jax.random.key(0), x, done=ended, initial_carry=carries)
+
+    seen["call"].clear()
+    sequence.apply(params, x, done=ended, initial_carry=carries)
+
+    walking = dataclasses.replace(
+        sequence,
+        components=tuple(
+            dataclasses.replace(component, where="walk")
+            if isinstance(component, Reporting)
+            else component
+            for component in sequence.components
+        ),
+    )
+    walking.walk(
+        params,
+        x,
+        done=ended,
+        carries=carries,
+        sensitivity=None,
+        credit=make_credit("tbptt", sequence.core),
+    )
+
+    assert seen["call"] == ["components_0", "components_2"]
+    assert seen["walk"] == seen["call"]
 
 
 NAMED = ("observation", "action", "reward", "embedding")

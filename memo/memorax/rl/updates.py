@@ -184,7 +184,7 @@ def make_bounded_rule(*, bound, base) -> UpdateRule:
     ``AdaptiveObBound``
         Divides by ``sqrt(v_hat) + eps``, which is what memorax and everything
         forked from it compute. Kept exactly as it is because the recorded runs
-        and the golden snapshot answer to it.
+        answer to it.
     ``AdaptiveObBoundFixed``
         Divides by ``sqrt(v_hat + eps)``, which is what AdaptiveObGD as
         published computes. The difference is not a rounding. While the second

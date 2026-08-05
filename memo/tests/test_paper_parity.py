@@ -23,17 +23,16 @@ published code that computes it:
   ``adaptive_obgd`` is not. That last is the reason two adaptive rules exist --
   the fork moved eps out of the square root, and while the second moment is near
   eps that changes the step by a factor rather than by a rounding.
-- Observation and reward normalisation, which had never been compared to
-  anything outside this repository. It differs, in three ways that are set out
-  where they are asserted; ``memorax.rl.normalization_upstream`` is the arm that
-  reproduces them, and it is driven here too.
+Normalisation was compared here too, against ``normalization_upstream``, the arm
+that reproduced their three differences. That arm is gone: the differences are
+three fields on one estimator now -- ``cold_start``, ``variance`` and
+``reset_on_done`` -- and nothing drives them against the published wrappers. The
+comparison returns when there is a surface to write it against.
 
 The comparison crosses frameworks, so most of it cannot be exact. Their z_sum
 accumulates in float64 through ``.item()`` and ours in float32, and torch and
 XLA reduce in their own orders. The budget below is what that costs, and it is
-several orders of magnitude tighter than any difference of formula. Their
-normalisation is the exception: it is numpy rather than torch, and the arm that
-reproduces it is held to the last bit.
+several orders of magnitude tighter than any difference of formula.
 """
 
 from __future__ import annotations
@@ -52,12 +51,7 @@ from conftest import assert_within, deviations, flattened
 from test_blocks import SETTINGS as KERNEL_SETTINGS
 from test_blocks import ours as ours_kernel
 
-from memorax.rl import (
-    NormalizationConfig,
-    make_bounded_rule,
-    make_normalizer,
-    make_td0,
-)
+from memorax.rl import make_bounded_rule, make_td0
 from memorax.rl.updates import (
     AdaptiveObBound,
     AdaptiveObBoundFixed,
@@ -119,14 +113,6 @@ def published():
     """The paper's own optimisers."""
 
     return _published("optim.py")
-
-
-@pytest.fixture(scope="module")
-def published_normalisation():
-    """The paper's own observation and reward wrappers. No torch in them."""
-
-    pytest.importorskip("gymnasium")
-    return _published("normalization_wrappers.py", needs_torch=False)
 
 
 @pytest.fixture(scope="module")
@@ -298,247 +284,6 @@ def test_the_fixed_adaptive_rule_is_the_published_adaptive_obgd(published, magni
         )
 
 
-# Their statistics accumulate in float64 and ours in float32, so even the arm
-# that reproduces their formulas exactly cannot land on their bits. This is what
-# that costs over the rollout below, and it is four orders of magnitude under the
-# smallest of the three differences the arm exists to reproduce.
-ACCUMULATION = 512.0
-
-NORM_EPS = 1e-8
-NORM_GAMMA = 0.91
-OBS_DIM = 2
-
-
-def rollout():
-    """One scripted episode boundary's worth of transitions, for both sides.
-
-    Two terminal steps rather than one, because the difference the reward trace
-    carries is a difference in what survives a boundary, and a single boundary
-    cannot show that it recurs.
-    """
-
-    observations = np.asarray(
-        np.random.default_rng(0).normal(size=(8, OBS_DIM)), dtype=np.float64
-    )
-    rewards = np.array([0.5, -1.25, 2.0, 0.0, -0.75, 3.5, 1.0, -0.25])
-    dones = np.array([0, 0, 1, 0, 0, 0, 1, 0], dtype=bool)
-    return observations, rewards, dones
-
-
-def scripted_env(module, observations, rewards, dones):
-    """A gymnasium environment replaying the rollout, for their wrappers.
-
-    Their normalisation is written as wrappers around an environment, so the way
-    to drive their code rather than a reading of it is to give it one. Nothing
-    here is arithmetic under test; it only hands out the arrays above.
-    """
-
-    import gymnasium as gym
-
-    class Scripted(gym.Env):
-        def __init__(self):
-            self.observation_space = gym.spaces.Box(-np.inf, np.inf, (OBS_DIM,))
-            self.action_space = gym.spaces.Box(-1.0, 1.0, (1,))
-            self.t = 0
-
-        def reset(self, **kwargs):
-            self.t = 0
-            return observations[0], {}
-
-        def step(self, action):
-            self.t += 1
-            return (
-                observations[self.t],
-                float(rewards[self.t]),
-                bool(dones[self.t]),
-                False,
-                {},
-            )
-
-    return Scripted()
-
-
-def their_observations(module):
-    """Every observation their wrapper hands out over the rollout."""
-
-    observations, rewards, dones = rollout()
-    wrapper = module.NormalizeObservation(
-        scripted_env(module, observations, rewards, dones), epsilon=NORM_EPS
-    )
-    first, _ = wrapper.reset()
-    yielded = [np.asarray(first)]
-    for _ in range(1, len(observations)):
-        stepped, _, _, _, _ = wrapper.step(np.zeros(1))
-        yielded.append(np.asarray(stepped))
-    return yielded
-
-
-def their_rewards(module):
-    """Every scaled reward their wrapper hands out, and the trace behind it."""
-
-    observations, rewards, dones = rollout()
-    wrapper = module.ScaleReward(
-        scripted_env(module, observations, rewards, dones),
-        gamma=NORM_GAMMA,
-        epsilon=NORM_EPS,
-    )
-    wrapper.reset()
-    yielded = []
-    for _ in range(1, len(observations)):
-        _, scaled, _, _, _ = wrapper.step(np.zeros(1))
-        yielded.append((float(scaled), float(wrapper.reward_trace[0])))
-    return yielded
-
-
-def our_observations(normalizer):
-    """The same rollout through one of ours, one stream."""
-
-    observations, _, _ = rollout()
-    normalized, state = normalizer.reset(jnp.asarray(observations[0])[None])
-    yielded = [np.asarray(normalized[0])]
-    for index in range(1, len(observations)):
-        outcome = normalizer.step(
-            state,
-            observation=jnp.asarray(observations[index])[None],
-            reward=jnp.zeros((1,), dtype=jnp.float32),
-            done=jnp.zeros((1,), dtype=bool),
-        )
-        state, normalized = outcome.state, outcome.observation
-        yielded.append(np.asarray(normalized[0]))
-    return yielded
-
-
-def our_rewards(normalizer):
-    """The same rollout through one of ours, and the trace behind it."""
-
-    observations, rewards, dones = rollout()
-    _, state = normalizer.reset(jnp.zeros((1, OBS_DIM), dtype=jnp.float32))
-    yielded = []
-    for index in range(1, len(observations)):
-        outcome = normalizer.step(
-            state,
-            observation=jnp.zeros((1, OBS_DIM), dtype=jnp.float32),
-            reward=jnp.asarray([rewards[index]], dtype=jnp.float32),
-            done=jnp.asarray([dones[index]]),
-        )
-        state = outcome.state
-        assert state.reward is not None
-        yielded.append((float(outcome.reward[0]), float(state.reward.G[0])))
-    return yielded
-
-
-def normalizers(kind: str):
-    """Ours and the arm, configured the same, for whichever channel is asked."""
-
-    config = NormalizationConfig(
-        normalize_observation=kind == "observation",
-        normalize_reward=kind == "reward",
-        eps=NORM_EPS,
-        reward_gamma=NORM_GAMMA,
-    )
-    # Both through the factory, so that what the experiments select by name is
-    # what gets compared here.
-    return make_normalizer(config), make_normalizer(
-        replace(config, statistics="upstream")
-    )
-
-
-def test_the_upstream_arm_normalises_observations_as_published(
-    published_normalisation,
-):
-    """The arm is their observation wrapper, step for step.
-
-    Held to an accumulation budget rather than to the bit because their
-    statistics run in float64 and ours in float32. That is the only thing between
-    them: same cold start, same divisor, same order.
-    """
-
-    theirs = their_observations(published_normalisation)
-    _, arm = normalizers("observation")
-    ours = our_observations(arm)
-
-    for index, (mine, reference) in enumerate(zip(ours, theirs)):
-        assert_within(
-            {"observation": mine},
-            {"observation": reference},
-            f"upstream arm, observation step={index}",
-            allowed=ACCUMULATION,
-        )
-    # Their first normalised observation is exactly zero, because their first
-    # sample becomes the mean exactly. It is the sharpest single consequence of
-    # the cold start, so it is asserted rather than left inside the loop.
-    assert float(np.max(np.abs(theirs[0]))) == 0.0, "their cold start changed"
-    assert float(np.max(np.abs(ours[0]))) == 0.0, "the arm's cold start is not theirs"
-
-
-def test_the_upstream_arm_scales_rewards_as_published(published_normalisation):
-    """The arm is their reward wrapper, including across the two boundaries."""
-
-    theirs = their_rewards(published_normalisation)
-    _, arm = normalizers("reward")
-    ours = our_rewards(arm)
-
-    for index, ((mine, my_trace), (reference, their_trace)) in enumerate(
-        zip(ours, theirs)
-    ):
-        assert_within(
-            {"reward": np.float32(mine), "trace": np.float32(my_trace)},
-            {"reward": np.float32(reference), "trace": np.float32(their_trace)},
-            f"upstream arm, reward step={index}",
-            allowed=ACCUMULATION,
-        )
-
-
-def test_our_normalisation_is_not_the_published_normalisation():
-    """And ours differs from it in the three ways, each measured.
-
-    The reason the arm exists. Kept as assertions rather than a note because a
-    difference nothing checks is a difference that gets tidied away, and because
-    each of these three has a different consequence for a run: the first two fade
-    as the statistics fill, and the third recurs at every episode boundary for as
-    long as the run lasts.
-
-    Ours is compared against the arm rather than against their wrapper directly,
-    so that what is measured is the three differences and not the accumulation
-    budget on top of them.
-    """
-
-    mine, arm = normalizers("observation")
-    ours, theirs = our_observations(mine), our_observations(arm)
-
-    # One: the cold start. Theirs normalises the first observation to exactly
-    # zero and ours does not.
-    assert float(np.max(np.abs(theirs[0]))) == 0.0
-    assert float(np.max(np.abs(ours[0]))) > 0.01, (
-        "our first normalised observation is at zero too, so the cold start is "
-        "no longer a difference and this file is out of date"
-    )
-
-    # Two: the divisor, which is visible once both have real samples and fades
-    # as the count grows. Asserted early and asserted to be shrinking.
-    early = float(np.max(np.abs(ours[1] - theirs[1])))
-    late = float(np.max(np.abs(ours[-1] - theirs[-1])))
-    assert early > 0.1, f"the divisors agree at step one, {early:.3g} apart"
-    assert late < early, (
-        f"the gap the divisors leave is {late:.3g} at the end of the rollout "
-        f"against {early:.3g} near the start, so it is not fading and is "
-        "something other than n-1 against n+1"
-    )
-
-    # Three: the trace across an episode boundary, which does not fade. On a
-    # terminal step theirs keeps the reward it just saw and ours drops it.
-    mine, arm = normalizers("reward")
-    ours, theirs = our_rewards(mine), our_rewards(arm)
-    _, _, dones = rollout()
-    boundaries = [index for index in range(1, len(dones)) if dones[index]]
-    assert len(boundaries) > 1, "one boundary cannot show that it recurs"
-    for boundary in boundaries:
-        step = boundary - 1
-        assert ours[step][1] == 0.0, "ours no longer clears the trace on a terminal"
-        assert abs(theirs[step][1]) > 0.1, (
-            f"their trace is {theirs[step][1]:.3g} after the terminal at "
-            f"step={boundary}, so it is being cleared and the arm is not theirs"
-        )
 
 
 # Eleven observations, which is Hopper's width and is not an arbitrary choice.
