@@ -19,7 +19,8 @@ from typing import Any
 import jax
 import jax.numpy as jnp
 from flax import struct
-from training_sdk.parameters import param
+
+from memorax.parameters import param
 
 
 @struct.dataclass

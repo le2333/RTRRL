@@ -3,21 +3,25 @@ from __future__ import annotations
 from dataclasses import dataclass, fields
 
 import pytest
-
 from training_sdk.contract import ChoiceSpec, ParameterSpec, StructureSpec
-from training_sdk.parameters import describe_parameters, param, read_branch, structure
+
+from memorax.parameters import describe_parameters, param, read_branch, structure
 
 
 @dataclass(frozen=True)
 class Conforming:
     width: int = param(valid=(1, 4096), search=(16, 512), placeholder=64)
-    rate: float = param(valid=(1e-9, 10.0), search=(1e-5, 1.0), placeholder=0.1, log=True)
+    rate: float = param(
+        valid=(1e-9, 10.0), search=(1e-5, 1.0), placeholder=0.1, log=True
+    )
     mode: str = param(valid=["a", "b"], search=["a", "b"], placeholder="a")
 
 
 @dataclass(frozen=True)
 class Selecting:
-    choice: str = structure(placeholder="left", branches={"left": Conforming, "right": ()})
+    choice: str = structure(
+        placeholder="left", branches={"left": Conforming, "right": ()}
+    )
 
 
 def keys(tree, prefix=""):
@@ -114,7 +118,9 @@ def test_a_placeholder_outside_valid_is_refused() -> None:
 def test_a_log_search_starting_at_zero_is_refused() -> None:
     @dataclass(frozen=True)
     class AtZero:
-        rate: float = param(valid=(0.0, 1.0), search=(0.0, 1.0), placeholder=0.5, log=True)
+        rate: float = param(
+            valid=(0.0, 1.0), search=(0.0, 1.0), placeholder=0.5, log=True
+        )
 
     with pytest.raises(ValueError, match="rate"):
         describe_parameters(AtZero)
@@ -123,7 +129,9 @@ def test_a_log_search_starting_at_zero_is_refused() -> None:
 def test_a_structure_placeholder_outside_its_branches_is_refused() -> None:
     @dataclass(frozen=True)
     class Astray:
-        choice: str = structure(placeholder="missing", branches={"left": (), "right": ()})
+        choice: str = structure(
+            placeholder="missing", branches={"left": (), "right": ()}
+        )
 
     with pytest.raises(ValueError, match="choice"):
         describe_parameters(Astray)

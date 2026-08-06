@@ -11,9 +11,8 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Any
 
-from training_sdk.parameters import param, read_branch, structure
-
 from memorax.networks.initializers import Initializer, lecun_normal, sparse
+from memorax.parameters import param, read_branch, structure
 
 
 @dataclass(frozen=True)

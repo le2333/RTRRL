@@ -124,7 +124,8 @@ def test_a_head_is_drawn_the_way_its_own_branch_says():
 
     import jax.tree_util
     from conftest import TinyContinuousEnv
-    from training_sdk.parameters import expand, flatten
+
+    from memorax.parameters import expand, flatten
 
     del TinyContinuousEnv
     base = flatten(expand(stream_ac.PARAMETERS))

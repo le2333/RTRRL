@@ -19,9 +19,9 @@ from types import SimpleNamespace
 import jax
 import pytest
 import yaml
-from training_sdk.parameters import expand, flatten
 
 from entries import stream_ac
+from memorax.parameters import expand, flatten
 
 TEMPLATE = (
     Path(__file__).resolve().parents[2] / "experiments" / "streamac template.yaml"

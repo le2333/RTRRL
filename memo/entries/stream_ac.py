@@ -13,12 +13,6 @@ from dataclasses import dataclass
 from typing import Any
 
 from training_sdk.episode import metric_names
-from training_sdk.parameters import (
-    describe_parameters,
-    param,
-    read_branch,
-    structure,
-)
 from training_sdk.reporter import Reporter
 
 from memorax.algorithms.stream_ac import StreamAC, StreamACConfig
@@ -33,6 +27,12 @@ from memorax.networks.readouts import (
     critic_head,
 )
 from memorax.networks.sequence import PLACES
+from memorax.parameters import (
+    describe_parameters,
+    param,
+    read_branch,
+    structure,
+)
 from memorax.rl import CREDITS, declared_normalizer
 from memorax.rl.normalization import (
     DISCOUNTED_NORMALIZATION_BRANCHES,

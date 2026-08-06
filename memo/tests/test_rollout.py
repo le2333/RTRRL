@@ -10,7 +10,7 @@ from __future__ import annotations
 import numpy as np
 import pytest
 
-from training_sdk.rollout import complete_episodes, read
+from memorax.runtime.rollout import complete_episodes, read
 
 
 class Chunk:
@@ -58,7 +58,9 @@ def test_each_stream_is_cut_on_its_own_boundaries():
 def test_a_declared_series_is_carried_alongside_the_rewards():
     steps = np.arange(8, dtype=float).reshape(4, 2)
     episodes = cut(
-        chunk([[0, 0], [1, 0], [0, 1], [0, 0]], td_error=steps, by_part={"torso": steps}),
+        chunk(
+            [[0, 0], [1, 0], [0, 1], [0, 0]], td_error=steps, by_part={"torso": steps}
+        ),
         series=("td_error", "by_part.torso", "never_produced"),
     )
 
@@ -97,7 +99,9 @@ def test_the_environments_own_reward_can_live_somewhere_else():
 def test_a_stride_of_nothing_dates_every_episode_at_one_step():
     """Evaluation does not advance the axis it is plotted against."""
 
-    episodes = cut(chunk([[0, 0], [1, 0], [0, 1], [0, 0]]), start_env_steps=64, stride=0)
+    episodes = cut(
+        chunk([[0, 0], [1, 0], [0, 1], [0, 0]]), start_env_steps=64, stride=0
+    )
 
     for episode in episodes:
         assert (episode.start_env_steps, episode.end_env_steps) == (64, 64)
@@ -165,7 +169,12 @@ def test_numbering_continues_where_the_last_chunk_stopped():
 
 @pytest.mark.parametrize(
     "path, found",
-    [("reward", True), ("info.environment_reward", True), ("info.absent", False), ("absent.x", False)],
+    [
+        ("reward", True),
+        ("info.environment_reward", True),
+        ("info.absent", False),
+        ("absent.x", False),
+    ],
 )
 def test_a_family_is_read_one_member_at_a_time(path, found):
     summary = chunk([[0, 0], [1, 0]], info={"environment_reward": np.zeros((2, 2))})

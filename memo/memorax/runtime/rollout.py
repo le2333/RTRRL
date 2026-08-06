@@ -19,7 +19,6 @@ from __future__ import annotations
 from collections.abc import Iterable, Iterator, Mapping
 
 import numpy as np
-
 from training_sdk.episode import Episode
 
 
@@ -101,8 +100,7 @@ def complete_episodes(
                 rewards=[float(rewards[step, env]) for step in span],
                 terminals=[bool(terminals[step, env]) for step in span],
                 truncations=[
-                    bool(dones[step, env] and not terminals[step, env])
-                    for step in span
+                    bool(dones[step, env] and not terminals[step, env]) for step in span
                 ],
                 series={
                     name: [float(column[step, env]) for step in span]

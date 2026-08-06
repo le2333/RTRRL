@@ -26,7 +26,6 @@ import jax
 import jax.numpy as jnp
 import pytest
 from training_sdk.contract import StructureSpec
-from training_sdk.parameters import expand, flatten
 
 from entries import stream_ac
 from memorax.networks.components import FFN
@@ -35,6 +34,7 @@ from memorax.networks.initialization import (
     Sparse,
     declared_initializer,
 )
+from memorax.parameters import expand, flatten
 
 SHAPE = (16, 8)
 

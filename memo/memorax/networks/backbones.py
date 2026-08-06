@@ -10,7 +10,6 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 import flax.linen as nn
-from training_sdk.parameters import param
 
 from memorax.networks.components import FFN, LayerNorm, LeakyReLU
 from memorax.networks.initialization import initialization
@@ -24,6 +23,7 @@ from memorax.networks.sequence_models import (
     RTUCell,
     RTUConfig,
 )
+from memorax.parameters import param
 
 RECURRENT_BACKBONES = ("lru", "rtu")
 BACKBONES = (*RECURRENT_BACKBONES, "mlp")

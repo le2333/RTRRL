@@ -6,8 +6,8 @@ from typing import Any
 
 import pytest
 import yaml
-from training_sdk.parameters import flatten
 
+from memorax.parameters import flatten
 from runner.catalog import discover
 
 ROOT = Path(__file__).resolve().parents[2]

@@ -18,12 +18,12 @@ from typing import Any
 
 import jax.numpy as jnp
 from flax import struct
-from training_sdk.parameters import param
 
 from memorax.environments.wrappers import (
     NormalizeObservationWrapper,
     NormalizeRewardWrapper,
 )
+from memorax.parameters import param
 
 COLD_STARTS = ("seeded", "first_sample")
 VARIANCES = ("population", "sample")

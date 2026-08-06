@@ -1,8 +1,8 @@
 from __future__ import annotations
 
+from collections.abc import Callable, Mapping
 from dataclasses import Field as DataclassField
 from dataclasses import field, fields, is_dataclass
-from collections.abc import Callable, Mapping
 from typing import Any
 
 from training_sdk.contract import (
@@ -111,7 +111,10 @@ def _valid_domain(name: str, value: Any, *, step: int) -> ValidSpec:
         return ChoiceSpec.model_validate(value)
     if isinstance(value, tuple) and len(value) == 2:
         low, high = value
-        if all(side is None or isinstance(side, bool) is False and isinstance(side, int) for side in value):
+        if all(
+            side is None or isinstance(side, bool) is False and isinstance(side, int)
+            for side in value
+        ):
             return IntValidSpec(type="int", low=low, high=high, step=step)
         return FloatValidSpec(type="float", low=low, high=high)
     raise TypeError(f"{name} has an unsupported valid domain {value!r}")
@@ -124,7 +127,9 @@ def _search_domain(name: str, value: Any, *, log: bool, step: int) -> SpaceEntry
         low, high = value
         if low is None or high is None:
             raise ValueError(f"{name} search domains must be closed on both sides")
-        if all(isinstance(side, bool) is False and isinstance(side, int) for side in value):
+        if all(
+            isinstance(side, bool) is False and isinstance(side, int) for side in value
+        ):
             return IntSpec(type="int", low=low, high=high, step=step, log=log)
         return FloatSpec(type="float", low=low, high=high, log=log)
     raise TypeError(f"{name} has an unsupported search domain {value!r}")
@@ -204,9 +209,7 @@ def read_branch(
     return branch, read_parameters(model, params, prefix=f"{key}.{branch}.")
 
 
-def flatten(
-    tree: Mapping[str, Any], prefix: str = ""
-) -> dict[str, Any]:
+def flatten(tree: Mapping[str, Any], prefix: str = "") -> dict[str, Any]:
     found: dict[str, Any] = {}
     for name, node in tree.items():
         key = f"{prefix}{name}"

@@ -19,8 +19,8 @@ from typing import Any
 
 import pytest
 from training_sdk.episode import Episode, metric_names, statistics
-from training_sdk.parameters import expand, flatten
 
+from memorax.parameters import expand, flatten
 from runner.catalog import discover
 
 PARAM_OVERRIDES: dict[str, Any] = {
