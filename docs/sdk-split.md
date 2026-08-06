@@ -57,17 +57,25 @@ infra 侧对 SDK 的全部依赖：
 
 ## 步骤
 
-每步做完回报并等评估。基线是这条命令的结果，**237 passed**：
+每步做完回报并等评估。
 
-```
-pytest tests -p no:warnings \
-  --ignore=tests/test_paper_parity.py --ignore=tests/test_entries.py \
-  --ignore=tests/test_experiments.py --ignore=tests/test_module_contract.py \
+**在 WSL 里验证**，不要只在 Windows 上跑：`aim` 的 `aimrocks` 没有 Windows wheel，`moto` 的 server 绑 `0.0.0.0` 而 Windows 连不上，`uv lock` 要构建 `mettagrid`（`cogames` 的传递依赖）而它 import `fcntl`。这三样都只在 Linux 上成立，而它们恰好盖住了 worker 侧最要紧的部分。
+
+```bash
+wsl -e bash -lc 'cd /mnt/c/.../memo && export PATH=$HOME/.local/bin:$PATH \
+  && export UV_PROJECT_ENVIRONMENT=$HOME/.venvs/memo-linux \
+  && uv lock && uv sync --frozen --group development'
+
+wsl -e bash -lc 'cd /mnt/c/.../memo && $HOME/.venvs/memo-linux/bin/python -m pytest tests \
+  -p no:warnings --ignore=tests/test_entries.py --ignore=tests/test_experiments.py \
+  --ignore=tests/test_module_contract.py \
   --deselect "tests/test_loop.py::test_the_catalog_is_the_entries_directory_and_nothing_written_down" \
-  --deselect "tests/test_loop.py::test_the_names_an_entry_declares_are_names_a_sink_will_accept"
+  --deselect "tests/test_loop.py::test_the_names_an_entry_declares_are_names_a_sink_will_accept"'
 ```
 
-排除的四处是 HEAD 上就坏的，与本次迁移无关：`entries/rtrrl.py` 导入不存在的 `FeatureExtractor`（连带 test_entries / test_experiments / test_loop 两例）、`test_module_contract.py` 导入不存在的 `memorax.algorithm`、`test_paper_parity.py` 的 F401 与 torch 依赖。
+排除的三处在 Linux 上同样坏，与本次迁移无关：`entries/rtrrl.py` 导入不存在的 `FeatureExtractor`（连带 test_entries / test_experiments / test_loop 两例）、`test_module_contract.py` 导入不存在的 `memorax.algorithm`。
+
+基线：T1 前 **237**（Windows，排除项更多），T2 后 **337 passed, 12 skipped**（Linux）。
 
 ### T1 — 搬两个依赖叶子 ✅
 
@@ -95,11 +103,7 @@ pytest tests -p no:warnings \
 - `memo/tests/conftest.py` 导入 `s3_base` / `s3_endpoint` 两个 fixture（`training_sdk.testing` 到 T4 才动）
 - `memo-ci.yml` 的 CHECKED 加 `worker`
 
-结果：memo **278 → 311 passed**。此后 `training_sdk` 只剩 `contract` `objects` `episode` `testing`。
-
-**遗留阻塞：`memo/uv.lock` 没能刷新。** `uv lock` 在 Windows 上失败——`mettagrid`（`cogames` 可选依赖的传递依赖）的构建要 `fcntl`。`training-sdk/uv.lock` 刷新成功了（连带删掉了 tqdm / uvicorn / websockets，正是 aim 拖进来的那些）。**CI 的 `uv sync --frozen` 会因为 memo 的锁与 pyproject 不符而失败，推之前必须在 Linux 上跑一次 `uv lock`。**
-
-本地新增四处**环境性**排除，不是缺陷：`test_aim_sink`、`test_rerun_sink`、`test_worker`、以及 `test_reporter` 里的 `test_reporter_from_env_reads_config_and_scratch`。前者是 aim 在 Windows 装不上（aimrocks 无 wheel），后者是 moto server 绑 `0.0.0.0` 而 Windows 连不上这个地址。都只能在 CI 上确认。
+结果：Linux 上 **337 passed, 12 skipped**（跳过的是 `test_paper_parity` 里需要 torch 的部分，torch 在 `paper` 组，没装）。此后 `training_sdk` 只剩 `contract` `objects` `episode` `testing`，`training-sdk/uv.lock` 少了 365 行——tqdm / uvicorn / websockets 正是 aim 拖进来的。
 
 ### T3 — 搬 episode
 
