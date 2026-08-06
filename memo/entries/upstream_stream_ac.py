@@ -54,7 +54,7 @@ from memorax.networks import (
     backbone,
     heads,
 )
-from runner.loop import drive
+from memorax.runtime import Runtime
 
 _UNIT = {"type": "float", "low": 0.0, "high": 1.0}
 _RATE = {"type": "float", "low": 1e-9, "high": 10.0, "log": True}
@@ -162,16 +162,9 @@ def build(params: Mapping[str, Any], environment, training) -> UpstreamStreamAC:
 def run(reporter, config) -> None:
     agent = build(config.params, config.environment, config.training)
     scaled = bool(config.params["normalize_reward"])
-    drive(
-        reporter,
-        init_fn=agent.init,
-        train_fn=agent.train,
-        evaluate_fn=agent.evaluate,
-        total_steps=config.training.total_steps,
-        epoch_steps=config.training.epoch_steps,
-        eval_steps=config.evaluation.steps,
-        num_envs=config.training.num_envs,
-        seed=config.environment.seed,
+    Runtime.from_config(
+        agent,
+        config,
         series=TRAINING_METRICS,
         # The wrapper replaced the reward the algorithm sees, and the algorithm
         # put that into the summary. The one the environment paid is beside it,
@@ -180,7 +173,7 @@ def run(reporter, config) -> None:
         reward=(
             "interaction.info.environment_reward" if scaled else "interaction.reward"
         ),
-    )
+    ).run(reporter)
 
 
 def main(argv: list[str] | None = None) -> int:

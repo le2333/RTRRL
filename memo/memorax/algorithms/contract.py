@@ -24,13 +24,18 @@ from flax import struct
 
 @dataclass(frozen=True)
 class AgentProgram:
-    """A built program and its stable host-side schemas."""
+    """A built program and its stable host-side schemas.
+
+    The schemas are what a host allocates against before the first step, and
+    only a kernel that wrote them down has them; a program assembled from an
+    algorithm's three methods carries none, and is drivable all the same.
+    """
 
     init_fn: Callable[..., Any]
     train_epoch_fn: Callable[..., Any]
     evaluate_fn: Callable[..., Any]
-    state_schema: Any
-    metric_schema: Any
+    state_schema: Any = None
+    metric_schema: Any = None
 
 
 @struct.dataclass

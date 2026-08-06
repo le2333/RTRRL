@@ -20,8 +20,8 @@ from training_sdk.episode import check_names, statistics
 
 import entries
 from entries import stream_ac
+from memorax.runtime import drive, whole_epochs
 from runner.catalog import build_catalog, discover
-from runner.loop import drive, whole_epochs
 
 
 class Recorder:

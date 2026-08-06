@@ -49,6 +49,7 @@ jobs:
         memorax/networks/initializers/sparse.py
         memorax/networks/readouts.py
         memorax/networks/sequence.py
+        memorax/runtime
         entries
         runner
         tests

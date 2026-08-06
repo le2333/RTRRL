@@ -30,7 +30,7 @@ from memorax.networks import (
     heads,
 )
 from memorax.rl import NormalizationConfig
-from runner.loop import EPISODE_FIELDS, drive
+from memorax.runtime import EPISODE_FIELDS, Runtime
 
 _UNIT = {"type": "float", "low": 0.0, "high": 1.0}
 _RATE = {"type": "float", "low": 1e-9, "high": 10.0, "log": True}
@@ -197,18 +197,7 @@ def build(params: Mapping[str, Any], environment, training) -> RTRRL:
 
 def run(reporter, config) -> None:
     agent = build(config.params, config.environment, config.training)
-    drive(
-        reporter,
-        init_fn=agent.init,
-        train_fn=agent.train,
-        evaluate_fn=agent.evaluate,
-        total_steps=config.training.total_steps,
-        epoch_steps=config.training.epoch_steps,
-        eval_steps=config.evaluation.steps,
-        num_envs=config.training.num_envs,
-        seed=config.environment.seed,
-        series=TRAINING_METRICS,
-    )
+    Runtime.from_config(agent, config, series=TRAINING_METRICS).run(reporter)
 
 
 def main(argv: list[str] | None = None) -> int:
