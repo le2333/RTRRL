@@ -36,7 +36,6 @@ from typing import Any
 
 import flax.linen as nn
 from training_sdk.episode import metric_names
-from training_sdk.reporter import Reporter
 
 from memorax.algorithms.upstream_stream_ac import (
     UpstreamStreamAC,
@@ -55,6 +54,7 @@ from memorax.networks import (
     heads,
 )
 from memorax.runtime import Runtime
+from worker.reporter import Reporter
 
 _UNIT = {"type": "float", "low": 0.0, "high": 1.0}
 _RATE = {"type": "float", "low": 1e-9, "high": 10.0, "log": True}

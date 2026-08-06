@@ -1,7 +1,7 @@
 import json
 from pathlib import Path
 
-from training_sdk.sinks.metrics import MetricsSink
+from worker.sinks.metrics import MetricsSink
 
 
 def test_report_appends_one_line(tmp_path: Path) -> None:

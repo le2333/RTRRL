@@ -22,7 +22,10 @@ class MetricsSink:
 
     def report(self, step: int, metrics: Mapping[str, float]) -> None:
         line = json.dumps(
-            {"step": int(step), "metrics": {str(k): float(v) for k, v in metrics.items()}},
+            {
+                "step": int(step),
+                "metrics": {str(k): float(v) for k, v in metrics.items()},
+            },
             sort_keys=True,
         )
         if self._handle is None:

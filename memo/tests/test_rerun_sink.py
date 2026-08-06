@@ -3,12 +3,12 @@ from unittest.mock import patch
 
 import pytest
 from rerun.experimental import RrdReader
-
+from test_reporter import make_config
 from training_sdk import objects
 from training_sdk.episode import Episode
-from training_sdk.reporter import build_default_sinks
-from training_sdk.sinks.rerun import RerunSink
-from tests.test_reporter import make_config
+
+from worker.reporter import build_default_sinks
+from worker.sinks.rerun import RerunSink
 
 
 def make_episode(
@@ -33,7 +33,9 @@ def make_episode(
     )
 
 
-def recording(s3_base: str, tmp_path: Path, *, where: str, every: int, num_envs: int = 1):
+def recording(
+    s3_base: str, tmp_path: Path, *, where: str, every: int, num_envs: int = 1
+):
     """A sink whose sampling is the only thing under test."""
 
     config = make_config()
@@ -62,7 +64,9 @@ def kept(sink, episodes) -> list[int]:
     ]
 
 
-def test_episode_is_uploaded_and_local_copy_removed(s3_base: str, tmp_path: Path) -> None:
+def test_episode_is_uploaded_and_local_copy_removed(
+    s3_base: str, tmp_path: Path
+) -> None:
     config = make_config().model_copy(
         update={
             "logging": make_config().logging.model_copy(
@@ -91,7 +95,7 @@ def test_an_episode_is_kept_when_a_sample_step_falls_inside_it(
 
     sink = recording(s3_base, tmp_path, where="by-step", every=100)
     episodes = [
-        make_episode(1, "train", span=(0, 90)),     # holds step 0
+        make_episode(1, "train", span=(0, 90)),  # holds step 0
         make_episode(2, "train", span=(110, 190)),  # holds nothing
         make_episode(3, "train", span=(190, 260)),  # holds step 200
     ]
@@ -118,9 +122,7 @@ def test_the_stream_a_sample_step_belongs_to_is_the_one_recorded(
     assert kept(sink, episodes) == [1, 3]
 
 
-def test_an_episode_with_no_span_is_never_sampled(
-    s3_base: str, tmp_path: Path
-) -> None:
+def test_an_episode_with_no_span_is_never_sampled(s3_base: str, tmp_path: Path) -> None:
     """Evaluation episodes are dated at one step and cover no interval.
 
     They measure the policy at an epoch boundary rather than spending training
@@ -155,12 +157,16 @@ def test_recording_is_readable_by_rerun(s3_base: str, tmp_path: Path) -> None:
 
 def _config_with_local_aim(tmp_path: Path, **logging_updates: object):
     aim_repo = str(tmp_path / "aim")
-    logging = make_config().logging.model_copy(update={"aim": aim_repo, **logging_updates})
+    logging = make_config().logging.model_copy(
+        update={"aim": aim_repo, **logging_updates}
+    )
     return make_config().model_copy(update={"logging": logging})
 
 
 def test_rerun_sink_requires_rerun_config(tmp_path: Path) -> None:
-    with pytest.raises(ValueError, match="rerun sink requires rerun_s3 and rerun_every_steps"):
+    with pytest.raises(
+        ValueError, match="rerun sink requires rerun_s3 and rerun_every_steps"
+    ):
         RerunSink(make_config(), tmp_path)
 
 
@@ -173,7 +179,9 @@ def test_local_file_retained_when_upload_fails(s3_base: str, tmp_path: Path) -> 
         }
     )
     sink = RerunSink(config, tmp_path)
-    with patch("training_sdk.objects.put_file", side_effect=RuntimeError("upload failed")):
+    with patch(
+        "training_sdk.objects.put_file", side_effect=RuntimeError("upload failed")
+    ):
         with pytest.raises(RuntimeError, match="upload failed"):
             sink.log_episode(make_episode(1))
     assert list(tmp_path.glob("*.rrd")) == [tmp_path / "eval-000001.rrd"]

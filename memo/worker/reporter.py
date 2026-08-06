@@ -8,7 +8,8 @@ from typing import Protocol
 
 from training_sdk.contract import RunConfig
 from training_sdk.episode import Episode, statistics
-from training_sdk.sinks.metrics import MetricsSink
+
+from worker.sinks.metrics import MetricsSink
 
 METRICS_FILENAME = "metrics.jsonl"
 
@@ -35,7 +36,9 @@ class Reporter:
     def from_env(cls) -> "Reporter":
         config_path = Path(os.environ["TRAINER_RUN_CONFIG"])
         scratch = Path(os.environ["TRAINER_SCRATCH"])
-        config = RunConfig.model_validate(json.loads(config_path.read_text(encoding="utf-8")))
+        config = RunConfig.model_validate(
+            json.loads(config_path.read_text(encoding="utf-8"))
+        )
         return cls(config, scratch, sinks=build_default_sinks(config, scratch))
 
     def report(self, step: int, metrics: Mapping[str, float]) -> None:
@@ -68,8 +71,8 @@ class Reporter:
 
 
 def build_default_sinks(config: RunConfig, scratch: Path) -> tuple[Sink, ...]:
-    from training_sdk.sinks.aim import AimSink
-    from training_sdk.sinks.rerun import RerunSink
+    from worker.sinks.aim import AimSink
+    from worker.sinks.rerun import RerunSink
 
     sinks: list[Sink] = [AimSink(config, repo=config.logging.aim)]
     if config.logging.enable_rerun:

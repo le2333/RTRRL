@@ -23,4 +23,4 @@ COPY memo/catalog.json /opt/trainer/catalog.json
 ENV PATH="/opt/venv/bin:${PATH}" \
     PYTHONUNBUFFERED=1 \
     JAX_PLATFORM_NAME=cpu
-CMD ["python", "-m", "training_sdk.worker"]
+CMD ["python", "-m", "worker"]

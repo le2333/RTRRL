@@ -3,10 +3,10 @@ from pathlib import Path
 
 import pytest
 from aim import Repo
+from test_reporter import make_config, make_episode
 
-from training_sdk.reporter import METRICS_FILENAME, Reporter
-from training_sdk.sinks.aim import AimSink, close_aim_run
-from tests.test_reporter import make_config, make_episode
+from worker.reporter import METRICS_FILENAME, Reporter
+from worker.sinks.aim import AimSink, close_aim_run
 
 
 def _metric_steps(repo_path: str, metric_name: str = "episode_return") -> list[int]:
@@ -52,7 +52,9 @@ def test_run_is_named_by_run_id_and_carries_launch_fields(tmp_path: Path) -> Non
     close_aim_run(run)
 
 
-def test_read_only_run_close_raises_sequence_infos_attribute_error(tmp_path: Path) -> None:
+def test_read_only_run_close_raises_sequence_infos_attribute_error(
+    tmp_path: Path,
+) -> None:
     # Documents Aim 3.28.0: Run.close() on a read-only run fails because
     # RunTracker never creates sequence_infos. If this test fails, Aim fixed
     # the bug and close_aim_run() can be retired.
@@ -130,7 +132,9 @@ def test_an_episodes_statistics_reach_aim_at_the_step_it_ended_on(
         update={"logging": make_config().logging.model_copy(update={"aim": repo_path})}
     )
 
-    with Reporter(config, tmp_path, sinks=[AimSink(config, repo=repo_path)]) as reporter:
+    with Reporter(
+        config, tmp_path, sinks=[AimSink(config, repo=repo_path)]
+    ) as reporter:
         reporter.log_episode(make_episode())
 
     assert _metric_steps(repo_path, "train/episode/return") == [8]

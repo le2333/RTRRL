@@ -3,10 +3,10 @@ from pathlib import Path
 
 import pytest
 from pydantic import ValidationError
-
 from training_sdk.contract import RunConfig
 from training_sdk.episode import Episode
-from training_sdk.reporter import METRICS_FILENAME, Reporter
+
+from worker.reporter import METRICS_FILENAME, Reporter
 
 
 def make_config(**logging: object) -> RunConfig:

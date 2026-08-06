@@ -3,10 +3,10 @@ import sys
 from pathlib import Path
 
 import pytest
-
+from test_reporter import make_config
 from training_sdk import objects
-from training_sdk.worker import WorkerError, main, run_manifest
-from tests.test_reporter import make_config
+
+from worker.worker import WorkerError, main, run_manifest
 
 CHILD = """
 import json, os, sys
@@ -78,7 +78,9 @@ def write_manifest(s3_base: str, uris: list[str]) -> str:
     return manifest
 
 
-def test_every_run_is_executed_and_scored(s3_base: str, tmp_path: Path, catalog: Path) -> None:
+def test_every_run_is_executed_and_scored(
+    s3_base: str, tmp_path: Path, catalog: Path
+) -> None:
     manifest = write_manifest(s3_base, [publish(s3_base, 0), publish(s3_base, 1)])
     run_manifest(manifest, tmp_path)
     for trial in (0, 1):
@@ -87,7 +89,9 @@ def test_every_run_is_executed_and_scored(s3_base: str, tmp_path: Path, catalog:
         assert payload["run_id"] == f"smoke-20260725-000000-t{trial}"
 
 
-def test_scratch_is_removed_between_runs(s3_base: str, tmp_path: Path, catalog: Path) -> None:
+def test_scratch_is_removed_between_runs(
+    s3_base: str, tmp_path: Path, catalog: Path
+) -> None:
     manifest = write_manifest(s3_base, [publish(s3_base, 0), publish(s3_base, 1)])
     run_manifest(manifest, tmp_path)
     assert list(tmp_path.glob("*/metrics.jsonl")) == []
@@ -97,9 +101,7 @@ def test_crashing_run_stops_the_manifest(
     s3_base: str, tmp_path: Path, catalog: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.setenv("CHILD_MODE", "crash")
-    manifest = write_manifest(
-        s3_base, [publish(s3_base, 100), publish(s3_base, 101)]
-    )
+    manifest = write_manifest(s3_base, [publish(s3_base, 100), publish(s3_base, 101)])
     with pytest.raises(WorkerError, match="exit code 3"):
         run_manifest(manifest, tmp_path)
     assert objects.exists(f"{s3_base}/trials/t100/score.json") is False
@@ -157,19 +159,19 @@ def test_run_config_contract_mismatch(
 
 def test_missing_catalog_entry(s3_base: str, tmp_path: Path, catalog: Path) -> None:
     manifest = write_manifest(s3_base, [publish(s3_base, 0, entry="missing")])
-    with pytest.raises(WorkerError, match="image catalog does not declare entry 'missing'"):
+    with pytest.raises(
+        WorkerError, match="image catalog does not declare entry 'missing'"
+    ):
         run_manifest(manifest, tmp_path)
 
 
 def test_score_computation_failure_stops_manifest(
     s3_base: str, tmp_path: Path, catalog: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    from training_sdk.score import ScoreError
+    from worker.score import ScoreError
 
     monkeypatch.setenv("CHILD_MODE", "empty_metrics")
-    manifest = write_manifest(
-        s3_base, [publish(s3_base, 200), publish(s3_base, 201)]
-    )
+    manifest = write_manifest(s3_base, [publish(s3_base, 200), publish(s3_base, 201)])
     with pytest.raises(ScoreError, match="no reported value for metric"):
         run_manifest(manifest, tmp_path)
     assert objects.exists(f"{s3_base}/trials/t200/score.json") is False

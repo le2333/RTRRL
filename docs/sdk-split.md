@@ -83,23 +83,31 @@ pytest tests -p no:warnings \
 
 结果：memo **237 → 278 passed**（+41 是搬进来的测试），静态检查零新增失败。**新基线 278。**
 
-### T2 — 搬 episode、reporter 与 sinks
+### T2 — 建 `memo/worker/`，搬整个 worker 闭包 ✅
 
-带来 aim / rerun-sdk 依赖的那一半。`episode.py` 跟着它的消费者一起走，但落点是 `memorax/runtime/`（见 D2），不是 worker。
+再次按依赖闭包重排：`worker.py` 引用 `reporter` 和 `score`，`reporter` 引用 `sinks`，这四个加 `__main__` 是一个连通块，一起搬才没有反向边。`episode.py` 反过来被 `reporter` 和 `sinks/rerun` 引用，先搬它会造出反向边，所以它留到 T3——**原计划的 T2/T3 分界正好画反了**。
 
-- `episode.py` → `memorax/runtime/episode.py`；`reporter.py` `sinks/*` → `memo/worker/`
-- 建 `memo/worker/` 包，`memo/pyproject.toml` 的 packages include 加上 `worker*`
-- `aim` `rerun-sdk` 从 `training-sdk/pyproject.toml` 移到 `memo/pyproject.toml`
-- 搬 `test_episode` `test_reporter` `test_aim_sink` `test_rerun_sink` `test_metrics_sink`
-- 验证：aim 在 Windows 装不上，那几个测试本地会失败，需在 CI 上确认
+- `reporter.py` `score.py` `worker.py` `__main__.py` `sinks/` → `memo/worker/`
+- `memo/pyproject.toml`：packages include 加 `worker*`，依赖加 `aim` `rerun-sdk`，dev 组加 `moto[server]`
+- `training-sdk/pyproject.toml`：去掉 `aim` `rerun-sdk`
+- `Dockerfile.{cpu,gpu}` 的 `CMD` 从 `python -m training_sdk.worker` 改成 `python -m worker`
+- 搬 `test_reporter` `test_score` `test_worker` `test_aim_sink` `test_rerun_sink` `test_metrics_sink`
+- `memo/tests/conftest.py` 导入 `s3_base` / `s3_endpoint` 两个 fixture（`training_sdk.testing` 到 T4 才动）
+- `memo-ci.yml` 的 CHECKED 加 `worker`
 
-### T3 — 搬 score 与 worker 运行器
+结果：memo **278 → 311 passed**。此后 `training_sdk` 只剩 `contract` `objects` `episode` `testing`。
 
-`score.py` 只被 `worker.py` 用，两者一起走。
+**遗留阻塞：`memo/uv.lock` 没能刷新。** `uv lock` 在 Windows 上失败——`mettagrid`（`cogames` 可选依赖的传递依赖）的构建要 `fcntl`。`training-sdk/uv.lock` 刷新成功了（连带删掉了 tqdm / uvicorn / websockets，正是 aim 拖进来的那些）。**CI 的 `uv sync --frozen` 会因为 memo 的锁与 pyproject 不符而失败，推之前必须在 Linux 上跑一次 `uv lock`。**
 
-- `score.py` `worker.py` `__main__.py` → `memo/worker/`
-- `memo/docker/Dockerfile.{cpu,gpu}` 的 `CMD ["python", "-m", "training_sdk.worker"]` 跟着改
-- 搬 `test_score` `test_worker`
+本地新增四处**环境性**排除，不是缺陷：`test_aim_sink`、`test_rerun_sink`、`test_worker`、以及 `test_reporter` 里的 `test_reporter_from_env_reads_config_and_scratch`。前者是 aim 在 Windows 装不上（aimrocks 无 wheel），后者是 moto server 绑 `0.0.0.0` 而 Windows 连不上这个地址。都只能在 CI 上确认。
+
+### T3 — 搬 episode
+
+`episode.py` 的消费者现在全在 memo：`worker/reporter.py`、`worker/sinks/rerun.py`、`memorax/runtime/{driver,rollout}.py`、三个 entry、两个测试。
+
+- `episode.py` → `memorax/runtime/episode.py`（见 D2：`Episode` 是 runtime 产出、worker 消费的接口类型）
+- 搬 `test_episode`
+- `numpy` 从 `training-sdk/pyproject.toml` 移到 memo
 - 此后 `training-sdk` 只剩 `contract.py` `objects.py` `testing.py`
 
 ### T4 — 抽出 AWS 操作包

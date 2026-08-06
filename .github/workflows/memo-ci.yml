@@ -53,6 +53,7 @@ jobs:
         memorax/runtime
         entries
         runner
+        worker
         tests
     steps:
       - uses: actions/checkout@v4

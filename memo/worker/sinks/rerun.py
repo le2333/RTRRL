@@ -5,7 +5,6 @@ from pathlib import Path
 
 import numpy as np
 import rerun as rr
-
 from training_sdk import objects
 from training_sdk.contract import RunConfig
 from training_sdk.episode import Episode
@@ -75,13 +74,13 @@ class RerunSink:
         series: dict[str, Sequence[object]] = {
             entity: values for entity, values in walked.items() if values is not None
         }
-        series |= {
-            f"series/{name}": values for name, values in episode.series.items()
-        }
+        series |= {f"series/{name}": values for name, values in episode.series.items()}
         for entity, values in series.items():
             for index, value in enumerate(values):
                 stream.set_time("episode_step", sequence=index)
-                stream.log(f"episode/{entity}", rr.Tensor(np.asarray(value, dtype=np.float64)))
+                stream.log(
+                    f"episode/{entity}", rr.Tensor(np.asarray(value, dtype=np.float64))
+                )
         stream.flush()
         stream.disconnect()
 

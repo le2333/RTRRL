@@ -3,9 +3,9 @@ import math
 from pathlib import Path
 
 import pytest
-
 from training_sdk.contract import ScoreConfig
-from training_sdk.score import WORST_MAGNITUDE, ScoreError, compute_score
+
+from worker.score import WORST_MAGNITUDE, ScoreError, compute_score
 
 
 def write_metrics(path: Path, rows: list[tuple[int, float]]) -> None:

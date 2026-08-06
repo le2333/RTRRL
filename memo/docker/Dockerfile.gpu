@@ -33,4 +33,4 @@ COPY memo/catalog.json /opt/trainer/catalog.json
 # visible, and pinning a platform would hide a job that landed without one.
 ENV PATH="/opt/venv/bin:${PATH}" \
     PYTHONUNBUFFERED=1
-CMD ["python", "-m", "training_sdk.worker"]
+CMD ["python", "-m", "worker"]

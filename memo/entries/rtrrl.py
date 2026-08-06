@@ -18,7 +18,6 @@ from typing import Any
 import flax.linen as nn
 import jax
 from training_sdk.episode import metric_names
-from training_sdk.reporter import Reporter
 
 from memorax.algorithms.rtrrl import RTRRL, RTRRLConfig
 from memorax.environments import make
@@ -31,6 +30,7 @@ from memorax.networks import (
 )
 from memorax.rl import NormalizationConfig
 from memorax.runtime import EPISODE_FIELDS, Runtime
+from worker.reporter import Reporter
 
 _UNIT = {"type": "float", "low": 0.0, "high": 1.0}
 _RATE = {"type": "float", "low": 1e-9, "high": 10.0, "log": True}

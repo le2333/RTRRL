@@ -3,6 +3,10 @@
 Two tests compare arrays that should agree to their last bits: one answers a
 recorded snapshot, the other answers upstream's own arithmetic. They agree on
 what "apart" means, and it is measured here rather than twice.
+
+The S3 fixtures are imported rather than declared: the worker tests that moved
+here reach an object store, and the one that stands in for it belongs beside
+the S3 helper they call, not beside the environments.
 """
 
 from dataclasses import dataclass
@@ -12,6 +16,7 @@ import jax.numpy as jnp
 import numpy as np
 from flax import struct
 from gymnax.environments import spaces
+from training_sdk.testing import s3_base, s3_endpoint  # noqa: F401
 
 
 def flattened(tree) -> dict:

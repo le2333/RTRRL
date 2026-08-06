@@ -10,8 +10,9 @@ from pathlib import Path
 
 from training_sdk import objects
 from training_sdk.contract import CONTRACT_VERSION, Catalog, RunConfig
-from training_sdk.reporter import METRICS_FILENAME
-from training_sdk.score import compute_score
+
+from worker.reporter import METRICS_FILENAME
+from worker.score import compute_score
 
 CATALOG_PATH = Path("/opt/trainer/catalog.json")
 

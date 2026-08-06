@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [tool.setuptools.packages.find]
 where = ["."]
-include = ["memorax*", "runner*", "entries*"]
+include = ["memorax*", "runner*", "entries*", "worker*"]
 
 [project]
 name = "memorax"
@@ -27,8 +27,14 @@ dependencies = [
     # don't ship setuptools, so add it explicitly. Pin <81: setuptools 81 removed
     # pkg_resources, which aim 3.28 still needs.
     "setuptools>=68,<81",
-    # Reporting goes through the SDK, which brings its own pinned aim and rerun.
+    # Still the contract, the S3 helper and the episode types; the reporting
+    # that used to come with them lives here now.
     "training-sdk",
+    # The sinks moved here with the worker, and their dependencies with them:
+    # the control plane hosts the Aim server but has no reason to install its
+    # client to read four pydantic models.
+    "aim==3.28.*",
+    "rerun-sdk>=0.34,<0.35",
 ]
 
 [project.urls]
@@ -89,6 +95,8 @@ development = [
     "black>=26.3.1",
     "isort>=8.0.1",
     "ruff>=0.15.22",
+    # The S3 fixtures the moved worker tests use.
+    "moto[server]>=5,<6",
 ]
 # The published streaming-drl optimisers, so the bounded step can be compared
 # against the paper's own code rather than against a reading of it. CPU wheels
