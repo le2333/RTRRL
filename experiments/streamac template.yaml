@@ -1,26 +1,54 @@
-experiment: streamac-test
-name: template
-description: ""
+# 一个实验。infra 读这个文件，产出若干份运行配置交给 worker。
+#
+# 三类字段，按去向分：
+#   [透传] 原样成为运行配置的同名块
+#   [消费] infra 读它，产出运行配置里的另一个字段
+#   [自用] infra 内部用，不过河
+#
+# infra 自己生成、这里没有的：contract、run_id、launch_id、trial。
+
+experiment: streamac-test # [透传] aim 里的实验名
+name: template # [自用] optuna study 名
+description: "" # [自用]
 
 image: 007122174918.dkr.ecr.eu-north-1.amazonaws.com/rtrrl@sha256:b33d69821d4dd8e601fea78b3dde331bacfd2797bda256da1dbdfeb5b1ce12a5
-entry: stream_ac
-storage: s3://rtrrl-artifacts-007122174918/trainer
+entry: stream_ac # [透传] 镜像 catalog 里的入口名
+storage: s3://rtrrl-artifacts-007122174918/trainer # [消费] → score.s3、rerun 落点
 
+# ── 以下整块透传 ──────────────────────────────────────────
+
+# [透传] 组装计算图要的：由它得到 action_dim 和观测宽度
 environment:
   id: brax::hopper
   backend: spring
   observed: [0, 2, 4, 6, 8, 10]
-  seed: 0
+  seed: 0 # 这个不进图，是 runtime 的随机源
   episode_length: 1000
 
+# [透传] num_envs 进图（每个 carry/trace 的第一维），另两个是预算
 training:
   num_envs: 16
   total_steps: 2000000
   epoch_steps: 10000
 
+# [透传] 流数不在这里：评估复用训练时那张图的宽度
 evaluation:
   steps: 1000
-  num_envs: 1
+
+logging:
+  aim: aim://172.31.62.192:53801
+  enable_rerun: true
+  rerun_every_steps: 20000
+
+# [透传] 除 s3 外；s3 由 infra 从 storage 生成
+score:
+  metric: eval/episode/return_per_step
+  window_steps: [0, 2000000] # 取值范围
+  reduce: last # 值序列如何生成分数
+  non_finite: worst # nan/inf 处理策略
+  direction: maximize
+
+# ── 以下 infra 自用，不过河 ────────────────────────────────
 
 compute:
   instance_type: c7a.large
@@ -29,8 +57,11 @@ compute:
 hpo:
   rounds: 5
   trials_per_round: 4
-  parallel_jobs: 4
+  startup_trials: 4
+  seed: 0
 
+# 对 catalog 搜索域的覆盖。采样后成为运行配置的 params。
+# 键是扁平点名，与 catalog 展开后的名字一致。
 space:
   # 归一化
   observation_normalization: [running]
@@ -52,16 +83,3 @@ space:
   actor_optimizer_base: [sgd]
   critic_optimizer_bound: [none]
   critic_optimizer_base: [sgd]
-
-score:
-  metric: eval/episode/return_per_step
-  window_steps: [0, 2000000] # 取值范围
-  reduce: last # 值序列如何生成分数
-  non_finite: worst # nan/inf处理策略
-  direction: maximize
-
-logging:
-  # 考虑设置记录的字段
-  aim: aim://172.31.62.192:53801
-  enable_rerun: true
-  rerun_every_steps: 20000

@@ -12,7 +12,7 @@
 
 ## `CONTRACT_VERSION`
 
-一个整数，当前 **6**，写在 `memo/worker/contract.py`。catalog 和 run configuration 各带一份。worker 收到不等于自己实现的版本就**拒绝执行**，不做兼容猜测。
+一个整数，当前 **7**，写在 `memo/worker/contract.py`。catalog 和 run configuration 各带一份。worker 收到不等于自己实现的版本就**拒绝执行**，不做兼容猜测。
 
 改动这四种形状里的任何一种——加字段、改语义、换类型——都要同时改这个数，否则一个旧 worker 会把新配置读成它以为的样子。
 
@@ -53,14 +53,13 @@ worker **串行**执行其中每一个 run。
 
 ```json
 {
-  "contract": 6,
-  "run_id": "...", "experiment": "...", "name": "...", "launch_id": "...",
+  "contract": 7,
+  "run_id": "...", "experiment": "...", "launch_id": "...",
   "trial": 0, "entry": "stream_ac", "digest": "sha256:...",
   "environment": { "id": "brax::hopper", "backend": "spring", "seed": 0,
                    "episode_length": 1000, "observed": [0, 2, 4] },
-  "training":   { "num_envs": 16, "total_steps": 2000000, "epoch_steps": 10000,
-                  "chunk_steps": null, "early_stop_patience": null },
-  "evaluation": { "steps": 1000, "num_envs": 1 },
+  "training":   { "num_envs": 16, "total_steps": 2000000, "epoch_steps": 10000 },
+  "evaluation": { "steps": 1000 },
   "params":     { "<扁平名>": <标量> },
   "logging":    { "aim": "...", "enable_rerun": false,
                   "rerun_s3": null, "rerun_every_steps": null },
@@ -69,7 +68,21 @@ worker **串行**执行其中每一个 run。
 }
 ```
 
-`training.chunk_steps` 和 `training.early_stop_patience` **声明了但没有任何实现读它们**，`evaluation.num_envs` 同样。它们是空声明，改动或删除不影响任何运行中的东西。
+#### 三组字段，按读者分
+
+| 组 | 字段 | 读者 |
+| --- | --- | --- |
+| **图** | `params`、`environment.{id,backend,observed,episode_length}`、`training.num_envs` | 入口的 `build` |
+| **预算** | `environment.seed`、`training.{total_steps,epoch_steps}`、`evaluation.steps` | `memorax.runtime.Runtime` |
+| **协调** | `contract` `run_id` `experiment` `launch_id` `trial` `entry` `digest`、`logging.*`、`score.*` | worker / reporter / sinks |
+
+`training.num_envs` 是唯一一个从预算块穿进组装器的字段：每个 carry、trace、sensitivity 都在这个宽度上开，建图时钉死。
+
+#### contract 6 → 7 删掉的四个字段
+
+`training.chunk_steps`、`training.early_stop_patience`、`evaluation.num_envs`、顶层 `name`——四个都**没有任何实现读**（`name` 尤其误导：aim 的 run 名用的是 `run_id`；实验文件里的 `name` 是 optuna study 名，属于 infra，不过河）。
+
+`evaluation.num_envs` 删得比另外三个硬：评估复用 `cfg.num_envs`，也就是训练那张图的宽度。按它的字面意思实现需要第二张图，所以它不只是没实现，是**与单图假设矛盾**。
 
 ### score
 

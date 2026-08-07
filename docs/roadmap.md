@@ -70,14 +70,63 @@ entry.build(...) 并跑一步
 
 链绿 = 两份拷贝仍然相等；红 = 有人只改了一边。
 
-### R1 的动作
+### 组装器需要什么（这是契约唯一的难点）
 
-1. 定 run config 的字段（起点是现有 `RunConfig` 减掉没人读的：`training.chunk_steps`、`training.early_stop_patience`、`evaluation.num_envs` 是空声明）
-2. infra 的实验 YAML schema 改成这个形状，`_configurations` 产出它
-3. **补上现在缺的协调字段**：infra 有 `objective`（优化什么）但**没说结果写到哪**。这不是偏好是协调，提供方必须说
-4. `RunConfig` 从跨侧契约降级成 worker 的内部类型
-5. `test_template.py` 改成真往返
-6. 更新 `docs/contract.md`
+`entries/stream_ac.py` 的 `build(params, environment, training)` 追到底只用三样：
+
+| 来源 | 字段 | 决定图的什么 |
+| --- | --- | --- |
+| `params` | 全部 | 组件选择 + 超参 |
+| `environment` | `id` `backend` `observed` `episode_length` | 造 env，由它得 `action_dim` 和观测宽度 |
+| `training` | **`num_envs`** | 每个 carry / trace / sensitivity 的第一维 |
+
+`environment.seed` 不进图。其余全是预算、上报、协调。`num_envs` 是唯一从预算块穿进组装器的字段，建图时钉死。
+
+顺这条看清了 `evaluation.num_envs` 为什么删得最硬：`evaluate` 用的是 `cfg.num_envs`，即训练那张图的宽度。按字面实现需要第二张图——它不是"没实现"，是**与单图假设矛盾**。
+
+### 目标形状已经写好了，在 `experiments/streamac template.yaml`
+
+那个文件的结构与 `RunConfig` 几乎逐字对应。R1b 不是设计新 schema，是**让 infra 读这个文件**：
+
+```
+透传:  experiment entry environment training evaluation logging  score(除 s3)
+生成:  contract  run_id  launch_id  trial
+       digest ← image        score.s3 ← storage
+采样:  params ← catalog 搜索域 ⊕ space
+自用:  name description compute hpo
+```
+
+`image` / `storage` 早在文件里但今天无人消费——它们正是"缺的协调字段"的原料，不用新增。
+
+### 修订后的次序（adapter 不改，等 R2）
+
+infra 的 `adapter.py` 判叶子用 `"search" in node`，那**正是 R2 之后**的 `Parameter(valid, search)` 形状；今天的 catalog 是 `kind`/`branches`，它认不了。现在改等于改错再改回来。往返测试同理——写今天的形状，R2 时整个重写。所以缝切在同一处：
+
+| | 内容 | 依赖 |
+| --- | --- | --- |
+| **R1a** ✅ | `RunConfig` 删 4 个死字段，`CONTRACT_VERSION` 6→7 | 无 |
+| **R1b** | infra 读模板 YAML 的名字，`_configurations` 产出 `RunConfig` 形状 | 无 |
+| **R1c** | 往返测试**上半**：infra 产出 → `RunConfig` 校验；`params` 手工给 | R1a+R1b |
+| **R2a** | 参数树重构，catalog 产出嵌套 `{valid, search}`；adapter 自动变对 | — |
+| **R1d** | 往返测试**下半**：真 catalog → 采样 → `build` | R2a |
+
+### R1a ✅ — 已完成
+
+删掉 `training.chunk_steps`、`training.early_stop_patience`、`evaluation.num_envs`、顶层 `name`（四个都零读取；aim 的 run 名用 `run_id`，实验文件的 `name` 是 optuna study 名，属 infra）。`CONTRACT_VERSION` 6→7，测试改成引用它而不是字面量。模板 YAML 按去向重排并标注。289 passed 不变。
+
+### R1b 待办
+
+infra 今天读的名字与模板对不上，九处：
+
+| infra 读 | 实际是 |
+| --- | --- |
+| `catalog["algorithms"]` | `catalog["entries"]` |
+| `experiment["algorithm"]` | `entry` |
+| `experiment["parameters"]` | `space` |
+| `experiment["run"]` / `["loggers"]` | `environment`+`training`+`evaluation` / `logging` |
+| `experiment["objective"]["direction"]` | `score.direction`（`metric`/`window_steps`/`reduce`/`non_finite` 无处安放） |
+
+外加 `adapter._collect` 假设 overrides 嵌套，而 `space` 的键是扁平点名——这一条改 `_collect` 查 `overrides.get(path)` 即可，与 R2 无关。
 
 ---
 

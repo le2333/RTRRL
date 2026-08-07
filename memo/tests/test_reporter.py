@@ -5,17 +5,16 @@ import pytest
 from pydantic import ValidationError
 
 from memorax.runtime.episode import Episode
-from worker.contract import RunConfig
+from worker.contract import CONTRACT_VERSION, RunConfig
 from worker.reporter import METRICS_FILENAME, Reporter
 
 
 def make_config(**logging: object) -> RunConfig:
     return RunConfig.model_validate(
         {
-            "contract": 6,
+            "contract": CONTRACT_VERSION,
             "run_id": "smoke-20260725-000000-t0",
             "experiment": "infra-acceptance",
-            "name": "smoke",
             "launch_id": "20260725-000000",
             "trial": 0,
             "entry": "e",
@@ -26,7 +25,7 @@ def make_config(**logging: object) -> RunConfig:
                 "seed": 0,
             },
             "training": {"num_envs": 1, "total_steps": 100, "epoch_steps": 100},
-            "evaluation": {"steps": 0, "num_envs": 1},
+            "evaluation": {"steps": 0},
             "params": {"learning_rate": 0.0003},
             "logging": {"aim": "aim://127.0.0.1:1", **logging},
             "score": {

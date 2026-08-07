@@ -14,7 +14,7 @@ from pydantic import BaseModel, ConfigDict, model_validator
 
 from memorax.parameters import ParameterNode, Scalar
 
-CONTRACT_VERSION = 6
+CONTRACT_VERSION = 7
 
 
 class _Frozen(BaseModel):
@@ -66,11 +66,12 @@ class EnvironmentConfig(_Frozen):
 
 
 class TrainingConfig(_Frozen):
+    # ``num_envs`` is the one field here the graph reads rather than the
+    # schedule: every carry, trace and sensitivity is opened at this width, so
+    # it is fixed when the agent is built and cannot be varied afterwards.
     num_envs: int
     total_steps: int
     epoch_steps: int
-    chunk_steps: int | None = None
-    early_stop_patience: int | None = None
 
     @model_validator(mode="after")
     def _whole(self) -> "TrainingConfig":
@@ -90,30 +91,23 @@ class TrainingConfig(_Frozen):
                 f"epoch_steps {self.epoch_steps} is not "
                 f"{self.num_envs} streams' worth"
             )
-        if self.chunk_steps is not None:
-            if self.chunk_steps < 1:
-                raise ValueError("chunk_steps must be positive")
-            per_chunk = self.chunk_steps * self.num_envs
-            if self.total_steps % per_chunk or self.epoch_steps % per_chunk:
-                raise ValueError(
-                    f"chunk_steps {self.chunk_steps} over {self.num_envs} streams "
-                    "must divide total_steps and epoch_steps"
-                )
-        if self.early_stop_patience is not None and self.early_stop_patience < 0:
-            raise ValueError("early_stop_patience must not be negative")
         return self
 
 
 class EvaluationConfig(_Frozen):
+    """How much evaluation to run. Not on how many streams.
+
+    Evaluation reuses the streams the agent was built with, because the widths
+    above are baked into the graph. Naming a second count here would describe
+    something only a second graph could do.
+    """
+
     steps: int
-    num_envs: int
 
     @model_validator(mode="after")
     def _usable(self) -> "EvaluationConfig":
         if self.steps < 0:
             raise ValueError("evaluation steps must not be negative")
-        if self.num_envs < 1:
-            raise ValueError("evaluation num_envs must be positive")
         return self
 
 
@@ -143,7 +137,6 @@ class RunConfig(_Frozen):
     contract: int
     run_id: str
     experiment: str
-    name: str
     launch_id: str
     trial: int
     entry: str

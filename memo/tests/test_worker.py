@@ -6,6 +6,7 @@ import pytest
 from test_reporter import make_config
 
 from worker import objects
+from worker.contract import CONTRACT_VERSION
 from worker.worker import WorkerError, main, run_manifest
 
 CHILD = """
@@ -32,7 +33,7 @@ def catalog(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     path.write_text(
         json.dumps(
             {
-                "contract": 6,
+                "contract": CONTRACT_VERSION,
                 "entries": {
                     "e": {
                         "command": [sys.executable, str(child)],
