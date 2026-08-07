@@ -24,7 +24,14 @@ from memorax.networks.readouts import (
     critic_head,
 )
 from memorax.networks.sequence import PLACES
-from memorax.parameters import KIND, describe_parameters, param, read_branch, structure
+from memorax.parameters import (
+    KIND,
+    describe_parameters,
+    group,
+    param,
+    read_branch,
+    structure,
+)
 from memorax.rl import CREDITS, declared_normalizer
 from memorax.rl.normalization import (
     DISCOUNTED_NORMALIZATION_BRANCHES,
@@ -40,22 +47,48 @@ CREDIT_BRANCHES = {name: () for name in CREDITS}
 
 
 # 结构参数表
+#
+# 分组的层是作用域，选择的层是 structure。``actor`` 不是"哪一个 actor"——没有
+# 第二个可选——但它是 actor 的参数住的地方，于是两个角色共用一份优化器声明，
+# 而不是四个靠名字里的前缀区分的字段。
+@dataclass(frozen=True)
+class Optimizer:
+    """两个轴，一条界一条底。两个角色各有一个，声明只有这一份。"""
+
+    bound: str = structure(branches=BOUND_BRANCHES)
+    base: str = structure(branches=BASE_BRANCHES)
+
+
+@dataclass(frozen=True)
+class Actor:
+    head: str = structure(branches=ACTOR_HEAD_BRANCHES)
+    optimizer: Optimizer = group(of=Optimizer)
+
+
+@dataclass(frozen=True)
+class Critic:
+    # 今天只有一条分支，仍然是 structure：它是选择点，不是作用域。
+    head: str = structure(branches=CRITIC_HEAD_BRANCHES)
+    optimizer: Optimizer = group(of=Optimizer)
+
+
+@dataclass(frozen=True)
+class Normalization:
+    observation: str = structure(branches=NORMALIZATION_BRANCHES)
+    reward: str = structure(branches=DISCOUNTED_NORMALIZATION_BRANCHES)
+
+
 @dataclass(frozen=True)
 class StreamACParameters:
+    actor: Actor = group(of=Actor)
+    critic: Critic = group(of=Critic)
+    normalization: Normalization = group(of=Normalization)
     backbone: str = structure(branches=BACKBONE_BRANCHES)
-    actor_head: str = structure(branches=ACTOR_HEAD_BRANCHES)
-    critic_head: str = structure(branches=CRITIC_HEAD_BRANCHES)
-    meta_rl: bool = param(valid=[False, True], search=[False, True])
     credit: str = structure(branches=CREDIT_BRANCHES)
+    meta_rl: bool = param(valid=[False, True], search=[False, True])
     gamma: float = param(valid=(0.5, 0.9999), search=(0.9, 0.9999))
     trace_lambda: float = param(valid=(0.0, 1.0), search=(0.0, 1.0))
     entropy_coefficient: float = param(valid=(1e-8, 1.0), search=(1e-8, 1e-2), log=True)
-    observation_normalization: str = structure(branches=NORMALIZATION_BRANCHES)
-    reward_normalization: str = structure(branches=DISCOUNTED_NORMALIZATION_BRANCHES)
-    actor_optimizer_bound: str = structure(branches=BOUND_BRANCHES)
-    actor_optimizer_base: str = structure(branches=BASE_BRANCHES)
-    critic_optimizer_bound: str = structure(branches=BOUND_BRANCHES)
-    critic_optimizer_base: str = structure(branches=BASE_BRANCHES)
 
 
 # 展开完整参数表
@@ -90,17 +123,21 @@ RECORD = frozenset(EPISODE_FIELDS) | set(TRAINING_METRICS)
 
 
 def _optimizer(params: Mapping[str, Any], role: str, axis: str):
-    """One axis of one role's optimiser, read back as the component it names."""
+    """One axis of one role's optimiser, read back as the component it names.
+
+    The role is a prefix rather than part of the name: both roles read the same
+    two branch tables, from their own scope.
+    """
 
     branches = BOUND_BRANCHES if axis == "bound" else BASE_BRANCHES
-    _, component = read_branch(params, f"{role}_optimizer_{axis}", branches)
+    _, component = read_branch(params, axis, branches, prefix=f"{role}.optimizer.")
     return component
 
 
 def _estimator(params: Mapping[str, Any], name: str, branches, *, discount=None):
     """The estimator one stream declared, or none if it declared none."""
 
-    _, component = read_branch(params, name, branches)
+    _, component = read_branch(params, name, branches, prefix="normalization.")
     normalizer = declared_normalizer(component, discount=discount)
     return None if normalizer is None else normalizer.config
 
@@ -129,8 +166,8 @@ def build(params: Mapping[str, Any], environment, training) -> StreamAC:
     # head and the cell draws its own. A branch that declares none is handed
     # none, and its layers keep the framework's default.
     kernel_init = initializer_at(params, f"backbone.{chosen}.")
-    acting = read_branch(params, "actor_head", ACTOR_HEAD_BRANCHES)[0]
-    valuing = read_branch(params, "critic_head", CRITIC_HEAD_BRANCHES)[0]
+    acting = read_branch(params, "head", ACTOR_HEAD_BRANCHES, prefix="actor.")[0]
+    valuing = read_branch(params, "head", CRITIC_HEAD_BRANCHES, prefix="critic.")[0]
 
     def network(head):
         return Sequence(
@@ -165,20 +202,20 @@ def build(params: Mapping[str, Any], environment, training) -> StreamAC:
             actor_head(
                 acting,
                 action_dim=action_dim,
-                kernel_init=initializer_at(params, f"actor_head.{acting}."),
+                kernel_init=initializer_at(params, f"actor.head.{acting}."),
             )
         ),
         network(
             critic_head(
-                valuing, kernel_init=initializer_at(params, f"critic_head.{valuing}.")
+                valuing, kernel_init=initializer_at(params, f"critic.head.{valuing}.")
             )
         ),
         observation_normalization=_estimator(
-            params, "observation_normalization", NORMALIZATION_BRANCHES
+            params, "observation", NORMALIZATION_BRANCHES
         ),
         reward_normalization=_estimator(
             params,
-            "reward_normalization",
+            "reward",
             DISCOUNTED_NORMALIZATION_BRANCHES,
             discount=gamma,
         ),

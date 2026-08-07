@@ -66,11 +66,31 @@ hpo:
 # 它和它的分支住在同一层，所以 backbone.kind 选，backbone.rtu.* 属于被选中的那个。
 # 一个名字在两处出现（两个角色各有 ob）是两个节点，不是重名。
 space:
+  # 两个角色。分组的层没有 kind——不存在"哪一个 actor"——但两个角色的
+  # optimizer 是同一份声明用了两次，各在自己的作用域里。
+  actor:
+    head:
+      kind: [global_std]
+    optimizer:
+      bound:
+        kind: [none]
+      base:
+        kind: [sgd]
+  critic:
+    head:
+      kind: [value]
+    optimizer:
+      bound:
+        kind: [none]
+      base:
+        kind: [sgd]
+
   # 归一化
-  observation_normalization:
-    kind: [running]
-  reward_normalization:
-    kind: [running]
+  normalization:
+    observation:
+      kind: [running]
+    reward:
+      kind: [running]
 
   # 网络
   backbone:
@@ -79,20 +99,9 @@ space:
       hidden_dim: [32]
     # 初始化归有权重可抽的那条分支；rtu 的递推核自己抽，所以 rtu 下没有这一项。
     # 换到 mlp 时是 mlp.initialization.kind: [lecun|sparse]。
-  meta_rl: [false]
-  actor_head:
-    kind: [global_std]
 
   # 梯度信用
   credit:
     kind: [tbptt]
 
-  # 优化器：两个角色各一条界、一条底
-  actor_optimizer_bound:
-    kind: [none]
-  actor_optimizer_base:
-    kind: [sgd]
-  critic_optimizer_bound:
-    kind: [none]
-  critic_optimizer_base:
-    kind: [sgd]
+  meta_rl: [false]

@@ -95,23 +95,23 @@ def test_the_head_a_parameterisation_is_its_own_component():
 
 
 def test_the_actor_head_is_declared_as_a_structure():
-    node = stream_ac.PARAMETERS["actor_head"]
+    node = stream_ac.PARAMETERS["actor"]["head"]
 
     assert set(node[KIND].valid.values) == set(ACTOR_HEAD_BRANCHES)
 
 
 def test_the_critic_head_is_declared_too():
-    node = stream_ac.PARAMETERS["critic_head"]
+    node = stream_ac.PARAMETERS["critic"]["head"]
 
     assert set(node[KIND].valid.values) == set(CRITIC_HEAD_BRANCHES)
 
 
 @pytest.mark.parametrize(
     "role, branches",
-    (("actor_head", ACTOR_HEAD_BRANCHES), ("critic_head", CRITIC_HEAD_BRANCHES)),
+    (("actor", ACTOR_HEAD_BRANCHES), ("critic", CRITIC_HEAD_BRANCHES)),
 )
 def test_every_head_declares_how_its_kernels_are_drawn(role, branches):
-    declared = stream_ac.PARAMETERS[role]
+    declared = stream_ac.PARAMETERS[role]["head"]
 
     for name in branches:
         assert "initialization" in declared[name], f"{role}.{name} declares none"
@@ -130,11 +130,11 @@ def test_a_head_is_drawn_the_way_its_own_branch_says():
     pinned = {
         **base,
         "backbone.kind": "rtu",
-        "actor_head.kind": "global_std",
-        "actor_head.global_std.initialization.kind": "sparse",
-        "actor_head.global_std.initialization.sparse.sparsity": 0.9,
-        "critic_head.kind": "value",
-        "critic_head.value.initialization.kind": "lecun",
+        "actor.head.kind": "global_std",
+        "actor.head.global_std.initialization.kind": "sparse",
+        "actor.head.global_std.initialization.sparse.sparsity": 0.9,
+        "critic.head.kind": "value",
+        "critic.head.value.initialization.kind": "lecun",
     }
     environment = SimpleNamespace(
         id="brax::hopper",

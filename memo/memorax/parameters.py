@@ -209,6 +209,23 @@ def param(
     return field(default=default, metadata=metadata)
 
 
+def group(*, of: type) -> Any:
+    """Declare a level that is a scope rather than a choice.
+
+    ``actor`` is not one of several actors -- there is no second one to choose
+    between -- but it is where the actor's parameters live, and two roles can
+    then share one declaration instead of four fields told apart by a prefix
+    written into their names.
+
+    The class is passed rather than read off the annotation because declaring
+    modules import ``annotations`` from ``__future__``, which leaves a field's
+    type a string. Nothing is inferred: a field with no declaration stays an
+    error, so a mistyped annotation cannot become a silent group.
+    """
+
+    return field(metadata={"group": of})
+
+
 def structure(
     *, branches: Mapping[str, Any], search: Sequence[str] | None = None
 ) -> Any:
@@ -246,9 +263,11 @@ def _domain(value: Any, *, log: bool, step: int, open_ended: bool) -> Range:
 def describe_parameters(model: type) -> dict[str, ParameterNode]:
     """The tree a declaring dataclass stands for.
 
-    A ``structure`` field becomes a group: the choice itself under ``kind``,
-    beside one subtree per branch. So the group is the scope, and a branch name
-    is only ever read relative to it.
+    Both nested declarations become a mapping, and the tree has no third kind
+    of node for them. A ``structure`` adds the choice itself under ``kind``,
+    beside one subtree per branch; a ``group`` adds nothing but the level. So
+    the scope is the mapping either way, and a name is only ever read relative
+    to the one it sits in.
     """
 
     if not is_dataclass(model):
@@ -259,16 +278,19 @@ def describe_parameters(model: type) -> dict[str, ParameterNode]:
             raise ValueError(f"{model.__name__}.{KIND} uses the reserved name")
         if "parameter" in item.metadata:
             described[item.name] = item.metadata["parameter"]
+        elif "group" in item.metadata:
+            described[item.name] = describe_parameters(item.metadata["group"])
         elif "branches" in item.metadata:
-            described[item.name] = _group(item)
+            described[item.name] = _branches(item)
         else:
             raise ValueError(
-                f"{model.__name__}.{item.name} is not declared with param() or structure()"
+                f"{model.__name__}.{item.name} is not declared with "
+                "param(), group() or structure()"
             )
     return described
 
 
-def _group(item: DataclassField) -> dict[str, ParameterNode]:
+def _branches(item: DataclassField) -> dict[str, ParameterNode]:
     branches: Mapping[str, Any] = item.metadata["branches"]
     group: dict[str, ParameterNode] = {
         KIND: Parameter(
@@ -292,6 +314,11 @@ def read_parameters(model: type, params: Mapping[str, Any], prefix: str = "") ->
     values = {}
     for item in fields(model):
         key = f"{prefix}{item.name}"
+        if "group" in item.metadata:
+            values[item.name] = read_parameters(
+                item.metadata["group"], params, prefix=f"{key}."
+            )
+            continue
         if "branches" in item.metadata:
             values[item.name] = read_branch(
                 params, item.name, item.metadata["branches"], prefix

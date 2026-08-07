@@ -22,8 +22,10 @@ from memorax.parameters import (
     describe_parameters,
     expand,
     flatten,
+    group,
     param,
     read_branch,
+    read_parameters,
     structure,
 )
 
@@ -188,3 +190,68 @@ def test_the_shipped_shape_is_valid_and_search_and_nothing_else() -> None:
         "search": {"type": "int", "low": 1, "high": 512, "step": 1, "log": False},
     }
     assert set(shipped["optimizer_base"]) == {KIND, "adam"}
+
+
+@dataclass(frozen=True)
+class Role:
+    """One declaration, used at two sites. What a scope buys."""
+
+    optimizer_base: str = structure(branches={"sgd": (), "adam": Adam})
+
+
+@dataclass(frozen=True)
+class Pair:
+    actor: Role = group(of=Role)
+    critic: Role = group(of=Role)
+    gamma: float = param(valid=(0.0, 1.0), search=[0.9])
+
+
+def test_a_group_is_a_level_without_a_choice() -> None:
+    """Because there is no second actor to choose between."""
+
+    tree = describe_parameters(Pair)
+
+    assert KIND not in tree["actor"]
+    assert set(tree["actor"]) == {"optimizer_base"}
+    assert KIND in tree["actor"]["optimizer_base"]
+
+
+def test_the_same_declaration_at_two_sites_is_two_sets_of_names() -> None:
+    """Which is the whole point: no prefix written into a field name."""
+
+    declared = flatten(describe_parameters(Pair))
+
+    assert "actor.optimizer_base.adam.b1" in declared
+    assert "critic.optimizer_base.adam.b1" in declared
+
+
+def test_a_group_is_descended_unconditionally() -> None:
+    reached = expand(describe_parameters(Pair), {"critic.optimizer_base.kind": "adam"})
+
+    assert reached["actor.optimizer_base.kind"] == "sgd"
+    assert "critic.optimizer_base.adam.b1" in reached
+    assert "actor.optimizer_base.adam.b1" not in reached
+
+
+def test_a_group_reads_back_as_the_class_it_names() -> None:
+    read = read_parameters(
+        Pair,
+        {
+            "gamma": 0.9,
+            f"actor.optimizer_base.{KIND}": "adam",
+            "actor.optimizer_base.adam.b1": 0.95,
+            f"critic.optimizer_base.{KIND}": "sgd",
+        },
+    )
+
+    assert read.actor.optimizer_base == "adam"
+    assert read.critic.optimizer_base == "sgd"
+
+
+def test_the_shipped_tree_has_no_third_kind_of_node_for_a_group() -> None:
+    """A group and a structure are both mappings; only the kind leaf differs."""
+
+    shipped = describe(describe_parameters(Pair))
+
+    assert set(shipped["actor"]) == {"optimizer_base"}
+    assert set(shipped["actor"]["optimizer_base"]) == {KIND, "adam"}
