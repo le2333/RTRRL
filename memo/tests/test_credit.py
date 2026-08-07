@@ -10,9 +10,9 @@ from __future__ import annotations
 
 import jax
 from test_blocks import ours
-from training_sdk.contract import StructureSpec
 
 from entries import stream_ac
+from memorax.parameters import StructureSpec
 from memorax.rl.credit import CREDITS
 
 

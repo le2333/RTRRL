@@ -15,13 +15,13 @@ from typing import Any, NamedTuple
 
 import jax.numpy as jnp
 import pytest
-from training_sdk.contract import Catalog
 
 import entries
 from entries import stream_ac
 from memorax.runtime import drive, whole_epochs
 from memorax.runtime.episode import check_names, statistics
 from runner.catalog import build_catalog, discover
+from worker.contract import Catalog
 
 
 class Recorder:

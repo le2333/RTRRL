@@ -3,9 +3,16 @@ from __future__ import annotations
 from dataclasses import dataclass, fields
 
 import pytest
-from training_sdk.contract import ChoiceSpec, ParameterSpec, StructureSpec
 
-from memorax.parameters import describe_parameters, param, read_branch, structure
+from memorax.parameters import (
+    ChoiceSpec,
+    ParameterSpec,
+    StructureSpec,
+    describe_parameters,
+    param,
+    read_branch,
+    structure,
+)
 
 
 @dataclass(frozen=True)

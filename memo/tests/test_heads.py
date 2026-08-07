@@ -25,7 +25,6 @@ from types import SimpleNamespace
 import jax
 import jax.numpy as jnp
 import pytest
-from training_sdk.contract import StructureSpec
 
 from entries import stream_ac
 from memorax.networks import heads
@@ -34,6 +33,7 @@ from memorax.networks.readouts import (
     CRITIC_HEAD_BRANCHES,
     actor_head,
 )
+from memorax.parameters import StructureSpec
 
 ACTIONS = 3
 WIDTH = 6

@@ -4,9 +4,9 @@ from unittest.mock import patch
 import pytest
 from rerun.experimental import RrdReader
 from test_reporter import make_config
-from training_sdk import objects
 
 from memorax.runtime.episode import Episode
+from worker import objects
 from worker.reporter import build_default_sinks
 from worker.sinks.rerun import RerunSink
 
@@ -179,9 +179,7 @@ def test_local_file_retained_when_upload_fails(s3_base: str, tmp_path: Path) -> 
         }
     )
     sink = RerunSink(config, tmp_path)
-    with patch(
-        "training_sdk.objects.put_file", side_effect=RuntimeError("upload failed")
-    ):
+    with patch("worker.objects.put_file", side_effect=RuntimeError("upload failed")):
         with pytest.raises(RuntimeError, match="upload failed"):
             sink.log_episode(make_episode(1))
     assert list(tmp_path.glob("*.rrd")) == [tmp_path / "eval-000001.rrd"]

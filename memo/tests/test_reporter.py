@@ -3,9 +3,9 @@ from pathlib import Path
 
 import pytest
 from pydantic import ValidationError
-from training_sdk.contract import RunConfig
 
 from memorax.runtime.episode import Episode
+from worker.contract import RunConfig
 from worker.reporter import METRICS_FILENAME, Reporter
 
 

@@ -20,6 +20,10 @@ dependencies = [
     # Nine files import it directly; it used to arrive through jax, which is a
     # dependency of a dependency deciding what this package can compile against.
     "numpy>=2",
+    # The contract this side validates what it receives against, and the S3 both
+    # sides read and write through. Neither arrives via a shared package now.
+    "pydantic>=2.8,<3",
+    "boto3>=1.35,<2",
     "flax>=0.10.2",
     "lox @ git+https://github.com/huterguier/lox@dev",
     "distrax>=0.1.5",
@@ -30,9 +34,6 @@ dependencies = [
     # don't ship setuptools, so add it explicitly. Pin <81: setuptools 81 removed
     # pkg_resources, which aim 3.28 still needs.
     "setuptools>=68,<81",
-    # Still the contract, the S3 helper and the episode types; the reporting
-    # that used to come with them lives here now.
-    "training-sdk",
     # The sinks moved here with the worker, and their dependencies with them:
     # the control plane hosts the Aim server but has no reason to install its
     # client to read four pydantic models.
@@ -132,7 +133,6 @@ explicit = true
 
 [tool.uv.sources]
 torch = { index = "pytorch-cpu" }
-training-sdk = { path = "../training-sdk" }
 continual-foragax = { git = "https://github.com/steventango/continual-foragax" }
 grimax  = { git = "ssh://git@github.com/noahfarr/grimax" }
 cogames = { git = "https://github.com/Metta-AI/cogames" }

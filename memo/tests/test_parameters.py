@@ -3,9 +3,10 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 import pytest
-from training_sdk.contract import ChoiceSpec, FloatValidSpec
 
 from memorax.parameters import (
+    ChoiceSpec,
+    FloatValidSpec,
     describe_parameters,
     param,
     read_branch,

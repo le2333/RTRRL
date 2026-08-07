@@ -3,11 +3,16 @@ from __future__ import annotations
 from dataclasses import fields, is_dataclass
 
 import pytest
-from training_sdk.contract import ChoiceSpec, ParameterSpec, StructureSpec
 
 from memorax.networks.backbones import Lru, Mlp, Rtu
 from memorax.networks.initialization import Sparse
-from memorax.parameters import describe_parameters, read_branch
+from memorax.parameters import (
+    ChoiceSpec,
+    ParameterSpec,
+    StructureSpec,
+    describe_parameters,
+    read_branch,
+)
 from memorax.rl.normalization import DiscountedNormalization, RunningNormalization
 from memorax.rl.updates import Adam, AdaptiveObBound, ObBound, Sgd
 

@@ -3,8 +3,8 @@ import math
 from pathlib import Path
 
 import pytest
-from training_sdk.contract import ScoreConfig
 
+from worker.contract import ScoreConfig
 from worker.score import WORST_MAGNITUDE, ScoreError, compute_score
 
 

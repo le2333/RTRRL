@@ -5,10 +5,10 @@ from pathlib import Path
 
 import numpy as np
 import rerun as rr
-from training_sdk import objects
-from training_sdk.contract import RunConfig
 
 from memorax.runtime.episode import Episode
+from worker import objects
+from worker.contract import RunConfig
 
 
 class RerunSink:

@@ -8,9 +8,8 @@ import sys
 import traceback
 from pathlib import Path
 
-from training_sdk import objects
-from training_sdk.contract import CONTRACT_VERSION, Catalog, RunConfig
-
+from worker import objects
+from worker.contract import CONTRACT_VERSION, Catalog, RunConfig
 from worker.reporter import METRICS_FILENAME
 from worker.score import compute_score
 

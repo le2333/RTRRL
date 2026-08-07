@@ -131,7 +131,7 @@ T2 之后 `episode.py` 的消费者全在 memo，且 training_sdk 内部无人�
 
 也就是说那份丢掉的工作已经在做"两侧各自声明、adapter 翻译、不共享包"。源码只剩字节码，但方向与这份计划一致，可以按它继续。
 
-### T5 — 删掉 training-sdk
+### T5 — 删掉 training-sdk ✅
 
 `training_sdk` 现在只剩 `contract.py` `objects.py` `testing.py`，而 infra 一个都不用了（它不 import SDK）。所以不是降级，是删除：
 
@@ -139,5 +139,12 @@ T2 之后 `episode.py` 的消费者全在 memo，且 training_sdk 内部无人�
 - `objects.py` → `memo/worker/objects.py`。**AWS 操作包暂不建**：判据是"两侧都要跟同一个外部服务说话"，而现在只有 worker 要。infra 长出后端时再抽
 - `testing.py` → `memo/tests/`
 - 删掉 `training-sdk/`，memo 的 pyproject 去掉这个依赖
-- 写 `docs/contract.md`：catalog / config / manifest / score 四种 JSON 形状 + `CONTRACT_VERSION` 的语义
-- 补一条跨侧约束：**worker 的 aim 客户端与 ctrler 的 aim 服务端主版本必须一致**——今天靠"两边装同一个包"隐式保证，删掉之后没人保证
+- 写 [docs/contract.md](contract.md)：catalog / manifest / config / score 四种 JSON 形状 + `CONTRACT_VERSION` 的语义 + aim 客户端与服务端的版本约束
+
+结果：memo **355 passed, 12 skipped**（与删除前一字不差），infra **10 passed**。`training-sdk` 从 memo 的依赖树里消失，Dockerfile 不再 COPY 它。
+
+**写文档时发现的不一致**：infra 的 `_configurations` 产出的字段与 worker 的 `RunConfig` 几乎没有交集——infra 说 `algorithm`，worker 说 `entry`；infra 说 `parameters`，worker 说 `params`；worker 要的 `contract` `run_id` `digest` `environment` `training` `evaluation` `score` infra 一个都不产。这不是回归（这份 infra 本来配的是另一套 worker），是两侧同处一个分支后第一次可见。详见 contract.md 末节。
+
+## 下一步
+
+对齐两侧的 run configuration。要定的是哪一侧动：infra 产出 `RunConfig` 的形状，还是 `RunConfig` 收缩到 infra 已在产的那些嵌套块。

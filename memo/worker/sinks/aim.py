@@ -3,7 +3,8 @@ from __future__ import annotations
 from collections.abc import Mapping
 
 from aim import Run
-from training_sdk.contract import RunConfig
+
+from worker.contract import RunConfig
 
 
 def close_aim_run(run: Run) -> None:

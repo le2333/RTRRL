@@ -1,23 +1,140 @@
+"""How a component declares its parameter space, and what that becomes.
+
+Two halves of one thing. ``param`` and ``structure`` are what a component
+writes down; the spec types are what those become once the catalog is built and
+shipped to a machine that cannot import any of this. The control plane reads
+the second half as JSON and never sees the first, which is why the two live
+together rather than in a package both sides install.
+"""
+
 from __future__ import annotations
 
 from collections.abc import Callable, Mapping
 from dataclasses import Field as DataclassField
 from dataclasses import field, fields, is_dataclass
-from typing import Any
+from typing import Annotated, Any, Literal, TypeAlias
 
-from training_sdk.contract import (
-    ChoiceSpec,
-    FloatSpec,
-    FloatValidSpec,
-    IntSpec,
-    IntValidSpec,
-    ParameterNode,
-    ParameterSpec,
-    Scalar,
-    SpaceEntry,
-    StructureSpec,
-    ValidSpec,
-)
+from pydantic import BaseModel, ConfigDict, Field, model_validator
+
+Scalar: TypeAlias = int | float | str | bool
+
+
+class _Frozen(BaseModel):
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+
+class FloatSpec(_Frozen):
+    type: Literal["float"]
+    low: float
+    high: float
+    log: bool = False
+
+    @model_validator(mode="after")
+    def _ordered(self) -> "FloatSpec":
+        if self.low > self.high:
+            raise ValueError("float low must not exceed high")
+        return self
+
+
+class IntSpec(_Frozen):
+    type: Literal["int"]
+    low: int
+    high: int
+    step: int = 1
+    log: bool = False
+
+    @model_validator(mode="after")
+    def _ordered(self) -> "IntSpec":
+        if self.low > self.high:
+            raise ValueError("int low must not exceed high")
+        if self.step < 1:
+            raise ValueError("int step must be positive")
+        return self
+
+
+class ChoiceSpec(_Frozen):
+    choices: tuple[Scalar, ...]
+
+    @model_validator(mode="before")
+    @classmethod
+    def _from_list(cls, value: object) -> object:
+        if isinstance(value, list):
+            return {"choices": value}
+        return value
+
+    @model_validator(mode="after")
+    def _non_empty(self) -> "ChoiceSpec":
+        if not self.choices:
+            raise ValueError("choice list must not be empty")
+        return self
+
+
+SpaceEntry: TypeAlias = Annotated[
+    FloatSpec | IntSpec | ChoiceSpec, Field(union_mode="left_to_right")
+]
+
+
+class FloatValidSpec(_Frozen):
+    type: Literal["float"]
+    low: float | None = None
+    high: float | None = None
+
+    @model_validator(mode="after")
+    def _ordered(self) -> "FloatValidSpec":
+        if self.low is not None and self.high is not None and self.low > self.high:
+            raise ValueError("float valid low must not exceed high")
+        return self
+
+
+class IntValidSpec(_Frozen):
+    type: Literal["int"]
+    low: int | None = None
+    high: int | None = None
+    step: int = 1
+
+    @model_validator(mode="after")
+    def _ordered(self) -> "IntValidSpec":
+        if self.low is not None and self.high is not None and self.low > self.high:
+            raise ValueError("int valid low must not exceed high")
+        if self.step < 1:
+            raise ValueError("int valid step must be positive")
+        return self
+
+
+ValidSpec: TypeAlias = Annotated[
+    FloatValidSpec | IntValidSpec | ChoiceSpec, Field(union_mode="left_to_right")
+]
+
+
+class ParameterSpec(_Frozen):
+    kind: Literal["param"] = "param"
+    value_type: Literal["float", "int", "str", "bool"]
+    valid: ValidSpec
+    search: SpaceEntry
+    placeholder: Scalar
+
+
+ParameterTree: TypeAlias = dict[str, "ParameterNode"]
+
+
+class StructureSpec(_Frozen):
+    kind: Literal["structure"] = "structure"
+    placeholder: Scalar
+    branches: dict[str, ParameterTree]
+
+    @model_validator(mode="after")
+    def _placeholder_is_a_branch(self) -> "StructureSpec":
+        if self.placeholder not in self.branches:
+            raise ValueError(
+                f"structure placeholder {self.placeholder!r} is not one of its "
+                f"branches: {', '.join(sorted(self.branches))}"
+            )
+        return self
+
+
+ParameterNode: TypeAlias = Annotated[
+    ParameterSpec | StructureSpec, Field(discriminator="kind")
+]
 
 
 def param(

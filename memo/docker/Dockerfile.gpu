@@ -9,7 +9,6 @@ ENV UV_PYTHON_DOWNLOADS=never \
     UV_PROJECT_ENVIRONMENT=/opt/venv \
     UV_LINK_MODE=copy
 WORKDIR /workspace/memo
-COPY training-sdk /workspace/training-sdk
 COPY memo /workspace/memo
 RUN uv sync --frozen --no-dev --no-editable --extra cuda12 && uv cache clean
 

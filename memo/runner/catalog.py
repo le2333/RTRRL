@@ -21,9 +21,8 @@ import pkgutil
 from pathlib import Path
 from typing import Any
 
-from training_sdk.contract import CONTRACT_VERSION, Catalog, EntryDescriptor
-
 import entries
+from worker.contract import CONTRACT_VERSION, Catalog, EntryDescriptor
 
 PACKAGE_ROOT = Path(__file__).resolve().parents[1]
 CATALOG_PATH = PACKAGE_ROOT / "catalog.json"

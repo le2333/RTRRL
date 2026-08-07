@@ -4,8 +4,8 @@ from pathlib import Path
 
 import pytest
 from test_reporter import make_config
-from training_sdk import objects
 
+from worker import objects
 from worker.worker import WorkerError, main, run_manifest
 
 CHILD = """

@@ -11,7 +11,9 @@ from botocore.exceptions import ClientError
 
 @lru_cache(maxsize=1)
 def client():
-    return boto3.client("s3", endpoint_url=os.environ.get("TRAINER_S3_ENDPOINT") or None)
+    return boto3.client(
+        "s3", endpoint_url=os.environ.get("TRAINER_S3_ENDPOINT") or None
+    )
 
 
 def split_uri(uri: str) -> tuple[str, str]:

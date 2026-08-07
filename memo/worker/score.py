@@ -5,7 +5,7 @@ import math
 import statistics
 from pathlib import Path
 
-from training_sdk.contract import ScoreConfig
+from worker.contract import ScoreConfig
 
 WORST_MAGNITUDE = 1e30
 
