@@ -1,297 +1,289 @@
 """How a component declares its parameter space, and what that becomes.
 
-Two halves of one thing. ``param`` and ``structure`` are what a component
-writes down; the spec types are what those become once the catalog is built and
-shipped to a machine that cannot import any of this. The control plane reads
-the second half as JSON and never sees the first, which is why the two live
-together rather than in a package both sides install.
+A tree with one kind of node. A leaf is a :class:`Parameter`, carrying the two
+domains that belong to two different knowers: ``valid`` is what the component
+can mean, ``search`` is what it suggests looking through, and an experiment
+narrows the second within the first. Anything else is a mapping, and nesting is
+the only grouping there is.
+
+A choice of component is not a second kind of node. It is a parameter named
+``kind`` living in the group its branches live in, so ``backbone.kind`` selects
+and ``backbone.rtu.hidden_dim`` belongs to what it selected. Nothing has to
+decide whether a node is a value or a structure, and a name repeated at two
+sites -- ``ob`` under both roles, ``sparse`` at every initialisation -- is two
+nodes rather than a collision, because there is no flat namespace for them to
+collide in.
+
+What ships is this tree as JSON: ``{"valid": ..., "search": ...}`` at the
+leaves and mappings above them. The control plane reads that and never imports
+any of this, which is why the vocabulary is dataclasses and standard library
+rather than anything either side would have to install.
 """
 
 from __future__ import annotations
 
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Mapping, Sequence
+from dataclasses import MISSING
 from dataclasses import Field as DataclassField
-from dataclasses import field, fields, is_dataclass
-from typing import Annotated, Any, Literal, TypeAlias
+from dataclasses import dataclass, field, fields, is_dataclass
+from typing import Any, TypeAlias
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+Scalar: TypeAlias = bool | int | float | str
 
-Scalar: TypeAlias = int | float | str | bool
-
-
-class _Frozen(BaseModel):
-    model_config = ConfigDict(frozen=True, extra="forbid")
+# The name a group gives to the parameter that selects among its branches.
+# Reserved: a component cannot declare a parameter called this.
+KIND = "kind"
 
 
-class FloatSpec(_Frozen):
-    type: Literal["float"]
-    low: float
-    high: float
-    log: bool = False
+@dataclass(frozen=True, init=False)
+class Choice:
+    """A fixed set of values. One value is how a domain says "not searched"."""
 
-    @model_validator(mode="after")
-    def _ordered(self) -> "FloatSpec":
-        if self.low > self.high:
-            raise ValueError("float low must not exceed high")
-        return self
+    values: tuple[Scalar, ...]
 
-
-class IntSpec(_Frozen):
-    type: Literal["int"]
-    low: int
-    high: int
-    step: int = 1
-    log: bool = False
-
-    @model_validator(mode="after")
-    def _ordered(self) -> "IntSpec":
-        if self.low > self.high:
-            raise ValueError("int low must not exceed high")
-        if self.step < 1:
-            raise ValueError("int step must be positive")
-        return self
+    def __init__(self, values: Sequence[Scalar]) -> None:
+        object.__setattr__(self, "values", tuple(values))
+        if not self.values:
+            raise ValueError("a choice must offer at least one value")
 
 
-class ChoiceSpec(_Frozen):
-    choices: tuple[Scalar, ...]
-
-    @model_validator(mode="before")
-    @classmethod
-    def _from_list(cls, value: object) -> object:
-        if isinstance(value, list):
-            return {"choices": value}
-        return value
-
-    @model_validator(mode="after")
-    def _non_empty(self) -> "ChoiceSpec":
-        if not self.choices:
-            raise ValueError("choice list must not be empty")
-        return self
-
-
-SpaceEntry: TypeAlias = Annotated[
-    FloatSpec | IntSpec | ChoiceSpec, Field(union_mode="left_to_right")
-]
-
-
-class FloatValidSpec(_Frozen):
-    type: Literal["float"]
+@dataclass(frozen=True)
+class FloatRange:
     low: float | None = None
     high: float | None = None
+    log: bool = False
 
-    @model_validator(mode="after")
-    def _ordered(self) -> "FloatValidSpec":
+    def __post_init__(self) -> None:
         if self.low is not None and self.high is not None and self.low > self.high:
-            raise ValueError("float valid low must not exceed high")
-        return self
+            raise ValueError(f"float low {self.low} exceeds high {self.high}")
 
 
-class IntValidSpec(_Frozen):
-    type: Literal["int"]
+@dataclass(frozen=True)
+class IntRange:
     low: int | None = None
     high: int | None = None
     step: int = 1
+    log: bool = False
 
-    @model_validator(mode="after")
-    def _ordered(self) -> "IntValidSpec":
+    def __post_init__(self) -> None:
         if self.low is not None and self.high is not None and self.low > self.high:
-            raise ValueError("int valid low must not exceed high")
+            raise ValueError(f"int low {self.low} exceeds high {self.high}")
         if self.step < 1:
-            raise ValueError("int valid step must be positive")
-        return self
+            raise ValueError("int step must be positive")
 
 
-ValidSpec: TypeAlias = Annotated[
-    FloatValidSpec | IntValidSpec | ChoiceSpec, Field(union_mode="left_to_right")
-]
+Range: TypeAlias = Choice | FloatRange | IntRange
 
 
-class ParameterSpec(_Frozen):
-    kind: Literal["param"] = "param"
-    value_type: Literal["float", "int", "str", "bool"]
-    valid: ValidSpec
-    search: SpaceEntry
-    placeholder: Scalar
+@dataclass(frozen=True)
+class Parameter:
+    """One value's two domains.
+
+    ``valid`` is what the component can mean and only it knows -- a discount
+    outside [0, 1] is not a bad idea, it is not a discount. ``search`` is a
+    suggestion an experiment may narrow, so it has to be bounded on both sides
+    even where ``valid`` is not: a sampler cannot draw from an open interval.
+    """
+
+    valid: Range
+    search: Range
+
+    def __post_init__(self) -> None:
+        _bounded(self.search)
+        _within(self.valid, self.search)
 
 
-ParameterTree: TypeAlias = dict[str, "ParameterNode"]
+ParameterNode: TypeAlias = "Parameter | Mapping[str, ParameterNode]"
+ParameterTree: TypeAlias = Mapping[str, ParameterNode]
 
 
-class StructureSpec(_Frozen):
-    kind: Literal["structure"] = "structure"
-    placeholder: Scalar
-    branches: dict[str, ParameterTree]
-
-    @model_validator(mode="after")
-    def _placeholder_is_a_branch(self) -> "StructureSpec":
-        if self.placeholder not in self.branches:
-            raise ValueError(
-                f"structure placeholder {self.placeholder!r} is not one of its "
-                f"branches: {', '.join(sorted(self.branches))}"
-            )
-        return self
+def _bounded(search: Range) -> None:
+    if isinstance(search, Choice):
+        return
+    if search.low is None or search.high is None:
+        raise ValueError("a search domain must be closed on both sides")
+    if search.log and search.low <= 0:
+        raise ValueError("a log search domain must start above zero")
 
 
-ParameterNode: TypeAlias = Annotated[
-    ParameterSpec | StructureSpec, Field(discriminator="kind")
-]
+def _within(valid: Range, search: Range) -> None:
+    """Every value the search can produce is one the component accepts."""
+
+    if isinstance(search, Choice):
+        for value in search.values:
+            _accepts(valid, value)
+        return
+    _accepts(valid, search.low)
+    _accepts(valid, search.high)
+
+
+def _accepts(valid: Range, value: Scalar) -> None:
+    if isinstance(valid, Choice):
+        if value not in valid.values:
+            raise ValueError(f"{value!r} is not one of {list(valid.values)}")
+        return
+    if isinstance(valid, IntRange) and type(value) is not int:
+        raise ValueError(f"{value!r} is not an int")
+    if type(value) not in (int, float):
+        raise ValueError(f"{value!r} is not numeric")
+    if valid.low is not None and value < valid.low:
+        raise ValueError(f"{value!r} is below the valid low {valid.low}")
+    if valid.high is not None and value > valid.high:
+        raise ValueError(f"{value!r} is above the valid high {valid.high}")
+
+
+# ---------------------------------------------------------------- serialising
+
+
+def describe(tree: ParameterTree) -> dict[str, Any]:
+    """The tree as the JSON a machine that cannot import this reads."""
+
+    return {
+        name: (
+            _describe_parameter(node) if isinstance(node, Parameter) else describe(node)
+        )
+        for name, node in tree.items()
+    }
+
+
+def _describe_parameter(parameter: Parameter) -> dict[str, Any]:
+    return {
+        "valid": _describe_range(parameter.valid),
+        "search": _describe_range(parameter.search),
+    }
+
+
+def _describe_range(domain: Range) -> dict[str, Any]:
+    if isinstance(domain, Choice):
+        return {"type": "choice", "values": list(domain.values)}
+    if isinstance(domain, FloatRange):
+        return {
+            "type": "float",
+            "low": domain.low,
+            "high": domain.high,
+            "log": domain.log,
+        }
+    return {
+        "type": "int",
+        "low": domain.low,
+        "high": domain.high,
+        "step": domain.step,
+        "log": domain.log,
+    }
+
+
+# ------------------------------------------------------------------ declaring
 
 
 def param(
     *,
     valid: Any,
     search: Any,
-    placeholder: Scalar,
+    default: Any = MISSING,
     log: bool = False,
     step: int = 1,
 ) -> Any:
+    """Declare one parameter as a dataclass field.
+
+    A tuple is a range and a list is a choice, on both domains, so a component
+    writes ``(0.0, 1.0)`` and ``["lecun", "sparse"]`` rather than naming the
+    class each time.
+
+    ``default`` is the language's own, for a component constructed directly
+    where the value is beside the point -- Adam's betas in a test about
+    bounding. It is not in the tree and not in the catalog, and reading a
+    component out of a run configuration never reaches it: a name the
+    configuration does not carry is an error there, not a default. That is the
+    difference between this and the ``placeholder`` it replaces, which was in
+    the contract and filled in branches nobody selected.
+    """
+
+    metadata = {
+        "parameter": Parameter(
+            valid=_domain(valid, log=log, step=step, open_ended=True),
+            search=_domain(search, log=log, step=step, open_ended=False),
+        )
+    }
+    if default is MISSING:
+        return field(metadata=metadata)
+    return field(default=default, metadata=metadata)
+
+
+def structure(
+    *, branches: Mapping[str, Any], search: Sequence[str] | None = None
+) -> Any:
+    """Declare a choice among components, and the branches it chooses between.
+
+    ``branches`` maps a name to the dataclass that branch declares, or to
+    nothing when it declares none. The same mapping is what the consuming side
+    reads back with :func:`read_branch`, so the space and the registry are one
+    object rather than two that have to agree.
+    """
+
     return field(
-        default=placeholder,
-        metadata={
-            "trainer_kind": "param",
-            "valid": valid,
-            "search": search,
-            "placeholder": placeholder,
-            "log": log,
-            "step": step,
-        },
+        metadata={"branches": dict(branches), "search": tuple(search or branches)}
     )
 
 
-def structure(*, placeholder: Scalar, branches: dict[str, Any]) -> Any:
-    return field(
-        default=placeholder,
-        metadata={
-            "trainer_kind": "structure",
-            "placeholder": placeholder,
-            "branches": branches,
-        },
-    )
+def _domain(value: Any, *, log: bool, step: int, open_ended: bool) -> Range:
+    if isinstance(value, Choice | FloatRange | IntRange):
+        return value
+    if isinstance(value, list):
+        return Choice(value)
+    if isinstance(value, tuple) and len(value) == 2:
+        low, high = value
+        if all(
+            side is None or (isinstance(side, bool) is False and isinstance(side, int))
+            for side in value
+        ):
+            return IntRange(low=low, high=high, step=step, log=log)
+        return FloatRange(low=low, high=high, log=log)
+    if open_ended:
+        raise TypeError(f"unsupported valid domain {value!r}")
+    raise TypeError(f"unsupported search domain {value!r}")
 
 
 def describe_parameters(model: type) -> dict[str, ParameterNode]:
+    """The tree a declaring dataclass stands for.
+
+    A ``structure`` field becomes a group: the choice itself under ``kind``,
+    beside one subtree per branch. So the group is the scope, and a branch name
+    is only ever read relative to it.
+    """
+
     if not is_dataclass(model):
         raise TypeError(f"{model.__name__} must be a dataclass")
     described: dict[str, ParameterNode] = {}
     for item in fields(model):
-        kind = item.metadata.get("trainer_kind")
-        if kind == "param":
-            described[item.name] = _parameter(item)
-        elif kind == "structure":
-            described[item.name] = _structure(item)
+        if item.name == KIND:
+            raise ValueError(f"{model.__name__}.{KIND} uses the reserved name")
+        if "parameter" in item.metadata:
+            described[item.name] = item.metadata["parameter"]
+        elif "branches" in item.metadata:
+            described[item.name] = _group(item)
         else:
             raise ValueError(
-                f"{model.__name__}.{item.name} is not declared with param() or "
-                "structure()"
+                f"{model.__name__}.{item.name} is not declared with param() or structure()"
             )
     return described
 
 
-def _parameter(item: DataclassField) -> ParameterSpec:
-    step = int(item.metadata["step"])
-    valid = _valid_domain(item.name, item.metadata["valid"], step=step)
-    placeholder = item.metadata["placeholder"]
-    _check_value(item.name, "placeholder", valid, placeholder)
-
-    declared = item.metadata["search"]
-    if declared is None:
-        raise ValueError(f"{item.name} must declare a search domain")
-    search = _search_domain(
-        item.name, declared, log=bool(item.metadata["log"]), step=step
-    )
-    _check_search(item.name, valid, search)
-
-    return ParameterSpec(
-        value_type=_value_type(item.name, item.type),
-        valid=valid,
-        search=search,
-        placeholder=placeholder,
-    )
-
-
-def _structure(item: DataclassField) -> StructureSpec:
-    branches: dict[str, dict[str, ParameterNode]] = {}
-    for name, branch in item.metadata["branches"].items():
-        branches[name] = {} if branch in (None, (), {}) else describe_parameters(branch)
-
-    placeholder = item.metadata["placeholder"]
-    if placeholder not in branches:
-        raise ValueError(
-            f"{item.name} placeholder {placeholder!r} is not one of its branches: "
-            f"{', '.join(sorted(branches))}"
+def _group(item: DataclassField) -> dict[str, ParameterNode]:
+    branches: Mapping[str, Any] = item.metadata["branches"]
+    group: dict[str, ParameterNode] = {
+        KIND: Parameter(
+            valid=Choice(sorted(branches)),
+            search=Choice(item.metadata["search"]),
         )
-    return StructureSpec(placeholder=placeholder, branches=branches)
+    }
+    for name, branch in branches.items():
+        if branch in (None, (), {}):
+            continue
+        group[name] = describe_parameters(branch)
+    return group
 
 
-def _valid_domain(name: str, value: Any, *, step: int) -> ValidSpec:
-    if isinstance(value, list):
-        return ChoiceSpec.model_validate(value)
-    if isinstance(value, tuple) and len(value) == 2:
-        low, high = value
-        if all(
-            side is None or isinstance(side, bool) is False and isinstance(side, int)
-            for side in value
-        ):
-            return IntValidSpec(type="int", low=low, high=high, step=step)
-        return FloatValidSpec(type="float", low=low, high=high)
-    raise TypeError(f"{name} has an unsupported valid domain {value!r}")
-
-
-def _search_domain(name: str, value: Any, *, log: bool, step: int) -> SpaceEntry:
-    if isinstance(value, list):
-        return ChoiceSpec.model_validate(value)
-    if isinstance(value, tuple) and len(value) == 2:
-        low, high = value
-        if low is None or high is None:
-            raise ValueError(f"{name} search domains must be closed on both sides")
-        if all(
-            isinstance(side, bool) is False and isinstance(side, int) for side in value
-        ):
-            return IntSpec(type="int", low=low, high=high, step=step, log=log)
-        return FloatSpec(type="float", low=low, high=high, log=log)
-    raise TypeError(f"{name} has an unsupported search domain {value!r}")
-
-
-def _value_type(name: str, annotation: Any) -> str:
-    for kind, names in (
-        ("bool", (bool, "bool")),
-        ("int", (int, "int")),
-        ("float", (float, "float")),
-        ("str", (str, "str")),
-    ):
-        if annotation in names:
-            return kind
-    raise TypeError(f"{name} has an unsupported type {annotation!r}")
-
-
-def _check_value(name: str, label: str, valid: ValidSpec, value: Scalar) -> None:
-    if isinstance(valid, ChoiceSpec):
-        if value not in valid.choices:
-            raise ValueError(f"{name} {label} {value!r} is outside its valid choices")
-        return
-    if isinstance(valid, IntValidSpec):
-        if type(value) is not int:
-            raise ValueError(f"{name} {label} {value!r} is not an int")
-    elif type(value) not in (int, float):
-        raise ValueError(f"{name} {label} {value!r} is not numeric")
-    numeric = float(value)
-    if valid.low is not None and numeric < valid.low:
-        raise ValueError(f"{name} {label} {value!r} is below its valid low {valid.low}")
-    if valid.high is not None and numeric > valid.high:
-        raise ValueError(
-            f"{name} {label} {value!r} is above its valid high {valid.high}"
-        )
-
-
-def _check_search(name: str, valid: ValidSpec, search: SpaceEntry) -> None:
-    if isinstance(search, ChoiceSpec):
-        for choice in search.choices:
-            _check_value(name, "search choice", valid, choice)
-        return
-    if search.log and search.low <= 0:
-        raise ValueError(f"{name} log search low must be above zero")
-    _check_value(name, "search low", valid, search.low)
-    _check_value(name, "search high", valid, search.high)
+# ------------------------------------------------------------------- reading
 
 
 def read_parameters(model: type, params: Mapping[str, Any], prefix: str = "") -> Any:
@@ -300,6 +292,11 @@ def read_parameters(model: type, params: Mapping[str, Any], prefix: str = "") ->
     values = {}
     for item in fields(model):
         key = f"{prefix}{item.name}"
+        if "branches" in item.metadata:
+            values[item.name] = read_branch(
+                params, item.name, item.metadata["branches"], prefix
+            )[0]
+            continue
         if key not in params:
             raise KeyError(f"the manifest carries no {key!r}")
         values[item.name] = params[key]
@@ -312,7 +309,14 @@ def read_branch(
     branches: Mapping[str, Any],
     prefix: str = "",
 ) -> tuple[str, Any]:
-    key = f"{prefix}{field_name}"
+    """Which branch a group selected, and that branch read back.
+
+    Only the selected branch is read. The others are not filled in with
+    anything, because a value nobody chose is a value nobody should be able to
+    mistake for one that was chosen.
+    """
+
+    key = f"{prefix}{field_name}.{KIND}"
     if key not in params:
         raise KeyError(f"the manifest carries no {key!r}")
     branch = str(params[key])
@@ -323,68 +327,73 @@ def read_branch(
     model = branches[branch]
     if model in (None, (), {}):
         return branch, None
-    return branch, read_parameters(model, params, prefix=f"{key}.{branch}.")
-
-
-def flatten(tree: Mapping[str, Any], prefix: str = "") -> dict[str, Any]:
-    found: dict[str, Any] = {}
-    for name, node in tree.items():
-        key = f"{prefix}{name}"
-        if key in found:
-            raise ValueError(f"parameter {key!r} is declared more than once")
-        found[key] = node
-        if isinstance(node, StructureSpec):
-            for branch, subtree in node.branches.items():
-                for sub_key, sub_node in flatten(subtree, f"{key}.{branch}.").items():
-                    if sub_key in found:
-                        raise ValueError(
-                            f"parameter {sub_key!r} is declared more than once"
-                        )
-                    found[sub_key] = sub_node
-    return found
-
-
-def walk(
-    tree: Mapping[str, Any],
-    *,
-    choose: Callable[[str, StructureSpec], str],
-    fill: Callable[[str, ParameterSpec, bool], Scalar],
-    prefix: str = "",
-    active: bool = True,
-) -> dict[str, Scalar]:
-    chosen: dict[str, Scalar] = {}
-    for name, node in tree.items():
-        key = f"{prefix}{name}"
-        if isinstance(node, StructureSpec):
-            branch = choose(key, node) if active else str(node.placeholder)
-            chosen[key] = branch
-            for candidate, subtree in node.branches.items():
-                chosen |= walk(
-                    subtree,
-                    choose=choose,
-                    fill=fill,
-                    prefix=f"{key}.{candidate}.",
-                    active=active and candidate == branch,
-                )
-        else:
-            chosen[key] = fill(key, node, active)
-    return chosen
-
-
-def expand(
-    tree: Mapping[str, Any], overrides: Mapping[str, Scalar] | None = None
-) -> dict[str, Scalar]:
-    pinned = dict(overrides or {})
-    return walk(
-        tree,
-        choose=lambda key, node: str(pinned.get(key, node.placeholder)),
-        fill=lambda key, node, active: (
-            pinned.get(key, _single(node)) if active else node.placeholder
-        ),
+    return branch, read_parameters(
+        model, params, prefix=f"{prefix}{field_name}.{branch}."
     )
 
 
-def _single(node: ParameterSpec) -> Scalar:
-    if isinstance(node.search, ChoiceSpec):
-        return node.search.choices[0]
+# ------------------------------------------------------------------- walking
+
+
+def flatten(tree: ParameterTree, prefix: str = "") -> dict[str, Parameter]:
+    """Every leaf, by the dotted path that reaches it.
+
+    The path is unique because the tree is, so this is a rendering rather than
+    a namespace: nothing is decided here that the tree had not already decided.
+    """
+
+    found: dict[str, Parameter] = {}
+    for name, node in tree.items():
+        key = f"{prefix}{name}"
+        if isinstance(node, Parameter):
+            found[key] = node
+        else:
+            found |= flatten(node, f"{key}.")
+    return found
+
+
+def expand(
+    tree: ParameterTree, overrides: Mapping[str, Scalar] | None = None
+) -> dict[str, Scalar]:
+    """One value per reachable leaf, taking the override where there is one.
+
+    Only the branches actually selected are descended. What an unselected
+    branch would have been given is not a smaller question than what it means,
+    and neither has an answer worth writing down.
+    """
+
+    pinned = dict(overrides or {})
+    return walk(tree, fill=lambda key, node: pinned.get(key, _single(node)))
+
+
+def _single(node: Parameter) -> Scalar:
+    """The one value a domain stands for when nothing is sampling it."""
+
+    if isinstance(node.search, Choice):
+        return node.search.values[0]
     return node.search.low
+
+
+def walk(
+    tree: ParameterTree,
+    *,
+    fill: Callable[[str, Parameter], Scalar],
+    prefix: str = "",
+) -> dict[str, Scalar]:
+    """Descend the selected branches, asking ``fill`` for each leaf it reaches."""
+
+    chosen: dict[str, Scalar] = {}
+    groups: dict[str, ParameterTree] = {}
+    for name, node in tree.items():
+        key = f"{prefix}{name}"
+        if isinstance(node, Parameter):
+            chosen[key] = fill(key, node)
+        else:
+            groups[name] = node
+
+    selected = chosen.get(f"{prefix}{KIND}")
+    for name, group in groups.items():
+        if selected is not None and name != str(selected):
+            continue
+        chosen |= walk(group, fill=fill, prefix=f"{prefix}{name}.")
+    return chosen

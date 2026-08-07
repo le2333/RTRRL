@@ -8,11 +8,11 @@ what makes a mismatch a refusal rather than a misreading.
 
 from __future__ import annotations
 
-from typing import Literal
+from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, model_validator
 
-from memorax.parameters import ParameterNode, Scalar
+from memorax.parameters import Scalar
 
 CONTRACT_VERSION = 7
 
@@ -24,7 +24,11 @@ class _Frozen(BaseModel):
 class EntryDescriptor(_Frozen):
     command: tuple[str, ...]
     metrics: tuple[str, ...]
-    parameters: dict[str, ParameterNode]
+    # Left opaque on purpose. Nothing on this side reads the parameter tree --
+    # the entry reads the values a run configuration carries, not the space
+    # they were drawn from -- and the only reader is the control plane, which
+    # has its own vocabulary for it and does not import this one.
+    parameters: dict[str, Any]
 
     @model_validator(mode="after")
     def _non_empty(self) -> "EntryDescriptor":

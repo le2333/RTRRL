@@ -61,25 +61,38 @@ hpo:
   seed: 0
 
 # 对 catalog 搜索域的覆盖。采样后成为运行配置的 params。
-# 键是扁平点名，与 catalog 展开后的名字一致。
+#
+# 形状与 catalog 相同：每层之内平铺，缩进即分组。选组件的那一项叫 kind，
+# 它和它的分支住在同一层，所以 backbone.kind 选，backbone.rtu.* 属于被选中的那个。
+# 一个名字在两处出现（两个角色各有 ob）是两个节点，不是重名。
 space:
   # 归一化
-  observation_normalization: [running]
-  reward_normalization: [running]
+  observation_normalization:
+    kind: [running]
+  reward_normalization:
+    kind: [running]
 
   # 网络
-  backbone: [rtu]
-  backbone.rtu.hidden_dim: [32]
+  backbone:
+    kind: [rtu]
+    rtu:
+      hidden_dim: [32]
+    # 初始化归有权重可抽的那条分支；rtu 的递推核自己抽，所以 rtu 下没有这一项。
+    # 换到 mlp 时是 mlp.initialization.kind: [lecun|sparse]。
   meta_rl: [false]
-  actor_head: [global_std]
-  # 初始化归有权重可抽的那条分支；rtu 的递推核自己抽，所以这条分支没有这一项。
-  # 换到 mlp 时是 backbone.mlp.initialization: [lecun|sparse]。
+  actor_head:
+    kind: [global_std]
 
   # 梯度信用
-  credit: [tbptt]
+  credit:
+    kind: [tbptt]
 
   # 优化器：两个角色各一条界、一条底
-  actor_optimizer_bound: [none]
-  actor_optimizer_base: [sgd]
-  critic_optimizer_bound: [none]
-  critic_optimizer_base: [sgd]
+  actor_optimizer_bound:
+    kind: [none]
+  actor_optimizer_base:
+    kind: [sgd]
+  critic_optimizer_bound:
+    kind: [none]
+  critic_optimizer_base:
+    kind: [sgd]

@@ -12,7 +12,7 @@ import jax
 from test_blocks import ours
 
 from entries import stream_ac
-from memorax.parameters import StructureSpec
+from memorax.parameters import KIND
 from memorax.rl.credit import CREDITS
 
 
@@ -40,5 +40,4 @@ def test_the_two_settings_do_not_initialise_through_the_same_method():
 def test_credit_is_declared_as_a_structure():
     node = stream_ac.PARAMETERS["credit"]
 
-    assert isinstance(node, StructureSpec)
-    assert set(node.branches) == set(CREDITS)
+    assert set(node[KIND].valid.values) == set(CREDITS)

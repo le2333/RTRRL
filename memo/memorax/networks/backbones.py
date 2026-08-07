@@ -35,18 +35,18 @@ UPSTREAM_BACKBONES = ("lru_published", "lru_rewritten")
 
 @dataclass(frozen=True)
 class Rtu:
-    hidden_dim: int = param(valid=(1, 4096), search=(32, 512), placeholder=192)
+    hidden_dim: int = param(valid=(1, 4096), search=(32, 512))
 
 
 @dataclass(frozen=True)
 class Lru:
-    hidden_dim: int = param(valid=(1, 4096), search=(32, 512), placeholder=128)
-    feature_dim: int = param(valid=(1, 4096), search=(16, 256), placeholder=32)
+    hidden_dim: int = param(valid=(1, 4096), search=(32, 512))
+    feature_dim: int = param(valid=(1, 4096), search=(16, 256))
 
 
 @dataclass(frozen=True)
 class Mlp:
-    hidden_dim: int = param(valid=(1, 4096), search=(32, 512), placeholder=128)
+    hidden_dim: int = param(valid=(1, 4096), search=(32, 512))
     initialization: str = initialization()
 
 

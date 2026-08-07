@@ -27,7 +27,7 @@ def test_resolve_parameter_ranges_applies_experiment_choice_overrides() -> None:
 
 
 def test_resolve_parameter_ranges_flattens_only_the_declared_tree() -> None:
-    """A nested declaration is pinned by the dotted path the worker will read."""
+    """A nested declaration is pinned where it sits; the path is the key."""
 
     declared = {
         "actor": {
@@ -37,7 +37,7 @@ def test_resolve_parameter_ranges_flattens_only_the_declared_tree() -> None:
             }
         }
     }
-    ranges = resolve_parameter_ranges(declared, {"actor.kind": ["rtu"]})
+    ranges = resolve_parameter_ranges(declared, {"actor": {"kind": ["rtu"]}})
     trial = optuna.trial.FixedTrial({"actor.kind": "rtu"})
 
     assert ranges == {

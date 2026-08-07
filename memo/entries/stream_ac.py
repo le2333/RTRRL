@@ -24,12 +24,7 @@ from memorax.networks.readouts import (
     critic_head,
 )
 from memorax.networks.sequence import PLACES
-from memorax.parameters import (
-    describe_parameters,
-    param,
-    read_branch,
-    structure,
-)
+from memorax.parameters import KIND, describe_parameters, param, read_branch, structure
 from memorax.rl import CREDITS, declared_normalizer
 from memorax.rl.normalization import (
     DISCOUNTED_NORMALIZATION_BRANCHES,
@@ -47,26 +42,20 @@ CREDIT_BRANCHES = {name: () for name in CREDITS}
 # 结构参数表
 @dataclass(frozen=True)
 class StreamACParameters:
-    backbone: str = structure(placeholder="rtu", branches=BACKBONE_BRANCHES)
-    actor_head: str = structure(placeholder="global_std", branches=ACTOR_HEAD_BRANCHES)
-    critic_head: str = structure(placeholder="value", branches=CRITIC_HEAD_BRANCHES)
-    meta_rl: bool = param(valid=[False, True], search=[False, True], placeholder=False)
-    credit: str = structure(placeholder="tbptt", branches=CREDIT_BRANCHES)
-    gamma: float = param(valid=(0.5, 0.9999), search=(0.9, 0.9999), placeholder=0.99)
-    trace_lambda: float = param(valid=(0.0, 1.0), search=(0.0, 1.0), placeholder=0.9)
-    entropy_coefficient: float = param(
-        valid=(1e-8, 1.0), search=(1e-8, 1e-2), placeholder=1e-4, log=True
-    )
-    observation_normalization: str = structure(
-        placeholder="running", branches=NORMALIZATION_BRANCHES
-    )
-    reward_normalization: str = structure(
-        placeholder="running", branches=DISCOUNTED_NORMALIZATION_BRANCHES
-    )
-    actor_optimizer_bound: str = structure(placeholder="ob", branches=BOUND_BRANCHES)
-    actor_optimizer_base: str = structure(placeholder="sgd", branches=BASE_BRANCHES)
-    critic_optimizer_bound: str = structure(placeholder="ob", branches=BOUND_BRANCHES)
-    critic_optimizer_base: str = structure(placeholder="sgd", branches=BASE_BRANCHES)
+    backbone: str = structure(branches=BACKBONE_BRANCHES)
+    actor_head: str = structure(branches=ACTOR_HEAD_BRANCHES)
+    critic_head: str = structure(branches=CRITIC_HEAD_BRANCHES)
+    meta_rl: bool = param(valid=[False, True], search=[False, True])
+    credit: str = structure(branches=CREDIT_BRANCHES)
+    gamma: float = param(valid=(0.5, 0.9999), search=(0.9, 0.9999))
+    trace_lambda: float = param(valid=(0.0, 1.0), search=(0.0, 1.0))
+    entropy_coefficient: float = param(valid=(1e-8, 1.0), search=(1e-8, 1e-2), log=True)
+    observation_normalization: str = structure(branches=NORMALIZATION_BRANCHES)
+    reward_normalization: str = structure(branches=DISCOUNTED_NORMALIZATION_BRANCHES)
+    actor_optimizer_bound: str = structure(branches=BOUND_BRANCHES)
+    actor_optimizer_base: str = structure(branches=BASE_BRANCHES)
+    critic_optimizer_bound: str = structure(branches=BOUND_BRANCHES)
+    critic_optimizer_base: str = structure(branches=BASE_BRANCHES)
 
 
 # 展开完整参数表
@@ -127,7 +116,7 @@ def build(params: Mapping[str, Any], environment, training) -> StreamAC:
         episode_length=environment.episode_length,
     )
     gamma = float(params["gamma"])
-    chosen = str(params["backbone"])
+    chosen = str(params[f"backbone.{KIND}"])
     hidden_dim = int(params[f"backbone.{chosen}.hidden_dim"])
     action_dim = int(env.action_space(env_params).shape[0])
     # What the first component is handed: the observation, and beside it the

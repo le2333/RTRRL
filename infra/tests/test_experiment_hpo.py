@@ -87,9 +87,10 @@ def test_the_sampled_parameters_honour_what_the_experiment_pinned(
     experiment: Any, catalog: Any, tmp_path: Path
 ) -> None:
     for configuration in runner(experiment, catalog, tmp_path).next_round():
-        assert set(configuration["params"]) == {"gamma", "backbone.hidden_dim"}
+        assert set(configuration["params"]) == {"gamma", "backbone.kind", "backbone.rtu.hidden_dim"}
         assert configuration["params"]["gamma"] in (0.9, 0.95)
-        assert configuration["params"]["backbone.hidden_dim"] == 32
+        assert configuration["params"]["backbone.rtu.hidden_dim"] == 32
+        assert configuration["params"]["backbone.kind"] == "rtu"
 
 
 def test_a_file_missing_a_field_the_worker_needs_starts_nothing(

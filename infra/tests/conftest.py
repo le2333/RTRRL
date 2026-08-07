@@ -29,10 +29,19 @@ def catalog() -> dict[str, Any]:
                         "search": {"type": "float", "low": 0.9, "high": 0.99},
                     },
                     "backbone": {
-                        "hidden_dim": {
-                            "valid": {"type": "int", "low": 1, "high": 4096},
-                            "search": {"type": "int", "low": 32, "high": 512},
-                        }
+                        # A component chosen among branches: the choice lives
+                        # beside them under the reserved name, so a branch is
+                        # only ever read relative to the group that offers it.
+                        "kind": {
+                            "valid": {"type": "choice", "values": ["rtu", "mlp"]},
+                            "search": {"type": "choice", "values": ["rtu", "mlp"]},
+                        },
+                        "rtu": {
+                            "hidden_dim": {
+                                "valid": {"type": "int", "low": 1, "high": 4096},
+                                "search": {"type": "int", "low": 32, "high": 512},
+                            }
+                        },
                     },
                 },
             }
@@ -73,7 +82,7 @@ EXPERIMENT: dict[str, Any] = {
         "direction": "maximize",
     },
     "hpo": {"rounds": 1, "trials_per_round": 2, "startup_trials": 2, "seed": 7},
-    "space": {"gamma": [0.9, 0.95], "backbone.hidden_dim": [32]},
+    "space": {"gamma": [0.9, 0.95], "backbone": {"kind": ["rtu"], "rtu": {"hidden_dim": [32]}}},
 }
 
 
@@ -119,5 +128,8 @@ hpo:
 
 space:
   gamma: [0.9, 0.95]
-  backbone.hidden_dim: [32]
+  backbone:
+    kind: [rtu]
+    rtu:
+      hidden_dim: [32]
 """

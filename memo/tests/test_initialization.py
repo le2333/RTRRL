@@ -33,7 +33,7 @@ from memorax.networks.initialization import (
     Sparse,
     declared_initializer,
 )
-from memorax.parameters import StructureSpec, expand, flatten
+from memorax.parameters import KIND, expand, flatten
 
 SHAPE = (16, 8)
 
@@ -44,22 +44,36 @@ def drawn(component) -> jax.Array:
 
 def test_the_branch_with_layers_declares_it_and_the_branch_without_does_not():
     backbone = stream_ac.PARAMETERS["backbone"]
-    mlp = backbone.branches["mlp"]["initialization"]
+    mlp = backbone["mlp"]["initialization"]
 
-    assert isinstance(mlp, StructureSpec)
-    assert set(mlp.branches) == set(INITIALIZATION_BRANCHES)
+    assert set(mlp[KIND].valid.values) == set(INITIALIZATION_BRANCHES)
     # ``rtu`` is the cell and a head; the cell draws its own and memorax fixes
     # how, so there is nothing here for a branch to choose between.
-    assert "initialization" not in backbone.branches["rtu"]
+    assert "initialization" not in backbone["rtu"]
     assert "initialization" not in stream_ac.PARAMETERS
 
 
 def test_the_key_only_exists_under_the_branch_that_has_it():
-    flat = flatten(expand(stream_ac.PARAMETERS))
+    declared = flatten(stream_ac.PARAMETERS)
 
-    assert "backbone.mlp.initialization" in flat
-    assert "backbone.mlp.initialization.sparse.sparsity" in flat
-    assert not [key for key in flat if key.startswith("backbone.rtu.initialization")]
+    assert "backbone.mlp.initialization.kind" in declared
+    assert "backbone.mlp.initialization.sparse.sparsity" in declared
+    assert not [
+        key for key in declared if key.startswith("backbone.rtu.initialization")
+    ]
+
+
+def test_only_the_chosen_branch_is_given_values():
+    """An unselected branch is absent, not filled in with something safe.
+
+    A value nobody chose is one nobody should be able to mistake for one that
+    was, which is why the catalog names it and a run configuration does not.
+    """
+
+    reached = expand(stream_ac.PARAMETERS, {"backbone.kind": "mlp"})
+
+    assert "backbone.mlp.initialization.kind" in reached
+    assert not [key for key in reached if key.startswith("backbone.rtu.")]
 
 
 def kept(sparsity: float, fan_in: int) -> int:

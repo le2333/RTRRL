@@ -13,6 +13,7 @@ builds and steps on a manifest honouring the file's pins.
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -21,11 +22,24 @@ import pytest
 import yaml
 
 from entries import stream_ac
-from memorax.parameters import expand, flatten
+from memorax.parameters import KIND, expand, flatten
 
 TEMPLATE = (
     Path(__file__).resolve().parents[2] / "experiments" / "streamac template.yaml"
 )
+
+
+def dotted(section: Mapping, prefix: str = "") -> dict[str, object]:
+    """A pinned space as leaf paths. The file nests; a name is the path to it."""
+
+    found: dict[str, object] = {}
+    for name, node in section.items():
+        key = f"{prefix}{name}"
+        if isinstance(node, Mapping):
+            found |= dotted(node, f"{key}.")
+        else:
+            found[key] = node
+    return found
 
 
 @pytest.fixture(scope="module")
@@ -34,31 +48,31 @@ def experiment() -> dict:
 
 
 @pytest.fixture(scope="module")
+def pins(experiment) -> dict:
+    return dotted(experiment["space"])
+
+
+@pytest.fixture(scope="module")
 def declared() -> dict:
-    return flatten(expand(stream_ac.PARAMETERS))
+    return flatten(stream_ac.PARAMETERS)
 
 
-def test_every_name_the_file_pins_is_one_the_entry_declares(experiment, declared):
-    unknown = sorted(set(experiment["space"]) - set(declared))
+def test_every_name_the_file_pins_is_one_the_entry_declares(pins, declared):
+    unknown = sorted(set(pins) - set(declared))
 
     assert not unknown, f"the entry declares no {unknown}"
 
 
-def test_every_structure_is_pinned_to_exactly_one_branch(experiment):
-    structures = {
-        name: node.branches
-        for name, node in stream_ac.PARAMETERS.items()
-        if hasattr(node, "branches")
-    }
-    for name, pinned in experiment["space"].items():
-        if name not in structures:
+def test_every_choice_of_component_is_pinned_to_exactly_one_branch(pins, declared):
+    for name, pinned in pins.items():
+        if not name.endswith(f".{KIND}"):
             continue
         assert (
             isinstance(pinned, list) and len(pinned) == 1
-        ), f"{name} is a structure and is not searched; pin it to one branch"
-        assert pinned[0] in structures[name], (
+        ), f"{name} chooses a component and is not searched; pin it to one"
+        assert pinned[0] in declared[name].valid.values, (
             f"{name} names {pinned[0]!r}, not one of "
-            f"{', '.join(sorted(structures[name]))}"
+            f"{', '.join(sorted(map(str, declared[name].valid.values)))}"
         )
 
 
@@ -66,16 +80,26 @@ def test_the_score_reads_a_metric_this_entry_reports(experiment):
     assert experiment["score"]["metric"] in stream_ac.METRICS
 
 
-def manifest(experiment, declared) -> dict:
+def manifest(pins) -> dict:
     """What the sampler would hand the entry, with the file's pins applied."""
 
-    return {**declared, **{name: one[0] for name, one in experiment["space"].items()}}
+    return expand(stream_ac.PARAMETERS, {name: one[0] for name, one in pins.items()})
 
 
-def test_the_entry_builds_and_steps_on_that_manifest(experiment, declared):
+def test_the_manifest_carries_only_the_branches_the_file_chose(pins):
+    """Not every branch filled in with something, which is the older mistake."""
+
+    values = manifest(pins)
+
+    assert values[f"backbone.{KIND}"] == "rtu"
+    assert not [name for name in values if name.startswith("backbone.mlp.")]
+    assert len(values) < len(flatten(stream_ac.PARAMETERS))
+
+
+def test_the_entry_builds_and_steps_on_that_manifest(experiment, pins):
     section = experiment["environment"]
     agent = stream_ac.build(
-        manifest(experiment, declared),
+        manifest(pins),
         SimpleNamespace(**section),
         SimpleNamespace(num_envs=2),
     )

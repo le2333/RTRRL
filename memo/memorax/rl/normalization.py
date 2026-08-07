@@ -31,24 +31,18 @@ VARIANCES = ("population", "sample")
 
 @dataclass(frozen=True)
 class RunningNormalization:
-    center: bool = param(valid=[False, True], search=[True], placeholder=True)
-    cold_start: str = param(
-        valid=list(COLD_STARTS), search=list(COLD_STARTS), placeholder="seeded"
-    )
-    variance: str = param(
-        valid=list(VARIANCES), search=list(VARIANCES), placeholder="population"
-    )
-    eps: float = param(valid=(1e-12, 1e-2), search=[1e-8], placeholder=1e-8, log=True)
-    reset_on_start: bool = param(valid=[False, True], search=[False], placeholder=False)
-    update_during_eval: bool = param(
-        valid=[False, True], search=[True], placeholder=True
-    )
+    center: bool = param(valid=[False, True], search=[True])
+    cold_start: str = param(valid=list(COLD_STARTS), search=list(COLD_STARTS))
+    variance: str = param(valid=list(VARIANCES), search=list(VARIANCES))
+    eps: float = param(valid=(1e-12, 1e-2), search=[1e-8], log=True)
+    reset_on_start: bool = param(valid=[False, True], search=[False])
+    update_during_eval: bool = param(valid=[False, True], search=[True])
 
 
 @dataclass(frozen=True)
 class DiscountedNormalization(RunningNormalization):
-    center: bool = param(valid=[False, True], search=[False], placeholder=False)
-    reset_on_done: bool = param(valid=[False, True], search=[True], placeholder=True)
+    center: bool = param(valid=[False, True], search=[False])
+    reset_on_done: bool = param(valid=[False, True], search=[True])
 
 
 NORMALIZATION_BRANCHES = {"none": (), "running": RunningNormalization}

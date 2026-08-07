@@ -43,4 +43,5 @@ def test_run_command_emits_first_round_without_metric_feedback(
         assert configuration["score"]["direction"] == "maximize"
         assert configuration["score"]["s3"].endswith("/score.json")
         assert configuration["params"]["gamma"] in (0.9, 0.95)
-        assert configuration["params"]["backbone.hidden_dim"] == 32
+        assert configuration["params"]["backbone.rtu.hidden_dim"] == 32
+        assert configuration["params"]["backbone.kind"] == "rtu"

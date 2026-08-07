@@ -22,6 +22,7 @@ from pathlib import Path
 from typing import Any
 
 import entries
+from memorax.parameters import describe
 from worker.contract import CONTRACT_VERSION, Catalog, EntryDescriptor
 
 PACKAGE_ROOT = Path(__file__).resolve().parents[1]
@@ -58,7 +59,7 @@ def build_catalog() -> Catalog:
                 {
                     "command": ["python", "-m", module.__name__],
                     "metrics": list(module.METRICS),
-                    "parameters": dict(module.PARAMETERS),
+                    "parameters": describe(module.PARAMETERS),
                 }
             )
             for name, module in discover().items()

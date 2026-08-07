@@ -113,14 +113,14 @@ def make_optax_rule(transform, *, rate=None) -> UpdateRule:
 
 @dataclass(frozen=True)
 class ObBound:
-    kappa: float = param(valid=(0.0, 100.0), search=(0.5, 10.0), placeholder=2.0)
+    kappa: float = param(valid=(0.0, 100.0), search=(0.5, 10.0))
 
 
 @dataclass(frozen=True)
 class AdaptiveObBound:
-    kappa: float = param(valid=(0.0, 100.0), search=(0.5, 10.0), placeholder=2.0)
-    beta2: float = param(valid=(0.0, 1.0), search=(0.9, 0.9999), placeholder=0.999)
-    eps: float = param(valid=(1e-12, 1e-2), search=[1e-8], placeholder=1e-8, log=True)
+    kappa: float = param(valid=(0.0, 100.0), search=(0.5, 10.0))
+    beta2: float = param(valid=(0.0, 1.0), search=(0.9, 0.9999))
+    eps: float = param(valid=(1e-12, 1e-2), search=[1e-8], log=True)
 
 
 @dataclass(frozen=True)
@@ -135,17 +135,17 @@ class AdaptiveObBoundFixed(AdaptiveObBound):
 
 @dataclass(frozen=True)
 class Sgd:
-    lr: float = param(valid=(1e-9, 10.0), search=(1e-5, 1.0), placeholder=0.1, log=True)
+    lr: float = param(valid=(1e-9, 10.0), search=(1e-5, 1.0), log=True)
 
 
 @dataclass(frozen=True)
 class Adam:
-    lr: float = param(
-        valid=(1e-9, 10.0), search=(1e-5, 1e-2), placeholder=0.001, log=True
-    )
-    b1: float = param(valid=(0.0, 1.0), search=[0.9], placeholder=0.9)
-    b2: float = param(valid=(0.0, 1.0), search=[0.999], placeholder=0.999)
-    eps: float = param(valid=(1e-12, 1e-2), search=[1e-8], placeholder=1e-8, log=True)
+    lr: float = param(valid=(1e-9, 10.0), search=(1e-5, 1e-2), log=True)
+    # The published constants, so that an Adam asked for in a test about
+    # something else can be spelled by the one number that test is about.
+    b1: float = param(valid=(0.0, 1.0), search=[0.9], default=0.9)
+    b2: float = param(valid=(0.0, 1.0), search=[0.999], default=0.999)
+    eps: float = param(valid=(1e-12, 1e-2), search=[1e-8], default=1e-8, log=True)
 
 
 def base_transform(base):

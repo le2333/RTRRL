@@ -12,12 +12,12 @@ from dataclasses import dataclass
 from typing import Any
 
 from memorax.networks.initializers import Initializer, lecun_normal, sparse
-from memorax.parameters import param, read_branch, structure
+from memorax.parameters import KIND, param, read_branch, structure
 
 
 @dataclass(frozen=True)
 class Sparse:
-    sparsity: float = param(valid=(0.0, 1.0), search=[0.9], placeholder=0.9)
+    sparsity: float = param(valid=(0.0, 1.0), search=[0.9])
 
 
 INITIALIZATION_BRANCHES = {"lecun": (), "sparse": Sparse}
@@ -26,7 +26,7 @@ INITIALIZATION_BRANCHES = {"lecun": (), "sparse": Sparse}
 def initialization() -> Any:
     """The declaration a component with kernels puts among its own fields."""
 
-    return structure(placeholder="lecun", branches=INITIALIZATION_BRANCHES)
+    return structure(branches=INITIALIZATION_BRANCHES)
 
 
 def declared_initializer(component) -> Initializer:
@@ -40,7 +40,7 @@ def declared_initializer(component) -> Initializer:
 def initializer_at(params: Mapping[str, Any], prefix: str) -> Initializer | None:
     """The initialiser declared at this path, or none if nothing declares one."""
 
-    if f"{prefix}initialization" not in params:
+    if f"{prefix}initialization.{KIND}" not in params:
         return None
     _, component = read_branch(
         params, "initialization", INITIALIZATION_BRANCHES, prefix=prefix

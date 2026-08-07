@@ -33,7 +33,7 @@ from memorax.networks.readouts import (
     CRITIC_HEAD_BRANCHES,
     actor_head,
 )
-from memorax.parameters import StructureSpec
+from memorax.parameters import KIND
 
 ACTIONS = 3
 WIDTH = 6
@@ -97,15 +97,13 @@ def test_the_head_a_parameterisation_is_its_own_component():
 def test_the_actor_head_is_declared_as_a_structure():
     node = stream_ac.PARAMETERS["actor_head"]
 
-    assert isinstance(node, StructureSpec)
-    assert set(node.branches) == set(ACTOR_HEAD_BRANCHES)
+    assert set(node[KIND].valid.values) == set(ACTOR_HEAD_BRANCHES)
 
 
 def test_the_critic_head_is_declared_too():
     node = stream_ac.PARAMETERS["critic_head"]
 
-    assert isinstance(node, StructureSpec)
-    assert set(node.branches) == set(CRITIC_HEAD_BRANCHES)
+    assert set(node[KIND].valid.values) == set(CRITIC_HEAD_BRANCHES)
 
 
 @pytest.mark.parametrize(
@@ -113,7 +111,7 @@ def test_the_critic_head_is_declared_too():
     (("actor_head", ACTOR_HEAD_BRANCHES), ("critic_head", CRITIC_HEAD_BRANCHES)),
 )
 def test_every_head_declares_how_its_kernels_are_drawn(role, branches):
-    declared = stream_ac.PARAMETERS[role].branches
+    declared = stream_ac.PARAMETERS[role]
 
     for name in branches:
         assert "initialization" in declared[name], f"{role}.{name} declares none"
@@ -125,17 +123,18 @@ def test_a_head_is_drawn_the_way_its_own_branch_says():
     import jax.tree_util
     from conftest import TinyContinuousEnv
 
-    from memorax.parameters import expand, flatten
+    from memorax.parameters import expand
 
     del TinyContinuousEnv
-    base = flatten(expand(stream_ac.PARAMETERS))
+    base = expand(stream_ac.PARAMETERS)
     pinned = {
         **base,
-        "backbone": "rtu",
-        "actor_head": "global_std",
-        "actor_head.global_std.initialization": "sparse",
-        "critic_head": "value",
-        "critic_head.value.initialization": "lecun",
+        "backbone.kind": "rtu",
+        "actor_head.kind": "global_std",
+        "actor_head.global_std.initialization.kind": "sparse",
+        "actor_head.global_std.initialization.sparse.sparsity": 0.9,
+        "critic_head.kind": "value",
+        "critic_head.value.initialization.kind": "lecun",
     }
     environment = SimpleNamespace(
         id="brax::hopper",
