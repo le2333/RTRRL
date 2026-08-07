@@ -242,9 +242,11 @@ def test_a_component_knows_its_own_name_on_both_ways_through():
     walking = dataclasses.replace(
         sequence,
         components=tuple(
-            dataclasses.replace(component, where="walk")
-            if isinstance(component, Reporting)
-            else component
+            (
+                dataclasses.replace(component, where="walk")
+                if isinstance(component, Reporting)
+                else component
+            )
             for component in sequence.components
         ),
     )

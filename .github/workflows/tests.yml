@@ -9,7 +9,7 @@ on:
       - main
     paths:
       - .github/workflows/tests.yml
-      - training-sdk/**
+      - infra/**
       - rtrrl/infra/control-plane/**
       - rtrrl/infra/mock-trainer/**
   workflow_dispatch:
@@ -25,8 +25,10 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - name: training-sdk
-            project: training-sdk
+          # The control plane this branch develops. The two below are the paper
+          # project's own, one generation older, and still its own thing.
+          - name: infra
+            project: infra
             target: ""
           - name: control-plane
             project: rtrrl/infra/control-plane

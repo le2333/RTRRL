@@ -40,7 +40,6 @@ from __future__ import annotations
 import importlib.util
 import os
 import sys
-from dataclasses import replace
 from pathlib import Path
 
 import jax
@@ -282,8 +281,6 @@ def test_the_fixed_adaptive_rule_is_the_published_adaptive_obgd(published, magni
             f"adaptive_obgd_fixed step={index} trace={magnitude}",
             allowed=FRAMEWORKS,
         )
-
-
 
 
 # Eleven observations, which is Hopper's width and is not an arbitrary choice.
