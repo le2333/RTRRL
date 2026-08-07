@@ -5,8 +5,8 @@ import pytest
 from rerun.experimental import RrdReader
 from test_reporter import make_config
 from training_sdk import objects
-from training_sdk.episode import Episode
 
+from memorax.runtime.episode import Episode
 from worker.reporter import build_default_sinks
 from worker.sinks.rerun import RerunSink
 

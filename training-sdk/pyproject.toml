@@ -4,7 +4,6 @@ version = "0.1.0"
 requires-python = ">=3.12,<3.13"
 dependencies = [
     "boto3>=1.35,<2",
-    "numpy>=2",
     "pydantic>=2.8,<3",
     "pyyaml>=6,<7",
 ]

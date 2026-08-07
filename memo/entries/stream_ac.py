@@ -12,8 +12,6 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Any
 
-from training_sdk.episode import metric_names
-
 from memorax.algorithms.stream_ac import StreamAC, StreamACConfig
 from memorax.environments import make
 from memorax.networks import Readout, Sequence, backbone
@@ -39,6 +37,7 @@ from memorax.rl.normalization import (
 )
 from memorax.rl.updates import BASE_BRANCHES, BOUND_BRANCHES
 from memorax.runtime import EPISODE_FIELDS, Runtime
+from memorax.runtime.episode import metric_names
 from worker.reporter import Reporter
 
 BACKBONE_BRANCHES = {"rtu": Rtu, "mlp": Mlp}

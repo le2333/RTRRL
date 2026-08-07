@@ -7,8 +7,8 @@ from pathlib import Path
 from typing import Protocol
 
 from training_sdk.contract import RunConfig
-from training_sdk.episode import Episode, statistics
 
+from memorax.runtime.episode import Episode, statistics
 from worker.sinks.metrics import MetricsSink
 
 METRICS_FILENAME = "metrics.jsonl"

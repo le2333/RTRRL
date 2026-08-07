@@ -16,11 +16,11 @@ from typing import Any, NamedTuple
 import jax.numpy as jnp
 import pytest
 from training_sdk.contract import Catalog
-from training_sdk.episode import check_names, statistics
 
 import entries
 from entries import stream_ac
 from memorax.runtime import drive, whole_epochs
+from memorax.runtime.episode import check_names, statistics
 from runner.catalog import build_catalog, discover
 
 

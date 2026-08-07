@@ -18,9 +18,9 @@ from types import SimpleNamespace
 from typing import Any
 
 import pytest
-from training_sdk.episode import Episode, metric_names, statistics
 
 from memorax.parameters import expand, flatten
+from memorax.runtime.episode import Episode, metric_names, statistics
 from runner.catalog import discover
 
 PARAM_OVERRIDES: dict[str, Any] = {

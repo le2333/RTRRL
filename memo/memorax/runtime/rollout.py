@@ -19,7 +19,8 @@ from __future__ import annotations
 from collections.abc import Iterable, Iterator, Mapping
 
 import numpy as np
-from training_sdk.episode import Episode
+
+from memorax.runtime.episode import Episode
 
 
 def complete_episodes(

@@ -21,8 +21,8 @@ from dataclasses import dataclass
 from typing import Any, Protocol
 
 import jax
-from training_sdk.episode import Episode
 
+from memorax.runtime.episode import Episode
 from memorax.runtime.rollout import complete_episodes
 
 from .program import AgentProgram, program_of

@@ -17,6 +17,9 @@ keywords = ["jax", "flax", "reinforcement-learning", "memory", "rnn", "ssm", "tr
 
 dependencies = [
     "jax>=0.7.0",
+    # Nine files import it directly; it used to arrive through jax, which is a
+    # dependency of a dependency deciding what this package can compile against.
+    "numpy>=2",
     "flax>=0.10.2",
     "lox @ git+https://github.com/huterguier/lox@dev",
     "distrax>=0.1.5",

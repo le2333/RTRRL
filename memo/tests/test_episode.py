@@ -6,7 +6,7 @@ import re
 
 import pytest
 
-from training_sdk.episode import Episode, check_names, metric_names, statistics
+from memorax.runtime.episode import Episode, check_names, metric_names, statistics
 
 
 def make(**overrides) -> Episode:
@@ -36,7 +36,8 @@ def test_a_mean_alone_cannot_tell_a_steady_episode_from_a_spiky_one():
     spiky = statistics(make(rewards=[0.0, 4.0]))
 
     assert (
-        steady["train/episode/return_per_step"] == spiky["train/episode/return_per_step"]
+        steady["train/episode/return_per_step"]
+        == spiky["train/episode/return_per_step"]
     )
     assert steady["train/episode/return_per_step_variance"] == 0.0
     assert spiky["train/episode/return_per_step_variance"] == 4.0

@@ -7,7 +7,8 @@ import numpy as np
 import rerun as rr
 from training_sdk import objects
 from training_sdk.contract import RunConfig
-from training_sdk.episode import Episode
+
+from memorax.runtime.episode import Episode
 
 
 class RerunSink:

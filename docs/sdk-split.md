@@ -105,14 +105,16 @@ wsl -e bash -lc 'cd /mnt/c/.../memo && $HOME/.venvs/memo-linux/bin/python -m pyt
 
 结果：Linux 上 **337 passed, 12 skipped**（跳过的是 `test_paper_parity` 里需要 torch 的部分，torch 在 `paper` 组，没装）。此后 `training_sdk` 只剩 `contract` `objects` `episode` `testing`，`training-sdk/uv.lock` 少了 365 行——tqdm / uvicorn / websockets 正是 aim 拖进来的。
 
-### T3 — 搬 episode
+### T3 — 搬 episode ✅
 
-`episode.py` 的消费者现在全在 memo：`worker/reporter.py`、`worker/sinks/rerun.py`、`memorax/runtime/{driver,rollout}.py`、三个 entry、两个测试。
+T2 之后 `episode.py` 的消费者全在 memo，且 training_sdk 内部无人再引用它。
 
-- `episode.py` → `memorax/runtime/episode.py`（见 D2：`Episode` 是 runtime 产出、worker 消费的接口类型）
+- `episode.py` → `memorax/runtime/episode.py`（见 D2：`Episode` 是 runtime 产出、worker 消费的接口类型），12 处引用改写
 - 搬 `test_episode`
-- `numpy` 从 `training-sdk/pyproject.toml` 移到 memo
-- 此后 `training-sdk` 只剩 `contract.py` `objects.py` `testing.py`
+- **numpy 的归属查出来是错的两次**：training-sdk 声明了 `numpy>=2` 而它**没有任何一个文件用**（`episode.py` 只 import 标准库）；memo 有九个文件直接 import numpy 却**从未声明**，一直靠 jax 的传递依赖。删掉前者，补上后者
+- 此后 `training-sdk` 只剩 `contract.py` `objects.py` `testing.py`，依赖只有 boto3 / pydantic / pyyaml
+
+结果：memo **337 → 355 passed, 12 skipped**；training-sdk 自己的 **28 passed**（它的测试这时也终于能跑了）。
 
 ### T4 — 抽出 AWS 操作包
 

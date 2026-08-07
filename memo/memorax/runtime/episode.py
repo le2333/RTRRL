@@ -98,9 +98,7 @@ def statistics(episode: Episode) -> dict[str, float]:
     values |= _moments("return_per_step", rewards)
     for name, series in episode.series.items():
         values |= _moments(name, [float(one) for one in series])
-    return {
-        f"{episode.phase}/{WINDOW}/{name}": value for name, value in values.items()
-    }
+    return {f"{episode.phase}/{WINDOW}/{name}": value for name, value in values.items()}
 
 
 def _moments(name: str, values: list[float]) -> dict[str, float]:

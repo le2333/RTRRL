@@ -1971,6 +1971,7 @@ dependencies = [
     { name = "gymnax" },
     { name = "jax" },
     { name = "lox" },
+    { name = "numpy" },
     { name = "rerun-sdk" },
     { name = "setuptools" },
     { name = "training-sdk" },
@@ -2124,6 +2125,7 @@ requires-dist = [
     { name = "memory-gym", marker = "extra == 'memory-gym'" },
     { name = "navix", marker = "extra == 'environments'", specifier = ">=0.7.0" },
     { name = "navix", marker = "extra == 'navix'", specifier = ">=0.7.0" },
+    { name = "numpy", specifier = ">=2" },
     { name = "playground", marker = "extra == 'environments'", specifier = ">=0.0.5" },
     { name = "playground", marker = "extra == 'mujoco-playground'", specifier = ">=0.0.5" },
     { name = "pobax", marker = "extra == 'environments'", git = "https://github.com/taodav/pobax" },
@@ -4238,7 +4240,6 @@ version = "0.1.0"
 source = { directory = "../training-sdk" }
 dependencies = [
     { name = "boto3" },
-    { name = "numpy" },
     { name = "pydantic" },
     { name = "pyyaml" },
 ]
@@ -4247,7 +4248,6 @@ dependencies = [
 requires-dist = [
     { name = "boto3", specifier = ">=1.35,<2" },
     { name = "moto", extras = ["server"], marker = "extra == 'testing'", specifier = ">=5,<6" },
-    { name = "numpy", specifier = ">=2" },
     { name = "pydantic", specifier = ">=2.8,<3" },
     { name = "pyyaml", specifier = ">=6,<7" },
 ]
