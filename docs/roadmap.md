@@ -105,7 +105,7 @@ infra 的 `adapter.py` 判叶子用 `"search" in node`，那**正是 R2 之后**
 | | 内容 | 依赖 |
 | --- | --- | --- |
 | **R1a** ✅ | `RunConfig` 删 4 个死字段，`CONTRACT_VERSION` 6→7 | 无 |
-| **R1b** | infra 读模板 YAML 的名字，`_configurations` 产出 `RunConfig` 形状 | 无 |
+| **R1b** ✅ | infra 读模板 YAML 的名字，`_configurations` 产出 `RunConfig` 形状 | 无 |
 | **R1c** | 往返测试**上半**：infra 产出 → `RunConfig` 校验；`params` 手工给 | R1a+R1b |
 | **R2a** | 参数树重构，catalog 产出嵌套 `{valid, search}`；adapter 自动变对 | — |
 | **R1d** | 往返测试**下半**：真 catalog → 采样 → `build` | R2a |
@@ -114,19 +114,19 @@ infra 的 `adapter.py` 判叶子用 `"search" in node`，那**正是 R2 之后**
 
 删掉 `training.chunk_steps`、`training.early_stop_patience`、`evaluation.num_envs`、顶层 `name`（四个都零读取；aim 的 run 名用 `run_id`，实验文件的 `name` 是 optuna study 名，属 infra）。`CONTRACT_VERSION` 6→7，测试改成引用它而不是字面量。模板 YAML 按去向重排并标注。289 passed 不变。
 
-### R1b 待办
+### R1b ✅ — 已完成
 
-infra 今天读的名字与模板对不上，九处：
+`experiment.py` 改读模板的名字（`entry` / `space` / `score.direction` / `catalog["entries"]`），`_configurations` 产出 `RunConfig` 的十三个字段。五个块原样透传，`PASSED_THROUGH` 是那份清单。
 
-| infra 读 | 实际是 |
-| --- | --- |
-| `catalog["algorithms"]` | `catalog["entries"]` |
-| `experiment["algorithm"]` | `entry` |
-| `experiment["parameters"]` | `space` |
-| `experiment["run"]` / `["loggers"]` | `environment`+`training`+`evaluation` / `logging` |
-| `experiment["objective"]["direction"]` | `score.direction`（`metric`/`window_steps`/`reduce`/`non_finite` 无处安放） |
+协调字段全在 infra 侧生成，实验文件不问：`launch_id`（UTC 时间戳，可用 `--launch-id` 固定）、`run_id = {name}-{launch}-t{trial}`、`digest ← image`、`score.s3` 和 `logging.rerun_s3 ← storage/{experiment}/{launch}/{run_id}/`。`contract` **抄 catalog 的**而不是自己声明——运行配置该claim的是那个将要读它的镜像实现的版本。
 
-外加 `adapter._collect` 假设 overrides 嵌套，而 `space` 的键是扁平点名——这一条改 `_collect` 查 `overrides.get(path)` 即可，与 R2 无关。
+三个 fail-fast 都在起容器之前：文件缺字段（`REQUIRED`）、`space` 里有 catalog 没声明的名字（`SpaceError`）、`image` 没钉 digest。
+
+`adapter._collect` 改成按扁平点名查覆盖（`overrides.get(path)`），与 R2 无关的那一半。判叶子的 `"search" in node` **一行没动**，等 R2a。
+
+infra 10 → 19 passed。测试的实验文件和 catalog 收进 `tests/conftest.py`，因为一份形状的意义就在于两侧共用一份，每个文件抄一遍正是它失效的方式。
+
+**未接的一环**：真 catalog（`kind`/`branches`）走不通 `adapter`，所以往返只验到协调与外围。R1d 补。
 
 ---
 

@@ -98,17 +98,32 @@ worker 写到 `score.s3`，控制面读回来喂给 Optuna。
 
 以前这条靠"两边装同一个包"隐式保证;拆开之后没有任何机制保证它，只有这一行。升级任何一侧都要同时升另一侧。
 
-## 已知的不一致：两侧现在说的不是同一种语言
+## 实验文件：运行配置是从哪来的
 
-`infra/src/trainer_infra/experiment.py` 的 `_configurations` 产出的是：
+infra 的输入，样板见 `experiments/streamac template.yaml`，由 `trainer_infra.experiment` 读。它与运行配置**共用一套字段名**——不是两个 schema 加一个翻译层，是一个形状填两次。
 
-```json
-{ "experiment": "...", "trial": 0, "algorithm": "...", "run": {...},
-  "objective": {...}, "loggers": {...}, "parameters": {...} }
+```
+[透传] environment  training  evaluation  logging  score(除 s3)
+[消费] image → digest        storage → score.s3、logging.rerun_s3
+[生成] contract(抄 catalog 的)  launch_id  run_id  trial
+[采样] space ⊕ catalog 的搜索域 → params
+[自用] name(optuna study)  description  compute  hpo
 ```
 
-而 worker 的 `RunConfig` 要的是上面那份。**两者字段几乎没有交集**——infra 说 `algorithm`，worker 说 `entry`；infra 说 `parameters`，worker 说 `params`；worker 要 `contract` `run_id` `digest` `environment` `training` `evaluation` `score`，infra 一个都不产出。
+**运行配置 = 实验配置的外围参数（透传）+ 采样(catalog 的搜索域 ⊕ 实验配置的覆盖)**，加上只有提供方知道的协调字段。外围参数只能透传：catalog 能声明的是空间，而空间需要采样器，一个值没有空间。
 
-这不是回归：这份 infra 是从 `rewrite/temp` 拉过来的，它本来就与另一套 worker 配对。两侧现在同处一个分支，差异才第一次可见——这份文档的第一个用处就是让它可见。
+infra 在**产出任何配置之前**校验自己的输入完整（`trainer_infra.experiment.REQUIRED`）。少一个 `epoch_steps` 是零个容器起来，不是一轮 HPO 起 N 个各自读到同一个空字段再死。它校验的是"我的输入格式完整吗"，不是"worker 会不会喜欢这个值"——它不理解任何名字的语义。
 
-对齐时要定的是**哪一侧动**：让 infra 产出 `RunConfig` 的形状，还是把 `RunConfig` 收缩到 infra 已经在产的那些字段（`run` / `objective` / `loggers` 这些嵌套块，比 worker 现在扁平的 `logging` + `score` + `training` 更接近实验 YAML 的结构）。
+三个 fail-fast，都在起容器之前：
+
+| 拒绝 | 为什么 |
+| --- | --- |
+| 实验文件缺字段 | 见上 |
+| `space` 里有 catalog 没声明的名字 | 那是个不接线的旋钮，采样器永远不会填，运行会带着作者以为设过的值开始 |
+| `image` 没钉到 digest | tag 可以移动，而搜索空间绑在镜像上；浮动 tag 会让空间在一个已记录试验的 study 底下改变 |
+
+### 保持两份形状相等的机制
+
+只有往返测试：catalog → `trainer_infra` 真实解析与采样 → `RunConfig` 校验 → 入口 `build` 并跑一步。链绿 = 两份拷贝仍然相等；红 = 有人只改了一边。
+
+上半（协调与外围）在 `infra/tests/test_experiment_hpo.py`。下半（参数）等 catalog 的参数树重构后接上，见 `docs/roadmap.md` R1d。

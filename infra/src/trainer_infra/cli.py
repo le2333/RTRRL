@@ -17,6 +17,9 @@ def main(argv: Sequence[str] | None = None) -> None:
     run_parser.add_argument("experiment", type=Path)
     run_parser.add_argument("--catalog", type=Path, required=True)
     run_parser.add_argument("--database", type=Path, required=True)
+    # One launch names one set of runs. Passing it lets a round be asked for
+    # again without the artifacts landing somewhere new.
+    run_parser.add_argument("--launch-id", default=None)
     arguments = parser.parse_args(argv)
 
     experiment = yaml.safe_load(arguments.experiment.read_text(encoding="utf-8"))
@@ -25,5 +28,6 @@ def main(argv: Sequence[str] | None = None) -> None:
         experiment=experiment,
         catalog=catalog,
         database=arguments.database,
+        launch_id=arguments.launch_id,
     ).next_round()
     print(json.dumps({"configurations": configurations}, indent=2))

@@ -1,131 +1,151 @@
 from pathlib import Path
+from typing import Any
 
-from trainer_infra import HPO, ExperimentRunner, SampledTrial, resolve_parameter_ranges
+import pytest
+from conftest import DIGEST
+
+from trainer_infra import ExperimentError, ExperimentRunner, SpaceError
+
+LAUNCH = "20260807-120000"
 
 
-def test_resolved_experiment_ranges_feed_hpo_configuration_groups(
-    tmp_path: Path,
-) -> None:
-    catalog = {
-        "algorithms": {
-            "stream_ac": {
-                "parameters": {
-                    "gamma": {
-                        "valid": {"type": "float", "low": 0.0, "high": 1.0},
-                        "search": {"type": "choice", "values": [0.99]},
-                    },
-                    "lr": {
-                        "valid": {"type": "float", "low": 0.0, "high": None},
-                        "search": {"type": "choice", "values": [1.0]},
-                    },
-                }
-            }
-        }
-    }
-    experiment = {
-        "name": "stream-ac-test",
-        "algorithm": "stream_ac",
-        "hpo": {
-            "rounds": 1,
-            "trials_per_round": 2,
-            "startup_trials": 2,
-            "seed": 7,
-        },
-        "objective": {"metric": "episodic_return", "direction": "maximize"},
-        "parameters": {"gamma": [0.9, 0.95, 0.99], "lr": [1.0]},
-    }
-    groups: list[tuple[SampledTrial, ...]] = []
-
-    declared = catalog["algorithms"][experiment["algorithm"]]["parameters"]
-    parameters = resolve_parameter_ranges(declared, experiment["parameters"])
-    hpo_settings = experiment["hpo"]
-    hpo = HPO(
-        name=experiment["name"],
+def runner(experiment: Any, catalog: Any, tmp_path: Path) -> ExperimentRunner:
+    return ExperimentRunner(
+        experiment=experiment,
+        catalog=catalog,
         database=tmp_path / "study.db",
-        direction=experiment["objective"]["direction"],
-        rounds=hpo_settings["rounds"],
-        trials_per_round=hpo_settings["trials_per_round"],
-        startup_trials=hpo_settings["startup_trials"],
-        seed=hpo_settings["seed"],
-        parameters=parameters,
+        launch_id=LAUNCH,
     )
 
-    def run_group(group: tuple[SampledTrial, ...]) -> list[float]:
-        groups.append(group)
-        return [float(trial.number) for trial in group]
 
-    study = hpo.run(run_group)
-
-    assert len(groups) == 1
-    assert [trial.number for trial in groups[0]] == [0, 1]
-    assert all(trial.parameters["gamma"] in [0.9, 0.95, 0.99] for trial in groups[0])
-    assert all(trial.parameters["lr"] == 1.0 for trial in groups[0])
-    assert [trial.value for trial in study.trials] == [0.0, 1.0]
-
-
-def test_runner_completes_two_rounds_from_out_of_order_worker_results(
-    tmp_path: Path,
+def test_a_configuration_carries_every_field_the_worker_validates(
+    experiment: Any, catalog: Any, tmp_path: Path
 ) -> None:
-    catalog = {
-        "algorithms": {
-            "stream_ac": {
-                "parameters": {
-                    "gamma": {
-                        "valid": {"type": "float", "low": 0.0, "high": 1.0},
-                        "search": {"type": "choice", "values": [0.9]},
-                    },
-                }
-            }
-        }
-    }
-    experiment = {
-        "name": "stream-ac-test",
-        "algorithm": "stream_ac",
-        "hpo": {
-            "rounds": 2,
-            "trials_per_round": 2,
-            "startup_trials": 2,
-            "seed": 7,
-        },
-        "objective": {
-            "metric": "episodic_return",
-            "reduction": "last",
-            "direction": "maximize",
-        },
-        "loggers": {"local": {"directory": "logs"}},
-        "parameters": {"gamma": [0.9]},
-        "run": {
-            "environment": {"id": "Pendulum-v1", "seed": 0},
-            "training": {"total_steps": 200},
-            "debug": False,
-            "overshooting_info": False,
-            "render": False,
-        },
-    }
-    configuration_rounds: list[tuple[dict[str, object], ...]] = []
+    first, second = runner(experiment, catalog, tmp_path).next_round()
 
-    def execute_round(
-        configurations: tuple[dict[str, object], ...],
-    ) -> tuple[dict[str, float | int], ...]:
-        configuration_rounds.append(configurations)
+    assert set(first) == {
+        "contract",
+        "run_id",
+        "experiment",
+        "launch_id",
+        "trial",
+        "entry",
+        "digest",
+        "environment",
+        "training",
+        "evaluation",
+        "params",
+        "logging",
+        "score",
+    }
+    assert first["contract"] == 7
+    assert first["experiment"] == "streamac-test"
+    assert first["entry"] == "stream_ac"
+    assert first["digest"] == DIGEST
+    assert (first["trial"], second["trial"]) == (0, 1)
+    assert first["run_id"] == f"stream-ac-test-{LAUNCH}-t0"
+    assert first["launch_id"] == LAUNCH
+
+
+def test_the_five_blocks_are_passed_through_untouched(
+    experiment: Any, catalog: Any, tmp_path: Path
+) -> None:
+    configuration = runner(experiment, catalog, tmp_path).next_round()[0]
+
+    assert configuration["environment"] == experiment["environment"]
+    assert configuration["training"] == experiment["training"]
+    assert configuration["evaluation"] == experiment["evaluation"]
+
+
+def test_each_run_is_told_where_its_own_result_goes(
+    experiment: Any, catalog: Any, tmp_path: Path
+) -> None:
+    """The experiment says a storage root; which run writes where is ours."""
+
+    first, second = runner(experiment, catalog, tmp_path).next_round()
+    root = f"s3://artifacts/trainer/streamac-test/{LAUNCH}"
+
+    assert first["score"]["s3"] == f"{root}/stream-ac-test-{LAUNCH}-t0/score.json"
+    assert second["score"]["s3"] == f"{root}/stream-ac-test-{LAUNCH}-t1/score.json"
+    assert first["logging"]["rerun_s3"] == f"{root}/stream-ac-test-{LAUNCH}-t0/rerun"
+    # What to optimise stays the experiment's word.
+    assert first["score"]["direction"] == "maximize"
+    assert first["score"]["metric"] == "eval/episode/return_per_step"
+
+
+def test_rerun_gets_no_destination_when_it_is_off(
+    experiment: Any, catalog: Any, tmp_path: Path
+) -> None:
+    experiment["logging"]["enable_rerun"] = False
+
+    configuration = runner(experiment, catalog, tmp_path).next_round()[0]
+
+    assert "rerun_s3" not in configuration["logging"]
+
+
+def test_the_sampled_parameters_honour_what_the_experiment_pinned(
+    experiment: Any, catalog: Any, tmp_path: Path
+) -> None:
+    for configuration in runner(experiment, catalog, tmp_path).next_round():
+        assert set(configuration["params"]) == {"gamma", "backbone.hidden_dim"}
+        assert configuration["params"]["gamma"] in (0.9, 0.95)
+        assert configuration["params"]["backbone.hidden_dim"] == 32
+
+
+def test_a_file_missing_a_field_the_worker_needs_starts_nothing(
+    experiment: Any, catalog: Any, tmp_path: Path
+) -> None:
+    del experiment["training"]["epoch_steps"]
+    del experiment["storage"]
+
+    with pytest.raises(ExperimentError) as raised:
+        runner(experiment, catalog, tmp_path)
+
+    assert "storage" in str(raised.value)
+    assert "training.epoch_steps" in str(raised.value)
+
+
+def test_a_pin_the_image_declares_no_parameter_for_starts_nothing(
+    experiment: Any, catalog: Any, tmp_path: Path
+) -> None:
+    experiment["space"]["gamma_"] = [0.9]
+
+    with pytest.raises(SpaceError, match="gamma_"):
+        runner(experiment, catalog, tmp_path)
+
+
+def test_an_image_on_a_movable_tag_starts_nothing(
+    experiment: Any, catalog: Any, tmp_path: Path
+) -> None:
+    experiment["image"] = "registry.example/trainer:latest"
+
+    with pytest.raises(ExperimentError, match="not pinned to a digest"):
+        runner(experiment, catalog, tmp_path)
+
+
+def test_an_entry_the_image_does_not_declare_starts_nothing(
+    experiment: Any, catalog: Any, tmp_path: Path
+) -> None:
+    experiment["entry"] = "nowhere"
+
+    with pytest.raises(ExperimentError, match="nowhere"):
+        runner(experiment, catalog, tmp_path)
+
+
+def test_two_rounds_complete_from_out_of_order_worker_results(
+    experiment: Any, catalog: Any, tmp_path: Path
+) -> None:
+    experiment["hpo"]["rounds"] = 2
+    rounds: list[tuple[dict[str, object], ...]] = []
+
+    def execute(configurations: tuple[dict[str, object], ...]) -> tuple[dict, ...]:
+        rounds.append(configurations)
         return tuple(
             {"trial": configuration["trial"], "value": float(configuration["trial"])}
             for configuration in reversed(configurations)
         )
 
-    study = ExperimentRunner(
-        experiment=experiment,
-        catalog=catalog,
-        database=tmp_path / "study.db",
-    ).run(execute_round)
+    study = runner(experiment, catalog, tmp_path).run(execute)
 
-    assert [[configuration["trial"] for configuration in round_] for round_ in configuration_rounds] == [
-        [0, 1],
-        [2, 3],
-    ]
-    assert all(
-        configuration["experiment"] == "stream-ac-test"
-        for round_ in configuration_rounds
-        for configuration in round_
-    )
+    assert [[c["trial"] for c in round_] for round_ in rounds] == [[0, 1], [2, 3]]
     assert [trial.value for trial in study.trials] == [0.0, 1.0, 2.0, 3.0]

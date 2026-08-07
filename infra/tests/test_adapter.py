@@ -1,7 +1,8 @@
 import optuna
+import pytest
 
 from trainer_infra import sample_parameters
-from trainer_infra.adapter import resolve_parameter_ranges
+from trainer_infra.adapter import SpaceError, resolve_parameter_ranges
 
 
 def test_resolve_parameter_ranges_applies_experiment_choice_overrides() -> None:
@@ -26,6 +27,8 @@ def test_resolve_parameter_ranges_applies_experiment_choice_overrides() -> None:
 
 
 def test_resolve_parameter_ranges_flattens_only_the_declared_tree() -> None:
+    """A nested declaration is pinned by the dotted path the worker will read."""
+
     declared = {
         "actor": {
             "kind": {
@@ -34,10 +37,22 @@ def test_resolve_parameter_ranges_flattens_only_the_declared_tree() -> None:
             }
         }
     }
-    ranges = resolve_parameter_ranges(declared, {"actor": {"kind": ["rtu"]}})
+    ranges = resolve_parameter_ranges(declared, {"actor.kind": ["rtu"]})
     trial = optuna.trial.FixedTrial({"actor.kind": "rtu"})
 
     assert ranges == {
         "actor.kind": {"type": "choice", "values": ["rtu"]},
     }
     assert sample_parameters(trial, ranges) == {"actor.kind": "rtu"}
+
+
+def test_a_pin_for_an_undeclared_name_is_refused_rather_than_ignored() -> None:
+    declared = {
+        "gamma": {
+            "valid": {"type": "float", "low": 0.0, "high": 1.0},
+            "search": {"type": "choice", "values": [0.99]},
+        }
+    }
+
+    with pytest.raises(SpaceError, match="gammma"):
+        resolve_parameter_ranges(declared, {"gammma": [0.9]})
