@@ -35,7 +35,24 @@
 }
 ```
 
-`parameters` 的节点形状由 `memo/memorax/parameters.py` 的 `ParameterSpec` / `StructureSpec` 定义。它绑定在镜像 digest 上：**改了文件不重建镜像，就不可能悄悄扩大一个实验的搜索空间**。
+`parameters` 是一棵树，**只有一种节点**。叶子是 `{"valid": ..., "search": ...}`，其余是分组：
+
+```json
+"backbone": {
+  "kind": { "valid": {"type": "choice", "values": ["mlp", "rtu"]},
+            "search": {"type": "choice", "values": ["rtu"]} },
+  "rtu":  { "hidden_dim": { "valid": {...}, "search": {...} } },
+  "mlp":  { "hidden_dim": {...}, "initialization": {...} }
+}
+```
+
+选组件不是第二种节点，是一个叫 **`kind`** 的参数，住在它的分支所在的那一组里。所以作用域是组本身：`ob` 在两个角色下各有一份、`sparse` 在六处初始化各有一份，它们是不同节点而不是重名——**没有一个平坦命名空间供它们相撞**。运行配置里的点名（`actor_optimizer_bound.ob.kappa`）是树路径的渲染，不是命名空间。
+
+`valid` 是组件说什么值有意义，`search` 是它建议搜哪一段、实验可以在其内收窄。
+
+**树是条件结构**：一个分支下的参数只属于选中了那条分支的试验。所以两侧都按 `kind` 递归——worker 从运行配置读它再往下建图，控制面在打开分支前一行抽它。扁平表说不出这件事，也就是为什么这里不是扁平表。
+
+整棵树绑定在镜像 digest 上：**改了文件不重建镜像，就不可能悄悄扩大一个实验的搜索空间**。
 
 ### manifest
 

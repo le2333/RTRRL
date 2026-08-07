@@ -7,6 +7,8 @@ from typing import Any, Literal, TypeAlias
 
 import optuna
 
+from trainer_infra.adapter import KIND
+
 Direction = Literal["minimize", "maximize"]
 Scalar: TypeAlias = bool | int | float | str
 
@@ -22,12 +24,47 @@ RunRound = Callable[[tuple[SampledTrial, ...]], Sequence[float]]
 
 def sample_parameters(
     trial: optuna.trial.Trial,
-    parameters: Mapping[str, Mapping[str, Any]],
+    parameters: Mapping[str, Any],
 ) -> dict[str, Scalar]:
-    return {
-        name: _suggest(trial, name, parameter_range)
-        for name, parameter_range in parameters.items()
-    }
+    """Draw one point, descending only the branches this trial chose.
+
+    The tree is the conditional structure, so drawing has to follow it: a
+    parameter under a branch exists for the trials that took that branch and
+    for no others. Sampling the whole tree instead would put the actor's Adam
+    betas in every trial that runs SGD -- dimensions nothing reads, which the
+    sampler must still model, and which the run configuration would then carry
+    as values that look chosen.
+
+    This is the same walk the worker does when it builds the graph. The only
+    difference is where ``kind`` comes from: there it is read out of a
+    configuration, here it is drawn a line above the branch it opens.
+    """
+
+    drawn: dict[str, Scalar] = {}
+    _draw(trial, parameters, prefix="", drawn=drawn)
+    return drawn
+
+
+def _draw(
+    trial: optuna.trial.Trial,
+    tree: Mapping[str, Any],
+    *,
+    prefix: str,
+    drawn: dict[str, Scalar],
+) -> None:
+    groups: dict[str, Mapping[str, Any]] = {}
+    for name, node in tree.items():
+        path = f"{prefix}{name}"
+        if "type" in node:
+            drawn[path] = _suggest(trial, path, node)
+        else:
+            groups[name] = node
+
+    chosen = drawn.get(f"{prefix}{KIND}")
+    for name, group in groups.items():
+        if chosen is not None and name != str(chosen):
+            continue
+        _draw(trial, group, prefix=f"{prefix}{name}.", drawn=drawn)
 
 
 def _suggest(
@@ -65,7 +102,7 @@ class HPO:
         rounds: int,
         trials_per_round: int,
         startup_trials: int,
-        parameters: Mapping[str, Mapping[str, Any]],
+        parameters: Mapping[str, Any],
         seed: int | None = None,
         metadata: Mapping[str, object] | None = None,
     ) -> None:

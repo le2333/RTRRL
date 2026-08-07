@@ -1,20 +1,27 @@
 """The image's declared search space, narrowed by what an experiment pins.
 
-Both are trees of the same shape, so this walks them together. The sampler
-wants a flat table, and the dotted path down the tree is what it is keyed by --
-which is also how a run configuration spells a parameter, so the flattening
-happens once, here, and is a rendering rather than a namespace.
+Both are trees of the same shape, so this walks them together and the result is
+a third of that shape: a group where the image had a group, a resolved range
+where it had a parameter. It stays a tree because the tree is the conditional
+structure -- a parameter under a branch exists only for the trials that chose
+that branch, and a flat table cannot say so.
 
-A leaf is a node carrying ``search``. Nothing else distinguishes a value from a
-group: a component chosen among branches is a parameter called ``kind`` living
-beside them, which is why a name used at two sites is two nodes and not a
-clash.
+Two leaf tests, one per shape. In what the image declares, a leaf carries
+``search``. In what comes out of here, a leaf carries ``type``. Nothing else
+separates a value from a group: a component chosen among branches is a
+parameter called ``kind`` living beside them, which is why a name used at two
+sites is two nodes and not a clash.
 """
 
 from __future__ import annotations
 
 from collections.abc import Iterator, Mapping
 from typing import Any
+
+# The parameter a group selects its branch with. Written here rather than
+# imported, because the worker's copy of this word lives in a package this side
+# does not install; the two are kept equal by the round-trip test.
+KIND = "kind"
 
 
 class SpaceError(ValueError):
@@ -24,7 +31,7 @@ class SpaceError(ValueError):
 def resolve_parameter_ranges(
     declared: Mapping[str, Any],
     overrides: Mapping[str, Any],
-) -> dict[str, dict[str, Any]]:
+) -> dict[str, Any]:
     """Every declared range, with the experiment's narrower one where it gave one.
 
     A pin the image declares no parameter for is refused rather than ignored:
@@ -32,27 +39,21 @@ def resolve_parameter_ranges(
     the run would start with the value its author believed they had set.
     """
 
-    resolved: dict[str, dict[str, Any]] = {}
-    _collect(declared, overrides, prefix="", resolved=resolved)
     unknown = sorted(_unpinnable(declared, overrides, prefix=""))
     if unknown:
         raise SpaceError(f"the image declares no parameter named {unknown}")
-    return resolved
+    return _resolve(declared, overrides)
 
 
-def _collect(
-    declared: Mapping[str, Any],
-    overrides: Mapping[str, Any],
-    *,
-    prefix: str,
-    resolved: dict[str, dict[str, Any]],
-) -> None:
-    for name, node in declared.items():
-        path = f"{prefix}{name}"
-        if "search" in node:
-            resolved[path] = _range(overrides.get(name, node["search"]))
-        else:
-            _collect(node, overrides.get(name, {}), prefix=f"{path}.", resolved=resolved)
+def _resolve(declared: Mapping[str, Any], overrides: Mapping[str, Any]) -> dict[str, Any]:
+    return {
+        name: (
+            _range(overrides.get(name, node["search"]))
+            if "search" in node
+            else _resolve(node, overrides.get(name, {}))
+        )
+        for name, node in declared.items()
+    }
 
 
 def _unpinnable(

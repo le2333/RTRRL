@@ -265,8 +265,24 @@ ParameterTree: TypeAlias = Mapping[str, ParameterNode]
 6. R1d：往返测试接上真 catalog → 采样 → `build`
 
 **R2b — 递归路由**
-7. 按 `kind` 从入口递归路由，**只走选中的分支**，作用域内只发现显式注册的组件。`flatten`/`walk`/`expand` 随之删除
-8. `read_branch` 保留（消费侧查表，与参数表无关），但改成在作用域内查
+7. ✅ **采样侧**：`resolve_parameter_ranges` 返回树而不是扁平表，`sample_parameters` 走树——先抽 `kind`，只下降抽中的那条
+8. 消费侧：作用域内只发现显式注册的组件；`read_branch` 保留但改成在作用域内查
+
+#### 第 7 步 ✅ — 采样也要递归，不只是消费
+
+两侧是同一个 walk，差别只在 `kind` 从哪来：worker 从运行配置**读**，采样器在打开分支前一行**抽**。
+
+之前 `sample_parameters` 收的是一张扁平范围表，而表表达不了"这一项只在 `kind == ob` 的试验里存在"。所以实验把 `actor_optimizer_bound.kind` 钉成 `none`，`ob.kappa` 仍在被采样——TPE 要为没人读的维度建模，运行配置还会带着它，看起来像有人选过。
+
+真模板上的效果：
+
+| | 之前 | 现在 |
+| --- | --- | --- |
+| catalog 声明的叶子 | 63 | 63 |
+| 这个实验到达的 | 63 | 34 |
+| **真正要搜的维度** | **27** | **11** |
+
+**顺带解锁了搜结构。** roadmap 原来写着"唯一会让删除 `structure` 这个决定反转的未来需求，是真的要搜 `backbone ∈ {rtu, mlp}`，那时两分支子空间不同、需要条件采样、平铺表达不了"。递归采样就是条件采样，树本来就是条件结构——不需要发明任何新东西。今天真模板上已经有两个结构在被搜（两处 `initialization.kind`）。`test_template` 那条"结构必须钉死"的断言可以在需要时去掉。
 
 **R2c — 组件拥有计算图**
 9. 一个组件先合并成声明 + `build()`（建议 `Rtu`：有 carry、有 sensitivity、有 `local_jacobian`，最复杂），`backbone()` 工厂留作兼容层
