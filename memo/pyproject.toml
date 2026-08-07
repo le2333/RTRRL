@@ -101,6 +101,10 @@ development = [
     "ruff>=0.15.22",
     # The S3 fixtures the moved worker tests use.
     "moto[server]>=5,<6",
+    # The control plane's sampler, for the round trip that ends here: what it
+    # draws has to be what an entry reads. Nothing shipped imports it, and it
+    # is not in the image.
+    "optuna>=4,<5",
 ]
 # The published streaming-drl optimisers, so the bounded step can be compared
 # against the paper's own code rather than against a reading of it. CPU wheels

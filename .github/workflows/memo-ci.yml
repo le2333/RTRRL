@@ -6,10 +6,16 @@ on:
     paths:
       - ".github/workflows/memo-ci.yml"
       - "memo/**"
+      # The round-trip test runs the control plane's own resolver and sampler,
+      # so a change there can break this suite without touching memo/.
+      - "infra/src/**"
+      - "experiments/**"
   push:
     paths:
       - ".github/workflows/memo-ci.yml"
       - "memo/**"
+      - "infra/src/**"
+      - "experiments/**"
 
 permissions:
   contents: read

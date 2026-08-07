@@ -1,4 +1,7 @@
 {
   "venvPath": ".",
-  "venv": ".venv"
+  "venv": ".venv",
+  "extraPaths": [
+    "../infra/src"
+  ]
 }

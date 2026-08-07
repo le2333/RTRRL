@@ -108,7 +108,7 @@ infra 的 `adapter.py` 判叶子用 `"search" in node`，那**正是 R2 之后**
 | **R1b** ✅ | infra 读模板 YAML 的名字，`_configurations` 产出 `RunConfig` 形状 | 无 |
 | **R1c** ✅ | 往返测试**上半**：infra 产出 → `RunConfig` 校验；`params` 手工给 | R1a+R1b |
 | **R2a** | 参数树重构，catalog 产出嵌套 `{valid, search}`；adapter 自动变对 | — |
-| **R1d** | 往返测试**下半**：真 catalog → 采样 → `build` | R2a |
+| **R1d** ✅ | 往返测试**下半**：真 catalog → 采样 → `build` | R2a |
 
 ### R1a ✅ — 已完成
 
@@ -263,6 +263,20 @@ ParameterTree: TypeAlias = Mapping[str, ParameterNode]
 4. catalog 序列化成嵌套 `{valid, search}`；infra 的 `adapter` **一行不改**就认得
 5. 实验 YAML 的 `space` 改成缩进；`adapter._collect` 的覆盖查找改回并行走树（R1b 那次改成扁平点名查找，是我把这一步误判成与 R2 无关）
 6. R1d：往返测试接上真 catalog → 采样 → `build`
+
+### R1d ✅ — 已完成，R1 到此结束
+
+`memo/tests/test_round_trip.py`，跑在 memo 侧（这一半要 jax）。`pytest.ini` 的 `pythonpath` 加 `../infra/src`（**不是** pyproject——memo 有 `pytest.ini`，它优先），dev 组加 optuna（实测只多一个 colorlog）。
+
+链路：真 catalog（`build_catalog()`）→ `ExperimentRunner` 读真模板 → optuna 真采样 → `RunConfig` 校验 → `stream_ac.build` → 走两步。
+
+**两个 walk 必须到达同一组名字**是这里最要紧的断言：`memorax.parameters` 那个从 mapping 里读已选分支，`trainer_infra.hpo` 那个在打开分支前一行抽它。两份是刻意分开写的（两侧不共享包），除了这条没有别的东西保证它们是同一个 walk。
+
+写的时候先写错了一版：断言两个 trial 的参数集相同。它们不相同——`initialization.kind` 现在被搜，抽到 `sparse` 的 trial 有 `sparse.sparsity`，抽到 `lecun` 的没有。**条件空间在工作的样子就是这个**，不变量是逐配置自洽（`expand(PARAMETERS, params)` 复现 `params` 本身），不是跨 trial 相等。
+
+两个 CI 的触发路径都放宽了：memo-ci 加 `infra/src/**` 和 `experiments/**`，tests.yml 加 `memo/worker/contract.py`、`memo/memorax/parameters.py`、`experiments/**`。缝两侧现在互相依赖，只盯自己那半边会漏。
+
+memo 289 → 303 passed。
 
 **R2b — 递归路由**
 7. ✅ **采样侧**：`resolve_parameter_ranges` 返回树而不是扁平表，`sample_parameters` 走树——先抽 `kind`，只下降抽中的那条

@@ -10,6 +10,11 @@ on:
     paths:
       - .github/workflows/tests.yml
       - infra/**
+      # infra's round-trip test validates against the worker's own contract
+      # module and the shipped experiment template.
+      - memo/worker/contract.py
+      - memo/memorax/parameters.py
+      - experiments/**
       - rtrrl/infra/control-plane/**
       - rtrrl/infra/mock-trainer/**
   workflow_dispatch:
