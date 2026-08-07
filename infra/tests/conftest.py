@@ -58,7 +58,7 @@ EXPERIMENT: dict[str, Any] = {
         "episode_length": 1000,
         "observed": [0, 2, 4],
     },
-    "training": {"num_envs": 16, "total_steps": 200, "epoch_steps": 100},
+    "training": {"num_envs": 4, "total_steps": 200, "epoch_steps": 100},
     "evaluation": {"steps": 16},
     "logging": {
         "aim": "aim://aim:53800",
@@ -92,7 +92,7 @@ environment:
   observed: [0, 2, 4]
 
 training:
-  num_envs: 16
+  num_envs: 4
   total_steps: 200
   epoch_steps: 100
 

@@ -39,7 +39,7 @@ def test_run_command_emits_first_round_without_metric_feedback(
         assert configuration["entry"] == "stream_ac"
         assert configuration["digest"] == DIGEST
         assert configuration["environment"]["id"] == "brax::hopper"
-        assert configuration["training"]["num_envs"] == 16
+        assert configuration["training"]["num_envs"] == 4
         assert configuration["score"]["direction"] == "maximize"
         assert configuration["score"]["s3"].endswith("/score.json")
         assert configuration["params"]["gamma"] in (0.9, 0.95)

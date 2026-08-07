@@ -8,7 +8,10 @@ dependencies = ["optuna>=4,<5", "pyyaml>=6,<7"]
 trainerctl = "trainer_infra.cli:main"
 
 [dependency-groups]
-dev = ["pytest>=8,<9", "ruff>=0.15,<1"]
+# pydantic is here and not in dependencies: it is what the worker validates an
+# arriving run configuration with, and the round-trip test runs that validator
+# against what this side produces. Nothing shipped imports it.
+dev = ["pytest>=8,<9", "ruff>=0.15,<1", "pydantic>=2.8,<3"]
 
 [build-system]
 requires = ["hatchling"]
@@ -18,7 +21,11 @@ build-backend = "hatchling.build"
 packages = ["src/trainer_infra"]
 
 [tool.pytest.ini_options]
-pythonpath = ["src"]
+# ../memo is on the path, not installed: the round-trip test imports the
+# worker's contract module, which is pydantic and nothing else. Installing the
+# package would bring jax, aim and aimrocks onto a control plane that has no
+# use for any of them, and aimrocks has no Windows wheel at all.
+pythonpath = ["src", "../memo"]
 
 [tool.ruff]
 line-length = 100

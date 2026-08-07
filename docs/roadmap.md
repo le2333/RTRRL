@@ -106,7 +106,7 @@ infra 的 `adapter.py` 判叶子用 `"search" in node`，那**正是 R2 之后**
 | --- | --- | --- |
 | **R1a** ✅ | `RunConfig` 删 4 个死字段，`CONTRACT_VERSION` 6→7 | 无 |
 | **R1b** ✅ | infra 读模板 YAML 的名字，`_configurations` 产出 `RunConfig` 形状 | 无 |
-| **R1c** | 往返测试**上半**：infra 产出 → `RunConfig` 校验；`params` 手工给 | R1a+R1b |
+| **R1c** ✅ | 往返测试**上半**：infra 产出 → `RunConfig` 校验；`params` 手工给 | R1a+R1b |
 | **R2a** | 参数树重构，catalog 产出嵌套 `{valid, search}`；adapter 自动变对 | — |
 | **R1d** | 往返测试**下半**：真 catalog → 采样 → `build` | R2a |
 
@@ -127,6 +127,19 @@ infra 的 `adapter.py` 判叶子用 `"search" in node`，那**正是 R2 之后**
 infra 10 → 19 passed。测试的实验文件和 catalog 收进 `tests/conftest.py`，因为一份形状的意义就在于两侧共用一份，每个文件抄一遍正是它失效的方式。
 
 **未接的一环**：真 catalog（`kind`/`branches`）走不通 `adapter`，所以往返只验到协调与外围。R1d 补。
+
+### R1c ✅ — 已完成
+
+`infra/tests/test_round_trip.py`，**跑在 infra 侧**。落点当时在犹豫，因为我按"从 memo import 任何东西都拖进 jax"估的代价——查了是错的：`worker.contract` → `memorax.parameters` → 只到 pydantic，216 个模块，零 numpy 零 aim。`memorax/__init__.py` 惰性，`worker/__init__.py` 只有 docstring。所以 `pythonpath = ["src", "../memo"]` 按源码 import，不安装（安装会连带 jax/aimrocks，后者没有 Windows wheel），pydantic 进 infra 的 dev 组。
+
+十个断言，两个是真正防漂移的：
+
+- **块清单两侧都读出来**，不在测试里列。列了就对"新增一个块"失明——新块不在列表里，比较的两边都把它过滤掉了
+- **worker 每个块的必填字段 ⊆ infra 要求的字段**（`score.s3` 除外，那是 infra 生成的）。方向是包含不是相等：infra 可以更严（它就要求 `episode_length`，而 worker 有默认值）
+
+其余：真模板文件本身过校验（不是它的副本）、`RunConfig` 十三个字段无一靠默认值到货、ragged 预算由 worker 拒绝而非 infra（分工正确的样子：infra 查"文件说了没有"，worker 查"说的有没有意义"）。
+
+infra 19 → 33 passed。
 
 ---
 

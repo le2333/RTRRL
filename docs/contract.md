@@ -126,4 +126,6 @@ infra 在**产出任何配置之前**校验自己的输入完整（`trainer_infr
 
 只有往返测试：catalog → `trainer_infra` 真实解析与采样 → `RunConfig` 校验 → 入口 `build` 并跑一步。链绿 = 两份拷贝仍然相等；红 = 有人只改了一边。
 
-上半（协调与外围）在 `infra/tests/test_experiment_hpo.py`。下半（参数）等 catalog 的参数树重构后接上，见 `docs/roadmap.md` R1d。
+上半（协调与外围）在 `infra/tests/test_round_trip.py`，跑在 infra 侧：它按源码 import `worker.contract`，而那条链只到 pydantic——`memorax.parameters` 不碰任何数组库，`memorax/__init__.py` 是惰性的。所以控制面不为此背任何东西，pydantic 只在它的 dev 组里。
+
+下半（参数）等 catalog 的参数树重构后接上，见 `docs/roadmap.md` R1d。
