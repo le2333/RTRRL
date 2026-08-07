@@ -167,6 +167,32 @@ class Rtu:
 - **`params` 保持平的**：每个前向都读它，包一层只是给最热的路径加一跳
 - **多递归组件不在需求内**。`sequence.py` 拒绝第二个递归组件是因为跨层敏感度需要 dense cross-layer Jacobian——**嵌套容器给的是容器，不是链式法则**，这个重构解决不了它，也不需要解决
 
+### 规格已经写过一次，在 `rewrite/temp`
+
+`rewrite/temp:docs/reference/legacy-code-reuse-assessment.md` 第 58 行起，是一份**否决清单**：它点名今天这套实现的哪五处与那轮设计冲突，所以它比"该长成什么样"更有用——它说了不该长成什么样。
+
+| # | 今天的实现 | 那轮设计 |
+| --- | --- | --- |
+| 1 | 数值参数和结构参数是**两类节点**（`ParameterSpec` / `StructureSpec`） | 统一树节点 |
+| 2 | `StructureSpec` 在**声明阶段展开所有 branch 的参数树** | 不展开 |
+| 3 | `flatten` / `walk` 遍历所有分支，用 `placeholder` 填未选分支 | 只走选中的那条 |
+| 4 | 参数声明绑定 **dataclass metadata** | 脱钩 |
+| 5 | — | 按实验配置里的 `kind` **从入口递归路由**，**仅发现作用域内显式注册的组件** |
+
+点名不复用的三个文件：SDK 的 `contract.py`（`ParameterSpec`/`StructureSpec`/`ParameterTree`）、SDK 的 `parameters.py`、control-plane 的 `space.py`。前两个的内容今天在 `memorax/parameters.py` 里。
+
+**保留的约束意图**（这些是要留住的，不是要删的）：范围必须非空、上下界有序、实验覆盖不得超出组件合法范围、单元素选项表示固定值、未知字段必须报错。
+
+#### 第 5 条回答了作用域
+
+命名撞车——`ob` 在 actor 和 critic 各一份、`sparse` 在 6 处 initialization、`running` 在两处 normalization、`sgd`/`adam` 在两个角色——**只有在存在一个全局命名空间时才是撞车**。递归路由下不存在这个空间：actor 的 bound 只在 actor 的作用域里查它显式注册的分支表，critic 查自己的，两者从来不是同一个节点。
+
+所以"实验配置扁平"指的是**每一层之内平铺**，用缩进分组表达层级，不是全局单层。`params` 的点名路径（`actor.ob.kappa`）是树路径的渲染，天然唯一。
+
+#### 第 2、3 条是今天 63 个参数名的来源
+
+`flatten(PARAMETERS)` 产出 63 个名字、最长 52 字符（`actor_head.global_std.initialization.sparse.sparsity`），而任何一次运行只用到其中约 20 个——其余是**未选分支被 placeholder 填出来的**。删掉展开，长度问题自己消失一大半。
+
 ### 参数契约的三个角色
 
 `param(valid=, search=, placeholder=)` 的三个参数属于三个不同的知情者：
@@ -191,18 +217,32 @@ class Rtu:
 
 ### 参考实现
 
-`rewrite/temp` 的 `algorithms/StreamAC/parameters.py`：
+`rewrite/temp` 的 `algorithms/StreamAC/parameters.py`——**词汇表就是全部，没有一行遍历逻辑**：
 
 ```python
+@dataclass(frozen=True)
+class Choice:      values: tuple[Scalar, ...]
+@dataclass(frozen=True)
+class FloatRange:  low: float | None; high: float | None; log: bool = False
+@dataclass(frozen=True)
+class IntRange:    low: int | None; high: int | None; step: int = 1; log: bool = False
+
+Range: TypeAlias = Choice | FloatRange | IntRange
+
 @dataclass(frozen=True)
 class Parameter:
     valid: Range
     search: Range
 
 ParameterNode: TypeAlias = Parameter | Mapping[str, "ParameterNode"]
+ParameterTree: TypeAlias = Mapping[str, ParameterNode]
 ```
 
-只有 valid + search，**没有 placeholder**，没有 `StructureSpec`；节点要么是参数要么是一组节点，嵌套即分组。但注意：那边的 StreamAC 参数树是六个平铺标量，**没有可选分支**，所以它不是"structure 不需要"的证据，只是没遇到。
+对照今天的 `memorax/parameters.py`（391 行、11 个 pydantic 模型、`walk`/`expand`/`flatten`/`_check_*`）：那边**没有 pydantic**、没有 `kind` 判别式、没有 placeholder、没有校验函数。节点要么是 `Parameter` 要么是一组节点，`isinstance` 就是判别。
+
+`scripts/build_catalog.py` 的序列化也只有三个函数、四十行，`_parameters` 递归、`_parameter` 出 `{valid, search}`、`_range` 出 `{type, ...}`。**infra 的 `adapter._collect` 判叶子用 `"search" in node`，正是对着这个形状写的**——这就是它今天认不了我们 catalog 的原因，也是它在 R2a 之后不用改的原因。
+
+但注意：那边的 StreamAC 参数树是**六个平铺标量**，没有可选分支、没有组件。所以它是**词汇表的**参考实现，不是**路由的**——路由那部分只有上面那份否决清单的第 5 条写了意图，代码从未存在。
 
 另有本分支归档时丢失的两个未提交模块（只剩 `infra/src/trainer_infra/__pycache__/` 里的字节码）：`parameters.py` 声明 infra **自己的** `Choice`/`FloatRange`/`IntRange`，`parameter_adapter.py` 的 `resolve_parameters` 对着它们解析。那份工作已经在做"两侧各自声明、不共享包"。
 
@@ -214,11 +254,24 @@ ParameterNode: TypeAlias = Parameter | Mapping[str, "ParameterNode"]
 
 ### R2 的动作
 
-1. `search` 保持必填，`placeholder` 弃用（字段默认值就是默认值）
-2. `describe_parameters` 改成走嵌套树；`ParameterSpec`/`StructureSpec` 合成 `Parameter(valid, search)`
-3. 一个组件（建议 `Rtu`——它最复杂：有 carry、有 sensitivity、有 `local_jacobian`）先合并成声明 + `build()`，`backbone()` 工厂留作兼容层
-4. 其余组件跟进，`read_branch` 保留（它是消费侧查表，与参数表无关）
-5. 外围配置并入组件树，R1 的 schema 删除
+拆成 a/b/c，因为 R1d 只卡在 a。
+
+**R2a — 词汇表与树**（R1d 的前置）
+1. `memorax/parameters.py` 换成 `rewrite/temp` 那份词汇表：`Choice`/`FloatRange`/`IntRange`/`Parameter(valid, search)`，`ParameterNode = Parameter | Mapping`。删 `ParameterSpec`/`StructureSpec`/`kind`/`placeholder`
+2. 保留的约束移到构造时校验：范围非空、上下界有序、search ⊆ valid、单元素选项即固定值
+3. 声明从 dataclass metadata 脱钩——参数表是模块级的 `ParameterTree` 字面量，不是 `field(metadata=...)`
+4. catalog 序列化成嵌套 `{valid, search}`；infra 的 `adapter` **一行不改**就认得
+5. 实验 YAML 的 `space` 改成缩进；`adapter._collect` 的覆盖查找改回并行走树（R1b 那次改成扁平点名查找，是我把这一步误判成与 R2 无关）
+6. R1d：往返测试接上真 catalog → 采样 → `build`
+
+**R2b — 递归路由**
+7. 按 `kind` 从入口递归路由，**只走选中的分支**，作用域内只发现显式注册的组件。`flatten`/`walk`/`expand` 随之删除
+8. `read_branch` 保留（消费侧查表，与参数表无关），但改成在作用域内查
+
+**R2c — 组件拥有计算图**
+9. 一个组件先合并成声明 + `build()`（建议 `Rtu`：有 carry、有 sensitivity、有 `local_jacobian`，最复杂），`backbone()` 工厂留作兼容层
+10. 其余组件跟进
+11. 外围配置并入组件树，R1 的 schema 删除
 
 ---
 
