@@ -1,0 +1,100 @@
+from pathlib import Path
+
+import optuna
+
+from trainer_infra import HPO, SampledTrial
+
+NO_PARAMETERS = {}
+
+
+def test_ask_generates_a_round_without_metric_feedback(tmp_path: Path) -> None:
+    database = tmp_path / "study.db"
+    hpo = HPO(
+        name="streamac",
+        database=database,
+        direction="maximize",
+        rounds=2,
+        trials_per_round=2,
+        startup_trials=2,
+        seed=7,
+        parameters={
+            "gamma": {"type": "choice", "values": [0.9, 0.95]},
+        },
+    )
+
+    trials = hpo.ask()
+
+    assert [trial.number for trial in trials] == [0, 1]
+    assert all(trial.parameters["gamma"] in [0.9, 0.95] for trial in trials)
+    persisted = optuna.load_study(
+        study_name="streamac",
+        storage=f"sqlite:///{database}",
+    )
+    assert all(
+        trial.state == optuna.trial.TrialState.RUNNING for trial in persisted.trials
+    )
+
+
+def test_run_hpo_records_each_round_before_starting_the_next(tmp_path: Path) -> None:
+    database = tmp_path / "nested" / "study.db"
+    round_trials: list[tuple[int, ...]] = []
+    completed_before_round: list[int] = []
+
+    sampled_parameters: list[tuple[dict[str, object], ...]] = []
+
+    def evaluate_round(trials: tuple[SampledTrial, ...]) -> list[float]:
+        persisted = optuna.load_study(
+            study_name="streamac",
+            storage=f"sqlite:///{database}",
+        )
+        completed_before_round.append(
+            sum(
+                trial.state == optuna.trial.TrialState.COMPLETE
+                for trial in persisted.trials
+            )
+        )
+        round_trials.append(tuple(trial.number for trial in trials))
+        sampled_parameters.append(tuple(trial.parameters for trial in trials))
+        return [float(trial.number) for trial in trials]
+
+    hpo = HPO(
+        name="streamac",
+        database=database,
+        direction="maximize",
+        rounds=2,
+        trials_per_round=2,
+        startup_trials=2,
+        seed=7,
+        metadata={"experiment": "baseline"},
+        parameters={"gamma": {"type": "choice", "values": [0.9]}},
+    )
+    study = hpo.run(evaluate_round)
+
+    assert database.is_file()
+    assert round_trials == [(0, 1), (2, 3)]
+    assert completed_before_round == [0, 2]
+    assert sampled_parameters == [
+        ({"gamma": 0.9}, {"gamma": 0.9}),
+        ({"gamma": 0.9}, {"gamma": 0.9}),
+    ]
+    assert [trial.value for trial in study.trials] == [0.0, 1.0, 2.0, 3.0]
+    assert study.user_attrs == {"experiment": "baseline"}
+
+
+def test_run_continues_an_existing_study(tmp_path: Path) -> None:
+    database = tmp_path / "study.db"
+    config = {
+        "name": "streamac",
+        "database": database,
+        "direction": "maximize",
+        "rounds": 1,
+        "trials_per_round": 1,
+        "startup_trials": 1,
+        "parameters": NO_PARAMETERS,
+    }
+
+    HPO(**config).run(lambda trials: [1.0])
+    study = HPO(**config).run(lambda trials: [2.0])
+
+    assert [trial.number for trial in study.trials] == [0, 1]
+    assert [trial.value for trial in study.trials] == [1.0, 2.0]

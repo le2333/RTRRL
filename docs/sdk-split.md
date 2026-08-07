@@ -116,19 +116,28 @@ T2 之后 `episode.py` 的消费者全在 memo，且 training_sdk 内部无人�
 
 结果：memo **337 → 355 passed, 12 skipped**；training-sdk 自己的 **28 passed**（它的测试这时也终于能跑了）。
 
-### T4 — 抽出 AWS 操作包
+### T4 — 把 infra 拉进本分支 ✅
 
-- `objects.py` + `testing.py` → 新包（D3），依赖只有 boto3 / moto
-- **infra 侧的 4 处 import 改不了：infra 源码不在本分支**（`main` 在 `rtrrl/infra/control-plane/`，`rewrite/torchrl` 在 `infra/`）。本分支只能改 worker 侧，infra 侧留给合并时处理
-- 验证：`test_objects`
+目标形状变了：memo 是 task 用的 Docker 镜像，infra 是基础设施侧代码，**两者在同一分支开发**，SDK 尽快删干净。infra 在本分支，T5 才能两头都改。
 
-### T5 — contract 降级成格式
+拉的是 `rewrite/temp` 的五个模块（与 `rewrite/torchrl` 的 blob 完全相同）：`adapter` `cli` `experiment` `hpo` `__init__`，连同 `pyproject.toml` `uv.lock` 和五个测试。
 
-- 保留 `CONTRACT_VERSION` 与接收方校验（`worker.py` 已经在做）
-- 写 `docs/contract.md`：catalog / config / manifest / score 四种 JSON 形状
-- 补一条跨侧约束：**worker 的 aim 客户端与 ctrler 的 aim 服务端主版本必须一致**——今天靠"两边装同一个包"隐式保证，拆开后没人保证
-- 同样受 infra 不在本分支的限制
+它的依赖是 **`optuna` + `pyyaml`，仅此**——不 import training_sdk，全程纯 dict。10 个测试在本分支全过。
 
-## 本分支能做到哪
+**一个考古发现。** 本分支 `infra/src/trainer_infra/__pycache__/` 里有两个从未被提交过的模块的字节码（8 月 5 日，随归档丢失）：
 
-T1–T3 完整可做，T4 只能做 worker 半边，T5 只能写文档。T4/T5 的 infra 半边要等分支合并。
+- `parameters.py` —— infra **自己的** `Choice` / `FloatRange` / `IntRange` / `ParameterTable`
+- `parameter_adapter.py` —— `resolve_parameters(...)`，import `trainer_infra.parameters`
+
+也就是说那份丢掉的工作已经在做"两侧各自声明、adapter 翻译、不共享包"。源码只剩字节码，但方向与这份计划一致，可以按它继续。
+
+### T5 — 删掉 training-sdk
+
+`training_sdk` 现在只剩 `contract.py` `objects.py` `testing.py`，而 infra 一个都不用了（它不 import SDK）。所以不是降级，是删除：
+
+- `contract.py` 按消费者拆开：参数规格类型（只有 `memorax/parameters.py` 用）→ 并入它；运行配置类型（worker 与 sinks 用）→ `memo/worker/contract.py`
+- `objects.py` → `memo/worker/objects.py`。**AWS 操作包暂不建**：判据是"两侧都要跟同一个外部服务说话"，而现在只有 worker 要。infra 长出后端时再抽
+- `testing.py` → `memo/tests/`
+- 删掉 `training-sdk/`，memo 的 pyproject 去掉这个依赖
+- 写 `docs/contract.md`：catalog / config / manifest / score 四种 JSON 形状 + `CONTRACT_VERSION` 的语义
+- 补一条跨侧约束：**worker 的 aim 客户端与 ctrler 的 aim 服务端主版本必须一致**——今天靠"两边装同一个包"隐式保证，删掉之后没人保证
