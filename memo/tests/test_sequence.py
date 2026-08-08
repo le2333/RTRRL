@@ -327,7 +327,9 @@ def test_the_kernel_steps_on_a_sequence():
     state, metrics = agent.train(jax.random.key(1), state, 2 * ENVS)
 
     assert metrics.interaction.reward.shape == (2, ENVS)
-    assert len(state.actor_carry) == len(agent.actor_network.components)
+    assert len(state.actor.recurrence.carry) == len(
+        agent.core.actor.block.network.components
+    )
 
 
 def test_composing_the_input_widens_the_first_layer_and_nothing_else():
@@ -349,5 +351,5 @@ def test_composing_the_input_widens_the_first_layer_and_nothing_else():
         tree = params["params"]
         return tree["components_0"]["Dense_0"]["kernel"].shape[0]
 
-    assert fan_in(plain.actor_params) == width
-    assert fan_in(composed.actor_params) == width + action_dim + 1
+    assert fan_in(plain.actor.params) == width
+    assert fan_in(composed.actor.params) == width + action_dim + 1

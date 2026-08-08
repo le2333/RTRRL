@@ -41,7 +41,7 @@ import jax
 import pytest
 from conftest import TinyContinuousEnv, assert_within, deviations, flattened
 
-from memorax.algorithms import stream_ac as flat
+from reference import stream_ac as flat
 from memorax.algorithms.contract import EvaluationConfig
 from memorax.networks import heads
 from memorax.networks.components import FFN, LayerNorm, Readout, Tanh
@@ -52,7 +52,7 @@ from memorax.rl.updates import ObBound, Sgd
 
 # Asked for by path: the package's lazy ``__getattr__`` hands back the *class*
 # under this name, and what is wanted is the module beside it.
-layered = importlib.import_module("memorax.algorithms.StreamAC")
+layered = importlib.import_module("memorax.algorithms.stream_ac")
 
 ENVS = 3
 FEATURES = 4

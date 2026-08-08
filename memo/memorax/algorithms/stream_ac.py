@@ -1,16 +1,13 @@
 """StreamAC-RTRL: an actor and a critic with separate recurrent networks.
 
-Neither network sees the other's gradient, so there is no shared backbone to
-target and no emphasis to carry. Each keeps its own eligibility trace and each
-steps under its own overshooting bound, which is what lets the pair learn from
-a single transition at a time without a replay buffer.
+    StreamAC          the order things happen in, and the scan
+    Environment       where every stream is
+    Normalization     the scales the environment's numbers are read through
+    Core              a policy, a value function, and the one thing they share
+      Actor / Critic  a task: what it produces, and the scalar it ascends
+        Network       a block of parameters nothing else owns
 
-Everything static is resolved in the constructor, so no method below asks the
-configuration a question: what the methods read are the pieces that answer was
-turned into. The point of that, and of these being methods rather than the
-closures they used to be, is that a single step can be called on a state you
-made up and compared against another implementation. A kernel that can only be
-run for a whole epoch can only be judged by whether the curve looked right.
+Driven against ``stream_ac.py`` by ``tests/test_layered_parity.py``.
 """
 
 from __future__ import annotations
@@ -23,8 +20,8 @@ import jax
 import jax.numpy as jnp
 from flax import struct
 
+from memorax.readings import reading, readings
 from memorax.rl import (
-    ObjectiveDirections,
     environment_owns_normalization,
     make_bounded_rule,
     make_credit,
@@ -48,6 +45,7 @@ from .contract import (
 )
 
 
+# --------------------------------------------------------------- configuration
 @dataclass(frozen=True)
 class StreamACConfig:
     """Everything the kernel reads that does not change during a run."""
@@ -55,45 +53,31 @@ class StreamACConfig:
     num_envs: int
     gamma: float
     trace_lambda: float
-    # One bound and one base per role. The two roles are independent: the shared
-    # triple that used to sit here was the only reason asking for different
-    # bounds had to be refused, and it was never a limit of the arithmetic.
     actor_bound: Any = None
     actor_base: Any = None
     critic_bound: Any = None
     critic_base: Any = None
     entropy_coefficient: float = 0.01
     credit: str = "rtrl"
-    # Concatenate the previous action and reward onto the observation.
     meta_rl: bool = False
-    # Whose running statistics to normalise with. Read by ``make_normalizer``
-    # when no explicit config is passed, and only meaningful when one of the two
-    # normalisation switches is on.
     normalization_statistics: str = "ours"
 
 
-@struct.dataclass
-class TraceDirections:
-    """The trace carried to the next step and the trace used now."""
+# ----------------------------------------------------------------------- state
+@struct.dataclass(frozen=True)
+class Recurrence:
+    """Where the sequence is, and what it owes the past."""
 
-    carried: Any
-    update: Any
-
-
-def _broadcast_env(values, leaf):
-    return values[(slice(None),) + (None,) * (leaf.ndim - 1)]
+    carry: Any
+    sensitivity: Any
 
 
-def _where_done(done, fresh, carried):
-    """Take the fresh one for the streams that ended, the carried one for the rest.
+@struct.dataclass(frozen=True)
+class RuleState:
+    """What the update carries between steps, which a forward pass never sees."""
 
-    Not a branch: both are computed and one is selected per stream, which is
-    what every reset in this stack already is.
-    """
-
-    return jax.tree.map(
-        lambda new, old: jnp.where(_broadcast_env(done, old), new, old), fresh, carried
-    )
+    traces: Any
+    v: Any
 
 
 @struct.dataclass(frozen=True)
@@ -101,87 +85,661 @@ class NetworkState:
     """Independent online state for one recurrent actor or critic network."""
 
     params: Any
-    traces: Any
-    v: Any
-    carry: Any
-    sensitivity: Any
+    rule: RuleState
+    recurrence: Recurrence
 
 
 @struct.dataclass(frozen=True)
-class StreamACState:
-    """Everything the kernel carries from one transition to the next."""
+class Scales:
+    """What the two running estimators carry, and nothing else."""
 
-    step: Any
-    update_step: Any
-    timestep: Timestep
-    env_state: Any
-    actor_params: Any
-    actor_traces: Any
-    actor_v: Any
-    actor_carry: Any
-    actor_sensitivity: Any
-    critic_params: Any
-    critic_traces: Any
-    critic_v: Any
-    critic_carry: Any
-    critic_sensitivity: Any
-    observation_statistics: Any = None
-    reward_statistics: Any = None
+    observation: Any = None
+    reward: Any = None
+
+
+# -------------------------------------------------------------------- readings
+@dataclass(frozen=True)
+class BlockReports:
+    """Which of a block's readings to take."""
+
+    step_size: bool = reading(at="step_size")
+    grad_norm: bool = reading(at="grad_norm", split=True)
+    trace_norm: bool = reading(at="trace_norm", split=True)
+
+
+@dataclass(frozen=True)
+class Reports:
+    """Which readings to take, in the shape of what produces them."""
+
+    log_prob: bool = reading(at="forward.actor.log_prob")
+    entropy: bool = reading(at="forward.actor.entropy")
+    value: bool = reading(at="forward.critic.value")
+    next_value: bool = reading(at="forward.critic.next_value")
+    td_error: bool = reading(at="update.td_error")
+    actor: BlockReports = readings(of=BlockReports, at="update.actor")
+    critic: BlockReports = readings(of=BlockReports, at="update.critic")
 
 
 @struct.dataclass(frozen=True)
-class ForwardMetrics:
-    """What the two networks answered about this step."""
+class ActorForward:
+    """What the policy answered on the pass that chose."""
 
-    value: Any = None
-    next_value: Any = None
     log_prob: Any = None
     entropy: Any = None
 
 
 @struct.dataclass(frozen=True)
-class UpdateMetrics:
-    """What the update produced. Absent during evaluation, where none runs.
+class CriticForward:
+    """Both of the critic's readings, which is what a TD error is made of."""
 
-    Scalars and one step of trajectory only. The kernel runs under ``lax.scan``,
-    so whole parameter and trace trees returned from here would be stacked once
-    per step.
-    """
+    value: Any = None
+    next_value: Any = None
+
+
+@struct.dataclass(frozen=True)
+class ForwardMetrics:
+    """One field per head, so a declared name is a path through the components."""
+
+    actor: ActorForward = ActorForward()
+    critic: CriticForward = CriticForward()
+
+
+@struct.dataclass(frozen=True)
+class BlockUpdate:
+    """What one block's step cost, and how big what went into it was."""
+
+    step_size: Any = None
+    grad_norm: Any = None
+    trace_norm: Any = None
+
+
+@struct.dataclass(frozen=True)
+class UpdateMetrics:
+    """One field per block, plus the TD error, which neither role owns."""
 
     td_error: Any = None
-    actor_step_size: Any = None
-    critic_step_size: Any = None
-    actor_grad_norm: Any = None
-    critic_grad_norm: Any = None
-    actor_trace_norm: Any = None
-    critic_trace_norm: Any = None
+    actor: BlockUpdate = BlockUpdate()
+    critic: BlockUpdate = BlockUpdate()
 
 
-def _per_stream(direction, params, *streamed):
-    """Differentiate each stream's own direction, and only its own.
+@struct.dataclass(frozen=True)
+class StreamACState:
+    """Everything the kernel carries, one field per component that owns one."""
 
-    Streams share parameters but not activations, so a stream's direction cannot
-    depend on another's hidden state and the Jacobian of the whole batch is zero
-    everywhere but the diagonal. Asking for that Jacobian asks the compiler to
-    fill the zeros in too, at a cost that grows with the square of the streams;
-    one gradient per stream, taken together, costs what the diagonal costs.
+    step: Any
+    update_step: Any
+    timestep: Timestep
 
-    The stream axis is put back inside as a length of one so that every layer
-    still sees the batched shapes it was written for, which is also why the
-    arithmetic is unchanged and the comparisons against upstream still hold.
-    """
+    env_state: Any
+    scales: Scales
+    actor: NetworkState
+    critic: NetworkState
+
+
+# ---------------------------------------------------------- shapes and streams
+def _broadcast_env(values, leaf):
+    return values[(slice(None),) + (None,) * (leaf.ndim - 1)]
+
+
+def _where_done(done, fresh, carried):
+    """Take the fresh one for the streams that ended, the carried one for the rest."""
+
+    return jax.tree.map(
+        lambda new, old: jnp.where(_broadcast_env(done, old), new, old), fresh, carried
+    )
+
+
+def _per_stream(objective, params, *streamed):
+    """Differentiate each stream's own objective, and only its own."""
 
     def one(params, *stream):
         batched = jax.tree.map(lambda leaf: leaf[None], stream)
-        return direction(params, *batched)[0]
+        return objective(params, *batched)[0]
 
     return jax.vmap(jax.grad(one), in_axes=(None, *(0,) * len(streamed)))(
         params, *streamed
     )
 
 
+# ---------------------------------------------- the environment and its scales
+class Environment:
+    """Where every stream is, and nothing about how its numbers are read."""
+
+    def __init__(self, num_envs: int, env: Any, env_params: Any) -> None:
+        self.num_envs = num_envs
+        self.env = env
+        self.env_params = env_params
+
+    def blank_timestep(self, obs) -> Timestep:
+        """The step before the first one: an observation and nothing behind it."""
+
+        action_space = self.env.action_space(self.env_params)
+        return Timestep(
+            obs=obs,
+            action=jnp.zeros(
+                (self.num_envs, *action_space.shape), dtype=action_space.dtype
+            ),
+            reward=jnp.zeros((self.num_envs,), dtype=jnp.float32),
+            done=jnp.zeros((self.num_envs,), dtype=jnp.bool_),
+        )
+
+    def init(self, key: Any):
+        """Every stream opened."""
+
+        keys = jax.random.split(key, self.num_envs)
+        return jax.vmap(self.env.reset, in_axes=(0, None))(keys, self.env_params)
+
+    def reset(self, key, env_state, done):
+        """Begin again wherever an episode ended, at the top of the act."""
+
+        obs, opened = self.init(key)
+        return obs, _where_done(done, opened, env_state)
+
+    def step(self, key, env_state, action):
+        """One transition, before anything has been read through a scale."""
+
+        keys = jax.random.split(key, self.num_envs)
+        obs, env_state, reward, done, info = jax.vmap(
+            self.env.step, in_axes=(0, 0, 0, None)
+        )(keys, env_state, action, self.env_params)
+        return (
+            obs,
+            env_state,
+            jnp.asarray(reward, dtype=jnp.float32),
+            done,
+            terminal_of(info, done),
+            info,
+        )
+
+    def persisted(self, timestep: Timestep) -> Timestep:
+        """What the next step is handed back: an ending feeds nothing forward."""
+
+        broadcast_dims = tuple(range(timestep.done.ndim, timestep.action.ndim))
+        reward = jnp.asarray(timestep.reward, dtype=jnp.float32)
+        return timestep.replace(
+            action=jnp.where(
+                jnp.expand_dims(timestep.done, axis=broadcast_dims),
+                jnp.zeros_like(timestep.action),
+                timestep.action,
+            ),
+            reward=jnp.where(timestep.done, jnp.zeros_like(reward), reward),
+        )
+
+
+class Normalization:
+    """The layer between the environment's numbers and the agent's."""
+
+    def __init__(
+        self,
+        num_envs: int,
+        env: Any,
+        *,
+        observation: Any = None,
+        reward: Any = None,
+        evaluation: EvaluationConfig | None = None,
+    ) -> None:
+        evaluation = evaluation or EvaluationConfig()
+        self.num_envs = num_envs
+
+        def estimator(declared):
+            if declared is None:
+                return None
+            return make_normalizer(
+                replace(
+                    declared,
+                    reset_on_start=evaluation.reset_on_start,
+                    update_during_eval=evaluation.update_during_eval,
+                )
+            )
+
+        self.observation = estimator(observation)
+        self.reward = estimator(reward)
+        self.normalizing = bool(self.observation or self.reward)
+        self.resets_on_start = evaluation.reset_on_start
+        self.updates_during_eval = evaluation.update_during_eval
+        if self.normalizing and environment_owns_normalization(env):
+            raise ValueError(
+                "normalization owner conflict: wrapper and program normalization "
+                "are both enabled"
+            )
+
+    def init(self, obs, scales: Scales | None = None, *, update: bool = True):
+        """The estimators begun, on nothing or on what another run built."""
+
+        observation = None if scales is None else scales.observation
+        reward = None if scales is None else scales.reward
+        if self.observation is not None:
+            obs, observation = self.observation.begin(obs, observation, update=update)
+        if self.reward is not None and reward is None:
+            reward = self.reward.initial(jnp.zeros((self.num_envs,), dtype=jnp.float32))
+        return obs, Scales(observation=observation, reward=reward)
+
+    def reset(self, obs, scales: Scales, done, *, update: bool = True):
+        """The value an episode opens on, for the streams that opened one."""
+
+        observation = scales.observation
+        if self.observation is not None:
+            obs, observation = self.observation.begin(obs, observation, update=update)
+        return obs, scales.replace(
+            observation=_where_done(done, observation, scales.observation)
+        )
+
+    def apply(self, scales: Scales, obs, reward, done, *, update: bool = True):
+        """Both estimators advanced by one transition, or neither if none exists."""
+
+        observation = scales.observation
+        counted = scales.reward
+        if self.observation is not None:
+            obs, observation = self.observation.observe(
+                observation, obs, done=done, update=update
+            )
+        if self.reward is not None:
+            reward, counted = self.reward.observe(
+                counted, reward, done=done, update=update
+            )
+        return obs, reward, Scales(observation=observation, reward=counted)
+
+
+# ------------------------------------------------------- a block of parameters
+class Network:
+    """One block of parameters that nothing else owns."""
+
+    def __init__(
+        self,
+        cfg: StreamACConfig,
+        network: Any,
+        *,
+        bound,
+        base,
+        reports: BlockReports = BlockReports(),
+    ) -> None:
+        self.cfg = cfg
+        self.network = network
+        self.reports = reports
+        self.credit = make_credit(cfg.credit, network.core)
+        self.rule = make_bounded_rule(bound=bound, base=base)
+        self.trace_decay = cfg.gamma * cfg.trace_lambda
+
+    @property
+    def carry_shape(self):
+        return (self.cfg.num_envs, None)
+
+    def _input(self, obs, action, reward):
+        """The one vector a sequence sees."""
+
+        if not self.cfg.meta_rl:
+            return obs
+        return jnp.concatenate([obs, action, reward], axis=-1)
+
+    def apply(self, params, timestep, recurrence: Recurrence):
+        """One forward pass, handing back the advance rather than writing it."""
+
+        obs, done, action, reward = timestep
+        (carry, sensitivity), output = self.network.walk(
+            params,
+            self._input(obs, action, reward),
+            done=done,
+            carries=recurrence.carry,
+            sensitivity=recurrence.sensitivity,
+            credit=self.credit,
+        )
+        return Recurrence(carry=carry, sensitivity=sensitivity), output
+
+    def init(self, keys, timestep: Timestep) -> NetworkState:
+        """Fresh online state for this block."""
+
+        param_key, torso_key, dropout_key = keys
+        obs, done, action, reward = timestep
+        carry = self.network.initialize_carry(jax.random.key(0), self.carry_shape)
+        sensitivity = self.credit.initialize(param_key, self.carry_shape)
+        with self.credit.initialization():
+            params = self.network.init(
+                {"params": param_key, "torso": torso_key, "dropout": dropout_key},
+                self._input(obs, action, reward),
+                done=done,
+                initial_carry=carry,
+            )
+        traces = jax.tree.map(
+            lambda param: jnp.zeros((self.cfg.num_envs, *param.shape)), params
+        )
+        return NetworkState(
+            params=params,
+            rule=RuleState(
+                traces=traces,
+                v=self.rule.init(params=params, traces=traces),
+            ),
+            recurrence=Recurrence(carry=carry, sensitivity=sensitivity),
+        )
+
+    def reset(self, key, state: NetworkState) -> NetworkState:
+        """The same parameters with the recurrence begun again."""
+
+        return state.replace(
+            recurrence=Recurrence(
+                carry=self.network.initialize_carry(key, self.carry_shape),
+                sensitivity=self.credit.initialize(key, self.carry_shape),
+            )
+        )
+
+    def trace(self, incoming, gradient, *, reset_before):
+        """StreamAC's pre-forward reset, always-fresh trace recurrence."""
+
+        return jax.tree.map(
+            lambda old, grad: (
+                self.trace_decay * (1 - _broadcast_env(reset_before, old)) * old + grad
+            ),
+            incoming,
+            gradient,
+        )
+
+    def _norms(self, tree):
+        """One norm per position group, per stream."""
+
+        return subtree_norms(self.network.split(tree), streams=True)
+
+    def step(self, state: NetworkState, gradient, delta, *, reset_before, step):
+        """Trace the gradient, take the bounded step, and say what it did."""
+
+        traces = self.trace(state.rule.traces, gradient, reset_before=reset_before)
+        taken = self.rule.apply(
+            traces,
+            None,
+            state.rule.v,
+            delta=delta,
+            step=step,
+            params=state.params,
+        )
+        return state.replace(
+            params=jax.tree.map(
+                lambda param, update: param + update, state.params, taken.updates
+            ),
+            rule=RuleState(traces=traces, v=taken.state),
+        ), BlockUpdate(
+            step_size=(
+                taken.metrics.get("step_size") if self.reports.step_size else None
+            ),
+            grad_norm=self._norms(gradient) if self.reports.grad_norm else None,
+            trace_norm=self._norms(traces) if self.reports.trace_norm else None,
+        )
+
+
+# --------------------------------------------------------------- the two tasks
+class Actor:
+    """The policy. It chooses, and it names the scalar its block ascends."""
+
+    def __init__(
+        self, cfg: StreamACConfig, network: Any, reports: Reports = Reports()
+    ) -> None:
+        self.cfg = cfg
+        self.reports = reports
+        self.block = Network(
+            cfg,
+            network,
+            bound=cfg.actor_bound,
+            base=cfg.actor_base,
+            reports=reports.actor,
+        )
+
+    def init(self, keys, timestep: Timestep) -> NetworkState:
+        return self.block.init(keys, timestep)
+
+    def reset(self, key, state: NetworkState) -> NetworkState:
+        return self.block.reset(key, state)
+
+    def act(
+        self, key, state: NetworkState, timestep: Timestep, *, deterministic: bool
+    ) -> tuple[Recurrence, Any, ActorForward]:
+        """Run forward once and choose, touching nothing else."""
+
+        recurrence, (dist, _) = self.block.apply(
+            state.params, timestep.to_sequence(), state.recurrence
+        )
+        if deterministic:
+            action = (
+                jnp.argmax(dist.logits, axis=-1)
+                if hasattr(dist, "logits")
+                else dist.mode()
+            )
+            return recurrence, remove_time_axis(action), ActorForward()
+        action, log_prob = dist.sample_and_log_prob(seed=key)
+        return (
+            recurrence,
+            remove_time_axis(action),
+            ActorForward(
+                log_prob=(
+                    remove_time_axis(log_prob) if self.reports.log_prob else None
+                ),
+                entropy=(
+                    remove_time_axis(dist.entropy()) if self.reports.entropy else None
+                ),
+            ),
+        )
+
+    def objective(self, output, action, delta):
+        """What this head ascends: log pi(a) with entropy riding on it."""
+
+        dist, _ = output
+        return remove_time_axis(
+            dist.log_prob(add_time_axis(action))
+        ) + self.cfg.entropy_coefficient * jnp.sign(
+            jax.lax.stop_gradient(delta)
+        ) * remove_time_axis(
+            dist.entropy()
+        )
+
+    def gradient(self, state: NetworkState, timestep: Timestep, action, delta):
+        """This head's ascent, one stream at a time."""
+
+        def ascent(params, timestep, recurrence, action, delta):
+            _, output = self.block.apply(params, timestep, recurrence)
+            return self.objective(output, action, delta)
+
+        return _per_stream(
+            ascent,
+            state.params,
+            timestep.to_sequence(),
+            jax.lax.stop_gradient(state.recurrence),
+            action,
+            delta,
+        )
+
+    def update(
+        self,
+        state: NetworkState,
+        timestep: Timestep,
+        next_timestep: Timestep,
+        delta,
+        *,
+        reset_before,
+        step,
+    ) -> tuple[NetworkState, BlockUpdate]:
+        """One transition's worth of learning, from where the acting pass began."""
+
+        gradient = self.gradient(state, timestep, next_timestep.action, delta)
+        return self.block.step(
+            state, gradient, delta, reset_before=reset_before, step=step
+        )
+
+
+class Critic:
+    """The value. It reads, and it ascends its own reading."""
+
+    def __init__(
+        self, cfg: StreamACConfig, network: Any, reports: Reports = Reports()
+    ) -> None:
+        self.cfg = cfg
+        self.reports = reports
+        self.block = Network(
+            cfg,
+            network,
+            bound=cfg.critic_bound,
+            base=cfg.critic_base,
+            reports=reports.critic,
+        )
+
+    def init(self, keys, timestep: Timestep) -> NetworkState:
+        return self.block.init(keys, timestep)
+
+    def reset(self, key, state: NetworkState) -> NetworkState:
+        return self.block.reset(key, state)
+
+    def objective(self, output):
+        """What this head ascends: the value itself, with no error in it."""
+
+        value, _ = output
+        return remove_feature_axis(remove_time_axis(value))
+
+    def apply(
+        self, params, timestep: Timestep, recurrence: Recurrence
+    ) -> tuple[Recurrence, Any]:
+        """What a state is worth, and the recurrence that reading advanced."""
+
+        recurrence, output = self.block.apply(
+            params, timestep.to_sequence(), recurrence
+        )
+        return recurrence, self.objective(output)
+
+    def gradient(self, state: NetworkState, timestep: Timestep):
+        """This head's ascent, one stream at a time. See ``Actor.gradient``."""
+
+        def ascent(params, timestep, recurrence):
+            _, output = self.block.apply(params, timestep, recurrence)
+            return self.objective(output)
+
+        return _per_stream(
+            ascent,
+            state.params,
+            timestep.to_sequence(),
+            jax.lax.stop_gradient(state.recurrence),
+        )
+
+    def update(
+        self,
+        state: NetworkState,
+        timestep: Timestep,
+        delta,
+        *,
+        recurrence: Recurrence,
+        reset_before,
+        step,
+    ) -> tuple[NetworkState, BlockUpdate]:
+        """Learning, plus the recurrence the valuing pass advanced."""
+
+        gradient = self.gradient(state, timestep)
+        stepped, reading = self.block.step(
+            state, gradient, delta, reset_before=reset_before, step=step
+        )
+        return stepped.replace(recurrence=recurrence), reading
+
+
+# --------------------------------------------------------------- the algorithm
+class Core:
+    """A policy, a value function, and the one thing they are coupled by."""
+
+    def __init__(
+        self,
+        cfg: StreamACConfig,
+        actor_network: Any,
+        critic_network: Any,
+        reports: Reports = Reports(),
+    ) -> None:
+        self.cfg = cfg
+        self.reports = reports
+        self.actor = Actor(cfg, actor_network, reports)
+        self.critic = Critic(cfg, critic_network, reports)
+        self.td0 = make_td0()
+
+    def init(
+        self, actor_keys, critic_keys, timestep: Timestep
+    ) -> tuple[NetworkState, NetworkState]:
+        return (
+            self.actor.init(actor_keys, timestep),
+            self.critic.init(critic_keys, timestep),
+        )
+
+    def reset(
+        self, key, actor_state: NetworkState, critic_state: NetworkState
+    ) -> tuple[NetworkState, NetworkState]:
+        return (
+            self.actor.reset(key, actor_state),
+            self.critic.reset(key, critic_state),
+        )
+
+    def sample_action(
+        self,
+        key: Any,
+        timestep: Timestep,
+        actor_state: NetworkState,
+        deterministic: bool,
+    ) -> tuple[Recurrence, Any, ActorForward]:
+        return self.actor.act(key, actor_state, timestep, deterministic=deterministic)
+
+    def update_parameters(
+        self,
+        state: StreamACState,
+        next_timestep: Timestep,
+        *,
+        terminal: Any = None,
+    ) -> tuple[StreamACState, CriticForward, UpdateMetrics]:
+        """One transition's worth of learning for both roles, and what it read."""
+
+        actor = state.actor
+        critic = state.critic
+        reset_before = state.timestep.done
+        terminal = next_timestep.done if terminal is None else terminal
+        current_step = state.update_step + 1
+
+        recurrence, value = self.critic.apply(
+            critic.params, state.timestep, critic.recurrence
+        )
+        _, next_value = self.critic.apply(
+            jax.lax.stop_gradient(critic.params),
+            next_timestep,
+            jax.lax.stop_gradient(recurrence),
+        )
+        td_error = self.td0(
+            reward=next_timestep.reward,
+            value=value,
+            next_value=next_value,
+            terminal=terminal,
+            gamma=self.cfg.gamma,
+        )
+
+        actor_state, actor_reading = self.actor.update(
+            actor,
+            state.timestep,
+            next_timestep,
+            td_error,
+            reset_before=reset_before,
+            step=current_step,
+        )
+        critic_state, critic_reading = self.critic.update(
+            critic,
+            state.timestep,
+            td_error,
+            recurrence=recurrence,
+            reset_before=reset_before,
+            step=current_step,
+        )
+        return (
+            state.replace(
+                update_step=current_step, actor=actor_state, critic=critic_state
+            ),
+            CriticForward(
+                value=value if self.reports.value else None,
+                next_value=next_value if self.reports.next_value else None,
+            ),
+            UpdateMetrics(
+                td_error=td_error if self.reports.td_error else None,
+                actor=actor_reading,
+                critic=critic_reading,
+            ),
+        )
+
+
+# -------------------------------------------------------------------- the flow
 class StreamAC:
-    """An actor and a critic learning online from one transition at a time."""
+    """One-invocation train/evaluation flow around the three layers."""
 
     def __init__(
         self,
@@ -195,171 +753,22 @@ class StreamAC:
         reward_normalization: Any = None,
         evaluation: EvaluationConfig | None = None,
         record: Iterable[str] = (),
+        reports: Reports = Reports(),
     ) -> None:
-        evaluation = evaluation or EvaluationConfig()
         self.cfg = cfg
-        self.env = env
-        self.env_params = env_params
-        self.actor_network = actor_network
-        self.critic_network = critic_network
-        # Which of the optional per-step fields to fill. A caller names what its
-        # metrics need rather than switching a bundle on, so a field nobody
-        # reduces is never stacked and a field somebody does is never missing.
+        self.environment = Environment(cfg.num_envs, env, env_params)
+        self.normalization = Normalization(
+            cfg.num_envs,
+            env,
+            observation=observation_normalization,
+            reward=reward_normalization,
+            evaluation=evaluation,
+        )
+        self.core = Core(cfg, actor_network, critic_network, reports)
         self.record = frozenset(record)
 
-        # One estimator per stream, each knowing nothing about the other. The
-        # kernel names them because it is the thing that holds them.
-        def estimator(declared):
-            if declared is None:
-                return None
-            return make_normalizer(
-                replace(
-                    declared,
-                    reset_on_start=evaluation.reset_on_start,
-                    update_during_eval=evaluation.update_during_eval,
-                )
-            )
-
-        self.observation_normalizer = estimator(observation_normalization)
-        self.reward_normalizer = estimator(reward_normalization)
-        self.normalizing = bool(self.observation_normalizer or self.reward_normalizer)
-        self._resets_on_start = evaluation.reset_on_start
-        self._updates_during_eval = evaluation.update_during_eval
-        if self.normalizing and environment_owns_normalization(env):
-            raise ValueError(
-                "normalization owner conflict: wrapper and program normalization "
-                "are both enabled"
-            )
-
-        self.actor_credit = make_credit(cfg.credit, actor_network.core)
-        self.critic_credit = make_credit(cfg.credit, critic_network.core)
-        self.actor_rule = make_bounded_rule(bound=cfg.actor_bound, base=cfg.actor_base)
-        self.critic_rule = make_bounded_rule(
-            bound=cfg.critic_bound, base=cfg.critic_base
-        )
-        self.td0 = make_td0()
-        self.trace_decay = cfg.gamma * cfg.trace_lambda
-
-    def _input(self, obs, action, reward):
-        """The one vector a sequence sees.
-
-        Under ``meta_rl`` the previous action and reward are concatenated onto
-        the observation.
-        """
-
-        if not self.cfg.meta_rl:
-            return obs
-        return jnp.concatenate([obs, action, reward], axis=-1)
-
-    def _forward(self, network, credit, params, obs, action, reward, done, carry, s):
-        return network.walk(
-            params,
-            self._input(obs, action, reward),
-            done=done,
-            carries=carry,
-            sensitivity=s,
-            credit=credit,
-        )
-
-    def _actor_forward(self, params, obs, action, reward, done, carry, sensitivity):
-        return self._forward(
-            self.actor_network,
-            self.actor_credit,
-            params,
-            obs,
-            action,
-            reward,
-            done,
-            carry,
-            sensitivity,
-        )
-
-    def _critic_forward(self, params, obs, action, reward, done, carry, sensitivity):
-        return self._forward(
-            self.critic_network,
-            self.critic_credit,
-            params,
-            obs,
-            action,
-            reward,
-            done,
-            carry,
-            sensitivity,
-        )
-
-    def _trace(self, incoming, gradient, *, reset_before) -> TraceDirections:
-        """StreamAC's pre-forward reset, always-fresh trace recurrence."""
-
-        carried = jax.tree.map(
-            lambda old, grad: (
-                self.trace_decay * (1 - _broadcast_env(reset_before, old)) * old + grad
-            ),
-            incoming,
-            gradient,
-        )
-        return TraceDirections(carried=carried, update=carried)
-
-    def _objective(self, *, log_prob, value, entropy, delta) -> ObjectiveDirections:
-        """Route the actor and critic ascent directions.
-
-        Entropy rides on the actor objective rather than arriving separately,
-        signed by the TD error so it pushes toward exploration only where the
-        critic was surprised.
-        """
-
-        actor = (
-            log_prob
-            + self.cfg.entropy_coefficient
-            * jnp.sign(jax.lax.stop_gradient(delta))
-            * entropy
-        )
-        return ObjectiveDirections(
-            traced_by_domain={"actor": actor, "critic": value},
-            direct_by_domain={
-                "actor": jnp.zeros_like(actor),
-                "critic": jnp.zeros_like(value),
-            },
-            metrics={"entropy": entropy},
-        )
-
-    def _initialize_network(
-        self, network, credit, rule, keys, timestep
-    ) -> NetworkState:
-        carry_shape = (self.cfg.num_envs, None)
-        carry = network.initialize_carry(jax.random.key(0), carry_shape)
-        param_key, torso_key, dropout_key = keys
-        sensitivity = credit.initialize(param_key, carry_shape)
-        obs, done, action, reward = timestep
-        with credit.initialization():
-            params = network.init(
-                {"params": param_key, "torso": torso_key, "dropout": dropout_key},
-                self._input(obs, action, reward),
-                done=done,
-                initial_carry=carry,
-            )
-        traces = jax.tree.map(
-            lambda param: jnp.zeros((self.cfg.num_envs, *param.shape)),
-            params,
-        )
-        return NetworkState(
-            params=params,
-            traces=traces,
-            # Asked for rather than assumed: a bounded rule carries a second
-            # moment shaped like the traces, an unbounded one carries whatever
-            # its base transformation built.
-            v=rule.init(params=params, traces=traces),
-            carry=carry,
-            sensitivity=sensitivity,
-        )
-
-    def init(self, key) -> StreamACState:
-        # Seven keys in this order because that is how the published kernel
-        # spends its seed. Two implementations of the same algorithm can only be
-        # compared at one seed if the seed buys them the same starting point,
-        # and drawing three keys where the reference draws seven makes every
-        # such comparison a comparison of two different draws instead. Two of
-        # the seven feed rng streams our networks do not ask for; they are drawn
-        # anyway, because what matters is which key each stream receives.
+    def init(self, key: Any) -> StreamACState:
+        # The published kernel's seven, in its order; two go unused.
         (
             env_key,
             actor_key,
@@ -369,40 +778,11 @@ class StreamAC:
             critic_torso_key,
             critic_dropout_key,
         ) = jax.random.split(key, 7)
-        env_keys = jax.random.split(env_key, self.cfg.num_envs)
-        obs, env_state = jax.vmap(self.env.reset, in_axes=(0, None))(
-            env_keys,
-            self.env_params,
-        )
-        observation_statistics = reward_statistics = None
-        if self.observation_normalizer is not None:
-            obs, observation_statistics = self.observation_normalizer.begin(obs)
-        if self.reward_normalizer is not None:
-            reward_statistics = self.reward_normalizer.initial(
-                jnp.zeros((self.cfg.num_envs,), dtype=jnp.float32)
-            )
-        action_space = self.env.action_space(self.env_params)
-        action = jnp.zeros(
-            (self.cfg.num_envs, *action_space.shape),
-            dtype=action_space.dtype,
-        )
-        timestep = Timestep(
-            obs=obs,
-            action=action,
-            reward=jnp.zeros((self.cfg.num_envs,), dtype=jnp.float32),
-            done=jnp.zeros((self.cfg.num_envs,), dtype=jnp.bool_),
-        ).to_sequence()
-        actor = self._initialize_network(
-            self.actor_network,
-            self.actor_credit,
-            self.actor_rule,
+        obs, env_state = self.environment.init(env_key)
+        obs, scales = self.normalization.init(obs)
+        timestep = self.environment.blank_timestep(obs).to_sequence()
+        actor, critic = self.core.init(
             (actor_key, actor_torso_key, actor_dropout_key),
-            timestep,
-        )
-        critic = self._initialize_network(
-            self.critic_network,
-            self.critic_credit,
-            self.critic_rule,
             (critic_key, critic_torso_key, critic_dropout_key),
             timestep,
         )
@@ -411,121 +791,24 @@ class StreamAC:
             update_step=jnp.asarray(0, dtype=jnp.int32),
             timestep=timestep.from_sequence(),
             env_state=env_state,
-            actor_params=actor.params,
-            actor_traces=actor.traces,
-            actor_v=actor.v,
-            actor_carry=actor.carry,
-            actor_sensitivity=actor.sensitivity,
-            critic_params=critic.params,
-            critic_traces=critic.traces,
-            critic_v=critic.v,
-            critic_carry=critic.carry,
-            critic_sensitivity=critic.sensitivity,
-            observation_statistics=observation_statistics,
-            reward_statistics=reward_statistics,
+            scales=scales,
+            actor=actor,
+            critic=critic,
         )
 
-    def _actor_gradient(self, params, timestep, carry, sensitivity, action, delta):
-        """The actor's ascent direction differentiated, one stream at a time.
+    def _reset(self, key, state: StreamACState, *, update=True) -> StreamACState:
+        """Both components begun again for the streams that ended, in order."""
 
-        A method rather than a closure because this is where the credit setting
-        shows: everything else about an update is arithmetic on quantities, and
-        this is the one place a parameter's effect on the past enters or does
-        not. A test can hand it a state and compare.
-        """
-
-        obs, done, previous_action, reward = timestep.to_sequence()
-
-        def direction(
-            differentiated,
-            obs,
-            previous_action,
-            reward,
-            done,
-            carry,
-            sensitivity,
-            action,
-            delta,
-        ):
-            _, (dist, _) = self._actor_forward(
-                differentiated,
-                obs,
-                previous_action,
-                reward,
-                done,
-                carry,
-                sensitivity,
-            )
-            directions = self._objective(
-                log_prob=remove_time_axis(dist.log_prob(add_time_axis(action))),
-                value=jnp.zeros_like(delta),
-                entropy=remove_time_axis(dist.entropy()),
-                delta=delta,
-            )
-            return directions.traced_by_domain["actor"]
-
-        return _per_stream(
-            direction,
-            params,
-            obs,
-            previous_action,
-            reward,
-            done,
-            carry,
-            sensitivity,
-            action,
-            delta,
+        done = state.timestep.done
+        obs, env_state = self.environment.reset(key, state.env_state, done)
+        obs, scales = self.normalization.reset(obs, state.scales, done, update=update)
+        return state.replace(
+            timestep=state.timestep.replace(
+                obs=_where_done(done, obs, state.timestep.obs)
+            ),
+            env_state=env_state,
+            scales=scales,
         )
-
-    def _critic_gradient(self, params, timestep, carry, sensitivity, delta):
-        """The critic's ascent direction differentiated, one stream at a time."""
-
-        obs, done, previous_action, reward = timestep.to_sequence()
-
-        def direction(
-            differentiated,
-            obs,
-            previous_action,
-            reward,
-            done,
-            carry,
-            sensitivity,
-            delta,
-        ):
-            _, (value_raw, _) = self._critic_forward(
-                differentiated,
-                obs,
-                previous_action,
-                reward,
-                done,
-                carry,
-                sensitivity,
-            )
-            value = remove_feature_axis(remove_time_axis(value_raw))
-            directions = self._objective(
-                log_prob=jnp.zeros_like(value),
-                value=value,
-                entropy=jnp.zeros_like(value),
-                delta=delta,
-            )
-            return directions.traced_by_domain["critic"]
-
-        return _per_stream(
-            direction,
-            params,
-            obs,
-            previous_action,
-            reward,
-            done,
-            carry,
-            sensitivity,
-            delta,
-        )
-
-    def _readings(self, network, tree):
-        """One norm per position group, per stream."""
-
-        return subtree_norms(network.split(tree), streams=True)
 
     def _interaction(
         self,
@@ -539,12 +822,7 @@ class StreamAC:
         info,
         action_decision=None,
     ) -> InteractionMetrics:
-        """One transition, with the trajectory kept only if something reads it.
-
-        The two observations are a vector per stream per step and the only
-        expensive thing here, so they are behind the declaration; a name nobody
-        declared is never stacked.
-        """
+        """One transition, with the trajectory kept only if something reads it."""
 
         walked = "interaction.observation" in self.record
         return InteractionMetrics(
@@ -558,390 +836,136 @@ class StreamAC:
             info=info,
         )
 
-    def _restarted(self, key, state, *, update=True):
-        """Begin again wherever an episode ended, at the top of the act.
+    def train_step(
+        self, state: StreamACState, key: Any
+    ) -> tuple[StreamACState, StepMetrics]:
+        """Act once, then learn from what the acting produced."""
 
-        The environment hands back the state its episode ended in, because that
-        is what the bootstrap has to value; starting the next one is the act
-        phase's business and belongs here, on the same flag the carry and the
-        traces already read. The statistics take the observation the agent is
-        about to act on, one stream at a time, so the streams still running are
-        not counted twice.
-        """
+        reset_key, action_key, env_key = jax.random.split(key, 3)
+        state = self._reset(reset_key, state)
+        observation = state.timestep.obs
 
-        keys = jax.random.split(key, self.cfg.num_envs)
-        obs, env_state = jax.vmap(self.env.reset, in_axes=(0, None))(
-            keys, self.env_params
+        recurrence, action, actor_reading = self.core.sample_action(
+            action_key, state.timestep, state.actor, deterministic=False
         )
-        statistics = state.observation_statistics
-        if self.observation_normalizer is not None:
-            obs, statistics = self.observation_normalizer.begin(
-                obs, statistics, update=update
-            )
-        # The reward estimator is not begun: what it sees is an accumulation,
-        # and dropping that at an ending is ``reset_on_done``'s business.
-        done = state.timestep.done
-        return state.replace(
-            timestep=state.timestep.replace(
-                obs=_where_done(done, obs, state.timestep.obs)
-            ),
-            env_state=_where_done(done, env_state, state.env_state),
-            observation_statistics=_where_done(
-                done, statistics, state.observation_statistics
-            ),
+        obs, env_state, environment_reward, done, terminal, info = (
+            self.environment.step(env_key, state.env_state, action)
+        )
+        obs, reward, scales = self.normalization.apply(
+            state.scales, obs, environment_reward, done
+        )
+        next_timestep = Timestep(obs=obs, action=action, reward=reward, done=done)
+        updated, critic_reading, update_reading = self.core.update_parameters(
+            state, next_timestep, terminal=terminal
         )
 
-    def _step(self, state: Any, key):
-        restart_key, action_key, env_key = jax.random.split(key, 3)
-        state = self._restarted(restart_key, state)
-        obs_before = state.timestep.obs
-        obs, done, previous_action, reward = state.timestep.to_sequence()
-        reset_before = state.timestep.done
-        pre_actor_carry = jax.lax.stop_gradient(state.actor_carry)
-        pre_actor_sensitivity = jax.lax.stop_gradient(state.actor_sensitivity)
-        pre_critic_carry = jax.lax.stop_gradient(state.critic_carry)
-        pre_critic_sensitivity = jax.lax.stop_gradient(state.critic_sensitivity)
-
-        (actor_carry, actor_sensitivity), (dist, _) = self._actor_forward(
-            state.actor_params,
-            obs,
-            previous_action,
-            reward,
-            done,
-            state.actor_carry,
-            state.actor_sensitivity,
-        )
-        sampled_action, log_prob = dist.sample_and_log_prob(seed=action_key)
-        entropy = remove_time_axis(dist.entropy()).mean()
-        sampled_action = remove_time_axis(sampled_action)
-        log_prob = remove_time_axis(log_prob)
-
-        (critic_carry, critic_sensitivity), (value_raw, _) = self._critic_forward(
-            state.critic_params,
-            obs,
-            previous_action,
-            reward,
-            done,
-            state.critic_carry,
-            state.critic_sensitivity,
-        )
-        value = remove_feature_axis(remove_time_axis(value_raw))
-
-        step_keys = jax.random.split(env_key, self.cfg.num_envs)
-        next_obs, env_state, next_reward, next_done, info = jax.vmap(
-            self.env.step,
-            in_axes=(0, 0, 0, None),
-        )(step_keys, state.env_state, sampled_action, self.env_params)
-
-        environment_reward = jnp.asarray(next_reward, dtype=jnp.float32)
-
-        next_terminal = terminal_of(info, next_done)
-        observation_statistics = state.observation_statistics
-        reward_statistics = state.reward_statistics
-        if self.observation_normalizer is not None:
-            next_obs, observation_statistics = self.observation_normalizer.observe(
-                observation_statistics, next_obs, done=next_done
-            )
-        if self.reward_normalizer is not None:
-            next_reward, reward_statistics = self.reward_normalizer.observe(
-                reward_statistics, next_reward, done=next_done
-            )
-        next_obs_s, next_done_s, next_action_s, next_reward_s = Timestep(
-            obs=next_obs,
-            action=sampled_action,
-            reward=next_reward,
-            done=next_done,
-        ).to_sequence()
-
-        # The bootstrap runs the critic forward on the state the transition
-        # ended in -- which is the one the environment hands back, because it
-        # resets nothing -- under the parameters from before this step's update,
-        # and throws away the carry it produced. The next step repeats that
-        # forward pass from the same carry but with updated parameters, which is
-        # the pass whose recurrent state is kept.
-        (
-            _bootstrap_carry,
-            _bootstrap_sensitivity,
-        ), (next_value_raw, _) = self._critic_forward(
-            jax.lax.stop_gradient(state.critic_params),
-            next_obs_s,
-            next_action_s,
-            next_reward_s,
-            next_done_s,
-            jax.lax.stop_gradient(critic_carry),
-            jax.lax.stop_gradient(critic_sensitivity),
-        )
-        next_value = remove_feature_axis(remove_time_axis(next_value_raw))
-        td_error = self.td0(
-            reward=next_reward,
-            value=value,
-            next_value=next_value,
-            terminal=next_terminal,
-            gamma=self.cfg.gamma,
-        )
-
-        actor_grads = self._actor_gradient(
-            state.actor_params,
-            state.timestep,
-            pre_actor_carry,
-            pre_actor_sensitivity,
-            sampled_action,
-            td_error,
-        )
-        critic_grads = self._critic_gradient(
-            state.critic_params,
-            state.timestep,
-            pre_critic_carry,
-            pre_critic_sensitivity,
-            td_error,
-        )
-        actor_trace_result = self._trace(
-            state.actor_traces,
-            actor_grads,
-            reset_before=reset_before,
-        )
-        critic_trace_result = self._trace(
-            state.critic_traces,
-            critic_grads,
-            reset_before=reset_before,
-        )
-        actor_traces = actor_trace_result.carried
-        critic_traces = critic_trace_result.carried
-        current_step = state.update_step + 1
-        critic_step = self.critic_rule.apply(
-            critic_trace_result.update,
-            None,
-            state.critic_v,
-            delta=td_error,
-            step=current_step,
-            params=state.critic_params,
-        )
-        actor_step = self.actor_rule.apply(
-            actor_trace_result.update,
-            None,
-            state.actor_v,
-            delta=td_error,
-            step=current_step,
-            params=state.actor_params,
-        )
-        critic_v = critic_step.state
-        actor_v = actor_step.state
-        critic_params = jax.tree.map(
-            lambda param, update: param + update,
-            state.critic_params,
-            critic_step.updates,
-        )
-        actor_params = jax.tree.map(
-            lambda param, update: param + update,
-            state.actor_params,
-            actor_step.updates,
-        )
-
-        broadcast_dims = tuple(
-            range(state.timestep.done.ndim, state.timestep.action.ndim)
-        )
-        next_reward_f = jnp.asarray(next_reward, dtype=jnp.float32)
-        persisted_action = jnp.where(
-            jnp.expand_dims(next_done, axis=broadcast_dims),
-            jnp.zeros_like(sampled_action),
-            sampled_action,
-        )
-        persisted_reward = jnp.where(
-            next_done,
-            jnp.zeros_like(next_reward_f),
-            next_reward_f,
-        )
-        action_decision = ActionDecision(
-            sampled_action=sampled_action,
-            logprob_action=sampled_action,
-            env_action=sampled_action,
-            bootstrap_feedback_action=sampled_action,
-            persisted_feedback_action=persisted_action,
-        )
-        next_state = state.replace(
+        persisted = self.environment.persisted(next_timestep)
+        next_state = updated.replace(
             step=state.step + self.cfg.num_envs,
-            update_step=current_step,
-            timestep=Timestep(
-                obs=next_obs,
-                action=persisted_action,
-                reward=persisted_reward,
-                done=next_done,
-            ),
+            timestep=persisted,
             env_state=env_state,
-            actor_params=actor_params,
-            actor_traces=actor_traces,
-            actor_v=actor_v,
-            actor_carry=actor_carry,
-            actor_sensitivity=actor_sensitivity,
-            critic_params=critic_params,
-            critic_traces=critic_traces,
-            critic_v=critic_v,
-            critic_carry=critic_carry,
-            critic_sensitivity=critic_sensitivity,
-            observation_statistics=observation_statistics,
-            reward_statistics=reward_statistics,
+            scales=scales,
+            actor=updated.actor.replace(recurrence=recurrence),
         )
         return next_state, StepMetrics(
             interaction=self._interaction(
-                observation=obs_before,
-                next_observation=next_obs,
-                action=sampled_action,
-                action_decision=action_decision,
+                observation=observation,
+                next_observation=next_timestep.obs,
+                action=action,
+                action_decision=ActionDecision(
+                    sampled_action=action,
+                    logprob_action=action,
+                    env_action=action,
+                    bootstrap_feedback_action=action,
+                    persisted_feedback_action=persisted.action,
+                ),
                 reward=environment_reward,
-                done=next_done,
-                terminal=next_terminal,
+                done=next_timestep.done,
+                terminal=terminal,
                 info=info,
             ),
-            forward=ForwardMetrics(
-                value=value,
-                next_value=next_value,
-                log_prob=log_prob,
-                entropy=entropy,
-            ),
-            update=UpdateMetrics(
-                td_error=td_error,
-                actor_step_size=actor_step.metrics["step_size"],
-                critic_step_size=critic_step.metrics["step_size"],
-                actor_grad_norm=self._readings(self.actor_network, actor_grads),
-                critic_grad_norm=self._readings(self.critic_network, critic_grads),
-                actor_trace_norm=self._readings(self.actor_network, actor_traces),
-                critic_trace_norm=self._readings(self.critic_network, critic_traces),
-            ),
+            forward=ForwardMetrics(actor=actor_reading, critic=critic_reading),
+            update=update_reading,
         )
 
-    def train(self, key, state: Any, num_steps: int):
-        keys = jax.random.split(key, num_steps // self.cfg.num_envs)
-        return jax.lax.scan(self._step, state, keys)
+    def evaluate_step(
+        self, state: StreamACState, key: Any
+    ) -> tuple[StreamACState, StepMetrics]:
+        """The same interaction with the greedy action and no update at all."""
 
-    def _evaluate_step(self, current: Any, step_key):
-        restart_key, action_key, env_key = jax.random.split(step_key, 3)
-        del action_key
-        current = self._restarted(
-            restart_key, current, update=self._updates_during_eval
+        reset_key, action_key, env_key = jax.random.split(key, 3)
+        update = self.normalization.updates_during_eval
+        state = self._reset(reset_key, state, update=update)
+        observation = state.timestep.obs
+
+        recurrence, action, _ = self.core.sample_action(
+            action_key, state.timestep, state.actor, deterministic=True
         )
-        obs_s, done_s, action_s, reward_s = current.timestep.to_sequence()
-        (actor_carry, actor_sensitivity), (dist, _) = self._actor_forward(
-            current.actor_params,
-            obs_s,
-            action_s,
-            reward_s,
-            done_s,
-            current.actor_carry,
-            current.actor_sensitivity,
+        obs, env_state, environment_reward, done, terminal, info = (
+            self.environment.step(env_key, state.env_state, action)
         )
-        chosen = (
-            jnp.argmax(dist.logits, axis=-1) if hasattr(dist, "logits") else dist.mode()
+        obs, reward, scales = self.normalization.apply(
+            state.scales, obs, environment_reward, done, update=update
         )
-        chosen = remove_time_axis(chosen)
-        step_keys = jax.random.split(env_key, self.cfg.num_envs)
-        next_obs, next_env_state, next_reward, next_done, info = jax.vmap(
-            self.env.step, in_axes=(0, 0, 0, None)
-        )(step_keys, current.env_state, chosen, self.env_params)
-        observation_statistics = current.observation_statistics
-        reward_statistics = current.reward_statistics
-        # What the environment paid, kept before normalisation overwrites
-        # it. Episode returns and the score are read off the summary below,
-        # and those are statements about the task, not about the scale the
-        # agent happens to be learning on.
-        environment_reward = jnp.asarray(next_reward, dtype=jnp.float32)
-        if self.observation_normalizer is not None:
-            next_obs, observation_statistics = self.observation_normalizer.observe(
-                observation_statistics,
-                next_obs,
-                done=next_done,
-                update=self._updates_during_eval,
-            )
-        if self.reward_normalizer is not None:
-            next_reward, reward_statistics = self.reward_normalizer.observe(
-                reward_statistics,
-                next_reward,
-                done=next_done,
-                update=self._updates_during_eval,
-            )
-        broadcast_dims = tuple(
-            range(current.timestep.done.ndim, current.timestep.action.ndim)
-        )
-        next_reward = jnp.asarray(next_reward, dtype=jnp.float32)
-        return current.replace(
-            step=current.step + self.cfg.num_envs,
-            timestep=Timestep(
-                obs=next_obs,
-                action=jnp.where(
-                    jnp.expand_dims(next_done, axis=broadcast_dims),
-                    jnp.zeros_like(chosen),
-                    chosen,
-                ),
-                reward=jnp.where(next_done, jnp.zeros_like(next_reward), next_reward),
-                done=next_done,
-            ),
-            env_state=next_env_state,
-            actor_carry=actor_carry,
-            actor_sensitivity=actor_sensitivity,
-            observation_statistics=observation_statistics,
-            reward_statistics=reward_statistics,
+        next_timestep = Timestep(obs=obs, action=action, reward=reward, done=done)
+        return state.replace(
+            step=state.step + self.cfg.num_envs,
+            timestep=self.environment.persisted(next_timestep),
+            env_state=env_state,
+            scales=scales,
+            actor=state.actor.replace(recurrence=recurrence),
         ), StepMetrics(
             interaction=self._interaction(
-                observation=current.timestep.obs,
-                next_observation=next_obs,
-                action=chosen,
+                observation=observation,
+                next_observation=next_timestep.obs,
+                action=action,
                 reward=environment_reward,
-                done=next_done,
-                terminal=terminal_of(info, next_done),
+                done=next_timestep.done,
+                terminal=terminal,
                 info=info,
             ),
-            forward=ForwardMetrics(),
         )
 
-    def evaluate(self, key, state: Any, num_steps: int):
-        reset_key, eval_key = jax.random.split(key)
-        reset_keys = jax.random.split(reset_key, self.cfg.num_envs)
-        obs, env_state = jax.vmap(self.env.reset, in_axes=(0, None))(
-            reset_keys, self.env_params
+    @staticmethod
+    def _num_scan_steps(num_steps: int, num_envs: int) -> int:
+        """How many rounds of every stream a step budget buys."""
+
+        return num_steps // num_envs
+
+    def _evaluation_state(self, key: Any, state: StreamACState) -> StreamACState:
+        """The trained parameters, opened on a fresh environment and recurrence."""
+
+        obs, env_state = self.environment.init(key)
+        fresh = self.normalization.resets_on_start
+        obs, scales = self.normalization.init(
+            obs,
+            None if fresh else state.scales,
+            update=fresh or self.normalization.updates_during_eval,
         )
-        # A rollout either opens on statistics of its own or carries the ones
-        # training built; either way the observation it opens on goes through.
-        fresh = self._resets_on_start
-        observation_statistics = None if fresh else state.observation_statistics
-        reward_statistics = None if fresh else state.reward_statistics
-        if self.observation_normalizer is not None:
-            obs, observation_statistics = self.observation_normalizer.begin(
-                obs, observation_statistics, update=fresh or self._updates_during_eval
-            )
-        if self.reward_normalizer is not None and reward_statistics is None:
-            reward_statistics = self.reward_normalizer.initial(
-                jnp.zeros((self.cfg.num_envs,), dtype=jnp.float32)
-            )
-        action_space = self.env.action_space(self.env_params)
-        action = jnp.zeros(
-            (self.cfg.num_envs, *action_space.shape), dtype=action_space.dtype
-        )
-        timestep = Timestep(
-            obs=obs,
-            action=action,
-            reward=jnp.zeros((self.cfg.num_envs,), dtype=jnp.float32),
-            done=jnp.zeros((self.cfg.num_envs,), dtype=jnp.bool_),
-        )
-        carry_shape = (self.cfg.num_envs, None)
-        eval_state = state.replace(
-            timestep=timestep,
+        actor, critic = self.core.reset(jax.random.key(0), state.actor, state.critic)
+        return state.replace(
+            timestep=self.environment.blank_timestep(obs),
             env_state=env_state,
-            actor_carry=self.actor_network.initialize_carry(
-                jax.random.key(0), carry_shape
-            ),
-            critic_carry=self.critic_network.initialize_carry(
-                jax.random.key(0), carry_shape
-            ),
-            # Through the credit, not around it: a truncated credit carries no
-            # sensitivity at all, and asking the recurrence directly hands back a tree
-            # the evaluation step will not produce, which scan rejects.
-            actor_sensitivity=self.actor_credit.initialize(
-                jax.random.key(0), carry_shape
-            ),
-            critic_sensitivity=self.critic_credit.initialize(
-                jax.random.key(0), carry_shape
-            ),
-            observation_statistics=observation_statistics,
-            reward_statistics=reward_statistics,
+            scales=scales,
+            actor=actor,
+            critic=critic,
         )
-        step_keys = jax.random.split(eval_key, num_steps // self.cfg.num_envs)
-        return jax.lax.scan(self._evaluate_step, eval_state, step_keys)
+
+    def train(
+        self, key: Any, state: StreamACState, num_steps: int
+    ) -> tuple[StreamACState, StepMetrics]:
+        """Run one fixed-size online-training invocation."""
+
+        scan_steps = self._num_scan_steps(num_steps, self.cfg.num_envs)
+        keys = jax.random.split(key, scan_steps)
+        return jax.lax.scan(self.train_step, state, keys)
+
+    def evaluate(self, key: Any, state: StreamACState, num_steps: int) -> StepMetrics:
+        """A rollout that leaves nothing behind."""
+
+        reset_key, rollout_key = jax.random.split(key)
+        eval_state = self._evaluation_state(reset_key, state)
+        scan_steps = self._num_scan_steps(num_steps, self.cfg.num_envs)
+        keys = jax.random.split(rollout_key, scan_steps)
+        _, metrics = jax.lax.scan(self.evaluate_step, eval_state, keys)
+        return metrics

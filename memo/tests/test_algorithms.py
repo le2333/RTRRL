@@ -88,6 +88,12 @@ def stream_ac_program(
     return agent.init, agent.train, agent.evaluate
 
 
+def _readings(found):
+    """An evaluation's readings, whether or not it also handed back a state."""
+
+    return found[1] if isinstance(found, tuple) else found
+
+
 def finite(tree):
     return all(jnp.all(jnp.isfinite(leaf)) for leaf in jax.tree.leaves(tree))
 
@@ -151,7 +157,9 @@ def test_epoch_moves_parameters_and_stays_finite(build):
 def test_evaluation_runs_without_training(build):
     init, _, evaluate = build()
     state = jax.jit(init)(jax.random.key(0))
-    _, summary = jax.jit(evaluate, static_argnums=2)(jax.random.key(2), state, 4)
+    summary = _readings(
+        jax.jit(evaluate, static_argnums=2)(jax.random.key(2), state, 4)
+    )
 
     assert finite(summary)
     assert summary.interaction.info is not None
@@ -176,7 +184,9 @@ def test_evaluation_reports_the_reward_the_environment_gave():
     rewards = []
     for init, _, evaluate in (plain, normalized):
         state = jax.jit(init)(jax.random.key(0))
-        _, summary = jax.jit(evaluate, static_argnums=2)(jax.random.key(2), state, 8)
+        summary = _readings(
+            jax.jit(evaluate, static_argnums=2)(jax.random.key(2), state, 8)
+        )
         rewards.append(summary.interaction.reward)
 
     assert jnp.allclose(rewards[0], rewards[1])

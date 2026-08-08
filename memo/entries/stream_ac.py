@@ -12,7 +12,7 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Any
 
-from memorax.algorithms.stream_ac import StreamAC, StreamACConfig
+from memorax.algorithms.stream_ac import Reports, StreamAC, StreamACConfig
 from memorax.environments import make
 from memorax.networks import Readout, Sequence, backbone
 from memorax.networks.backbones import Mlp, Rtu
@@ -32,6 +32,7 @@ from memorax.parameters import (
     read_branch,
     structure,
 )
+from memorax.readings import taken
 from memorax.rl import CREDITS, declared_normalizer
 from memorax.rl.normalization import (
     DISCOUNTED_NORMALIZATION_BRANCHES,
@@ -98,21 +99,11 @@ PARAMETERS = describe_parameters(StreamACParameters)
 # backbone and METRICS is fixed at import.
 PARTS: tuple[str, ...] = PLACES
 
-# 需记录的字段
-TRAINING_METRICS: tuple[str, ...] = (
-    "update.td_error",
-    "update.actor_step_size",
-    "update.critic_step_size",
-    "forward.value",
-    "forward.log_prob",
-    "forward.entropy",
-    *(
-        f"update.{domain}_{reading}_norm.{part}"
-        for domain in ("actor", "critic")
-        for reading in ("grad", "trace")
-        for part in PARTS
-    ),
-)
+# 本入口取哪些读数。名字不再手写：kernel 按这份声明开门，而这里按同一份声明
+# 发布，所以 kernel 产不出的名字发布不出去。
+REPORTS = Reports()
+
+TRAINING_METRICS: tuple[str, ...] = taken(REPORTS, parts=PARTS)
 
 # 指标汇总
 METRICS: tuple[str, ...] = metric_names("train", TRAINING_METRICS) + metric_names(
@@ -220,6 +211,7 @@ def build(params: Mapping[str, Any], environment, training) -> StreamAC:
             discount=gamma,
         ),
         record=RECORD,
+        reports=REPORTS,
     )
 
 

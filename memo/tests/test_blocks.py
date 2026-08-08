@@ -49,7 +49,12 @@ import jax.numpy as jnp
 import pytest
 from conftest import TinyContinuousEnv, assert_within, deviations, flattened
 
-from memorax.algorithms.stream_ac import StreamAC, StreamACConfig
+from memorax.algorithms.stream_ac import (
+    NetworkState,
+    Recurrence,
+    StreamAC,
+    StreamACConfig,
+)
 from reference.upstream_stream_ac import (
     UpstreamStreamAC,
     UpstreamStreamACConfig,
@@ -231,23 +236,21 @@ def test_the_trace_recurrence_is_upstreams(seed, done, scale):
     reset_before = terminals(done, keys[2])
 
     mine, theirs = ours(), upstream()
-    assert mine.trace_decay == theirs.cfg.gamma * theirs.cfg.trace_lambda
+    block = mine.core.actor.block
+    assert block.trace_decay == theirs.cfg.gamma * theirs.cfg.trace_lambda
 
-    carried = mine._trace(incoming, gradient, reset_before=reset_before)
+    carried = block.trace(incoming, gradient, reset_before=reset_before)
     expected = jax.tree.map(
-        lambda z, g: theirs._update_trace(z, g, reset_before, mine.trace_decay),
+        lambda z, g: theirs._update_trace(z, g, reset_before, block.trace_decay),
         incoming,
         gradient,
     )
+    # StreamAC resets before it acts, so the trace it carries away and the one
+    # it steps with are one tree rather than two.
     assert_within(
-        flattened(carried.carried),
+        flattened(carried),
         flattened(expected),
         f"trace seed={seed} done={done} scale={scale}",
-    )
-    # StreamAC resets before it acts, so the trace it carries away and the one
-    # it steps with are the same object.
-    assert_within(
-        flattened(carried.update), flattened(expected), "trace used for the update"
     )
 
 
@@ -272,18 +275,36 @@ def test_the_actor_direction_is_upstreams(seed, surprise):
     }[surprise]
 
     mine, theirs = ours(), upstream()
-    directions = mine._objective(
-        log_prob=log_prob, value=value, entropy=entropy, delta=delta
-    )
+
+    class Answers:
+        """A distribution that answers with the numbers under test and nothing else.
+
+        The objective takes a distribution because a head owns one; what is
+        being compared is the arithmetic it wraps around the two readings.
+        """
+
+        def log_prob(self, action):
+            del action
+            return log_prob[:, None]
+
+        def entropy(self):
+            return entropy[:, None]
+
     assert_within(
-        {"actor": directions.traced_by_domain["actor"]},
+        {
+            "actor": mine.core.actor.objective(
+                (Answers(), {}), jnp.zeros((ENVS, 1), dtype=jnp.float32), delta
+            )
+        },
         {"actor": theirs._actor_direction(log_prob, entropy, delta)},
         f"actor direction seed={seed} td={surprise}",
     )
     # Upstream's critic objective is the value itself; ours has to route it
     # rather than recompute it, so it is exactly that value or it is wrong.
     assert_within(
-        {"critic": directions.traced_by_domain["critic"]}, {"critic": value}, "critic"
+        {"critic": mine.core.critic.objective((value[:, None, None], {}))},
+        {"critic": value},
+        "critic",
     )
 
 
@@ -541,19 +562,25 @@ def test_exact_credit_is_not_the_truncated_one():
     state, timestep, action, delta = transition(0, "live")
     exact, truncated = ours(), ours(credit="tbptt")
     shape = (ENVS, None)
-    empty = exact.actor_credit.initialize(jax.random.key(0), shape)
+    empty = exact.core.actor.block.credit.initialize(jax.random.key(0), shape)
     assert empty is not None, "exact credit stopped carrying a sensitivity"
     sensitivity = jax.tree.map(
         lambda leaf: jax.random.normal(jax.random.key(1), leaf.shape, leaf.dtype),
         empty,
     )
 
-    carried = exact._actor_gradient(
-        state.actor_params, timestep, state.actor_carry, sensitivity, action, delta
-    )
-    cut = truncated._actor_gradient(
-        state.actor_params, timestep, state.actor_carry, None, action, delta
-    )
+    def ascent(kernel, carrying):
+        held = NetworkState(
+            params=state.actor.params,
+            rule=None,
+            recurrence=Recurrence(
+                carry=state.actor.recurrence.carry, sensitivity=carrying
+            ),
+        )
+        return kernel.core.actor.gradient(held, timestep, action, delta)
+
+    carried = ascent(exact, sensitivity)
+    cut = ascent(truncated, None)
     assert deviations(flattened(carried), flattened(cut)), (
         "exact and truncated credit produced the same gradient from a "
         "sensitivity that was not zero, so one of them is not doing its job"
@@ -674,4 +701,4 @@ def test_two_roles_may_ask_for_different_bounds():
         actor_bound=ObBound(kappa=3.0),
         critic_bound=AdaptiveObBound(kappa=1.5, beta2=0.9, eps=1e-8),
     )
-    assert kernel.actor_rule is not kernel.critic_rule
+    assert kernel.core.actor.block.rule is not kernel.core.critic.block.rule

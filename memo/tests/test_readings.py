@@ -18,7 +18,7 @@ from test_rtrrl import ENVS, build
 from memorax.networks.sequence import PLACES
 from memorax.readings import declared, reading, readings, taken
 
-layered = importlib.import_module("memorax.algorithms.StreamAC")
+layered = importlib.import_module("memorax.algorithms.stream_ac")
 rtrrl = importlib.import_module("memorax.algorithms.rtrrl_aaai")
 
 

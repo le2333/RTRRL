@@ -19,7 +19,7 @@ from memorax.rl.credit import CREDITS
 def test_the_two_settings_do_not_build_the_same_state():
     key = jax.random.key(0)
     shapes = {
-        name: jax.tree.structure(ours(credit=name).init(key).actor_sensitivity)
+        name: jax.tree.structure(ours(credit=name).init(key).actor.recurrence.sensitivity)
         for name in CREDITS
     }
 
@@ -30,7 +30,7 @@ def test_the_two_settings_do_not_initialise_through_the_same_method():
     """Exact credit traces ``local_jacobian``; truncated credit traces the forward."""
 
     contexts = {
-        name: type(ours(credit=name).actor_credit.initialization()).__name__
+        name: type(ours(credit=name).core.actor.block.credit.initialization()).__name__
         for name in CREDITS
     }
 

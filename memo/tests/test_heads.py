@@ -152,5 +152,5 @@ def test_a_head_is_drawn_the_way_its_own_branch_says():
                 return leaf
         raise AssertionError("no head kernel found")
 
-    assert float((kernel(state.actor_params) == 0.0).mean()) > 0.5
-    assert float((kernel(state.critic_params) == 0.0).mean()) == 0.0
+    assert float((kernel(state.actor.params) == 0.0).mean()) > 0.5
+    assert float((kernel(state.critic.params) == 0.0).mean()) == 0.0

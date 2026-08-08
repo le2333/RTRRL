@@ -45,6 +45,21 @@ EPISODE_FIELDS: tuple[str, ...] = tuple(
 DEFAULT_REWARD = f"{TRANSITIONS}.reward"
 
 
+def _readings(evaluate):
+    """An evaluation's readings, whether or not it also hands back a state.
+
+    A kernel that returns none cannot have one carried into training; one that
+    still returns a state is not wrong, only older. Here rather than in
+    ``program_of`` because a program can also be built by hand.
+    """
+
+    def readings(*arguments):
+        found = evaluate(*arguments)
+        return found[1] if isinstance(found, tuple) else found
+
+    return readings
+
+
 def whole_epochs(*, total_steps: int, epoch_steps: int, num_envs: int) -> range:
     """The step count at each epoch boundary, refusing a budget that is ragged.
 
@@ -119,7 +134,7 @@ class Runtime:
         )
 
         train = jax.jit(self.program.train_epoch_fn, static_argnums=2)
-        evaluate = jax.jit(self.program.evaluate_fn, static_argnums=2)
+        evaluate = jax.jit(_readings(self.program.evaluate_fn), static_argnums=2)
 
         key = jax.random.key(self.seed)
         key, init_key = jax.random.split(key)
@@ -141,7 +156,7 @@ class Runtime:
             if not self.eval_steps:
                 continue
             key, eval_key = jax.random.split(key)
-            _, summary = evaluate(eval_key, state, self.eval_steps)
+            summary = evaluate(eval_key, state, self.eval_steps)
             numbers["eval"] = self._report(
                 reporter,
                 summary,
