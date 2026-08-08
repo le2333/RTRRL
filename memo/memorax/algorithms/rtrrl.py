@@ -294,52 +294,116 @@ class RTRRLState:
     reward_statistics: Any = None
 
 
-@struct.dataclass
-class ForwardMetrics:
-    """What the shared torso and its two heads answered, and how they stand."""
+# @struct.dataclass
+# class ForwardMetrics:
+#     """What the shared torso and its two heads answered, and how they stand."""
 
-    value: Any = None
-    next_value: Any = None
-    log_prob: Any = None
-    entropy: Any = None
-    diag_lambda_max: Any = None
-    diag_gamma_max: Any = None
-    diag_carry_norm: Any = None
-    diag_p_torso: Any = None
-    diag_p_actor: Any = None
-    diag_p_critic: Any = None
-    diag_value_abs: Any = None
-    diag_actor_loc_abs: Any = None
-    diag_actor_scale: Any = None
-    diag_act_abs: Any = None
+#     value: Any = None
+#     next_value: Any = None
+#     log_prob: Any = None
+#     entropy: Any = None
+#     diag_lambda_max: Any = None
+#     diag_gamma_max: Any = None
+#     diag_carry_norm: Any = None
+#     diag_p_torso: Any = None
+#     diag_p_actor: Any = None
+#     diag_p_critic: Any = None
+#     diag_value_abs: Any = None
+#     diag_actor_loc_abs: Any = None
+#     diag_actor_scale: Any = None
+#     diag_act_abs: Any = None
 
 
-@struct.dataclass
-class UpdateMetrics:
-    """What the update produced. Absent during evaluation, where none runs.
+# @struct.dataclass
+# class UpdateMetrics:
+    # """What the update produced. Absent during evaluation, where none runs.
 
-    Everything here is a scalar or one step of trajectory. The kernel runs under
-    ``lax.scan``, so anything returned is stacked once per step; whole parameter,
-    trace, and optimiser trees used to be returned alongside these and cost
-    memory proportional to epoch length times model size.
-    """
+    # Everything here is a scalar or one step of trajectory. The kernel runs under
+    # ``lax.scan``, so anything returned is stacked once per step; whole parameter,
+    # trace, and optimiser trees used to be returned alongside these and cost
+    # memory proportional to epoch length times model size.
+    # """
 
-    td_error: Any = None
-    emphasis: Any = None
-    step_size: Any = None
-    diag_sens_norm: Any = None
-    diag_z_rnn: Any = None
-    diag_z_actor: Any = None
-    diag_z_critic: Any = None
-    diag_grad_rnn: Any = None
-    diag_grad_actor: Any = None
-    diag_grad_critic: Any = None
-    diag_grad_actor_rnn: Any = None
-    diag_grad_critic_rnn: Any = None
-    diag_grad_cosine: Any = None
-    diag_upd_rnn: Any = None
-    diag_td_abs: Any = None
+    # td_error: Any = None
+    # emphasis: Any = None
+    # step_size: Any = None
+    # diag_sens_norm: Any = None
+    # diag_z_rnn: Any = None
+    # diag_z_actor: Any = None
+    # diag_z_critic: Any = None
+    # diag_grad_rnn: Any = None
+    # diag_grad_actor: Any = None
+    # diag_grad_critic: Any = None
+    # diag_grad_actor_rnn: Any = None
+    # diag_grad_critic_rnn: Any = None
+    # diag_grad_cosine: Any = None
+    # diag_upd_rnn: Any = None
+    # diag_td_abs: Any = None
 
+
+class Backbone:
+
+    def __init__(self,cfg: RTRRLConfig):
+        pass
+
+    def apply(self,params: Any,obs: Any,action: Any,reward: Any,done: Any):
+        pass
+
+    def reset(self,key: Any):
+        pass
+
+    def step(self,params: Any,obs: Any,action: Any,reward: Any,done: Any):
+        pass
+
+    def update(self,params: Any,obs: Any,action: Any,reward: Any,done: Any):
+        pass
+
+class Actor:
+    def __init__(self,cfg: RTRRLConfig):
+        pass
+
+    def apply(self,params: Any,obs: Any,action: Any,reward: Any,done: Any):
+        pass
+
+    def reset(self,key: Any):
+        pass
+
+    def step(self,params: Any,obs: Any,action: Any,reward: Any,done: Any):
+        pass
+
+    def update(self,params: Any,obs: Any,action: Any,reward: Any,done: Any):
+        pass
+
+
+class Critic:
+    def __init__(self,cfg: RTRRLConfig):
+        pass
+
+    def apply(self,params: Any,obs: Any,action: Any,reward: Any,done: Any):
+        pass
+
+    def reset(self,key: Any):
+        pass
+
+    def step(self,params: Any,obs: Any,action: Any,reward: Any,done: Any):
+        pass
+
+    def update(self,params: Any,obs: Any,action: Any,reward: Any,done: Any):
+        pass
+
+class RTRRLCore:
+    def __init__(self,cfg: RTRRLConfig):
+        pass
+
+    def sample_action(self,params: Any,obs: Any):
+        pass
+
+    def update_parameters(self,params: Any,obs: Any,action: Any,reward: Any,done: Any):
+        pass
+
+    def reset(self,key: Any):
+        pass
+    
 
 class RTRRL:
     """An actor and a critic sharing one torso credited by exact RTRL."""

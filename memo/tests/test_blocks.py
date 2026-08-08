@@ -50,7 +50,7 @@ import pytest
 from conftest import TinyContinuousEnv, assert_within, deviations, flattened
 
 from memorax.algorithms.stream_ac import StreamAC, StreamACConfig
-from memorax.algorithms.upstream_stream_ac import (
+from reference.upstream_stream_ac import (
     UpstreamStreamAC,
     UpstreamStreamACConfig,
 )

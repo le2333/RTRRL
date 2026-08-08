@@ -43,6 +43,12 @@ import jax
 import jax.numpy as jnp
 from flax import core, struct
 
+from memorax.algorithms.contract import (
+    ActionDecision,
+    InteractionMetrics,
+    StepMetrics,
+    terminal_of,
+)
 from memorax.utils import Timestep
 from memorax.utils.axes import (
     add_time_axis,
@@ -50,8 +56,6 @@ from memorax.utils.axes import (
     remove_time_axis,
 )
 from memorax.utils.typing import Array, Discrete, EnvState, Key, PyTree
-
-from .contract import ActionDecision, InteractionMetrics, StepMetrics, terminal_of
 
 
 @struct.dataclass(frozen=True)
