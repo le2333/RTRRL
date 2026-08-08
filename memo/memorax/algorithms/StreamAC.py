@@ -20,6 +20,7 @@ import jax
 import jax.numpy as jnp
 from flax import struct
 
+from memorax.readings import reading, readings
 from memorax.rl import (
     environment_owns_normalization,
     make_bounded_rule,
@@ -101,22 +102,22 @@ class Scales:
 class BlockReports:
     """Which of a block's readings to take."""
 
-    step_size: bool = True
-    grad_norm: bool = True
-    trace_norm: bool = True
+    step_size: bool = reading(at="step_size")
+    grad_norm: bool = reading(at="grad_norm", split=True)
+    trace_norm: bool = reading(at="trace_norm", split=True)
 
 
 @dataclass(frozen=True)
 class Reports:
     """Which readings to take, in the shape of what produces them."""
 
-    log_prob: bool = True
-    entropy: bool = True
-    value: bool = True
-    next_value: bool = True
-    td_error: bool = True
-    actor: BlockReports = BlockReports()
-    critic: BlockReports = BlockReports()
+    log_prob: bool = reading(at="forward.actor.log_prob")
+    entropy: bool = reading(at="forward.actor.entropy")
+    value: bool = reading(at="forward.critic.value")
+    next_value: bool = reading(at="forward.critic.next_value")
+    td_error: bool = reading(at="update.td_error")
+    actor: BlockReports = readings(of=BlockReports, at="update.actor")
+    critic: BlockReports = readings(of=BlockReports, at="update.critic")
 
 
 @struct.dataclass(frozen=True)

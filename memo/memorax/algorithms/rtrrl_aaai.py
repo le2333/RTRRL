@@ -26,6 +26,7 @@ import jax.numpy as jnp
 import optax
 from flax import struct
 
+from memorax.readings import reading, readings
 from memorax.rl import (
     environment_owns_normalization,
     make_exact_rtrl_credit,
@@ -132,15 +133,15 @@ class Scales:
 class BlockReports:
     """Which of one block's readings to take."""
 
-    grad_norm: bool = True
-    trace_norm: bool = True
+    grad_norm: bool = reading(at="grad_norm", split=True)
+    trace_norm: bool = reading(at="trace_norm", split=True)
 
 
 @dataclass(frozen=True)
 class GroupReports:
     """Which of one rule group's readings to take."""
 
-    step_size: bool = True
+    step_size: bool = reading(at="step_size")
 
 
 @dataclass(frozen=True)
@@ -150,16 +151,16 @@ class Reports:
     Two levels, because three blocks step in two groups.
     """
 
-    log_prob: bool = True
-    entropy: bool = True
-    value: bool = True
-    td_error: bool = True
-    emphasis: bool = True
-    torso: BlockReports = BlockReports()
-    actor: BlockReports = BlockReports()
-    critic: BlockReports = BlockReports()
-    torso_step: GroupReports = GroupReports()
-    heads_step: GroupReports = GroupReports()
+    log_prob: bool = reading(at="forward.actor.log_prob")
+    entropy: bool = reading(at="forward.actor.entropy")
+    value: bool = reading(at="forward.critic.value")
+    td_error: bool = reading(at="update.td_error")
+    emphasis: bool = reading(at="update.emphasis")
+    torso: BlockReports = readings(of=BlockReports, at="update.torso")
+    actor: BlockReports = readings(of=BlockReports, at="update.actor")
+    critic: BlockReports = readings(of=BlockReports, at="update.critic")
+    torso_step: GroupReports = readings(of=GroupReports, at="update.torso_step")
+    heads_step: GroupReports = readings(of=GroupReports, at="update.heads_step")
 
 
 @struct.dataclass(frozen=True)

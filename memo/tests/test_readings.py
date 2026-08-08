@@ -1,0 +1,101 @@
+"""A declaration and what a kernel produces, checked against each other.
+
+Every name published for a run has to be one the run emits, and every reading
+emitted has to be one that was declared. Neither direction held before: the
+driver drops a series it cannot find without saying so, and the shipped entry
+declared eighteen readings against a kernel that emitted none.
+"""
+
+from __future__ import annotations
+
+import importlib
+
+import jax
+import pytest
+from conftest import flattened
+from test_rtrrl import ENVS, build
+
+from memorax.networks.sequence import PLACES
+from memorax.readings import declared, reading, readings, taken
+
+layered = importlib.import_module("memorax.algorithms.StreamAC")
+rtrrl = importlib.import_module("memorax.algorithms.rtrrl_aaai")
+
+
+def emitted(metrics) -> set[str]:
+    """Every path a step's readings actually carry, minus the transition."""
+
+    found = flattened({"forward": metrics.forward, "update": metrics.update})
+    return {name.lstrip(".").replace("/.", ".").replace("/", ".") for name in found}
+
+
+def test_a_declaration_names_what_it_can_offer():
+    assert declared(layered.Reports)[:2] == (
+        "forward.actor.log_prob",
+        "forward.actor.entropy",
+    )
+    assert "update.actor.step_size" in declared(layered.Reports)
+    # RTRRL steps in groups, so no block offers a step size and two groups do.
+    assert "update.actor.step_size" not in declared(rtrrl.Reports)
+    assert "update.heads_step.step_size" in declared(rtrrl.Reports)
+
+
+def test_a_split_reading_becomes_one_name_per_part():
+    plain = taken(layered.Reports())
+    split = taken(layered.Reports(), parts=PLACES)
+    assert len(split) == len(plain) + 2 * 2 * (len(PLACES) - 1)
+    assert "update.actor.grad_norm.recurrence" in split
+
+
+def test_taking_less_publishes_less():
+    everything = set(taken(rtrrl.Reports()))
+    less = set(
+        taken(rtrrl.Reports(entropy=False, torso=rtrrl.BlockReports(False, False)))
+    )
+    assert less < everything
+    assert "forward.actor.entropy" in everything - less
+    assert "update.torso.grad_norm" in everything - less
+
+
+def test_what_rtrrl_declares_is_what_rtrrl_emits():
+    """Both directions: nothing published that is absent, nothing absent that is published."""
+
+    agent = build()
+    state = agent.init(jax.random.key(0))
+    _, metrics = agent.train(jax.random.key(1), state, 2 * ENVS)
+
+    published = set(taken(rtrrl.Reports(), parts=("before", "recurrence", "readout")))
+    produced = emitted(metrics)
+    # A split reading's parts come from the networks, so compare the stems.
+    stems = {name.rsplit(".", 1)[0] if "_norm." in name else name for name in produced}
+    for name in published:
+        stem = name.rsplit(".", 1)[0] if "_norm." in name else name
+        assert stem in stems, f"{name} is published and not produced"
+
+
+def test_a_field_that_is_not_declared_is_refused():
+    """The declaration is the only way in, so a plain field cannot slip through."""
+
+    from dataclasses import dataclass
+
+    @dataclass(frozen=True)
+    class Sloppy:
+        good: bool = reading(at="update.good")
+        bad: bool = True
+
+    with pytest.raises(ValueError, match="not declared with"):
+        taken(Sloppy())
+
+
+def test_a_nested_declaration_hangs_off_one_path():
+    from dataclasses import dataclass
+
+    @dataclass(frozen=True)
+    class Inner:
+        one: bool = reading(at="one")
+
+    @dataclass(frozen=True)
+    class Outer:
+        inner: Inner = readings(of=Inner, at="update.block")
+
+    assert taken(Outer()) == ("update.block.one",)
