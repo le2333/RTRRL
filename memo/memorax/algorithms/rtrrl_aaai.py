@@ -128,6 +128,40 @@ class Scales:
 
 
 # -------------------------------------------------------------------- readings
+@dataclass(frozen=True)
+class BlockReports:
+    """Which of one block's readings to take."""
+
+    grad_norm: bool = True
+    trace_norm: bool = True
+
+
+@dataclass(frozen=True)
+class GroupReports:
+    """Which of one rule group's readings to take."""
+
+    step_size: bool = True
+
+
+@dataclass(frozen=True)
+class Reports:
+    """Which readings to take, in the shape of what produces them.
+
+    Two levels, because three blocks step in two groups.
+    """
+
+    log_prob: bool = True
+    entropy: bool = True
+    value: bool = True
+    td_error: bool = True
+    emphasis: bool = True
+    torso: BlockReports = BlockReports()
+    actor: BlockReports = BlockReports()
+    critic: BlockReports = BlockReports()
+    torso_step: GroupReports = GroupReports()
+    heads_step: GroupReports = GroupReports()
+
+
 @struct.dataclass(frozen=True)
 class ActorForward:
     """What the policy answered on the pass that chose."""
@@ -387,12 +421,19 @@ class Network:
     """One block of parameters that nothing else owns."""
 
     def __init__(
-        self, module: Any, *, num_envs: int, decay: float, credit=None
+        self,
+        module: Any,
+        *,
+        num_envs: int,
+        decay: float,
+        credit=None,
+        reports: BlockReports = BlockReports(),
     ) -> None:
         self.module = module
         self.num_envs = num_envs
         self.decay = decay
         self.credit = credit
+        self.reports = reports
 
     def apply(self, params, x, *, done, action=None, reward=None, recurrence=None):
         if self.credit is None:
@@ -444,14 +485,18 @@ class Network:
 class Torso:
     """The one block both heads read, and the only one credited by RTRL."""
 
-    def __init__(self, cfg: RTRRLConfig, network: Any) -> None:
+    def __init__(
+        self, cfg: RTRRLConfig, network: Any, reports: Reports = Reports()
+    ) -> None:
         self.cfg = cfg
+        self.reports = reports
         self.network = network
         self.block = Network(
             network,
             num_envs=cfg.num_envs,
             decay=cfg.gamma * cfg.lambda_rnn,
             credit=make_exact_rtrl_credit(network.core),
+            reports=reports.torso,
         )
 
     @property
@@ -526,10 +571,16 @@ class Torso:
 class Actor:
     """The policy. It chooses, and it names the two directions it ascends."""
 
-    def __init__(self, cfg: RTRRLConfig, head: Any) -> None:
+    def __init__(
+        self, cfg: RTRRLConfig, head: Any, reports: Reports = Reports()
+    ) -> None:
         self.cfg = cfg
+        self.reports = reports
         self.block = Network(
-            head, num_envs=cfg.num_envs, decay=cfg.gamma * cfg.lambda_pi
+            head,
+            num_envs=cfg.num_envs,
+            decay=cfg.gamma * cfg.lambda_pi,
+            reports=reports.actor,
         )
 
     def init(self, key, hidden, timestep: Timestep) -> BlockState:
@@ -562,10 +613,16 @@ class Actor:
 class Critic:
     """The value. It reads, and it ascends its own reading."""
 
-    def __init__(self, cfg: RTRRLConfig, head: Any) -> None:
+    def __init__(
+        self, cfg: RTRRLConfig, head: Any, reports: Reports = Reports()
+    ) -> None:
         self.cfg = cfg
+        self.reports = reports
         self.block = Network(
-            head, num_envs=cfg.num_envs, decay=cfg.gamma * cfg.lambda_v
+            head,
+            num_envs=cfg.num_envs,
+            decay=cfg.gamma * cfg.lambda_v,
+            reports=reports.critic,
         )
 
     def init(self, key, hidden, timestep: Timestep) -> BlockState:
@@ -598,11 +655,13 @@ class Core:
         torso_network: Any,
         actor_head: Any,
         critic_head: Any,
+        reports: Reports = Reports(),
     ) -> None:
         self.cfg = cfg
-        self.torso = Torso(cfg, torso_network)
-        self.actor = Actor(cfg, actor_head)
-        self.critic = Critic(cfg, critic_head)
+        self.reports = reports
+        self.torso = Torso(cfg, torso_network, reports)
+        self.actor = Actor(cfg, actor_head, reports)
+        self.critic = Critic(cfg, critic_head, reports)
         self.td0 = make_td0()
         self.rules = make_rules(cfg)
         self.group_of = {
@@ -712,8 +771,14 @@ class Core:
                 },
                 {"torso": torso_direct, "actor": actor_direct},
                 ActorForward(
-                    log_prob=remove_time_axis(log_prob)[0],
-                    entropy=remove_time_axis(dist.entropy())[0],
+                    log_prob=(
+                        remove_time_axis(log_prob)[0] if self.reports.log_prob else None
+                    ),
+                    entropy=(
+                        remove_time_axis(dist.entropy())[0]
+                        if self.reports.entropy
+                        else None
+                    ),
                 ),
             )
 
@@ -822,29 +887,64 @@ class Core:
                 emphasis=emphasis,
             ),
             action,
-            ForwardMetrics(actor=actor_reading, critic=CriticForward(value=value)),
+            ForwardMetrics(
+                actor=actor_reading,
+                critic=CriticForward(value=value if self.reports.value else None),
+            ),
             UpdateMetrics(
-                td_error=delta,
-                emphasis=emphasis,
+                td_error=delta if self.reports.td_error else None,
+                emphasis=emphasis if self.reports.emphasis else None,
                 torso=BlockUpdate(
-                    grad_norm=self.torso.block._norms(traced["torso"]),
-                    trace_norm=self.torso.block._norms(advanced["torso"]),
+                    grad_norm=(
+                        self.torso.block._norms(traced["torso"])
+                        if self.reports.torso.grad_norm
+                        else None
+                    ),
+                    trace_norm=(
+                        self.torso.block._norms(advanced["torso"])
+                        if self.reports.torso.trace_norm
+                        else None
+                    ),
                 ),
                 actor=BlockUpdate(
-                    grad_norm=self.actor.block._norms(traced["actor"]),
-                    trace_norm=self.actor.block._norms(advanced["actor"]),
+                    grad_norm=(
+                        self.actor.block._norms(traced["actor"])
+                        if self.reports.actor.grad_norm
+                        else None
+                    ),
+                    trace_norm=(
+                        self.actor.block._norms(advanced["actor"])
+                        if self.reports.actor.trace_norm
+                        else None
+                    ),
                 ),
                 critic=BlockUpdate(
-                    grad_norm=self.critic.block._norms(traced["critic"]),
-                    trace_norm=self.critic.block._norms(advanced["critic"]),
+                    grad_norm=(
+                        self.critic.block._norms(traced["critic"])
+                        if self.reports.critic.grad_norm
+                        else None
+                    ),
+                    trace_norm=(
+                        self.critic.block._norms(advanced["critic"])
+                        if self.reports.critic.trace_norm
+                        else None
+                    ),
                 ),
                 # Per group, not per block. The two readouts took one step
                 # between them, so there is one step size for the pair.
                 torso_step=GroupUpdate(
-                    step_size=taken[TORSO_GROUP].metrics.get("step_size")
+                    step_size=(
+                        taken[TORSO_GROUP].metrics.get("step_size")
+                        if self.reports.torso_step.step_size
+                        else None
+                    )
                 ),
                 heads_step=GroupUpdate(
-                    step_size=taken[HEAD_GROUP].metrics.get("step_size")
+                    step_size=(
+                        taken[HEAD_GROUP].metrics.get("step_size")
+                        if self.reports.heads_step.step_size
+                        else None
+                    )
                 ),
             ),
         )
@@ -867,6 +967,7 @@ class RTRRL:
         reward_normalization: Any = None,
         evaluation: EvaluationConfig | None = None,
         record: Iterable[str] = (),
+        reports: Reports = Reports(),
     ) -> None:
         self.cfg = cfg
         self.environment = Environment(cfg.num_envs, env, env_params)
@@ -877,7 +978,7 @@ class RTRRL:
             reward=reward_normalization,
             evaluation=evaluation,
         )
-        self.core = Core(cfg, torso_network, actor_head, critic_head)
+        self.core = Core(cfg, torso_network, actor_head, critic_head, reports)
         self.record = frozenset(record)
 
     def init(self, key: Any) -> RTRRLState:

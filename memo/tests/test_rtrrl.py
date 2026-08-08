@@ -20,6 +20,7 @@ import jax.numpy as jnp
 import pytest
 from conftest import TinyContinuousEnv
 
+from memorax.algorithms import rtrrl_aaai as rtrrl
 from memorax.algorithms.rtrrl_aaai import RTRRL, RTRRLConfig
 from memorax.networks import heads
 from memorax.networks.components import FFN, LayerNorm, Tanh
@@ -32,7 +33,7 @@ HIDDEN = 2
 CELL = "components_3"
 
 
-def build(head: str = "state_std", **overrides) -> RTRRL:
+def build(head: str = "state_std", reports=None, **overrides) -> RTRRL:
     """The kernel, on the smallest sequence that still has a recurrence in it."""
 
     env = TinyContinuousEnv()
@@ -77,6 +78,7 @@ def build(head: str = "state_std", **overrides) -> RTRRL:
         torso,
         actor,
         heads.VNetwork(),
+        reports=rtrrl.Reports() if reports is None else reports,
     )
 
 
@@ -349,3 +351,60 @@ def test_meta_rl_widens_the_first_layer_and_nothing_else():
 
     action_dim = 2
     assert fan_in(build(meta_rl=True)) == fan_in(build(meta_rl=False)) + action_dim + 1
+
+
+# --------------------------------------------------------- what a run declares
+
+
+def test_a_reading_nobody_declared_is_absent():
+    """Absent, not zero: an empty pytree is what a scan stacks nothing for."""
+
+    agent = build(
+        reports=rtrrl.Reports(
+            log_prob=False,
+            emphasis=False,
+            torso=rtrrl.BlockReports(grad_norm=False, trace_norm=True),
+            heads_step=rtrrl.GroupReports(step_size=False),
+        )
+    )
+    state = agent.init(jax.random.key(0))
+    _, metrics = agent.train(jax.random.key(1), state, 2 * ENVS)
+
+    assert metrics.forward.actor.log_prob is None
+    assert metrics.update.emphasis is None
+    assert metrics.update.torso.grad_norm is None
+    assert metrics.update.heads_step.step_size is None
+    # and what was declared is still there
+    assert metrics.forward.actor.entropy is not None
+    assert metrics.update.torso.trace_norm is not None
+    assert metrics.update.torso_step.step_size is not None
+
+
+def test_declaring_less_compiles_to_less():
+    """The gate is a Python bool at trace time, so XLA drops what it guards."""
+
+    def lowered(reports):
+        agent = build(reports=reports)
+        state = agent.init(jax.random.key(0))
+        return (
+            jax.jit(agent.train, static_argnums=2)
+            .lower(jax.random.key(1), state, 2 * ENVS)
+            .compile()
+        )
+
+    everything = lowered(rtrrl.Reports())
+    nothing = lowered(
+        rtrrl.Reports(
+            log_prob=False,
+            entropy=False,
+            value=False,
+            td_error=False,
+            emphasis=False,
+            torso=rtrrl.BlockReports(False, False),
+            actor=rtrrl.BlockReports(False, False),
+            critic=rtrrl.BlockReports(False, False),
+            torso_step=rtrrl.GroupReports(False),
+            heads_step=rtrrl.GroupReports(False),
+        )
+    )
+    assert len(nothing.as_text().splitlines()) < len(everything.as_text().splitlines())

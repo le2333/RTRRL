@@ -97,6 +97,28 @@ class Scales:
 
 
 # -------------------------------------------------------------------- readings
+@dataclass(frozen=True)
+class BlockReports:
+    """Which of a block's readings to take."""
+
+    step_size: bool = True
+    grad_norm: bool = True
+    trace_norm: bool = True
+
+
+@dataclass(frozen=True)
+class Reports:
+    """Which readings to take, in the shape of what produces them."""
+
+    log_prob: bool = True
+    entropy: bool = True
+    value: bool = True
+    next_value: bool = True
+    td_error: bool = True
+    actor: BlockReports = BlockReports()
+    critic: BlockReports = BlockReports()
+
+
 @struct.dataclass(frozen=True)
 class ActorForward:
     """What the policy answered on the pass that chose."""
@@ -321,9 +343,18 @@ class Normalization:
 class Network:
     """One block of parameters that nothing else owns."""
 
-    def __init__(self, cfg: StreamACConfig, network: Any, *, bound, base) -> None:
+    def __init__(
+        self,
+        cfg: StreamACConfig,
+        network: Any,
+        *,
+        bound,
+        base,
+        reports: BlockReports = BlockReports(),
+    ) -> None:
         self.cfg = cfg
         self.network = network
+        self.reports = reports
         self.credit = make_credit(cfg.credit, network.core)
         self.rule = make_bounded_rule(bound=bound, base=base)
         self.trace_decay = cfg.gamma * cfg.trace_lambda
@@ -423,9 +454,11 @@ class Network:
             ),
             rule=RuleState(traces=traces, v=taken.state),
         ), BlockUpdate(
-            step_size=taken.metrics.get("step_size"),
-            grad_norm=self._norms(gradient),
-            trace_norm=self._norms(traces),
+            step_size=(
+                taken.metrics.get("step_size") if self.reports.step_size else None
+            ),
+            grad_norm=self._norms(gradient) if self.reports.grad_norm else None,
+            trace_norm=self._norms(traces) if self.reports.trace_norm else None,
         )
 
 
@@ -433,9 +466,18 @@ class Network:
 class Actor:
     """The policy. It chooses, and it names the scalar its block ascends."""
 
-    def __init__(self, cfg: StreamACConfig, network: Any) -> None:
+    def __init__(
+        self, cfg: StreamACConfig, network: Any, reports: Reports = Reports()
+    ) -> None:
         self.cfg = cfg
-        self.block = Network(cfg, network, bound=cfg.actor_bound, base=cfg.actor_base)
+        self.reports = reports
+        self.block = Network(
+            cfg,
+            network,
+            bound=cfg.actor_bound,
+            base=cfg.actor_base,
+            reports=reports.actor,
+        )
 
     def init(self, keys, timestep: Timestep) -> NetworkState:
         return self.block.init(keys, timestep)
@@ -463,8 +505,12 @@ class Actor:
             recurrence,
             remove_time_axis(action),
             ActorForward(
-                log_prob=remove_time_axis(log_prob),
-                entropy=remove_time_axis(dist.entropy()),
+                log_prob=(
+                    remove_time_axis(log_prob) if self.reports.log_prob else None
+                ),
+                entropy=(
+                    remove_time_axis(dist.entropy()) if self.reports.entropy else None
+                ),
             ),
         )
 
@@ -517,9 +563,18 @@ class Actor:
 class Critic:
     """The value. It reads, and it ascends its own reading."""
 
-    def __init__(self, cfg: StreamACConfig, network: Any) -> None:
+    def __init__(
+        self, cfg: StreamACConfig, network: Any, reports: Reports = Reports()
+    ) -> None:
         self.cfg = cfg
-        self.block = Network(cfg, network, bound=cfg.critic_bound, base=cfg.critic_base)
+        self.reports = reports
+        self.block = Network(
+            cfg,
+            network,
+            bound=cfg.critic_bound,
+            base=cfg.critic_base,
+            reports=reports.critic,
+        )
 
     def init(self, keys, timestep: Timestep) -> NetworkState:
         return self.block.init(keys, timestep)
@@ -585,10 +640,12 @@ class Core:
         cfg: StreamACConfig,
         actor_network: Any,
         critic_network: Any,
+        reports: Reports = Reports(),
     ) -> None:
         self.cfg = cfg
-        self.actor = Actor(cfg, actor_network)
-        self.critic = Critic(cfg, critic_network)
+        self.reports = reports
+        self.actor = Actor(cfg, actor_network, reports)
+        self.critic = Critic(cfg, critic_network, reports)
         self.td0 = make_td0()
 
     def init(
@@ -667,9 +724,14 @@ class Core:
             state.replace(
                 update_step=current_step, actor=actor_state, critic=critic_state
             ),
-            CriticForward(value=value, next_value=next_value),
+            CriticForward(
+                value=value if self.reports.value else None,
+                next_value=next_value if self.reports.next_value else None,
+            ),
             UpdateMetrics(
-                td_error=td_error, actor=actor_reading, critic=critic_reading
+                td_error=td_error if self.reports.td_error else None,
+                actor=actor_reading,
+                critic=critic_reading,
             ),
         )
 
@@ -690,6 +752,7 @@ class StreamAC:
         reward_normalization: Any = None,
         evaluation: EvaluationConfig | None = None,
         record: Iterable[str] = (),
+        reports: Reports = Reports(),
     ) -> None:
         self.cfg = cfg
         self.environment = Environment(cfg.num_envs, env, env_params)
@@ -700,7 +763,7 @@ class StreamAC:
             reward=reward_normalization,
             evaluation=evaluation,
         )
-        self.core = Core(cfg, actor_network, critic_network)
+        self.core = Core(cfg, actor_network, critic_network, reports)
         self.record = frozenset(record)
 
     def init(self, key: Any) -> StreamACState:
