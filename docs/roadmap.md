@@ -1092,3 +1092,47 @@ RTRRL 的 21 条行为检查转成 `test_rtrrl.py` 时并成 20 项（三条分�
 
 两个 RTRRL 测试文件共用一个 `build`：**两份构造器就是两个 kernel**，一旦任一份漂移，
 比对就悄悄在比错的东西。
+
+## R4m ⑥ 归一化拆件（已完成）
+
+`Normalizer` 是两样东西焊在一起：把值变成它所属折扣累积的**累加器**，和跑动的**均值与
+散度**。观测那路只用后者，回报那路两者都用。
+
+```
+Accumulation   持 Statistics.trace
+Spread         持 mean / M2 / count，以及用它们缩放
+Normalizer     装配：accumulate → advance → read
+```
+
+状态仍是一棵树（`test_blocks.py` 和 `test_normalization.py` 直接读它的字段），但每个组件
+只点自己的字段。差分仍精确——纯重排。
+
+**拆完暴露的一件事**：`read` 拿的是 `sample`，`advance` 拿的是 `counted`——**两者读的不是
+同一个量**。这在原来的单体 `observe` 里是真的，但没有地方能看出来。
+
+这也修正了先前的判断：我说过"前向/更新拆不了，因为 read 用刚写完的统计量"。正确版本是
+**顺序确实是先 advance 后 read，但那是接线不是约束**——粒度不够让它看起来像约束。
+
+## R4n ⑧a 评估预算（已完成）
+
+`stream_ac.evaluate` 扫 `num_steps` 轮，而它自己的 `train` 扫 `num_steps // num_envs`。
+driver 两边都传 `config.evaluation.steps`，所以**每次 shipped 评估都跑了 `num_envs` 倍于
+要求的步数**——按模板的批大小是 16 倍。两边现在都是环境步数，差分里的特例删除。
+
+## R4o ⑧b 评估独立流数（推迟，需单独讨论）
+
+不是"加个参数"。查出来两处耦合：
+
+**一、流数焊在 12 个位置**，且 `Environment` / `Normalization` 的 `num_envs` 是**构造器
+字段**不是调用参数：`blank_timestep` 的三个 zeros、两处 `split(key, num_envs)`、回报统计量的
+`initial`、`Network.carry_shape`、迹的分配、两个组件的构造。
+
+要么这些方法全部加参数（签名一路改上去），要么**给评估建第二组组件实例**。后者是对的，
+而且和"不要两个组件、传状态进去"不冲突——**形状是无状态图的构建期属性，不是状态**。
+值不同就传状态，形状不同就是两个图。这个区分是本轮新得到的。
+
+**二、`reset_on_start=False` 与不同的评估流数不兼容。** 统计量是逐流的
+（`mean = zeros_like(sample)`），继承训练的统计量意味着拿 `(train_envs, obs_dim)` 的 mean
+去减 `(eval_envs, obs_dim)` 的样本。而 `RunningNormalization.reset_on_start` 的默认搜索值
+就是 `False`。要么拒绝这个组合，要么把逐流统计量归约后广播——后者改的是统计量的语义，
+不该由这个功能顺带决定。
