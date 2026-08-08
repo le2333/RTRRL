@@ -86,80 +86,68 @@ def _expand_for(value, target):
     return value[(slice(None),) + (None,) * (target.ndim - value.ndim)]
 
 
-class Normalizer:
-    def __init__(self, config: NormalizationConfig):
+# ------------------------------------------------------------- the two pieces
+class Accumulation:
+    """A value and everything discounted that came before it."""
+
+    def __init__(self, discount: float, reset_on_done: bool) -> None:
+        self.discount = discount
+        self.reset_on_done = reset_on_done
+
+    def initial(self, statistics: Statistics, streams: int) -> Statistics:
+        return replace(statistics, trace=jnp.zeros((streams,), dtype=jnp.float32))
+
+    def dropped(self, statistics: Statistics) -> Statistics:
+        return replace(statistics, trace=jnp.zeros_like(statistics.trace))
+
+    def advance(self, statistics: Statistics, sample, done):
+        counted = sample + self.discount * statistics.trace * (1 - done)
+        return counted, replace(
+            statistics,
+            trace=counted * (1 - done) if self.reset_on_done else counted,
+        )
+
+
+class Spread:
+    """A running mean and second moment, and what they scale a value by."""
+
+    def __init__(self, config: NormalizationConfig) -> None:
         self.config = config
 
     def initial(self, sample) -> Statistics:
-        """Statistics shaped like the stream, one estimate per stream."""
-
-        sample = jnp.asarray(sample, dtype=jnp.float32)
         streams = sample.shape[0]
         seeded = self.config.cold_start == "seeded"
-        counted = jnp.ones((streams,), dtype=jnp.float32)
         return Statistics(
             mean=jnp.zeros_like(sample),
             M2=jnp.ones_like(sample) if seeded else jnp.zeros_like(sample),
-            count=counted if seeded else jnp.zeros((streams,), dtype=jnp.float32),
-            trace=(
-                jnp.zeros((streams,), dtype=jnp.float32)
-                if self.config.discount is not None
-                else None
+            count=(
+                jnp.ones((streams,), dtype=jnp.float32)
+                if seeded
+                else jnp.zeros((streams,), dtype=jnp.float32)
             ),
         )
 
-    def begin(self, sample, statistics=None, *, update=True):
-        """The value an episode opens on, and the accumulation dropped with it."""
-
-        sample = jnp.asarray(sample, dtype=jnp.float32)
-        if statistics is None:
-            statistics = self.initial(sample)
-        if update:
-            statistics = self._accumulate(statistics, sample)
-        return self._scaled(statistics, sample), replace(
-            statistics,
-            trace=(
-                None if statistics.trace is None else jnp.zeros_like(statistics.trace)
-            ),
-        )
-
-    def observe(self, statistics, sample, *, done, update=True):
-        """One value, and the statistics after it."""
-
-        sample = jnp.asarray(sample, dtype=jnp.float32)
-        done = jnp.asarray(done)
-        counted = sample
-        if statistics.trace is not None:
-            counted = sample + self.config.discount * statistics.trace * (1 - done)
-            statistics = replace(
-                statistics,
-                trace=counted * (1 - done) if self.config.reset_on_done else counted,
-            )
-        if update:
-            statistics = self._accumulate(statistics, counted)
-        return self._scaled(statistics, sample), statistics
-
-    def _accumulate(self, statistics, sample) -> Statistics:
-        mean, M2 = self._open(statistics, sample)
+    def advance(self, statistics: Statistics, value) -> Statistics:
+        mean, M2 = self._open(statistics, value)
         count = statistics.count + 1
-        delta = sample - mean
-        mean = mean + delta / _expand_for(count, sample)
+        delta = value - mean
+        mean = mean + delta / _expand_for(count, value)
         return replace(
-            statistics, mean=mean, M2=M2 + delta * (sample - mean), count=count
+            statistics, mean=mean, M2=M2 + delta * (value - mean), count=count
         )
 
-    def _scaled(self, statistics, sample):
+    def read(self, statistics: Statistics, sample):
         count = _expand_for(statistics.count, statistics.M2)
         spread = self._spread(statistics.M2, count)
         centred = sample - statistics.mean if self.config.center else sample
         return centred / jnp.sqrt(spread + self.config.eps)
 
-    def _open(self, statistics, sample):
+    def _open(self, statistics, value):
         if self.config.cold_start == "seeded":
             return statistics.mean, statistics.M2
         first = statistics.count == 0
         return (
-            jnp.where(_expand_for(first, statistics.mean), sample, statistics.mean),
+            jnp.where(_expand_for(first, statistics.mean), value, statistics.mean),
             jnp.where(
                 _expand_for(first, statistics.M2),
                 jnp.zeros_like(statistics.M2),
@@ -171,6 +159,54 @@ class Normalizer:
         if self.config.variance == "population":
             return M2 / count
         return jnp.where(count < 2, jnp.ones_like(M2), M2 / jnp.maximum(count - 1, 1.0))
+
+
+# ----------------------------------------------------------------- the assembly
+class Normalizer:
+    """One estimator: accumulate, advance, read."""
+
+    def __init__(self, config: NormalizationConfig):
+        self.config = config
+        self.spread = Spread(config)
+        self.accumulation = (
+            None
+            if config.discount is None
+            else Accumulation(config.discount, config.reset_on_done)
+        )
+
+    def initial(self, sample) -> Statistics:
+        """Statistics shaped like the stream, one estimate per stream."""
+
+        sample = jnp.asarray(sample, dtype=jnp.float32)
+        statistics = self.spread.initial(sample)
+        if self.accumulation is None:
+            return statistics
+        return self.accumulation.initial(statistics, sample.shape[0])
+
+    def begin(self, sample, statistics=None, *, update=True):
+        """The value an episode opens on, and the accumulation dropped with it."""
+
+        sample = jnp.asarray(sample, dtype=jnp.float32)
+        if statistics is None:
+            statistics = self.initial(sample)
+        if update:
+            statistics = self.spread.advance(statistics, sample)
+        value = self.spread.read(statistics, sample)
+        if self.accumulation is not None:
+            statistics = self.accumulation.dropped(statistics)
+        return value, statistics
+
+    def observe(self, statistics, sample, *, done, update=True):
+        """One value, and the statistics after it."""
+
+        sample = jnp.asarray(sample, dtype=jnp.float32)
+        done = jnp.asarray(done)
+        counted = sample
+        if self.accumulation is not None:
+            counted, statistics = self.accumulation.advance(statistics, sample, done)
+        if update:
+            statistics = self.spread.advance(statistics, counted)
+        return self.spread.read(statistics, sample), statistics
 
 
 def normalization_metrics(statistics, eps):
