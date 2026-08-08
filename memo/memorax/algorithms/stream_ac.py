@@ -943,5 +943,5 @@ class StreamAC:
             observation_statistics=observation_statistics,
             reward_statistics=reward_statistics,
         )
-        step_keys = jax.random.split(eval_key, num_steps)
+        step_keys = jax.random.split(eval_key, num_steps // self.cfg.num_envs)
         return jax.lax.scan(self._evaluate_step, eval_state, step_keys)

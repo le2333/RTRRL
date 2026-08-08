@@ -11,11 +11,11 @@ where the layering did most of its rearranging -- two components out of one, an
 evaluation opener deleted, a second forward pass folded into the first. Both
 bugs this file found were found by the cases and not by the comparison:
 
-- ``stream_ac.evaluate`` scans ``num_steps`` rounds while its own ``train``
-  scans ``num_steps // num_envs``, so an evaluation budget meant environment
-  steps in one method and scan rounds in the other. The layered kernel made both
-  mean environment steps; each side is handed whatever buys it the same number
-  of rounds, so what is compared here is arithmetic rather than that difference.
+- ``stream_ac.evaluate`` scanned ``num_steps`` rounds while its own ``train``
+  scanned ``num_steps // num_envs``, so an evaluation budget meant environment
+  steps in one method and scan rounds in the other, and every shipped evaluation
+  ran ``num_envs`` times longer than it was asked for. Both mean environment
+  steps now.
 - The layered kernel returned no ``forward`` or ``update`` readings at all,
   while the shipped entry declares eighteen of them and the driver drops a
   declared name it cannot find without saying so.
@@ -126,8 +126,7 @@ def _driven(module, *, normalize, evaluation, run_eval):
     state, metrics = agent.train(jax.random.key(1), state, ROUNDS * ENVS)
     readings = None
     if run_eval:
-        budget = ROUNDS if module is flat else ROUNDS * ENVS
-        evaluated = agent.evaluate(jax.random.key(2), state, budget)
+        evaluated = agent.evaluate(jax.random.key(2), state, ROUNDS * ENVS)
         # The layered kernel hands back readings alone, which is what stops an
         # evaluation state being carried into training by accident.
         readings = evaluated[1] if module is flat else evaluated
