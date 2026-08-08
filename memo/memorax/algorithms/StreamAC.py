@@ -1,16 +1,9 @@
 """StreamAC-RTRL: an actor and a critic with separate recurrent networks.
 
 Neither network sees the other's gradient, so there is no shared backbone to
-target and no emphasis to carry. Each keeps its own eligibility trace and each
-steps under its own overshooting bound, which is what lets the pair learn from
-a single transition at a time without a replay buffer.
-
-Everything static is resolved in the constructor, so no method below asks the
-configuration a question: what the methods read are the pieces that answer was
-turned into. The point of that, and of these being methods rather than the
-closures they used to be, is that a single step can be called on a state you
-made up and compared against another implementation. A kernel that can only be
-run for a whole epoch can only be judged by whether the curve looked right.
+target and no emphasis to carry. Each keeps its own eligibility trace and steps
+under its own overshooting bound, which is what lets the pair learn from a
+single transition at a time without a replay buffer.
 
 Four layers, each owning a slice of the state:
 
@@ -21,76 +14,27 @@ Four layers, each owning a slice of the state:
       Actor / Critic  a task: what it produces, and the scalar it ascends
         Network       a block of parameters nothing else owns
 
-Every layer has both an ``init`` and a ``reset``, and they are not two names for
-one thing. ``init`` allocates: from a key and the shapes it builds state that
-did not exist -- opened streams, fresh estimators, parameters, traces, carries,
-sensitivities -- and it runs once per invocation. ``reset`` begins again without
-allocating and without touching anything learning built: it is per-stream and
-selective, replacing only the streams whose episode ended and leaving the
-parameters alone, and it runs on every step. They cannot be merged, because one
-returns a whole fresh state and the other returns a per-stream blend of two.
+``init`` allocates and runs once; ``reset`` begins again, per stream and
+selectively, every step. The words follow what Flax, optax and an environment
+already mean by them, which is why ``Environment.init`` may call ``env.reset``
+without the two colliding.
 
-The words are also not free choices. ``init`` is already what Flax, optax and
-the run contract call allocation, and ``reset`` is already what an environment
-calls beginning an episode -- so ``Environment.init`` is allowed to call
-``env.reset`` without the two meaning the same thing.
+A head holds as much of a network as belongs to it alone -- here all of one,
+because the two roles share nothing. Where a torso were shared it would sit in
+``Core`` as a third block and each head would hold only its own output
+transform, which is why ``Network`` is composed rather than inherited from.
 
-A head holds as much of a network as belongs to it alone. Here that is all of
-one, because the two roles share nothing; where a torso were shared it would sit
-in ``Core`` as a third block and each head would hold only its own output
-transform. ``Network`` is composed rather than inherited from for exactly that
-reason -- inheriting would weld the boundary at "all of it".
+A reading is not state, so nothing here puts one in the carry: what a layer
+measured comes back beside what it carries, in this algorithm's own classes. A
+field left ``None`` is an empty pytree and a scan stacks nothing for it.
 
-``Network`` exists because a block is a real thing: it carries its own trace and
-decay, it is differentiated as a unit, and it steps as a unit. The two roles'
-forward, init, trace and step were the same code twice and are now the same
-code once.
+Everything returned is per step, because an episode ends at a different step in
+every stream while a scan emits one fixed shape. Cutting the stream into
+episodes is ``memorax/runtime/episode.py``'s, and what this file owes that cut
+is ``done`` and ``terminal``.
 
-``Core`` exists because one thing is not separable: the TD error is measured by
-the critic and ascended toward by the actor, and both bounds read their step
-size off it. It is written where both roles are in hand rather than pushed into
-either, so the coupling is visible instead of hidden inside the half that
-happens to compute it. It is thin here, and would grow by exactly what sharing
-costs.
-
-That the interaction is a layer of its own means the update can be handed a
-state you made up without an environment being reachable at all, which is the
-same line the reference implementation draws between ``sample_action``,
-``update_params`` and the loop in its ``main``.
-
-A reading is not state, so nothing here puts one in the carry. What every
-method that does something hands back instead is two things: the state the next
-step runs on, and what that step measured. An earlier version of this file
-emitted nothing at all, on the argument that returned readings get threaded
-through every signature between the arithmetic and the sink until the shape of
-an update is being argued about in terms of what a dashboard wanted. The fear
-was right and the conclusion was not. What answers it is that the metrics below
-are *this algorithm's* classes: a field RTRRL needs and StreamAC has no opinion
-about does not exist here, so no signature widens for it, and no shared schema
-can reach back into the arithmetic. Only the return channel grows; every input
-is untouched.
-
-The cost of having been wrong is small and was measured rather than guessed: the
-readings the shipped entry declares come to 0.07 MiB an epoch, against roughly a
-gigabyte for the stacked state somebody would otherwise reach for. A field left
-``None`` is an empty pytree and a scan stacks nothing at all for it, which is
-what makes "carry only what someone declared" a property of the type rather than
-of a switch.
-
-The transition stays whatever else does, because it is not a reading: it is what
-happened, and it is what an episode boundary is found in.
-
-Everything returned is per step, and that is not a choice: an episode ends at a
-different step in every stream, so an episode record is a variable-length slice
-of the step stream while a scan emits one fixed shape per step. Cutting the
-stream into episodes belongs to ``memorax/runtime/episode.py`` and happens after
-the scan, in Python. What this file owes that cut is exactly ``done`` and
-``terminal`` -- the two fields on the transition that no step-level reader wants
-and that the episode level cannot be found without.
-
-``train`` hands back a state and its readings; ``evaluate`` hands back only
-readings. An evaluation exists to be read rather than continued from, and a
-state it never returns is one nothing can accidentally carry into training.
+``tests/test_layered_parity.py`` drives this against ``stream_ac.py``, which is
+the same algorithm written flat.
 """
 
 from __future__ import annotations
@@ -189,12 +133,9 @@ class NetworkState:
 class Scales:
     """What the two running estimators carry, and nothing else.
 
-    Its own state because normalization is its own layer. It sits between the
-    environment's numbers and the agent's, and the agent never sees a raw one,
-    so which scale a number was on is not a question anything above it has to
-    answer. That an ending resets these on the same flag as the environment is
-    a coincidence of lifetime, not of ownership, and packing them into one tree
-    would have been the only argument for keeping them there.
+    Its own state because normalization is its own layer: the agent never sees a
+    raw number, so which scale one was on is not a question anything above it
+    answers.
     """
 
     observation: Any = None
@@ -203,11 +144,7 @@ class Scales:
 
 @struct.dataclass(frozen=True)
 class ActorForward:
-    """What the policy answered on the pass that chose.
-
-    Free: the distribution is already in hand where the action is drawn, so
-    nothing is run twice to report these.
-    """
+    """What the policy answered on the pass that chose."""
 
     log_prob: Any = None
     entropy: Any = None
@@ -223,12 +160,7 @@ class CriticForward:
 
 @struct.dataclass(frozen=True)
 class ForwardMetrics:
-    """One field per head, because a reading belongs to whoever produced it.
-
-    Nested rather than flattened into ``actor_log_prob`` and the like, so that a
-    declared name is a path through the components and not a spelling somebody
-    has to agree with.
-    """
+    """One field per head, so a declared name is a path through the components."""
 
     actor: ActorForward = ActorForward()
     critic: CriticForward = CriticForward()
@@ -245,11 +177,7 @@ class BlockUpdate:
 
 @struct.dataclass(frozen=True)
 class UpdateMetrics:
-    """One field per block, plus the one quantity that belongs to neither.
-
-    The TD error is here rather than under a head for the same reason it is
-    computed in ``Core``: both roles read it and neither owns it.
-    """
+    """One field per block, plus the TD error, which neither role owns."""
 
     td_error: Any = None
     actor: BlockUpdate = BlockUpdate()
@@ -289,15 +217,10 @@ def _where_done(done, fresh, carried):
 def _per_stream(objective, params, *streamed):
     """Differentiate each stream's own objective, and only its own.
 
-    Streams share parameters but not activations, so a stream's objective cannot
-    depend on another's hidden state and the Jacobian of the whole batch is zero
-    everywhere but the diagonal. Asking for that Jacobian asks the compiler to
-    fill the zeros in too, at a cost that grows with the square of the streams;
-    one gradient per stream, taken together, costs what the diagonal costs.
-
-    The stream axis is put back inside as a length of one so that every layer
-    still sees the batched shapes it was written for, which is also why the
-    arithmetic is unchanged and the comparisons against upstream still hold.
+    Streams share parameters but not activations, so the Jacobian of the whole
+    batch is zero everywhere but the diagonal, and asking for it costs the
+    square of the streams. The stream axis is put back inside as a length of one
+    so every layer still sees the batched shapes it was written for.
     """
 
     def one(params, *stream):
@@ -340,12 +263,11 @@ class Environment:
         """Begin again wherever an episode ended, at the top of the act.
 
         The environment hands back the state its episode ended in, because that
-        is what the bootstrap has to value; starting the next one belongs here,
-        on the same flag the carries and the traces already read.
+        is what the bootstrap values; starting the next one belongs here.
 
-        The fresh observation comes back unblended. What reads it next is a
-        scale, and the estimator has to be offered the value an episode opens on
-        before anything decides which streams keep the one they had.
+        The fresh observation comes back unblended: a scale reads it next, and
+        the estimator has to be offered the value an episode opens on before
+        anything decides which streams keep the one they had.
         """
 
         obs, opened = self.init(key)
@@ -464,21 +386,10 @@ class Normalization:
     def apply(self, scales: Scales, obs, reward, done, *, update: bool = True):
         """Both estimators advanced by one transition, or neither if none exists.
 
-        One call per estimator, and that is a granularity problem rather than a
-        property of the algorithm. ``Normalizer`` is two things welded together:
-        an accumulator that turns a reward into the discounted return it belongs
-        to -- ``Statistics.trace`` -- and a running estimate of that quantity's
-        spread -- ``mean``, ``M2``, ``count``. The observation path has only the
-        second; the reward path has both. Three pieces, two objects.
-
-        ``observe`` advances whichever it has and then scales by what it has
-        just written, so there is no reading to take before the advance. The
-        order is not a constraint, it is the wiring -- and it is invisible only
-        because the pieces are not separately expressible.
-
-        Give each piece its own component and this class becomes what it should
-        be: an assembler that says accumulate, then update, then read. That is a
-        change to ``memorax/rl/normalization.py``, not to this file.
+        ``Normalizer.observe`` scales by the statistics it has just written, so
+        the reading cannot be taken before the advance. That is wiring rather
+        than a constraint, and it is only invisible because an accumulator and a
+        running estimate are one class there.
         """
 
         observation = scales.observation
@@ -497,30 +408,19 @@ class Normalization:
 class Network:
     """One block of parameters that nothing else owns.
 
-    A block is what it is because no other component reaches it: it carries its
-    own trace and its own decay, it is differentiated as a unit, and it steps as
-    a unit. How big a block is depends on the algorithm and not on this class --
-    here each role owns a whole sequence, and in an algorithm with a shared
-    torso a head's block is only its own output transform.
-
-    ``backward`` takes the cotangent arriving from whatever consumed this
-    block's output and hands back both this block's gradient and the cotangent
-    to pass further up. Here nothing is further up, so the second is dropped;
-    the signature is the same either way, which is what lets a shared block sit
-    above these without changing them.
+    It carries its own trace and decay, is differentiated as a unit, and steps
+    as a unit. How big a block is belongs to the algorithm and not to this
+    class: here each role owns a whole sequence, and where a torso is shared a
+    head's block is only its own output transform.
     """
 
     def __init__(self, cfg: StreamACConfig, network: Any, *, bound, base) -> None:
         self.cfg = cfg
         self.network = network
-        # Resolved once. Which of a cell's methods stands for credit, and what
-        # shape a step takes, are answered here so that nothing below reads a
-        # string out of the configuration.
         self.credit = make_credit(cfg.credit, network.core)
-        # The rule lives here because in this algorithm a rule group is exactly
-        # one block. Where a group spans several blocks -- two heads bounded
-        # together -- the step is the only thing that has to move up to whoever
-        # holds them both, because the bound reads a norm over the whole group.
+        # A rule group is exactly one block here. Where a group spans several,
+        # the step moves up to whoever holds them all, because the bound reads a
+        # norm over the whole group.
         self.rule = make_bounded_rule(bound=bound, base=base)
         self.trace_decay = cfg.gamma * cfg.trace_lambda
 
@@ -540,11 +440,10 @@ class Network:
         return jnp.concatenate([obs, action, reward], axis=-1)
 
     def apply(self, params, timestep, recurrence: Recurrence):
-        """One forward pass over one sequence-shaped step.
+        """One forward pass, handing back the advance rather than writing it.
 
-        What comes back is the next recurrence and the readout. The advance is
-        handed back rather than written, because the gradient a step takes is
-        taken from the carry the pass *started* on.
+        The gradient a step takes is taken from the carry the pass started on,
+        so whoever owns that carry decides when it moves.
         """
 
         obs, done, action, reward = timestep
@@ -561,11 +460,10 @@ class Network:
     def init(self, keys, timestep: Timestep) -> NetworkState:
         """Fresh online state for this block.
 
-        Three keys -- parameters, torso, dropout -- and in that order, because
-        that is how the published kernel spends its seed and a comparison at one
-        seed is only a comparison if both sides start from the same draw.
-        ``timestep`` is one sequence-shaped step, which is all initialisation
-        reads: the shapes.
+        Three keys -- parameters, torso, dropout -- in the order the published
+        kernel spends them, because a comparison at one seed is only a
+        comparison if both sides start from the same draw. ``timestep`` is read
+        for its shapes and nothing else.
         """
 
         param_key, torso_key, dropout_key = keys
@@ -586,9 +484,8 @@ class Network:
             params=params,
             rule=RuleState(
                 traces=traces,
-                # Asked for rather than assumed: a bounded rule carries a second
-                # moment shaped like the traces, an unbounded one carries
-                # whatever its base transformation built.
+                # Asked for rather than assumed: a bounded rule's second moment
+                # follows the traces, an unbounded one follows its transform.
                 v=self.rule.init(params=params, traces=traces),
             ),
             recurrence=Recurrence(carry=carry, sensitivity=sensitivity),
@@ -612,10 +509,9 @@ class Network:
     def trace(self, incoming, gradient, *, reset_before):
         """StreamAC's pre-forward reset, always-fresh trace recurrence.
 
-        One tree back rather than two: what this step steps along and what the
-        next step decays are the same trace here, and naming them separately
-        only said that some other algorithm's are not. The decay is this
-        block's own -- an algorithm with three blocks has three of them.
+        One tree back rather than two, because what this step steps along and
+        what the next decays are the same trace here. The decay is this block's
+        own; an algorithm with three blocks has three.
         """
 
         return jax.tree.map(
@@ -641,11 +537,6 @@ class Network:
 
         ``delta`` is the same for every block: the bound reads it whichever
         objective was differentiated.
-
-        Two things come back and they are not the same kind of thing. The state
-        is what the next step runs on; the reading is what a report is made of,
-        and it is beside the state rather than in it precisely so that nothing
-        downstream of the report can reach the arithmetic.
         """
 
         traces = self.trace(state.rule.traces, gradient, reset_before=reset_before)
@@ -672,10 +563,9 @@ class Network:
 class Actor:
     """The policy. It chooses, and it names the scalar its block ascends.
 
-    It holds a whole network because in this algorithm nothing else reaches
-    those parameters. A head whose torso were shared would hold only its own
-    output transform and hand a cotangent upward instead; nothing else about
-    this class would change.
+    It holds a whole network because nothing else reaches those parameters. A
+    head whose torso were shared would hold only its own output transform and
+    hand a cotangent upward; nothing else here would change.
     """
 
     def __init__(self, cfg: StreamACConfig, network: Any) -> None:
@@ -693,12 +583,9 @@ class Actor:
     ) -> tuple[Recurrence, Any, ActorForward]:
         """Run forward once and choose, touching nothing else.
 
-        Back come the advanced recurrence and the action -- a recurrence rather
-        than a whole network state, because that is all acting can have changed.
-
-        ``deterministic`` is read at trace time, not stepped over: the greedy
-        rollout and the learning one are two programs, and a rollout that had to
-        carry a branch would also have to carry the sampler it never uses.
+        ``deterministic`` is read at trace time rather than stepped over: the
+        greedy rollout and the learning one are two programs, and one carrying
+        the branch would also carry the sampler it never uses.
         """
 
         recurrence, (dist, _) = self.block.apply(
@@ -726,12 +613,8 @@ class Actor:
     def objective(self, output, action, delta):
         """What this head ascends: log pi(a) with entropy riding on it.
 
-        A scalar, not a direction -- the direction is its gradient, and naming
-        it for the gradient put the name one derivative away from the thing.
-
         Entropy is signed by the TD error rather than added flat, so it pushes
-        toward exploration only where the critic was surprised. This is the
-        whole of what the head contributes to its own update.
+        toward exploration only where the critic was surprised.
         """
 
         dist, _ = output
@@ -746,14 +629,8 @@ class Actor:
     def gradient(self, state: NetworkState, timestep: Timestep, action, delta):
         """This head's ascent, one stream at a time.
 
-        Taken here rather than by the block: what is differentiated is this
-        head's objective, and the extra terms it reads are this head's. A block
-        that took the gradient could only do it while the block and the head
-        were the same thing, which is true here and is not true wherever a torso
-        is shared.
-
         From a recurrence already cut out of the graph: what a parameter did to
-        the past reaches this step through the sensitivity the credit carries,
+        the past reaches this step through the sensitivity the credit carries
         and through nothing else.
         """
 
@@ -782,12 +659,8 @@ class Actor:
     ) -> tuple[NetworkState, BlockUpdate]:
         """One transition's worth of learning, from where the acting pass began.
 
-        ``delta`` is an argument rather than something measured here: the actor
-        has no value function, so the one quantity the two roles are not
-        independent in reaches it from whoever holds both.
-
-        The recurrence is not advanced -- the pass that advanced it was the
-        acting pass.
+        ``delta`` arrives rather than being measured: the actor has no value
+        function. The recurrence is not advanced, because the acting pass did.
         """
 
         gradient = self.gradient(state, timestep, next_timestep.action, delta)
@@ -829,12 +702,9 @@ class Critic:
     ) -> tuple[Recurrence, Any]:
         """What a state is worth, and the recurrence that reading advanced.
 
-        One forward pass, not one per use. The two readings a TD error needs
-        differ only in what is handed in -- whether the parameters and the
-        recurrence are cut out of the graph -- and in whether the advance that
-        comes back is kept. All three are facts about the coupling, so all three
-        are decided where the coupling is, and are visible at the call site
-        instead of being spelled by which method was reached for.
+        One pass, not one per use: the two readings a TD error needs differ only
+        in what is handed in, and that is the coupling's business rather than
+        this head's.
         """
 
         recurrence, output = self.block.apply(
@@ -883,16 +753,14 @@ class Critic:
 class Core:
     """A policy, a value function, and the one thing they are coupled by.
 
-    Everything either role can do alone lives in that role, and each role owns
-    the whole block of parameters nothing else reaches. What is left here is the
-    coupling, which is what makes this readable as the algorithm: value the
-    state, value where it ended, take the difference, step both roles on it.
-    Nothing here touches an environment.
+    Everything either role can do alone lives in that role. What is left is the
+    algorithm: value the state, value where it ended, take the difference, step
+    both roles on it. Nothing here touches an environment.
 
-    It is thin because these two roles share nothing. An algorithm whose heads
-    sat on one torso would put that torso here as a third block, and this class
-    would grow by exactly what the sharing costs: routing the cotangents the
-    heads hand up, and gating which of them the shared block is allowed to hear.
+    Thin, because these two roles share nothing. An algorithm whose heads sat on
+    one torso would put that torso here and grow this class by exactly what the
+    sharing costs -- routing the cotangents the heads hand up, and gating which
+    of them the shared block hears.
     """
 
     def __init__(
@@ -940,12 +808,6 @@ class Core:
     ) -> tuple[StreamACState, CriticForward, UpdateMetrics]:
         """One transition's worth of learning for both roles, and what it read.
 
-        Three things back rather than one bundle: the state, the readings the
-        critic's two passes produced, and what the two steps did. The first two
-        are named separately because they belong to different halves of the
-        report -- one is what a network answered, the other is what an update
-        cost -- and it is the flow above that decides where each is filed.
-
         ``state`` is the state the transition *began* in -- both carries as they
         were before the acting pass -- and ``next_timestep`` is where it ended.
         ``terminal`` is the ending that says the future is worth nothing;
@@ -962,10 +824,9 @@ class Core:
         recurrence, value = self.critic.apply(
             critic.params, state.timestep, critic.recurrence
         )
-        # The bootstrap is that same reading with everything it could have
-        # learned from cut away, and with the advance it produces thrown out:
-        # the next step repeats the pass from the same carry but under updated
-        # parameters, and that is the pass whose recurrent state is kept.
+        # The same reading with everything it could learn from cut away, and
+        # its advance dropped: the next step repeats the pass from the same
+        # carry under updated parameters, and that is the one that is kept.
         _, next_value = self.critic.apply(
             jax.lax.stop_gradient(critic.params),
             next_timestep,
@@ -1037,19 +898,15 @@ class StreamAC:
             evaluation=evaluation,
         )
         self.core = Core(cfg, actor_network, critic_network)
-        # Which of the optional per-step fields to fill. A caller names what its
-        # metrics need rather than switching a bundle on, so a field nobody
-        # reduces is never stacked and a field somebody does is never missing.
+        # Which optional per-step fields to fill, named rather than switched on
+        # in bundles, so nothing nobody reduces is ever stacked.
         self.record = frozenset(record)
 
     def init(self, key: Any) -> StreamACState:
-        # Seven keys in this order because that is how the published kernel
-        # spends its seed. Two implementations of the same algorithm can only be
-        # compared at one seed if the seed buys them the same starting point,
-        # and drawing three keys where the reference draws seven makes every
-        # such comparison a comparison of two different draws instead. Two of
-        # the seven feed rng streams our networks do not ask for; they are drawn
-        # anyway, because what matters is which key each stream receives.
+        # Seven keys in the order the published kernel spends them. Two of
+        # them feed rng streams these networks never ask for and are drawn
+        # anyway: a comparison at one seed is only a comparison if both sides
+        # start from the same draw.
         (
             env_key,
             actor_key,
@@ -1157,9 +1014,8 @@ class StreamAC:
             timestep=persisted,
             env_state=env_state,
             scales=scales,
-            # The acting pass is what advanced the actor's recurrence; the
-            # update differentiated from where that pass started and left it
-            # alone. Written here, once, where both are in hand.
+            # The acting pass advanced this; the update differentiated from
+            # where that pass started and left it alone.
             actor=updated.actor.replace(recurrence=recurrence),
         )
         return next_state, StepMetrics(
@@ -1233,15 +1089,9 @@ class StreamAC:
     def _evaluation_state(self, key: Any, state: StreamACState) -> StreamACState:
         """The trained parameters, opened on a fresh environment and recurrence.
 
-        There is no evaluation allocator. Inheriting training's scales is
-        handing training's ``Scales`` to the same ``init`` a fresh run calls
-        with nothing, so what evaluation does differently is an argument rather
-        than a second code path.
-
-        Nothing here writes into ``state``: what comes back is a value derived
-        from it, and training's own is untouched. That a caller cannot carry the
-        derived one on is not this method's doing -- ``evaluate`` never hands it
-        out.
+        Inheriting training's scales is handing them to the same ``init`` a
+        fresh run calls with nothing, so what evaluation does differently is an
+        argument and not a second code path.
         """
 
         obs, env_state = self.environment.init(key)
@@ -1272,13 +1122,9 @@ class StreamAC:
     def evaluate(self, key: Any, state: StreamACState, num_steps: int) -> StepMetrics:
         """A rollout that leaves nothing behind.
 
-        Only the readings come back. The state an evaluation runs on is built
-        here and dropped here, so a caller cannot carry it into training even by
-        accident -- which is the one guarantee a comment can ask for and a
-        return type can give. Nothing else was ever wanted from it: an
-        evaluation exists to be read, not to be continued from.
-
-        ``num_steps`` is environment steps, the same as ``train``'s.
+        The state an evaluation runs on is built here and dropped here, so a
+        caller cannot carry it into training even by accident. ``num_steps`` is
+        environment steps, the same as ``train``'s.
         """
 
         reset_key, rollout_key = jax.random.split(key)
