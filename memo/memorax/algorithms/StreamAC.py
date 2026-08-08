@@ -1,12 +1,5 @@
 """StreamAC-RTRL: an actor and a critic with separate recurrent networks.
 
-Neither network sees the other's gradient, so there is no shared backbone to
-target and no emphasis to carry. Each keeps its own eligibility trace and steps
-under its own overshooting bound, which is what lets the pair learn from a
-single transition at a time without a replay buffer.
-
-Four layers, each owning a slice of the state:
-
     StreamAC          the order things happen in, and the scan
     Environment       where every stream is
     Normalization     the scales the environment's numbers are read through
@@ -14,27 +7,7 @@ Four layers, each owning a slice of the state:
       Actor / Critic  a task: what it produces, and the scalar it ascends
         Network       a block of parameters nothing else owns
 
-``init`` allocates and runs once; ``reset`` begins again, per stream and
-selectively, every step. The words follow what Flax, optax and an environment
-already mean by them, which is why ``Environment.init`` may call ``env.reset``
-without the two colliding.
-
-A head holds as much of a network as belongs to it alone -- here all of one,
-because the two roles share nothing. Where a torso were shared it would sit in
-``Core`` as a third block and each head would hold only its own output
-transform, which is why ``Network`` is composed rather than inherited from.
-
-A reading is not state, so nothing here puts one in the carry: what a layer
-measured comes back beside what it carries, in this algorithm's own classes. A
-field left ``None`` is an empty pytree and a scan stacks nothing for it.
-
-Everything returned is per step, because an episode ends at a different step in
-every stream while a scan emits one fixed shape. Cutting the stream into
-episodes is ``memorax/runtime/episode.py``'s, and what this file owes that cut
-is ``done`` and ``terminal``.
-
-``tests/test_layered_parity.py`` drives this against ``stream_ac.py``, which is
-the same algorithm written flat.
+Driven against ``stream_ac.py`` by ``tests/test_layered_parity.py``.
 """
 
 from __future__ import annotations
@@ -71,6 +44,7 @@ from .contract import (
 )
 
 
+# --------------------------------------------------------------- configuration
 @dataclass(frozen=True)
 class StreamACConfig:
     """Everything the kernel reads that does not change during a run."""
@@ -88,13 +62,10 @@ class StreamACConfig:
     normalization_statistics: str = "ours"
 
 
+# ----------------------------------------------------------------------- state
 @struct.dataclass(frozen=True)
 class Recurrence:
-    """Where the sequence is, and what it owes the past.
-
-    What an ending resets and what a rollout begins again. A forward pass reads
-    it and hands back the next one; nothing else writes it.
-    """
+    """Where the sequence is, and what it owes the past."""
 
     carry: Any
     sensitivity: Any
@@ -102,13 +73,7 @@ class Recurrence:
 
 @struct.dataclass(frozen=True)
 class RuleState:
-    """What the update carries between steps, which a forward pass never sees.
-
-    The eligibility trace and the second moment together, because that is what
-    they are: in the published optimiser both are ``self.state[p]`` while the
-    parameters are ``p.data``, and here both are allocated together, handed to
-    the rule together, and read by nothing else.
-    """
+    """What the update carries between steps, which a forward pass never sees."""
 
     traces: Any
     v: Any
@@ -116,13 +81,7 @@ class RuleState:
 
 @struct.dataclass(frozen=True)
 class NetworkState:
-    """Independent online state for one recurrent actor or critic network.
-
-    Grouped by what writes it: the parameter step writes ``params``, the trace
-    recurrence and the rule write ``rule``, the forward pass and an ending write
-    ``recurrence``. ``params`` stays flat because every forward pass reads it
-    and a group of one would only put a hop in the hottest path.
-    """
+    """Independent online state for one recurrent actor or critic network."""
 
     params: Any
     rule: RuleState
@@ -131,17 +90,13 @@ class NetworkState:
 
 @struct.dataclass(frozen=True)
 class Scales:
-    """What the two running estimators carry, and nothing else.
-
-    Its own state because normalization is its own layer: the agent never sees a
-    raw number, so which scale one was on is not a question anything above it
-    answers.
-    """
+    """What the two running estimators carry, and nothing else."""
 
     observation: Any = None
     reward: Any = None
 
 
+# -------------------------------------------------------------------- readings
 @struct.dataclass(frozen=True)
 class ActorForward:
     """What the policy answered on the pass that chose."""
@@ -198,16 +153,13 @@ class StreamACState:
     critic: NetworkState
 
 
+# ---------------------------------------------------------- shapes and streams
 def _broadcast_env(values, leaf):
     return values[(slice(None),) + (None,) * (leaf.ndim - 1)]
 
 
 def _where_done(done, fresh, carried):
-    """Take the fresh one for the streams that ended, the carried one for the rest.
-
-    Not a branch: both are computed and one is selected per stream, which is
-    what every reset in this stack already is.
-    """
+    """Take the fresh one for the streams that ended, the carried one for the rest."""
 
     return jax.tree.map(
         lambda new, old: jnp.where(_broadcast_env(done, old), new, old), fresh, carried
@@ -215,13 +167,7 @@ def _where_done(done, fresh, carried):
 
 
 def _per_stream(objective, params, *streamed):
-    """Differentiate each stream's own objective, and only its own.
-
-    Streams share parameters but not activations, so the Jacobian of the whole
-    batch is zero everywhere but the diagonal, and asking for it costs the
-    square of the streams. The stream axis is put back inside as a length of one
-    so every layer still sees the batched shapes it was written for.
-    """
+    """Differentiate each stream's own objective, and only its own."""
 
     def one(params, *stream):
         batched = jax.tree.map(lambda leaf: leaf[None], stream)
@@ -232,6 +178,7 @@ def _per_stream(objective, params, *streamed):
     )
 
 
+# ---------------------------------------------- the environment and its scales
 class Environment:
     """Where every stream is, and nothing about how its numbers are read."""
 
@@ -260,26 +207,13 @@ class Environment:
         return jax.vmap(self.env.reset, in_axes=(0, None))(keys, self.env_params)
 
     def reset(self, key, env_state, done):
-        """Begin again wherever an episode ended, at the top of the act.
-
-        The environment hands back the state its episode ended in, because that
-        is what the bootstrap values; starting the next one belongs here.
-
-        The fresh observation comes back unblended: a scale reads it next, and
-        the estimator has to be offered the value an episode opens on before
-        anything decides which streams keep the one they had.
-        """
+        """Begin again wherever an episode ended, at the top of the act."""
 
         obs, opened = self.init(key)
         return obs, _where_done(done, opened, env_state)
 
     def step(self, key, env_state, action):
-        """One transition, before anything has been read through a scale.
-
-        The reward that comes back is what the task paid, which is what an
-        episode return and a score are read off. What the agent learns on is
-        whatever the scale makes of it, and that is not this component's.
-        """
+        """One transition, before anything has been read through a scale."""
 
         keys = jax.random.split(key, self.num_envs)
         obs, env_state, reward, done, info = jax.vmap(
@@ -310,13 +244,7 @@ class Environment:
 
 
 class Normalization:
-    """The layer between the environment's numbers and the agent's.
-
-    Whether a reading is taken at all, and whether the estimator behind it is
-    allowed to move, are this component's questions and nobody else's -- which
-    is why ``update_during_eval`` lives here rather than on the environment. It
-    was never a statement about the environment.
-    """
+    """The layer between the environment's numbers and the agent's."""
 
     def __init__(
         self,
@@ -353,12 +281,7 @@ class Normalization:
             )
 
     def init(self, obs, scales: Scales | None = None, *, update: bool = True):
-        """The estimators begun, on nothing or on what another run built.
-
-        One allocator rather than two. An evaluation that inherits training's
-        scales differs from a fresh one only in what is handed in, so it is
-        handed in; a second constructor said the same thing with a second name.
-        """
+        """The estimators begun, on nothing or on what another run built."""
 
         observation = None if scales is None else scales.observation
         reward = None if scales is None else scales.reward
@@ -369,12 +292,7 @@ class Normalization:
         return obs, Scales(observation=observation, reward=reward)
 
     def reset(self, obs, scales: Scales, done, *, update: bool = True):
-        """The value an episode opens on, for the streams that opened one.
-
-        One stream at a time, so the ones still running are not counted twice.
-        The reward estimator is not begun: what it sees is an accumulation, and
-        dropping that at an ending is ``reset_on_done``'s business.
-        """
+        """The value an episode opens on, for the streams that opened one."""
 
         observation = scales.observation
         if self.observation is not None:
@@ -384,13 +302,7 @@ class Normalization:
         )
 
     def apply(self, scales: Scales, obs, reward, done, *, update: bool = True):
-        """Both estimators advanced by one transition, or neither if none exists.
-
-        ``Normalizer.observe`` scales by the statistics it has just written, so
-        the reading cannot be taken before the advance. That is wiring rather
-        than a constraint, and it is only invisible because an accumulator and a
-        running estimate are one class there.
-        """
+        """Both estimators advanced by one transition, or neither if none exists."""
 
         observation = scales.observation
         counted = scales.reward
@@ -405,22 +317,14 @@ class Normalization:
         return obs, reward, Scales(observation=observation, reward=counted)
 
 
+# ------------------------------------------------------- a block of parameters
 class Network:
-    """One block of parameters that nothing else owns.
-
-    It carries its own trace and decay, is differentiated as a unit, and steps
-    as a unit. How big a block is belongs to the algorithm and not to this
-    class: here each role owns a whole sequence, and where a torso is shared a
-    head's block is only its own output transform.
-    """
+    """One block of parameters that nothing else owns."""
 
     def __init__(self, cfg: StreamACConfig, network: Any, *, bound, base) -> None:
         self.cfg = cfg
         self.network = network
         self.credit = make_credit(cfg.credit, network.core)
-        # A rule group is exactly one block here. Where a group spans several,
-        # the step moves up to whoever holds them all, because the bound reads a
-        # norm over the whole group.
         self.rule = make_bounded_rule(bound=bound, base=base)
         self.trace_decay = cfg.gamma * cfg.trace_lambda
 
@@ -429,22 +333,14 @@ class Network:
         return (self.cfg.num_envs, None)
 
     def _input(self, obs, action, reward):
-        """The one vector a sequence sees.
-
-        Under ``meta_rl`` the previous action and reward are concatenated onto
-        the observation.
-        """
+        """The one vector a sequence sees."""
 
         if not self.cfg.meta_rl:
             return obs
         return jnp.concatenate([obs, action, reward], axis=-1)
 
     def apply(self, params, timestep, recurrence: Recurrence):
-        """One forward pass, handing back the advance rather than writing it.
-
-        The gradient a step takes is taken from the carry the pass started on,
-        so whoever owns that carry decides when it moves.
-        """
+        """One forward pass, handing back the advance rather than writing it."""
 
         obs, done, action, reward = timestep
         (carry, sensitivity), output = self.network.walk(
@@ -458,13 +354,7 @@ class Network:
         return Recurrence(carry=carry, sensitivity=sensitivity), output
 
     def init(self, keys, timestep: Timestep) -> NetworkState:
-        """Fresh online state for this block.
-
-        Three keys -- parameters, torso, dropout -- in the order the published
-        kernel spends them, because a comparison at one seed is only a
-        comparison if both sides start from the same draw. ``timestep`` is read
-        for its shapes and nothing else.
-        """
+        """Fresh online state for this block."""
 
         param_key, torso_key, dropout_key = keys
         obs, done, action, reward = timestep
@@ -484,20 +374,13 @@ class Network:
             params=params,
             rule=RuleState(
                 traces=traces,
-                # Asked for rather than assumed: a bounded rule's second moment
-                # follows the traces, an unbounded one follows its transform.
                 v=self.rule.init(params=params, traces=traces),
             ),
             recurrence=Recurrence(carry=carry, sensitivity=sensitivity),
         )
 
     def reset(self, key, state: NetworkState) -> NetworkState:
-        """The same parameters with the recurrence begun again.
-
-        Through the credit, not around it: a truncated credit carries no
-        sensitivity at all, and asking the recurrence directly hands back a tree
-        the evaluation step will not produce, which scan rejects.
-        """
+        """The same parameters with the recurrence begun again."""
 
         return state.replace(
             recurrence=Recurrence(
@@ -507,12 +390,7 @@ class Network:
         )
 
     def trace(self, incoming, gradient, *, reset_before):
-        """StreamAC's pre-forward reset, always-fresh trace recurrence.
-
-        One tree back rather than two, because what this step steps along and
-        what the next decays are the same trace here. The decay is this block's
-        own; an algorithm with three blocks has three.
-        """
+        """StreamAC's pre-forward reset, always-fresh trace recurrence."""
 
         return jax.tree.map(
             lambda old, grad: (
@@ -523,21 +401,12 @@ class Network:
         )
 
     def _norms(self, tree):
-        """One norm per position group, per stream.
-
-        The grouping is the sequence's own -- what came before the recurrence,
-        what is the recurrence, what came after -- so a reading says where in
-        the network something got large rather than only that something did.
-        """
+        """One norm per position group, per stream."""
 
         return subtree_norms(self.network.split(tree), streams=True)
 
     def step(self, state: NetworkState, gradient, delta, *, reset_before, step):
-        """Trace the gradient, take the bounded step, and say what it did.
-
-        ``delta`` is the same for every block: the bound reads it whichever
-        objective was differentiated.
-        """
+        """Trace the gradient, take the bounded step, and say what it did."""
 
         traces = self.trace(state.rule.traces, gradient, reset_before=reset_before)
         taken = self.rule.apply(
@@ -560,13 +429,9 @@ class Network:
         )
 
 
+# --------------------------------------------------------------- the two tasks
 class Actor:
-    """The policy. It chooses, and it names the scalar its block ascends.
-
-    It holds a whole network because nothing else reaches those parameters. A
-    head whose torso were shared would hold only its own output transform and
-    hand a cotangent upward; nothing else here would change.
-    """
+    """The policy. It chooses, and it names the scalar its block ascends."""
 
     def __init__(self, cfg: StreamACConfig, network: Any) -> None:
         self.cfg = cfg
@@ -581,12 +446,7 @@ class Actor:
     def act(
         self, key, state: NetworkState, timestep: Timestep, *, deterministic: bool
     ) -> tuple[Recurrence, Any, ActorForward]:
-        """Run forward once and choose, touching nothing else.
-
-        ``deterministic`` is read at trace time rather than stepped over: the
-        greedy rollout and the learning one are two programs, and one carrying
-        the branch would also carry the sampler it never uses.
-        """
+        """Run forward once and choose, touching nothing else."""
 
         recurrence, (dist, _) = self.block.apply(
             state.params, timestep.to_sequence(), state.recurrence
@@ -597,8 +457,6 @@ class Actor:
                 if hasattr(dist, "logits")
                 else dist.mode()
             )
-            # A mode has no draw behind it, so there is no probability of having
-            # chosen it and nothing here to report.
             return recurrence, remove_time_axis(action), ActorForward()
         action, log_prob = dist.sample_and_log_prob(seed=key)
         return (
@@ -611,11 +469,7 @@ class Actor:
         )
 
     def objective(self, output, action, delta):
-        """What this head ascends: log pi(a) with entropy riding on it.
-
-        Entropy is signed by the TD error rather than added flat, so it pushes
-        toward exploration only where the critic was surprised.
-        """
+        """What this head ascends: log pi(a) with entropy riding on it."""
 
         dist, _ = output
         return remove_time_axis(
@@ -627,12 +481,7 @@ class Actor:
         )
 
     def gradient(self, state: NetworkState, timestep: Timestep, action, delta):
-        """This head's ascent, one stream at a time.
-
-        From a recurrence already cut out of the graph: what a parameter did to
-        the past reaches this step through the sensitivity the credit carries
-        and through nothing else.
-        """
+        """This head's ascent, one stream at a time."""
 
         def ascent(params, timestep, recurrence, action, delta):
             _, output = self.block.apply(params, timestep, recurrence)
@@ -657,11 +506,7 @@ class Actor:
         reset_before,
         step,
     ) -> tuple[NetworkState, BlockUpdate]:
-        """One transition's worth of learning, from where the acting pass began.
-
-        ``delta`` arrives rather than being measured: the actor has no value
-        function. The recurrence is not advanced, because the acting pass did.
-        """
+        """One transition's worth of learning, from where the acting pass began."""
 
         gradient = self.gradient(state, timestep, next_timestep.action, delta)
         return self.block.step(
@@ -670,12 +515,7 @@ class Actor:
 
 
 class Critic:
-    """The value. It reads, and it ascends its own reading.
-
-    The TD error is not measured here. It is what the two roles are coupled by,
-    so it belongs to whatever holds both of them; pushed into this class it
-    would still be the same coupling, only harder to see.
-    """
+    """The value. It reads, and it ascends its own reading."""
 
     def __init__(self, cfg: StreamACConfig, network: Any) -> None:
         self.cfg = cfg
@@ -688,11 +528,7 @@ class Critic:
         return self.block.reset(key, state)
 
     def objective(self, output):
-        """What this head ascends: the value itself, with no error in it.
-
-        A scalar, not a direction. The delta reaches the critic in the rule,
-        which is where the bound reads it.
-        """
+        """What this head ascends: the value itself, with no error in it."""
 
         value, _ = output
         return remove_feature_axis(remove_time_axis(value))
@@ -700,12 +536,7 @@ class Critic:
     def apply(
         self, params, timestep: Timestep, recurrence: Recurrence
     ) -> tuple[Recurrence, Any]:
-        """What a state is worth, and the recurrence that reading advanced.
-
-        One pass, not one per use: the two readings a TD error needs differ only
-        in what is handed in, and that is the coupling's business rather than
-        this head's.
-        """
+        """What a state is worth, and the recurrence that reading advanced."""
 
         recurrence, output = self.block.apply(
             params, timestep.to_sequence(), recurrence
@@ -736,12 +567,7 @@ class Critic:
         reset_before,
         step,
     ) -> tuple[NetworkState, BlockUpdate]:
-        """Learning, plus the recurrence the valuing pass advanced.
-
-        Unlike the actor's, this block's recurrence *is* written: the pass that
-        advanced it was the one the TD error was measured from, and the caller
-        has it in hand because that is where the two roles meet.
-        """
+        """Learning, plus the recurrence the valuing pass advanced."""
 
         gradient = self.gradient(state, timestep)
         stepped, reading = self.block.step(
@@ -750,18 +576,9 @@ class Critic:
         return stepped.replace(recurrence=recurrence), reading
 
 
+# --------------------------------------------------------------- the algorithm
 class Core:
-    """A policy, a value function, and the one thing they are coupled by.
-
-    Everything either role can do alone lives in that role. What is left is the
-    algorithm: value the state, value where it ended, take the difference, step
-    both roles on it. Nothing here touches an environment.
-
-    Thin, because these two roles share nothing. An algorithm whose heads sat on
-    one torso would put that torso here and grow this class by exactly what the
-    sharing costs -- routing the cotangents the heads hand up, and gating which
-    of them the shared block hears.
-    """
+    """A policy, a value function, and the one thing they are coupled by."""
 
     def __init__(
         self,
@@ -806,14 +623,7 @@ class Core:
         *,
         terminal: Any = None,
     ) -> tuple[StreamACState, CriticForward, UpdateMetrics]:
-        """One transition's worth of learning for both roles, and what it read.
-
-        ``state`` is the state the transition *began* in -- both carries as they
-        were before the acting pass -- and ``next_timestep`` is where it ended.
-        ``terminal`` is the ending that says the future is worth nothing;
-        without one, an ending is read as a failure, which is the safe reading
-        and what a single flag always meant.
-        """
+        """One transition's worth of learning for both roles, and what it read."""
 
         actor = state.actor
         critic = state.critic
@@ -824,9 +634,6 @@ class Core:
         recurrence, value = self.critic.apply(
             critic.params, state.timestep, critic.recurrence
         )
-        # The same reading with everything it could learn from cut away, and
-        # its advance dropped: the next step repeats the pass from the same
-        # carry under updated parameters, and that is the one that is kept.
         _, next_value = self.critic.apply(
             jax.lax.stop_gradient(critic.params),
             next_timestep,
@@ -867,13 +674,9 @@ class Core:
         )
 
 
+# -------------------------------------------------------------------- the flow
 class StreamAC:
-    """One-invocation train/evaluation flow around the three layers.
-
-    It owns none of the arithmetic and none of the environment: it owns the
-    order. Restart what ended, act, step the world, learn from what that
-    produced, and report the transition.
-    """
+    """One-invocation train/evaluation flow around the three layers."""
 
     def __init__(
         self,
@@ -898,15 +701,10 @@ class StreamAC:
             evaluation=evaluation,
         )
         self.core = Core(cfg, actor_network, critic_network)
-        # Which optional per-step fields to fill, named rather than switched on
-        # in bundles, so nothing nobody reduces is ever stacked.
         self.record = frozenset(record)
 
     def init(self, key: Any) -> StreamACState:
-        # Seven keys in the order the published kernel spends them. Two of
-        # them feed rng streams these networks never ask for and are drawn
-        # anyway: a comparison at one seed is only a comparison if both sides
-        # start from the same draw.
+        # The published kernel's seven, in its order; two go unused.
         (
             env_key,
             actor_key,
@@ -935,13 +733,7 @@ class StreamAC:
         )
 
     def _reset(self, key, state: StreamACState, *, update=True) -> StreamACState:
-        """Both components begun again for the streams that ended, in order.
-
-        The environment offers the observation an episode opens on, the scale
-        reads it, and only then is it blended with the one the still-running
-        streams already had -- so an estimator is offered every fresh value
-        exactly once, whichever streams end up keeping it.
-        """
+        """Both components begun again for the streams that ended, in order."""
 
         done = state.timestep.done
         obs, env_state = self.environment.reset(key, state.env_state, done)
@@ -966,12 +758,7 @@ class StreamAC:
         info,
         action_decision=None,
     ) -> InteractionMetrics:
-        """One transition, with the trajectory kept only if something reads it.
-
-        The two observations are a vector per stream per step and the only
-        expensive thing here, so they are behind the declaration; a name nobody
-        declared is never stacked.
-        """
+        """One transition, with the trajectory kept only if something reads it."""
 
         walked = "interaction.observation" in self.record
         return InteractionMetrics(
@@ -1014,8 +801,6 @@ class StreamAC:
             timestep=persisted,
             env_state=env_state,
             scales=scales,
-            # The acting pass advanced this; the update differentiated from
-            # where that pass started and left it alone.
             actor=updated.actor.replace(recurrence=recurrence),
         )
         return next_state, StepMetrics(
@@ -1023,8 +808,6 @@ class StreamAC:
                 observation=observation,
                 next_observation=next_timestep.obs,
                 action=action,
-                # One sample, named every way the step reads it: only the ending
-                # tells the bootstrap's action from the one fed forward.
                 action_decision=ActionDecision(
                     sampled_action=action,
                     logprob_action=action,
@@ -1066,7 +849,6 @@ class StreamAC:
             timestep=self.environment.persisted(next_timestep),
             env_state=env_state,
             scales=scales,
-            # Only the actor ran, so only the actor's recurrence moved.
             actor=state.actor.replace(recurrence=recurrence),
         ), StepMetrics(
             interaction=self._interaction(
@@ -1087,12 +869,7 @@ class StreamAC:
         return num_steps // num_envs
 
     def _evaluation_state(self, key: Any, state: StreamACState) -> StreamACState:
-        """The trained parameters, opened on a fresh environment and recurrence.
-
-        Inheriting training's scales is handing them to the same ``init`` a
-        fresh run calls with nothing, so what evaluation does differently is an
-        argument and not a second code path.
-        """
+        """The trained parameters, opened on a fresh environment and recurrence."""
 
         obs, env_state = self.environment.init(key)
         fresh = self.normalization.resets_on_start
@@ -1120,12 +897,7 @@ class StreamAC:
         return jax.lax.scan(self.train_step, state, keys)
 
     def evaluate(self, key: Any, state: StreamACState, num_steps: int) -> StepMetrics:
-        """A rollout that leaves nothing behind.
-
-        The state an evaluation runs on is built here and dropped here, so a
-        caller cannot carry it into training even by accident. ``num_steps`` is
-        environment steps, the same as ``train``'s.
-        """
+        """A rollout that leaves nothing behind."""
 
         reset_key, rollout_key = jax.random.split(key)
         eval_state = self._evaluation_state(reset_key, state)
