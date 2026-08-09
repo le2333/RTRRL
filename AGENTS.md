@@ -54,6 +54,47 @@ thing, or guessing what a type checker will say about a file nothing has checked
 yet, spends the attention the real disagreement is going to need. CI is the
 instrument. Point it at everything at once, then read what it says.
 
+## Algorithm graph boundaries
+
+Split algorithm code by algorithmic meaning, not by file size or by an attempt
+to maximise the number of reusable objects. Use three distinct levels:
+
+- An **algorithm-private subgraph** names a concept in the algorithm and may be
+  useful only to that algorithm. It exists to make the algorithm understandable
+  and locally replaceable; cross-algorithm reuse is not required.
+- A **shared component** has the same meaning and a stable replacement contract
+  in more than one algorithm. Promote a private subgraph only when that shared
+  contract is real, not in anticipation of hypothetical reuse.
+- A **private helper** organises implementation steps. It is not a graph node,
+  is not registered, and does not acquire a component interface merely because
+  the containing method is long.
+
+A graph component or private subgraph must own at least one substantive part of
+the algorithm: a parameter domain, a state transition, a mathematical objective,
+a temporal boundary, or a coupling/routing invariant between child graphs. It
+should be possible to state its inputs, outputs, owned state or parameters, and
+invariants without describing its implementation.
+
+Use the replacement test when a boundary is unclear: replacing the candidate
+with another implementation of the same contract should require the parent to
+change only its construction, not to understand or synchronise with the
+candidate's internals. A class that only forwards calls, renames values, wraps a
+constructor, or exposes several parent-internal intermediates is not a semantic
+component; keep it as a private helper or merge it into its owner.
+
+The algorithm owns its computation-graph topology, including private subgraphs,
+network grouping, objectives, gradient routing, and optimiser grouping. An entry
+may resolve deployment configuration, construct external resources, and invoke
+the algorithm's builder and runtime, but it must not become the place where the
+algorithm graph is defined.
+
+Prefer names found in the algorithm's equations, pseudocode, or domain model.
+Test semantic boundaries directly where practical, and keep whole-algorithm
+numerical comparisons for refactors that are required to preserve behaviour.
+Extracting private functions from a large core method is encouraged when it
+improves auditability, but those functions must not be promoted to graph layers
+unless they independently satisfy the semantic and replacement tests above.
+
 ## AWS
 
 - `dev-*` Batch queues are for infrastructure development. Delivered
