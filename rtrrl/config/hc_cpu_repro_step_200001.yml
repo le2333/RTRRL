@@ -1,0 +1,21 @@
+experiment: rtrrl-halfcheetah-platform
+name: cpu-repro-step-200001
+phase: one-step-reproduction-gate
+environment:
+  id: brax::halfcheetah
+  backend: spring
+  observation_mask: even
+runtime:
+  python: "3.13"
+  instance_type: c7a.medium
+  queue: dev-cpu-c7am-queue
+  timeout_minutes: 60
+  retries: 0
+assets:
+  s3_prefix: s3://rtrrl-artifacts-007122174918/experiments/rtrrl-halfcheetah/platform/assets
+validation:
+  start_step: 200000
+  end_step: 200001
+  target_max_abs_diff: 0.0
+  authority: oai-intel-xeon-platinum-8573c
+  reference: config/hc_bp_step200001_oai_reference.tsv

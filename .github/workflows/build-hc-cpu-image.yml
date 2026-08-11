@@ -8,6 +8,8 @@ on:
       - rtrrl/docker/Dockerfile.hc-cpu
       - rtrrl/scripts/hc_cpu_repro_gate.py
       - rtrrl/config/hc_cpu_repro_200k_220k.yml
+      - rtrrl/config/hc_cpu_repro_step_200001.yml
+      - rtrrl/config/hc_bp_step200001_oai_reference.tsv
 
 permissions:
   contents: read
@@ -44,6 +46,7 @@ jobs:
           import boto3
           from pathlib import Path
           assert Path("/opt/rtrrl/hc_cpu_repro_gate.py").is_file()
+          assert Path("/opt/rtrrl/hc_bp_step200001_oai_reference.tsv").is_file()
           '
       - name: Configure AWS credentials
         if: contains(github.event.head_commit.message, '[push-hc-cpu-image]')

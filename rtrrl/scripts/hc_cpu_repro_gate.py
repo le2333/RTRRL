@@ -6,6 +6,7 @@ import hashlib
 import importlib.util
 import json
 import os
+import platform
 import shutil
 import subprocess
 import sys
@@ -16,6 +17,7 @@ from pathlib import Path
 
 BUCKET = "rtrrl-artifacts-007122174918"
 PREFIX = "experiments/rtrrl-halfcheetah/platform/assets"
+OAI_METRICS_SHA256 = "cf972eee842f5e379a5f68f853c548ce92ca74ef914c8c10d134758fa92422bc"
 ASSETS = {
     "wheels": (
         "rtrrl_wheels_cp313_linux.zip",
@@ -135,7 +137,7 @@ def prepare_workspace(root: Path, extracted: dict[str, Path]) -> tuple[Path, Pat
     return handoff, round_root
 
 
-def checkpoint_report(handoff: Path, round_root: Path) -> None:
+def checkpoint_report(handoff: Path, round_root: Path) -> dict[int, dict[str, object]]:
     import jax
 
     runner_path = next(
@@ -152,10 +154,20 @@ def checkpoint_report(handoff: Path, round_root: Path) -> None:
     carry_200, payload_200 = runner.load_checkpoint(checkpoint_dir / "step_0200000.pkl")
     carry_220, payload_220 = runner.load_checkpoint(checkpoint_dir / "step_0220000.pkl")
     spans = []
+    leaf_catalog = {}
     cursor = 0
     for name, component in zip(CARRY_NAMES, carry_200, strict=True):
-        leaves = jax.tree_util.tree_leaves(component)
+        path_leaves, _ = jax.tree_util.tree_flatten_with_path(component)
+        leaves = [leaf for _, leaf in path_leaves]
         spans.append({"block": name, "leaf_start": cursor, "leaf_end": cursor + len(leaves) - 1})
+        for offset, (path, leaf) in enumerate(path_leaves):
+            index = cursor + offset
+            leaf_catalog[index] = {
+                "block": name,
+                "path": jax.tree_util.keystr(path),
+                "shape": list(leaf.shape),
+                "dtype": str(leaf.dtype),
+            }
         cursor += len(leaves)
     report = {
         "event": "checkpoint_metadata",
@@ -173,8 +185,85 @@ def checkpoint_report(handoff: Path, round_root: Path) -> None:
         "leaf_count_200k": len(jax.tree_util.tree_leaves(carry_200)),
         "leaf_count_220k": len(jax.tree_util.tree_leaves(carry_220)),
         "leaf_spans": spans,
+        "leaf_catalog": leaf_catalog,
     }
     print(json.dumps(report, default=str), flush=True)
+    return leaf_catalog
+
+
+def raw_sha256(value: object) -> str:
+    import numpy as np
+
+    return hashlib.sha256(np.asarray(value).tobytes(order="C")).hexdigest()
+
+
+def one_step_report(round_root: Path, leaf_catalog: dict[int, dict[str, object]]) -> bool:
+    import csv
+
+    import jax
+    import numpy as np
+
+    runner_path = next(
+        (round_root / "artifacts/hcbase").glob(
+            "rtrrl_halfcheetah_instability_probe_*/rtrrl_halfcheetah_runner_v1_20260809.py"
+        )
+    )
+    spec = importlib.util.spec_from_file_location("hc_one_step_runner", runner_path)
+    if spec is None or spec.loader is None:
+        raise RuntimeError(f"cannot import archived runner: {runner_path}")
+    runner = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(runner)
+    sys.path.insert(0, str(round_root / "work"))
+    from teaching_runner_lib import make_runner_class
+
+    checkpoint = round_root / "results/exp3_bp_fromscratch_3seed/batch_checkpoints/step_0200000.pkl"
+    carry_200, payload = runner.load_checkpoint(checkpoint)
+    runner_class = make_runner_class(runner.Runner, "bp", "bp", 1.0, 1.0)
+    replay = runner_class(seed=1, config=payload["config"])
+
+    def batched_step(carry: object) -> tuple[object, object]:
+        return jax.vmap(lambda item: replay.step(item, None))(carry)
+
+    carry_201, step_output = batched_step(carry_200)
+    metrics, finite = step_output
+    jax.block_until_ready(carry_201)
+    reference_path = Path(__file__).with_name("hc_bp_step200001_oai_reference.tsv")
+    with reference_path.open(newline="") as stream:
+        rows = list(csv.DictReader(stream, delimiter="\t"))
+    expected = {
+        (row["carry"], int(row["leaf"])): row["sha256_raw_c_order_bytes"] for row in rows
+    }
+    mismatches = []
+    for carry_name, carry in (("carry_200000", carry_200), ("carry_200001", carry_201)):
+        for index, value in enumerate(jax.tree_util.tree_leaves(carry)):
+            host = np.asarray(jax.device_get(value))
+            actual = raw_sha256(host)
+            wanted = expected[(carry_name, index)]
+            if actual != wanted:
+                detail = {
+                    "carry": carry_name,
+                    "index": index,
+                    **leaf_catalog[index],
+                    "expected_sha256": wanted,
+                    "actual_sha256": actual,
+                }
+                if host.size <= 512:
+                    detail["actual_values"] = host.tolist()
+                mismatches.append(detail)
+    metrics_sha256 = raw_sha256(jax.device_get(metrics))
+    report = {
+        "event": "one_step_comparison",
+        "host": {"platform": platform.platform(), "processor": platform.processor()},
+        "metrics_sha256": metrics_sha256,
+        "expected_metrics_sha256": OAI_METRICS_SHA256,
+        "metrics_equal": metrics_sha256 == OAI_METRICS_SHA256,
+        "metrics": np.asarray(jax.device_get(metrics)).tolist(),
+        "finite": np.asarray(jax.device_get(finite)).tolist(),
+        "mismatch_count": len(mismatches),
+        "mismatches": mismatches,
+    }
+    print(json.dumps(report), flush=True)
+    return not mismatches and metrics_sha256 == OAI_METRICS_SHA256
 
 
 def run_prepared(root: Path) -> int:
@@ -184,31 +273,8 @@ def run_prepared(root: Path) -> int:
     handoff = handoffs[0]
     round_root = root / "round" / "hc_bp_round_20260810"
     subprocess.run([sys.executable, str(handoff / "env/verify_env.py")], check=True)
-    checkpoint_report(handoff, round_root)
-    completed = subprocess.run(
-        [
-            sys.executable,
-            str(handoff / "scripts/verify_bp_200_to_220.py"),
-            "--round-root",
-            str(round_root),
-        ],
-        check=False,
-        capture_output=True,
-        text=True,
-    )
-    if completed.stdout:
-        print(completed.stdout, end="", flush=True)
-    if completed.stderr:
-        print(completed.stderr, end="", file=sys.stderr, flush=True)
-    if completed.returncode != 0:
-        print(json.dumps({"event": "gate_complete", "returncode": completed.returncode}))
-        return completed.returncode
-    try:
-        result = json.loads(completed.stdout)
-    except json.JSONDecodeError as error:
-        print(json.dumps({"event": "gate_complete", "returncode": 2, "error": str(error)}))
-        return 2
-    gate_returncode = 0 if result.get("equal") and result.get("max_abs_diff") == 0.0 else 1
+    leaf_catalog = checkpoint_report(handoff, round_root)
+    gate_returncode = 0 if one_step_report(round_root, leaf_catalog) else 1
     print(json.dumps({"event": "gate_complete", "returncode": gate_returncode}))
     return gate_returncode
 

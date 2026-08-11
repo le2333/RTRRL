@@ -1,0 +1,99 @@
+carry	leaf	alias	path	shape	dtype	nbytes	sha256_raw_c_order_bytes
+carry_200000	0	env_state.pipeline_state.q	(SequenceKey(idx=0), GetAttrKey(name='pipeline_state'), GetAttrKey(name='q'))	[3, 9]	float32	108	d753ee58962f0ab0ea737e08336c60cbeb788a4c008ee68ebc490aa0df7960dc
+carry_200000	1	env_state.pipeline_state.qd	(SequenceKey(idx=0), GetAttrKey(name='pipeline_state'), GetAttrKey(name='qd'))	[3, 9]	float32	108	7f2d356ae35280fb02ddf2d17ebb247b5ddc47a8e778e9f990f9f580d373bc61
+carry_200000	2	env_state.pipeline_state.x.pos	(SequenceKey(idx=0), GetAttrKey(name='pipeline_state'), GetAttrKey(name='x'), GetAttrKey(name='pos'))	[3, 7, 3]	float32	252	fece4dbc681632ed510bfab2a1f325a9b9b6315955c17506627889258bcdbeb1
+carry_200000	3	env_state.pipeline_state.x.rot	(SequenceKey(idx=0), GetAttrKey(name='pipeline_state'), GetAttrKey(name='x'), GetAttrKey(name='rot'))	[3, 7, 4]	float32	336	559408a3fe3c4fd827c3df1ff4d07a672f54513454aab904ac722580ea9a2ae9
+carry_200000	4	env_state.pipeline_state.xd.ang	(SequenceKey(idx=0), GetAttrKey(name='pipeline_state'), GetAttrKey(name='xd'), GetAttrKey(name='ang'))	[3, 7, 3]	float32	252	5c760f975fc635b7360eaca815aec153beb5766b34f30002c229674926c80338
+carry_200000	5	env_state.pipeline_state.xd.vel	(SequenceKey(idx=0), GetAttrKey(name='pipeline_state'), GetAttrKey(name='xd'), GetAttrKey(name='vel'))	[3, 7, 3]	float32	252	e64f7b2a3e79ccc5f5589009bd2eb16907366b224a8e157a576c9197d4bcff2f
+carry_200000	6	env_state.pipeline_state.x_i.pos	(SequenceKey(idx=0), GetAttrKey(name='pipeline_state'), GetAttrKey(name='x_i'), GetAttrKey(name='pos'))	[3, 7, 3]	float32	252	61a26fbf6bdbdc968a2e8465ae4126f852ce86ad74f1918852572473d113042f
+carry_200000	7	env_state.pipeline_state.x_i.rot	(SequenceKey(idx=0), GetAttrKey(name='pipeline_state'), GetAttrKey(name='x_i'), GetAttrKey(name='rot'))	[3, 7, 4]	float32	336	559408a3fe3c4fd827c3df1ff4d07a672f54513454aab904ac722580ea9a2ae9
+carry_200000	8	env_state.pipeline_state.xd_i.ang	(SequenceKey(idx=0), GetAttrKey(name='pipeline_state'), GetAttrKey(name='xd_i'), GetAttrKey(name='ang'))	[3, 7, 3]	float32	252	5c760f975fc635b7360eaca815aec153beb5766b34f30002c229674926c80338
+carry_200000	9	env_state.pipeline_state.xd_i.vel	(SequenceKey(idx=0), GetAttrKey(name='pipeline_state'), GetAttrKey(name='xd_i'), GetAttrKey(name='vel'))	[3, 7, 3]	float32	252	1cff1f153354951035998862700e4be351647001af58e3f22df8a905a2607688
+carry_200000	10	env_state.pipeline_state.j.pos	(SequenceKey(idx=0), GetAttrKey(name='pipeline_state'), GetAttrKey(name='j'), GetAttrKey(name='pos'))	[3, 7, 3]	float32	252	446b6a0c3a05d6b27cca4562149736df957e1a996c831bc07f9b73ee5949c395
+carry_200000	11	env_state.pipeline_state.j.rot	(SequenceKey(idx=0), GetAttrKey(name='pipeline_state'), GetAttrKey(name='j'), GetAttrKey(name='rot'))	[3, 7, 4]	float32	336	9ada3222fa58f0d0589041422a8e564f92e1079973dde4e98114da53dfd2f28a
+carry_200000	12	env_state.pipeline_state.jd.ang	(SequenceKey(idx=0), GetAttrKey(name='pipeline_state'), GetAttrKey(name='jd'), GetAttrKey(name='ang'))	[3, 7, 3]	float32	252	a63b125547f494181c9ab14ddc2ba2c63ddcd690abdc5d298fc172eea4d156e2
+carry_200000	13	env_state.pipeline_state.jd.vel	(SequenceKey(idx=0), GetAttrKey(name='pipeline_state'), GetAttrKey(name='jd'), GetAttrKey(name='vel'))	[3, 7, 3]	float32	252	0fd4cb7ecbe691e2a125243c3dc36cf9fa8a5615227b1f8c42e66141121da50d
+carry_200000	14	env_state.pipeline_state.a_p.pos	(SequenceKey(idx=0), GetAttrKey(name='pipeline_state'), GetAttrKey(name='a_p'), GetAttrKey(name='pos'))	[3, 7, 3]	float32	252	b3fee838bc37848a9e2a0d659ca0c04122215e208de0326d54a1e66184907b8c
+carry_200000	15	env_state.pipeline_state.a_p.rot	(SequenceKey(idx=0), GetAttrKey(name='pipeline_state'), GetAttrKey(name='a_p'), GetAttrKey(name='rot'))	[3, 7, 4]	float32	336	3f4053b7f7662c9ba18cc8a410d772ce13537d5e7b4bb2ea32d7ddd65d03f448
+carry_200000	16	env_state.pipeline_state.a_c.pos	(SequenceKey(idx=0), GetAttrKey(name='pipeline_state'), GetAttrKey(name='a_c'), GetAttrKey(name='pos'))	[3, 7, 3]	float32	252	fece4dbc681632ed510bfab2a1f325a9b9b6315955c17506627889258bcdbeb1
+carry_200000	17	env_state.pipeline_state.a_c.rot	(SequenceKey(idx=0), GetAttrKey(name='pipeline_state'), GetAttrKey(name='a_c'), GetAttrKey(name='rot'))	[3, 7, 4]	float32	336	559408a3fe3c4fd827c3df1ff4d07a672f54513454aab904ac722580ea9a2ae9
+carry_200000	18	env_state.pipeline_state.i_inv	(SequenceKey(idx=0), GetAttrKey(name='pipeline_state'), GetAttrKey(name='i_inv'))	[3, 7, 3, 3]	float32	756	cc77a4abb04cfdf64d73ce20ab4d837e4d792c7d8f9288b6727ad9e758272ece
+carry_200000	19	env_state.pipeline_state.mass	(SequenceKey(idx=0), GetAttrKey(name='pipeline_state'), GetAttrKey(name='mass'))	[3, 7]	float32	84	055daa31f9487a5c20f70bc74ca73c26ae2503544d4e078b7bd7f77df4e53f2e
+carry_200000	20	env_state.obs	(SequenceKey(idx=0), GetAttrKey(name='obs'))	[3, 17]	float32	204	6ab3589111868fc3ea073b4559d118e3aa006b8325e9cc9052d959c04cd94c11
+carry_200000	21	env_state.reward	(SequenceKey(idx=0), GetAttrKey(name='reward'))	[3]	float32	12	b6333a5f4f5ea61b3302df1f488aedb7a2e7cafeff9b01aa7d109b4688eb8a4b
+carry_200000	22	env_state.done	(SequenceKey(idx=0), GetAttrKey(name='done'))	[3]	float32	12	15ec7bf0b50732b49f8228e07d24365338f9e3ab994b00af08e5a3bffe55fd8b
+carry_200000	23	env_state.metrics['reward_ctrl']	(SequenceKey(idx=0), GetAttrKey(name='metrics'), DictKey(key='reward_ctrl'))	[3]	float32	12	5c36677bc06a2f0f6e9ebefcbbd6b59c1ff30c078470a7bdab209253b7b61378
+carry_200000	24	env_state.metrics['reward_run']	(SequenceKey(idx=0), GetAttrKey(name='metrics'), DictKey(key='reward_run'))	[3]	float32	12	b996860c50b86e2e06660ae2a9d7c620b152338386eac8697b33f4d642c1c5c0
+carry_200000	25	env_state.metrics['x_position']	(SequenceKey(idx=0), GetAttrKey(name='metrics'), DictKey(key='x_position'))	[3]	float32	12	206841e298f563afbd319520ba7b49a5db94b55ed2ea97c9bd7fc6553aeeb0b9
+carry_200000	26	env_state.metrics['x_velocity']	(SequenceKey(idx=0), GetAttrKey(name='metrics'), DictKey(key='x_velocity'))	[3]	float32	12	b996860c50b86e2e06660ae2a9d7c620b152338386eac8697b33f4d642c1c5c0
+carry_200000	27	W_R	(SequenceKey(idx=1),)	[3, 32, 49]	float32	18816	29aea017478232dad3c97d84decd79a68a4f01cfed031cf5ed7694cc1f53db60
+carry_200000	28	tau	(SequenceKey(idx=2),)	[3, 32]	float32	384	b774c3e8b347a87664c5b7db65bcb2c0a9efc819213e2375a4d8302d7fa58320
+carry_200000	29	W_A	(SequenceKey(idx=3),)	[3, 32, 12]	float32	4608	28d8313a5195a0bb48471173387335dfb258f3d57ff51aaca9894a1f49b7ee99
+carry_200000	30	W_C	(SequenceKey(idx=4),)	[3, 32, 1]	float32	384	e991bd6937c98b665f38269c33015301b1459e47c74c11491131ad263ece44f1
+carry_200000	31	b_C	(SequenceKey(idx=5),)	[3, 1]	float32	12	d1f23b1228d4da2073c30e9b8fdabd8cffbc0b4d4a1902036d0e61a9a2e48a9b
+carry_200000	32	B_A	(SequenceKey(idx=6),)	[3, 32, 12]	float32	4608	05c03abf8e0cd918d38a53cf445ad342e95c878387ef870bf6b9cc63e464deee
+carry_200000	33	B_C	(SequenceKey(idx=7),)	[3, 32, 1]	float32	384	d96a7bcc51ee62e1e5f607003c1012f4c6ee40df19da2ac7cbd8640b98b35f04
+carry_200000	34	h	(SequenceKey(idx=8),)	[3, 32]	float32	384	bfc26692fb1a2d48fa22f0f6684d434495c551bb8afc8e4b54794be0eebf7145
+carry_200000	35	J_W	(SequenceKey(idx=9),)	[3, 32, 49]	float32	18816	25e0c8ebda937bfec8cd07469cd7a7505e4c56496c528df74ad1a18b500a3988
+carry_200000	36	J_tau	(SequenceKey(idx=10),)	[3, 32]	float32	384	51cc21b9b0481a8400843e722da542d399b445caa278102bbe89d47bff945c2a
+carry_200000	37	z_A	(SequenceKey(idx=11),)	[3, 32, 12]	float32	4608	620b4b1337450429d92d67f23a53fdd75d96f56a47c433365d3474e8dd0f3c98
+carry_200000	38	z_C_W	(SequenceKey(idx=12),)	[3, 32, 1]	float32	384	bfc26692fb1a2d48fa22f0f6684d434495c551bb8afc8e4b54794be0eebf7145
+carry_200000	39	z_C_b	(SequenceKey(idx=13),)	[3, 1]	float32	12	8a31a40ecac0ceb4d87b30bd156ca7a547e8e33dc071454b765fbc777d1c34a1
+carry_200000	40	z_R_W	(SequenceKey(idx=14),)	[3, 32, 49]	float32	18816	4a22cd96abde528f6ab25a6e7fda12c9fce2e23e39a935415fd7651b2f390656
+carry_200000	41	z_R_tau	(SequenceKey(idx=15),)	[3, 32]	float32	384	d7c25bf5ac369ae81916eba1335b26bc42ae1c420aec4207d03f4e62b048199a
+carry_200000	42	action	(SequenceKey(idx=16),)	[3, 6]	float32	72	491deba4c6fc8355b83f110fe17600cc0f11c0f9f113dec61202bee6a0582a28
+carry_200000	43	V_prev	(SequenceKey(idx=17),)	[3]	float32	12	f37e344386b0fe53f76ec9749320ed3c5323fbd0d1723cb7eaf9159b1b60b24c
+carry_200000	44	PRNG_key	(SequenceKey(idx=18),)	[3, 2]	uint32	24	17e97ea8f2cfe89a3ac3c667c4acfa0dfe422d47369bda24025eb47db7641ce9
+carry_200000	45	fixed_reset_key	(SequenceKey(idx=19),)	[3, 2]	uint32	24	c669803272a8320d73b9f4569571d4dfb032ab1c89f53370dc7c33df77bba0f7
+carry_200000	46	episodic_I	(SequenceKey(idx=20),)	[3]	float32	12	8a31a40ecac0ceb4d87b30bd156ca7a547e8e33dc071454b765fbc777d1c34a1
+carry_200000	47	episode_return	(SequenceKey(idx=21),)	[3]	float32	12	15ec7bf0b50732b49f8228e07d24365338f9e3ab994b00af08e5a3bffe55fd8b
+carry_200000	48	episode_length	(SequenceKey(idx=22),)	[3]	int32	12	15ec7bf0b50732b49f8228e07d24365338f9e3ab994b00af08e5a3bffe55fd8b
+carry_200001	0	env_state.pipeline_state.q	(SequenceKey(idx=0), GetAttrKey(name='pipeline_state'), GetAttrKey(name='q'))	[3, 9]	float32	108	dc0b35dd785613442e4cc8b41f9729156cbe9ca4679944f277dfe9fff0a5fba5
+carry_200001	1	env_state.pipeline_state.qd	(SequenceKey(idx=0), GetAttrKey(name='pipeline_state'), GetAttrKey(name='qd'))	[3, 9]	float32	108	61f6ee85c7e20065c578b73196629298638ee572ae483edaf9960dd7619c1eb6
+carry_200001	2	env_state.pipeline_state.x.pos	(SequenceKey(idx=0), GetAttrKey(name='pipeline_state'), GetAttrKey(name='x'), GetAttrKey(name='pos'))	[3, 7, 3]	float32	252	9aa80387a45679eeda6631902e8e79b5bf98d380268b35b093a306200f190d4f
+carry_200001	3	env_state.pipeline_state.x.rot	(SequenceKey(idx=0), GetAttrKey(name='pipeline_state'), GetAttrKey(name='x'), GetAttrKey(name='rot'))	[3, 7, 4]	float32	336	0c154ca995372051495dd12b9eba485fce729772ae7e31bed2cf41159909535a
+carry_200001	4	env_state.pipeline_state.xd.ang	(SequenceKey(idx=0), GetAttrKey(name='pipeline_state'), GetAttrKey(name='xd'), GetAttrKey(name='ang'))	[3, 7, 3]	float32	252	1ce5d7d04b5985ff4a9f2d7ec13dc8cad57d209388b551691320310a6bdab2fa
+carry_200001	5	env_state.pipeline_state.xd.vel	(SequenceKey(idx=0), GetAttrKey(name='pipeline_state'), GetAttrKey(name='xd'), GetAttrKey(name='vel'))	[3, 7, 3]	float32	252	21654bcf85b7727ca268a17a30f42d8cce1d3a837fd1109f9ddfd617f6405aff
+carry_200001	6	env_state.pipeline_state.x_i.pos	(SequenceKey(idx=0), GetAttrKey(name='pipeline_state'), GetAttrKey(name='x_i'), GetAttrKey(name='pos'))	[3, 7, 3]	float32	252	dd99d63a49b9927aca248a709595a99b7c82c0a421b3f073a9ef3099fda2ee72
+carry_200001	7	env_state.pipeline_state.x_i.rot	(SequenceKey(idx=0), GetAttrKey(name='pipeline_state'), GetAttrKey(name='x_i'), GetAttrKey(name='rot'))	[3, 7, 4]	float32	336	0c154ca995372051495dd12b9eba485fce729772ae7e31bed2cf41159909535a
+carry_200001	8	env_state.pipeline_state.xd_i.ang	(SequenceKey(idx=0), GetAttrKey(name='pipeline_state'), GetAttrKey(name='xd_i'), GetAttrKey(name='ang'))	[3, 7, 3]	float32	252	1ce5d7d04b5985ff4a9f2d7ec13dc8cad57d209388b551691320310a6bdab2fa
+carry_200001	9	env_state.pipeline_state.xd_i.vel	(SequenceKey(idx=0), GetAttrKey(name='pipeline_state'), GetAttrKey(name='xd_i'), GetAttrKey(name='vel'))	[3, 7, 3]	float32	252	c7987ef5441e80f3434fc600b97b34f229a6c1a2c5d1534d22813a6992dae071
+carry_200001	10	env_state.pipeline_state.j.pos	(SequenceKey(idx=0), GetAttrKey(name='pipeline_state'), GetAttrKey(name='j'), GetAttrKey(name='pos'))	[3, 7, 3]	float32	252	18665468db6bd68595189e7163ea9cb6ee6d05a2806145721aebcdd7f7ad8ef6
+carry_200001	11	env_state.pipeline_state.j.rot	(SequenceKey(idx=0), GetAttrKey(name='pipeline_state'), GetAttrKey(name='j'), GetAttrKey(name='rot'))	[3, 7, 4]	float32	336	ec1d7a67131dcc5cf439ead06d5ccae29080983e1241e9bae510fd214f9b229d
+carry_200001	12	env_state.pipeline_state.jd.ang	(SequenceKey(idx=0), GetAttrKey(name='pipeline_state'), GetAttrKey(name='jd'), GetAttrKey(name='ang'))	[3, 7, 3]	float32	252	1ad31431beb01d2a2119edf7c6757b28ea8521113f0847bc609896fc552e6301
+carry_200001	13	env_state.pipeline_state.jd.vel	(SequenceKey(idx=0), GetAttrKey(name='pipeline_state'), GetAttrKey(name='jd'), GetAttrKey(name='vel'))	[3, 7, 3]	float32	252	d86387e5224b7d649e2146c00e30d598ae77a24b4678e4c572411db079fbd2da
+carry_200001	14	env_state.pipeline_state.a_p.pos	(SequenceKey(idx=0), GetAttrKey(name='pipeline_state'), GetAttrKey(name='a_p'), GetAttrKey(name='pos'))	[3, 7, 3]	float32	252	8853b7f52be05d596b97e5d14c270433beca6d5dabd3aabd3711bccfc7752871
+carry_200001	15	env_state.pipeline_state.a_p.rot	(SequenceKey(idx=0), GetAttrKey(name='pipeline_state'), GetAttrKey(name='a_p'), GetAttrKey(name='rot'))	[3, 7, 4]	float32	336	60123aba0a40ca6811b83b162ca28c95f4c0cac65dec755b85a330504a8c6a68
+carry_200001	16	env_state.pipeline_state.a_c.pos	(SequenceKey(idx=0), GetAttrKey(name='pipeline_state'), GetAttrKey(name='a_c'), GetAttrKey(name='pos'))	[3, 7, 3]	float32	252	9aa80387a45679eeda6631902e8e79b5bf98d380268b35b093a306200f190d4f
+carry_200001	17	env_state.pipeline_state.a_c.rot	(SequenceKey(idx=0), GetAttrKey(name='pipeline_state'), GetAttrKey(name='a_c'), GetAttrKey(name='rot'))	[3, 7, 4]	float32	336	0c154ca995372051495dd12b9eba485fce729772ae7e31bed2cf41159909535a
+carry_200001	18	env_state.pipeline_state.i_inv	(SequenceKey(idx=0), GetAttrKey(name='pipeline_state'), GetAttrKey(name='i_inv'))	[3, 7, 3, 3]	float32	756	1b4567bcd9a68e6d86863bd93960896aaf108e918368deb986a35336999267c7
+carry_200001	19	env_state.pipeline_state.mass	(SequenceKey(idx=0), GetAttrKey(name='pipeline_state'), GetAttrKey(name='mass'))	[3, 7]	float32	84	055daa31f9487a5c20f70bc74ca73c26ae2503544d4e078b7bd7f77df4e53f2e
+carry_200001	20	env_state.obs	(SequenceKey(idx=0), GetAttrKey(name='obs'))	[3, 17]	float32	204	381c8f6f4cfeb97deafa79cd6fc89b0c0bc4d1bf16c7b7876ec1f438068baa63
+carry_200001	21	env_state.reward	(SequenceKey(idx=0), GetAttrKey(name='reward'))	[3]	float32	12	91733cd64341232c8aac8cdd54105ba44946bcd5d54a075a63c91dbed2b33d3b
+carry_200001	22	env_state.done	(SequenceKey(idx=0), GetAttrKey(name='done'))	[3]	float32	12	15ec7bf0b50732b49f8228e07d24365338f9e3ab994b00af08e5a3bffe55fd8b
+carry_200001	23	env_state.metrics['reward_ctrl']	(SequenceKey(idx=0), GetAttrKey(name='metrics'), DictKey(key='reward_ctrl'))	[3]	float32	12	a54ab087a04a9d4da13ed544b4c26138b7fdbebf078c696789d48a72c9ccabc6
+carry_200001	24	env_state.metrics['reward_run']	(SequenceKey(idx=0), GetAttrKey(name='metrics'), DictKey(key='reward_run'))	[3]	float32	12	05a296b975d233b16e8054ddc506e2647bbf43b12a0fe0cc1547e7873413199f
+carry_200001	25	env_state.metrics['x_position']	(SequenceKey(idx=0), GetAttrKey(name='metrics'), DictKey(key='x_position'))	[3]	float32	12	387afd3f30cbcb63af8253511c0dc194e30e1d3bcfe934de774e15111ce0adc6
+carry_200001	26	env_state.metrics['x_velocity']	(SequenceKey(idx=0), GetAttrKey(name='metrics'), DictKey(key='x_velocity'))	[3]	float32	12	05a296b975d233b16e8054ddc506e2647bbf43b12a0fe0cc1547e7873413199f
+carry_200001	27	W_R	(SequenceKey(idx=1),)	[3, 32, 49]	float32	18816	0ee8c04e81083a6874de900cd4a0ff740d50fc87948329d3e03b87c0704cc64c
+carry_200001	28	tau	(SequenceKey(idx=2),)	[3, 32]	float32	384	bf729602645f790b3e0c26f203eab618ee0b139a421dd44a27a2a918b86645de
+carry_200001	29	W_A	(SequenceKey(idx=3),)	[3, 32, 12]	float32	4608	30ae0483f01f2f17e50b7dd1fb34f169322a323b8b283b569bf5b3fe17ba55ba
+carry_200001	30	W_C	(SequenceKey(idx=4),)	[3, 32, 1]	float32	384	3420ba02bff7e0060e8003653b9eb8b8ee968059ade0b3fcaa674ce0ac792472
+carry_200001	31	b_C	(SequenceKey(idx=5),)	[3, 1]	float32	12	dda205f6ad5b792f530d9723a9c8c5a528b1f704d8ce56101d362450854e56d1
+carry_200001	32	B_A	(SequenceKey(idx=6),)	[3, 32, 12]	float32	4608	05c03abf8e0cd918d38a53cf445ad342e95c878387ef870bf6b9cc63e464deee
+carry_200001	33	B_C	(SequenceKey(idx=7),)	[3, 32, 1]	float32	384	d96a7bcc51ee62e1e5f607003c1012f4c6ee40df19da2ac7cbd8640b98b35f04
+carry_200001	34	h	(SequenceKey(idx=8),)	[3, 32]	float32	384	1eb78d88d78553cbe7c69a0dd63a1d845754d25f18eb8273a9c60f622dec1248
+carry_200001	35	J_W	(SequenceKey(idx=9),)	[3, 32, 49]	float32	18816	daa79fe6241aa40b08ad307e08f372278cfaf1167e27f8afdbe8e2f0942b3c4e
+carry_200001	36	J_tau	(SequenceKey(idx=10),)	[3, 32]	float32	384	b357b57290fb6696dff35a348f5df5dcde512ea7cec827ab3f3d3c8600083084
+carry_200001	37	z_A	(SequenceKey(idx=11),)	[3, 32, 12]	float32	4608	4aba839eeea28993d4902bfa9775a08b9f224f0d16f696a3105eaf2553389acf
+carry_200001	38	z_C_W	(SequenceKey(idx=12),)	[3, 32, 1]	float32	384	d0f9d83df801ba699557935ef36b37fefcf124eb1eac621a03a5634c08a1db00
+carry_200001	39	z_C_b	(SequenceKey(idx=13),)	[3, 1]	float32	12	55ced38a49dcc5115ec0e6af0c67f790ab98373d429e0524674aee39f52c0dd5
+carry_200001	40	z_R_W	(SequenceKey(idx=14),)	[3, 32, 49]	float32	18816	c36a49653b0ca0ff8131b597d89131ea31ba9c43e67a0bc8c253016deb67ab14
+carry_200001	41	z_R_tau	(SequenceKey(idx=15),)	[3, 32]	float32	384	649861aa622fcfc5b28009403f564b1ddc5370e6fcd6ec516c7b3a3b378aae23
+carry_200001	42	action	(SequenceKey(idx=16),)	[3, 6]	float32	72	1fcf28bc6987724759108b3d62b027caa98de8a8d32c4c75185aeec8e0b2a3c1
+carry_200001	43	V_prev	(SequenceKey(idx=17),)	[3]	float32	12	d153719adbdb50642fc302e0c373d736835dc7bd95f2fcde2e6fec520600fa25
+carry_200001	44	PRNG_key	(SequenceKey(idx=18),)	[3, 2]	uint32	24	f1c018e83b01840f399fafc78e5ac4f207532ef3841239ff7502a00bc9a1c3e5
+carry_200001	45	fixed_reset_key	(SequenceKey(idx=19),)	[3, 2]	uint32	24	c669803272a8320d73b9f4569571d4dfb032ab1c89f53370dc7c33df77bba0f7
+carry_200001	46	episodic_I	(SequenceKey(idx=20),)	[3]	float32	12	3d19712160842d4031581ccaf1a3db8dd893010b417623ccc8285b6feb4a6fe3
+carry_200001	47	episode_return	(SequenceKey(idx=21),)	[3]	float32	12	91733cd64341232c8aac8cdd54105ba44946bcd5d54a075a63c91dbed2b33d3b
+carry_200001	48	episode_length	(SequenceKey(idx=22),)	[3]	int32	12	11047585fe102fbb5cadb42446612a578d88c6ef5ed076bb7ac360c4f9e4373d
