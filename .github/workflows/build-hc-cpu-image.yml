@@ -1,0 +1,62 @@
+name: Build HalfCheetah CPU reproduction image
+
+on:
+  push:
+    branches: [main, "feature/**"]
+    paths:
+      - .github/workflows/build-hc-cpu-image.yml
+      - rtrrl/docker/Dockerfile.hc-cpu
+      - rtrrl/scripts/hc_cpu_repro_gate.py
+      - rtrrl/config/hc_cpu_repro_200k_220k.yml
+
+permissions:
+  contents: read
+
+concurrency:
+  group: build-hc-cpu-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  IMAGE: rtrrl-hc-repro:cpu
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+      - uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f
+      - name: Compile-check the entry
+        run: python -m py_compile rtrrl/scripts/hc_cpu_repro_gate.py
+      - name: Build image
+        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8
+        with:
+          context: .
+          file: rtrrl/docker/Dockerfile.hc-cpu
+          platforms: linux/amd64
+          load: true
+          push: false
+          tags: ${{ env.IMAGE }}
+      - name: Verify bootstrap runtime
+        run: |
+          docker run --rm --entrypoint python "$IMAGE" -c '
+          import boto3
+          from pathlib import Path
+          assert Path("/opt/rtrrl/hc_cpu_repro_gate.py").is_file()
+          '
+      - name: Configure AWS credentials
+        if: contains(github.event.head_commit.message, '[push-hc-cpu-image]')
+        uses: aws-actions/configure-aws-credentials@61815dcd50bd041e203e49132bacad1fd04d2708
+        with:
+          role-to-assume: ${{ vars.INFRA_ACCEPTANCE_AWS_ROLE_ARN }}
+          aws-region: eu-north-1
+      - name: Push immutable image
+        if: contains(github.event.head_commit.message, '[push-hc-cpu-image]')
+        env:
+          ECR_TAG: hc-cpu-repro-${{ github.sha }}
+        run: |
+          test "$(aws sts get-caller-identity --query Account --output text)" = "007122174918"
+          aws ecr get-login-password | docker login --username AWS --password-stdin 007122174918.dkr.ecr.eu-north-1.amazonaws.com
+          remote="007122174918.dkr.ecr.eu-north-1.amazonaws.com/rtrrl:$ECR_TAG"
+          docker tag "$IMAGE" "$remote"
+          docker push "$remote"

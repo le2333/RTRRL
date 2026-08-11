@@ -1,0 +1,8 @@
+FROM python:3.13-slim-bookworm
+
+# boto3 only bootstraps the authenticated S3 download. The numerical stack is
+# installed at run time, offline, from the SHA256-verified archived wheelhouse.
+RUN python -m pip install --no-cache-dir boto3
+COPY rtrrl/scripts/hc_cpu_repro_gate.py /opt/rtrrl/hc_cpu_repro_gate.py
+ENV JAX_PLATFORM_NAME=cpu PYTHONUNBUFFERED=1
+CMD ["python", "/opt/rtrrl/hc_cpu_repro_gate.py"]
