@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+import importlib.util
 import json
 import os
 import shutil
@@ -33,6 +34,31 @@ ASSETS = {
         "abc163294942147a5efc00dcb1ba2ab309961c39a073fb999c3255d845ad1e3b",
     ),
 }
+CARRY_NAMES = (
+    "env_state",
+    "W_R",
+    "tau",
+    "W_A",
+    "W_C",
+    "b_C",
+    "B_A",
+    "B_C",
+    "h",
+    "J_W",
+    "J_tau",
+    "z_A",
+    "z_C_W",
+    "z_C_b",
+    "z_R_W",
+    "z_R_tau",
+    "action",
+    "V_prev",
+    "PRNG_key",
+    "fixed_reset_key",
+    "episodic_I",
+    "episode_return",
+    "episode_length",
+)
 
 
 def download_and_extract(root: Path) -> dict[str, Path]:
@@ -109,6 +135,48 @@ def prepare_workspace(root: Path, extracted: dict[str, Path]) -> tuple[Path, Pat
     return handoff, round_root
 
 
+def checkpoint_report(handoff: Path, round_root: Path) -> None:
+    import jax
+
+    runner_path = next(
+        (round_root / "artifacts/hcbase").glob(
+            "rtrrl_halfcheetah_instability_probe_*/rtrrl_halfcheetah_runner_v1_20260809.py"
+        )
+    )
+    spec = importlib.util.spec_from_file_location("hc_archived_runner", runner_path)
+    if spec is None or spec.loader is None:
+        raise RuntimeError(f"cannot import archived runner: {runner_path}")
+    runner = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(runner)
+    checkpoint_dir = round_root / "results/exp3_bp_fromscratch_3seed/batch_checkpoints"
+    carry_200, payload_200 = runner.load_checkpoint(checkpoint_dir / "step_0200000.pkl")
+    carry_220, payload_220 = runner.load_checkpoint(checkpoint_dir / "step_0220000.pkl")
+    spans = []
+    cursor = 0
+    for name, component in zip(CARRY_NAMES, carry_200, strict=True):
+        leaves = jax.tree_util.tree_leaves(component)
+        spans.append({"block": name, "leaf_start": cursor, "leaf_end": cursor + len(leaves) - 1})
+        cursor += len(leaves)
+    report = {
+        "event": "checkpoint_metadata",
+        "handoff_sha256": hashlib.sha256(
+            (handoff / "scripts/verify_bp_200_to_220.py").read_bytes()
+        ).hexdigest(),
+        "step_200k": {
+            key: payload_200.get(key) for key in ("format", "step", "code_sha256", "config")
+        },
+        "step_220k": {
+            key: payload_220.get(key) for key in ("format", "step", "code_sha256", "config")
+        },
+        "config_equal": payload_200.get("config") == payload_220.get("config"),
+        "treedef_equal": payload_200.get("treedef") == payload_220.get("treedef"),
+        "leaf_count_200k": len(jax.tree_util.tree_leaves(carry_200)),
+        "leaf_count_220k": len(jax.tree_util.tree_leaves(carry_220)),
+        "leaf_spans": spans,
+    }
+    print(json.dumps(report, default=str), flush=True)
+
+
 def run_prepared(root: Path) -> int:
     handoffs = list((root / "handoff").glob("rtrrl_server_handoff_*"))
     if len(handoffs) != 1:
@@ -116,6 +184,7 @@ def run_prepared(root: Path) -> int:
     handoff = handoffs[0]
     round_root = root / "round" / "hc_bp_round_20260810"
     subprocess.run([sys.executable, str(handoff / "env/verify_env.py")], check=True)
+    checkpoint_report(handoff, round_root)
     completed = subprocess.run(
         [
             sys.executable,
@@ -124,9 +193,24 @@ def run_prepared(root: Path) -> int:
             str(round_root),
         ],
         check=False,
+        capture_output=True,
+        text=True,
     )
-    print(json.dumps({"event": "gate_complete", "returncode": completed.returncode}))
-    return completed.returncode
+    if completed.stdout:
+        print(completed.stdout, end="", flush=True)
+    if completed.stderr:
+        print(completed.stderr, end="", file=sys.stderr, flush=True)
+    if completed.returncode != 0:
+        print(json.dumps({"event": "gate_complete", "returncode": completed.returncode}))
+        return completed.returncode
+    try:
+        result = json.loads(completed.stdout)
+    except json.JSONDecodeError as error:
+        print(json.dumps({"event": "gate_complete", "returncode": 2, "error": str(error)}))
+        return 2
+    gate_returncode = 0 if result.get("equal") and result.get("max_abs_diff") == 0.0 else 1
+    print(json.dumps({"event": "gate_complete", "returncode": gate_returncode}))
+    return gate_returncode
 
 
 def main() -> int:
