@@ -8,7 +8,11 @@ RUN apt-get update \
 RUN python -m pip install --no-cache-dir boto3 PyYAML
 COPY rtrrl/scripts/hc_cpu_repro_gate.py /opt/rtrrl/hc_cpu_repro_gate.py
 COPY rtrrl/scripts/hc_ctrnn_continuation.py /opt/rtrrl/hc_ctrnn_continuation.py
+COPY rtrrl/scripts/s1_diagssm_s0_gate.py /opt/rtrrl/s1_diagssm_s0_gate.py
+COPY rtrrl/scripts/s1_diagssm_runner.py /opt/rtrrl/s1_diagssm_runner.py
+COPY rtrrl/scripts/s1_diagssm_worker.py /opt/rtrrl/s1_diagssm_worker.py
 COPY rtrrl/config/hc_bp_step200001_oai_reference.tsv /opt/rtrrl/hc_bp_step200001_oai_reference.tsv
 COPY rtrrl/config/hc_ctrnn_bp_rflo_nominal_300k_1m.yml /opt/rtrrl/hc_ctrnn_continuation.yml
+COPY rtrrl/config/s1_diagssm_s0_server_gate.yml /opt/rtrrl/s1_config.yml
 ENV JAX_PLATFORM_NAME=cpu PYTHONUNBUFFERED=1
 CMD ["python", "/opt/rtrrl/hc_cpu_repro_gate.py"]

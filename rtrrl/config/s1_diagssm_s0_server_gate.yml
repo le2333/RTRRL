@@ -1,0 +1,40 @@
+experiment: s1-diagssm-qualification
+name: s1-diagssm-s0-server-gate
+phase: s0-prerequisite
+
+environment:
+  id: brax::halfcheetah
+  backend: spring
+  observation_mask: even
+  episode_horizon: 1000
+  action_clip: [-1.0, 1.0]
+
+model:
+  recurrent_model: minimal-diagssm
+  complex_modes: 16
+  real_state_dimension: 32
+  dtype: float32
+  input: [masked_observation, previous_action, previous_reward]
+
+gate:
+  compare_against: same-backend-autodiff
+  relative_tolerance: 2.0e-5
+  absolute_tolerance: 2.0e-6
+  require_finite: true
+  require_reset_boundary_isolation: true
+  fail_closed: true
+
+runtime:
+  python: "3.13"
+  jax: "0.5.0"
+  jaxlib: "0.5.0"
+  brax: "0.10.5"
+  device: cpu
+  instance_type: c7a.medium
+  queue: dev-cpu-c7am-queue
+  timeout_minutes: 30
+  retries: 0
+
+artifacts:
+  output_prefix: s3://rtrrl-artifacts-007122174918/experiments/s1-diagssm/s0/server-gate
+  required: [config, gate_json, runtime_summary, code_version]
