@@ -23,6 +23,7 @@ import yaml
 
 from entries import stream_ac
 from memorax.parameters import KIND, expand, flatten
+from tests.support.builders import assemble_stream_ac
 
 TEMPLATE = (
     Path(__file__).resolve().parents[2] / "experiments" / "streamac template.yaml"
@@ -96,14 +97,14 @@ def test_the_manifest_carries_only_the_branches_the_file_chose(pins):
     assert len(values) < len(flatten(stream_ac.PARAMETERS))
 
 
-def test_the_entry_builds_and_steps_on_that_manifest(experiment, pins):
+def test_the_manifest_assembles_and_steps(experiment, pins):
     section = experiment["environment"]
-    agent = stream_ac.build(
+    program = assemble_stream_ac(
         manifest(pins),
         SimpleNamespace(**section),
-        SimpleNamespace(num_envs=2),
+        num_envs=2,
     )
-    state = agent.init(jax.random.key(int(section["seed"])))
-    _, metrics = agent.train(jax.random.key(1), state, 4)
+    state = program.init_fn(jax.random.key(int(section["seed"])))
+    _, metrics = program.train_epoch_fn(jax.random.key(1), state, 4)
 
     assert metrics.interaction.reward.shape == (2, 2)

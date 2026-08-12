@@ -47,17 +47,12 @@ from typing import Any
 import jax
 import jax.numpy as jnp
 import pytest
-from conftest import TinyContinuousEnv, assert_within, deviations, flattened
 
 from memorax.algorithms.stream_ac import (
     NetworkState,
     Recurrence,
     StreamAC,
     StreamACConfig,
-)
-from reference.upstream_stream_ac import (
-    UpstreamStreamAC,
-    UpstreamStreamACConfig,
 )
 from memorax.environments.wrappers.normalize_observation import (
     NormalizeObservationWrapper,
@@ -81,6 +76,12 @@ from memorax.rl.updates import (
     ObBound,
     Sgd,
 )
+from reference.upstream_stream_ac import (
+    UpstreamStreamAC,
+    UpstreamStreamACConfig,
+)
+from tests.support.environments import TinyContinuousEnv
+from tests.support.numerics import assert_within, deviations, flattened
 
 ENVS = 3
 

@@ -21,6 +21,8 @@ from typing import Any
 
 from flax import struct
 
+from memorax.rl.interaction import terminal_of as terminal_of
+
 
 @dataclass(frozen=True)
 class AgentProgram:
@@ -85,17 +87,6 @@ class StepMetrics:
     interaction: InteractionMetrics = InteractionMetrics()
     forward: Any = None
     update: Any = None
-
-
-def terminal_of(info, done):
-    """The failure ending, from an environment that tells the two apart.
-
-    One that does not says every ending was a failure, which is what it knew and
-    what a single flag always meant. Reading it that way is also the safe one: it
-    never bootstraps past an ending the environment could not explain.
-    """
-
-    return info.get("terminal", done)
 
 
 @dataclass(frozen=True)

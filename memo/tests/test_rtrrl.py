@@ -18,7 +18,6 @@ from __future__ import annotations
 import jax
 import jax.numpy as jnp
 import pytest
-from conftest import TinyContinuousEnv
 
 from memorax.algorithms import rtrrl_aaai as rtrrl
 from memorax.algorithms.rtrrl_aaai import RTRRL, RTRRLConfig
@@ -26,6 +25,7 @@ from memorax.networks import heads
 from memorax.networks.components import FFN, LayerNorm, Tanh
 from memorax.networks.sequence import Sequence
 from memorax.networks.sequence_models import LRUCell, LRUConfig, Memoroid
+from tests.support.environments import TinyContinuousEnv
 
 ENVS = 3
 FEATURES = 4

@@ -11,6 +11,7 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Any
 
+from memorax.building import ComponentFamily
 from memorax.networks.initializers import Initializer, lecun_normal, sparse
 from memorax.parameters import KIND, param, read_branch, structure
 
@@ -35,6 +36,17 @@ def declared_initializer(component) -> Initializer:
     if component is None:
         return lecun_normal()
     return sparse(component.sparsity)
+
+
+def _construct_initializer(selection, builder):
+    del builder
+    return declared_initializer(selection.parameters)
+
+
+INITIALIZER_FAMILY = ComponentFamily(
+    branches=INITIALIZATION_BRANCHES,
+    construct=_construct_initializer,
+)
 
 
 def initializer_at(params: Mapping[str, Any], prefix: str) -> Initializer | None:

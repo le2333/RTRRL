@@ -1,0 +1,35 @@
+{
+  "contract": 7,
+  "run_id": "stream-ac-baseline-t0",
+  "experiment": "stream-ac-baseline",
+  "launch_id": "20260810-000000",
+  "trial": 0,
+  "entry": "stream_ac",
+  "digest": "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+  "environment": {
+    "id": "brax::hopper",
+    "backend": "spring",
+    "seed": 0,
+    "episode_length": 1000,
+    "observed": [0, 2, 4]
+  },
+  "training": {
+    "num_envs": 2,
+    "total_steps": 100,
+    "epoch_steps": 100
+  },
+  "evaluation": {"steps": 10},
+  "params": {"gamma": 0.99},
+  "logging": {
+    "aim": "aim://aim:53800",
+    "enable_rerun": false
+  },
+  "score": {
+    "metric": "eval/episode/return_per_step",
+    "window_steps": [0, 100],
+    "reduce": "last",
+    "direction": "maximize",
+    "non_finite": "worst",
+    "s3": "s3://artifacts/trainer/score.json"
+  }
+}

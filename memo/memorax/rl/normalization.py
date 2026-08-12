@@ -19,6 +19,7 @@ from typing import Any
 import jax.numpy as jnp
 from flax import struct
 
+from memorax.building import ComponentFamily
 from memorax.environments.wrappers import (
     NormalizeObservationWrapper,
     NormalizeRewardWrapper,
@@ -255,6 +256,22 @@ def declared_normalizer(component, *, discount=None) -> Normalizer | None:
             reset_on_done=getattr(component, "reset_on_done", True),
         )
     )
+
+
+def _construct_normalizer(selection, builder, *, discount=None):
+    del builder
+    normalizer = declared_normalizer(selection.parameters, discount=discount)
+    return None if normalizer is None else normalizer.config
+
+
+NORMALIZATION_FAMILY = ComponentFamily(
+    branches=NORMALIZATION_BRANCHES,
+    construct=_construct_normalizer,
+)
+DISCOUNTED_NORMALIZATION_FAMILY = ComponentFamily(
+    branches=DISCOUNTED_NORMALIZATION_BRANCHES,
+    construct=_construct_normalizer,
+)
 
 
 def environment_owns_normalization(env) -> bool:

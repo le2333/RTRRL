@@ -34,6 +34,7 @@ env:
   # mohmdelsayed/streaming-drl, the code behind the streaming RL paper. Pinned
   # so the numbers our rules answer to cannot change under us.
   STREAMING_DRL_COMMIT: 407dca7a8b584c1c20bc649053557f66e270b1e6
+  RTRRL_AAAI25_COMMIT: 4301943c349171d828d0fcf3e40944c286451415
 
 jobs:
   static:
@@ -43,6 +44,8 @@ jobs:
     env:
       CHECKED: >-
         memorax/rl
+        memorax/assembly.py
+        memorax/building.py
         memorax/algorithms/contract.py
         memorax/algorithms/rtrrl.py
         memorax/algorithms/stream_ac.py
@@ -103,8 +106,17 @@ jobs:
           git clone --quiet https://github.com/mohmdelsayed/streaming-drl.git "$RUNNER_TEMP/streaming-drl"
           git -C "$RUNNER_TEMP/streaming-drl" checkout --quiet $STREAMING_DRL_COMMIT
           echo "STREAMING_DRL=$RUNNER_TEMP/streaming-drl" >> "$GITHUB_ENV"
-      - name: Run algorithm suite
-        run: uv run pytest tests -v
+      - name: Fetch the published RTRRL implementation
+        run: |
+          git clone --quiet https://github.com/FranzKnut/RTRRL-AAAI25.git "$RUNNER_TEMP/RTRRL-AAAI25"
+          git -C "$RUNNER_TEMP/RTRRL-AAAI25" checkout --quiet $RTRRL_AAAI25_COMMIT
+          echo "RTRRL_AAAI25=$RUNNER_TEMP/RTRRL-AAAI25" >> "$GITHUB_ENV"
+      - name: Run fast and local-parity suites
+        run: uv run pytest tests -m "not external and not service and not container" -v
+      - name: Run service integrations
+        run: uv run pytest tests -m service -v
+      - name: Compare against pinned external implementations
+        run: uv run pytest tests -m external -v
       # Its own step because x64 is a process-wide JAX flag. The suite above runs
       # in the precision the trainer runs in, and this asks what that precision
       # costs, by rerunning the two LRUs against a double-precision reference.

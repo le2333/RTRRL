@@ -34,6 +34,7 @@ from memorax.networks.readouts import (
     actor_head,
 )
 from memorax.parameters import KIND
+from tests.support.builders import assemble_stream_ac
 
 ACTIONS = 3
 WIDTH = 6
@@ -121,9 +122,9 @@ def test_a_head_is_drawn_the_way_its_own_branch_says():
     """Not the way the backbone's does, and not the same as the other role's."""
 
     import jax.tree_util
-    from conftest import TinyContinuousEnv
 
     from memorax.parameters import expand
+    from tests.support.environments import TinyContinuousEnv
 
     del TinyContinuousEnv
     base = expand(stream_ac.PARAMETERS)
@@ -143,8 +144,8 @@ def test_a_head_is_drawn_the_way_its_own_branch_says():
         episode_length=1000,
         seed=0,
     )
-    agent = stream_ac.build(pinned, environment, SimpleNamespace(num_envs=2))
-    state = agent.init(jax.random.key(0))
+    program = assemble_stream_ac(pinned, environment, num_envs=2)
+    state = program.init_fn(jax.random.key(0))
 
     def kernel(params):
         for path, leaf in jax.tree_util.tree_leaves_with_path(params):

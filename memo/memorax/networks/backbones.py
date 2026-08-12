@@ -11,8 +11,9 @@ from dataclasses import dataclass
 
 import flax.linen as nn
 
+from memorax.building import ComponentFamily
 from memorax.networks.components import FFN, LayerNorm, LeakyReLU
-from memorax.networks.initialization import initialization
+from memorax.networks.initialization import INITIALIZER_FAMILY, initialization
 from memorax.networks.sequence_models import (
     RNN,
     LRUCell,
@@ -54,6 +55,14 @@ _LRU_CELLS = {
     "lru": LRUCell,
     "lru_published": PublishedLRUCell,
     "lru_rewritten": RewrittenLRUCell,
+}
+
+BACKBONE_BRANCHES = {
+    "rtu": Rtu,
+    "lru": Lru,
+    "mlp": Mlp,
+    "lru_published": Lru,
+    "lru_rewritten": Lru,
 }
 
 
@@ -101,3 +110,30 @@ def backbone(
         )
     registered = ", ".join((*BACKBONES, *UPSTREAM_BACKBONES))
     raise ValueError(f"unknown backbone {name!r}; registered: {registered}")
+
+
+def _construct_backbone(
+    selection,
+    builder,
+    *,
+    features: int,
+    output_dim: int | None = None,
+):
+    kernel_init = (
+        builder.build(INITIALIZER_FAMILY, f"{selection.path}.initialization")
+        if isinstance(selection.parameters, Mlp)
+        else None
+    )
+    return backbone(
+        selection.kind,
+        features=features,
+        hidden_dim=selection.parameters.hidden_dim,
+        output_dim=output_dim,
+        kernel_init=kernel_init,
+    )
+
+
+BACKBONE_FAMILY = ComponentFamily(
+    branches=BACKBONE_BRANCHES,
+    construct=_construct_backbone,
+)

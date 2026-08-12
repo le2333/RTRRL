@@ -15,8 +15,9 @@ from dataclasses import dataclass
 
 import flax.linen as nn
 
+from memorax.building import ComponentFamily
 from memorax.networks import heads
-from memorax.networks.initialization import initialization
+from memorax.networks.initialization import INITIALIZER_FAMILY, initialization
 
 ACTOR_HEADS = {
     "global_std": heads.Gaussian,
@@ -50,3 +51,23 @@ def actor_head(name: str, *, action_dim: int, kernel_init=None) -> nn.Module:
 
 def critic_head(name: str, *, kernel_init=None) -> nn.Module:
     return _build(CRITIC_HEADS, "critic", name, kernel_init)
+
+
+def _construct_actor_head(selection, builder, *, action_dim: int):
+    kernel_init = builder.build(INITIALIZER_FAMILY, f"{selection.path}.initialization")
+    return actor_head(selection.kind, action_dim=action_dim, kernel_init=kernel_init)
+
+
+def _construct_critic_head(selection, builder):
+    kernel_init = builder.build(INITIALIZER_FAMILY, f"{selection.path}.initialization")
+    return critic_head(selection.kind, kernel_init=kernel_init)
+
+
+ACTOR_HEAD_FAMILY = ComponentFamily(
+    branches=ACTOR_HEAD_BRANCHES,
+    construct=_construct_actor_head,
+)
+CRITIC_HEAD_FAMILY = ComponentFamily(
+    branches=CRITIC_HEAD_BRANCHES,
+    construct=_construct_critic_head,
+)

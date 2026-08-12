@@ -47,7 +47,6 @@ import sys
 import jax
 import jax.numpy as jnp
 import pytest
-from conftest import assert_within, deviations, flattened
 
 # The kernel both files drive, built once. Two copies of a builder are two
 # kernels the moment either drifts, and this file's whole job is to compare
@@ -57,6 +56,9 @@ from test_rtrrl import build
 from memorax.algorithms.rtrrl_aaai import Network, RTRRLConfig
 from memorax.networks.sequence_models import LRUCell, LRUConfig, Memoroid
 from memorax.rl import make_exact_rtrl_credit
+from tests.support.numerics import assert_within, deviations, flattened
+
+pytestmark = [pytest.mark.parity, pytest.mark.external]
 
 ENVS = 3
 STEPS = 12

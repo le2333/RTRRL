@@ -20,6 +20,7 @@ import jax
 import jax.numpy as jnp
 from flax import struct
 
+from memorax.building import ComponentFamily
 from memorax.parameters import param
 
 
@@ -166,6 +167,21 @@ BOUND_BRANCHES = {
 }
 
 BASE_BRANCHES = {"sgd": Sgd, "adam": Adam}
+
+
+def _selected_parameters(selection, builder):
+    del builder
+    return selection.parameters
+
+
+BOUND_FAMILY = ComponentFamily(
+    branches=BOUND_BRANCHES,
+    construct=_selected_parameters,
+)
+BASE_FAMILY = ComponentFamily(
+    branches=BASE_BRANCHES,
+    construct=_selected_parameters,
+)
 
 
 def make_bounded_rule(*, bound, base) -> UpdateRule:

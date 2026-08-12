@@ -10,6 +10,8 @@ from worker import objects
 from worker.reporter import build_default_sinks
 from worker.sinks.rerun import RerunSink
 
+pytestmark = [pytest.mark.integration, pytest.mark.service]
+
 
 def make_episode(
     number: int,

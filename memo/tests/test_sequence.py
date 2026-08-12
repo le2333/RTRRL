@@ -22,7 +22,6 @@ import flax.linen as nn
 import jax
 import jax.numpy as jnp
 import pytest
-from conftest import TinyContinuousEnv, deviations, flattened
 
 from memorax.algorithms.stream_ac import StreamAC, StreamACConfig
 from memorax.networks import heads
@@ -31,6 +30,8 @@ from memorax.networks.sequence import Sequence
 from memorax.networks.sequence_models import RNN, RTUCell, RTUConfig
 from memorax.rl import make_credit
 from memorax.rl.updates import ObBound, Sgd
+from tests.support.environments import TinyContinuousEnv
+from tests.support.numerics import deviations, flattened
 
 ENVS = 3
 FEATURES = 4

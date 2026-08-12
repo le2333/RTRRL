@@ -18,7 +18,7 @@ Rebuilt from ``../RTRRL-AAAI25/rtrrl.py``. Driven against it by
 from __future__ import annotations
 
 from collections.abc import Iterable
-from dataclasses import dataclass, replace
+from dataclasses import dataclass
 from typing import Any
 
 import jax
@@ -28,11 +28,14 @@ from flax import struct
 
 from memorax.readings import reading, readings
 from memorax.rl import (
-    environment_owns_normalization,
+    EnvironmentStreams,
+    InteractionNormalization,
+    NormalizationState,
+    broadcast_stream,
     make_exact_rtrl_credit,
-    make_normalizer,
     make_optax_rule,
     make_td0,
+    select_ended,
 )
 from memorax.utils import Timestep
 from memorax.utils.axes import (
@@ -47,7 +50,6 @@ from .contract import (
     EvaluationConfig,
     InteractionMetrics,
     StepMetrics,
-    terminal_of,
 )
 
 TORSO_GROUP = "torso"
@@ -118,14 +120,6 @@ class CoreState:
     rule: Any
     value: Any
     emphasis: Any
-
-
-@struct.dataclass(frozen=True)
-class Scales:
-    """What the two running estimators carry, and nothing else."""
-
-    observation: Any = None
-    reward: Any = None
 
 
 # -------------------------------------------------------------------- readings
@@ -224,23 +218,11 @@ class RTRRLState:
     terminal: Any
 
     env_state: Any
-    scales: Scales
+    scales: NormalizationState
     core: CoreState
 
 
 # ---------------------------------------------------------- shapes and streams
-def _broadcast_env(values, leaf):
-    return values[(slice(None),) + (None,) * (leaf.ndim - 1)]
-
-
-def _where_done(done, fresh, carried):
-    """Take the fresh one for the streams that ended, the carried one for the rest."""
-
-    return jax.tree.map(
-        lambda new, old: jnp.where(_broadcast_env(done, old), new, old), fresh, carried
-    )
-
-
 def _as_batch(tree):
     """Put the stream axis back as a length of one."""
 
@@ -276,145 +258,6 @@ def make_rules(cfg: RTRRLConfig):
             rate=cfg.head_lr,
         ),
     }
-
-
-# ---------------------------------------------- the environment and its scales
-class Environment:
-    """Where every stream is, and nothing about how its numbers are read."""
-
-    def __init__(self, num_envs: int, env: Any, env_params: Any) -> None:
-        self.num_envs = num_envs
-        self.env = env
-        self.env_params = env_params
-
-    def blank_timestep(self, obs) -> Timestep:
-        """The step before the first one: an observation and nothing behind it."""
-
-        action_space = self.env.action_space(self.env_params)
-        return Timestep(
-            obs=obs,
-            action=jnp.zeros(
-                (self.num_envs, *action_space.shape), dtype=action_space.dtype
-            ),
-            reward=jnp.zeros((self.num_envs,), dtype=jnp.float32),
-            done=jnp.zeros((self.num_envs,), dtype=jnp.bool_),
-        )
-
-    def init(self, key: Any):
-        """Every stream opened."""
-
-        keys = jax.random.split(key, self.num_envs)
-        return jax.vmap(self.env.reset, in_axes=(0, None))(keys, self.env_params)
-
-    def reset(self, key, env_state, done):
-        """Begin again wherever an episode ended, at the top of the act."""
-
-        obs, opened = self.init(key)
-        return obs, _where_done(done, opened, env_state)
-
-    def step(self, key, env_state, action):
-        """One transition, before anything has been read through a scale."""
-
-        keys = jax.random.split(key, self.num_envs)
-        obs, env_state, reward, done, info = jax.vmap(
-            self.env.step, in_axes=(0, 0, 0, None)
-        )(keys, env_state, action, self.env_params)
-        return (
-            obs,
-            env_state,
-            jnp.asarray(reward, dtype=jnp.float32),
-            done,
-            terminal_of(info, done),
-            info,
-        )
-
-    def persisted(self, timestep: Timestep) -> Timestep:
-        """What the next step is handed back: an ending feeds nothing forward."""
-
-        broadcast_dims = tuple(range(timestep.done.ndim, timestep.action.ndim))
-        reward = jnp.asarray(timestep.reward, dtype=jnp.float32)
-        return timestep.replace(
-            action=jnp.where(
-                jnp.expand_dims(timestep.done, axis=broadcast_dims),
-                jnp.zeros_like(timestep.action),
-                timestep.action,
-            ),
-            reward=jnp.where(timestep.done, jnp.zeros_like(reward), reward),
-        )
-
-
-class Normalization:
-    """The layer between the environment's numbers and the agent's."""
-
-    def __init__(
-        self,
-        num_envs: int,
-        env: Any,
-        *,
-        observation: Any = None,
-        reward: Any = None,
-        evaluation: EvaluationConfig | None = None,
-    ) -> None:
-        evaluation = evaluation or EvaluationConfig()
-        self.num_envs = num_envs
-
-        def estimator(declared):
-            if declared is None:
-                return None
-            return make_normalizer(
-                replace(
-                    declared,
-                    reset_on_start=evaluation.reset_on_start,
-                    update_during_eval=evaluation.update_during_eval,
-                )
-            )
-
-        self.observation = estimator(observation)
-        self.reward = estimator(reward)
-        self.normalizing = bool(self.observation or self.reward)
-        self.resets_on_start = evaluation.reset_on_start
-        self.updates_during_eval = evaluation.update_during_eval
-        if self.normalizing and environment_owns_normalization(env):
-            raise ValueError(
-                "normalization owner conflict: wrapper and program normalization "
-                "are both enabled"
-            )
-
-    def init(self, obs, scales: Scales | None = None, *, update: bool = True):
-        """The estimators begun, on nothing or on what another run built."""
-
-        observation = None if scales is None else scales.observation
-        reward = None if scales is None else scales.reward
-        if self.observation is not None:
-            obs, observation = self.observation.begin(obs, observation, update=update)
-        if self.reward is not None and reward is None:
-            reward = self.reward.initial(jnp.zeros((self.num_envs,), dtype=jnp.float32))
-        return obs, Scales(observation=observation, reward=reward)
-
-    def reset(self, obs, scales: Scales, done, *, update: bool = True):
-        """The value an episode opens on, for the streams that opened one."""
-
-        observation = scales.observation
-        if self.observation is not None:
-            obs, observation = self.observation.begin(obs, observation, update=update)
-        return obs, scales.replace(
-            observation=_where_done(done, observation, scales.observation)
-        )
-
-    def apply(self, scales: Scales, obs, reward, done, *, update: bool = True):
-        """Both estimators advanced by one transition, or neither if none exists."""
-
-        observation = scales.observation
-        counted = scales.reward
-        if self.observation is not None:
-            obs, observation = self.observation.observe(
-                observation, obs, done=done, update=update
-            )
-        if self.reward is not None:
-            reward, counted = self.reward.observe(
-                counted, reward, done=done, update=update
-            )
-        return obs, reward, Scales(observation=observation, reward=counted)
 
 
 # ------------------------------------------------------- a block of parameters
@@ -474,8 +317,8 @@ class Network:
 
         return jax.tree.map(
             lambda old, grad: (
-                self.decay * (1 - _broadcast_env(reset_before, old)) * old
-                + _broadcast_env(emphasis, grad) * grad
+                self.decay * (1 - broadcast_stream(reset_before, old)) * old
+                + broadcast_stream(emphasis, grad) * grad
             ),
             incoming,
             gradient,
@@ -971,13 +814,15 @@ class RTRRL:
         reports: Reports = Reports(),
     ) -> None:
         self.cfg = cfg
-        self.environment = Environment(cfg.num_envs, env, env_params)
-        self.normalization = Normalization(
+        evaluation = evaluation or EvaluationConfig()
+        self.environment = EnvironmentStreams(cfg.num_envs, env, env_params)
+        self.normalization = InteractionNormalization(
             cfg.num_envs,
             env,
             observation=observation_normalization,
             reward=reward_normalization,
-            evaluation=evaluation,
+            reset_on_start=evaluation.reset_on_start,
+            update_during_eval=evaluation.update_during_eval,
         )
         self.core = Core(cfg, torso_network, actor_head, critic_head, reports)
         self.record = frozenset(record)
@@ -1016,7 +861,7 @@ class RTRRL:
         obs, scales = self.normalization.reset(obs, state.scales, done, update=update)
         return state.replace(
             timestep=state.timestep.replace(
-                obs=_where_done(done, obs, state.timestep.obs)
+                obs=select_ended(done, obs, state.timestep.obs)
             ),
             env_state=env_state,
             scales=scales,

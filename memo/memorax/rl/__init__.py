@@ -5,6 +5,13 @@ objectives, or drives its own loop stays with the algorithm.
 """
 
 from .credit import CREDITS, make_credit, make_exact_rtrl_credit
+from .interaction import (
+    EnvironmentStreams,
+    InteractionNormalization,
+    NormalizationState,
+    broadcast_stream,
+    select_ended,
+)
 from .normalization import (
     COLD_STARTS,
     VARIANCES,
@@ -29,8 +36,11 @@ from .updates import (
 
 __all__ = [
     "CREDITS",
+    "EnvironmentStreams",
+    "InteractionNormalization",
     "NormalizationConfig",
     "NormalizationMetrics",
+    "NormalizationState",
     "Normalizer",
     "ObjectiveDirections",
     "RuleOutput",
@@ -39,6 +49,7 @@ __all__ = [
     "VARIANCES",
     "UpdateRule",
     "delayed_update",
+    "broadcast_stream",
     "declared_normalizer",
     "environment_owns_normalization",
     "make_credit",
@@ -49,4 +60,5 @@ __all__ = [
     "make_td0",
     "normalization_metrics",
     "periodic_incremental_update",
+    "select_ended",
 ]

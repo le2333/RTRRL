@@ -15,7 +15,21 @@ from typing import Any
 import flax.linen as nn
 import jax
 
+from memorax.building import ComponentFamily
+
 CREDITS = ("rtrl", "tbptt")
+CREDIT_BRANCHES = {name: () for name in CREDITS}
+
+
+def _construct_credit(selection, builder):
+    del builder
+    return selection.kind
+
+
+CREDIT_FAMILY = ComponentFamily(
+    branches=CREDIT_BRANCHES,
+    construct=_construct_credit,
+)
 
 
 def _delegate_rtu_init_forward(next_fun, args, kwargs, context):

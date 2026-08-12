@@ -28,6 +28,8 @@ from conftest import EXPERIMENT
 from pydantic import BaseModel
 from worker.contract import CONTRACT_VERSION, RunConfig
 
+pytestmark = pytest.mark.integration
+
 from trainer_infra.experiment import (
     PASSED_THROUGH,
     REQUIRED,

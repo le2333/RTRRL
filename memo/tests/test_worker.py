@@ -9,6 +9,8 @@ from worker import objects
 from worker.contract import CONTRACT_VERSION
 from worker.worker import WorkerError, main, run_manifest
 
+pytestmark = [pytest.mark.integration, pytest.mark.service]
+
 CHILD = """
 import json, os, sys
 config = json.loads(open(os.environ["TRAINER_RUN_CONFIG"]).read())

@@ -46,7 +46,6 @@ import jax
 import jax.numpy as jnp
 import numpy as np
 import pytest
-from conftest import assert_within, deviations, flattened
 from test_blocks import SETTINGS as KERNEL_SETTINGS
 from test_blocks import ours as ours_kernel
 
@@ -57,6 +56,9 @@ from memorax.rl.updates import (
     ObBound,
     Sgd,
 )
+from tests.support.numerics import assert_within, deviations, flattened
+
+pytestmark = [pytest.mark.parity, pytest.mark.external]
 
 # What crossing frameworks costs, in float32 last bits. Chosen to be loose
 # enough for two float accumulation orders and tight enough that a misplaced

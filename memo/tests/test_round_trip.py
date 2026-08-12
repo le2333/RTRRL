@@ -1,13 +1,13 @@
 """The whole chain, from what the image declares to an agent taking a step.
 
-    catalog  ->  the control plane's resolver and sampler  ->  RunConfig  ->  build
+    catalog -> control-plane resolver and sampler -> RunConfig -> assembly
 
 Neither side imports the other in production. They answer to a shape written
 down in docs/contract.md, and two copies of one shape stay equal only if
 something runs them against each other. The other half of that lives in
 ``infra/tests/test_round_trip.py``, which validates what the control plane
 produces without needing an array library. This half is the one that does: it
-ends where the names are actually read, in the entry's ``build``.
+ends where the names are actually read, in component assembly.
 
 A name renamed on either side fails here, which is the only place it can fail
 before a job has been dispatched.
@@ -27,9 +27,12 @@ from trainer_infra.hpo import sample_parameters
 from entries import stream_ac
 from memorax.parameters import KIND, expand, flatten
 from runner.catalog import build_catalog
+from tests.support.builders import assemble_stream_ac
 from worker.contract import CONTRACT_VERSION, RunConfig
 
 optuna = pytest.importorskip("optuna")
+
+pytestmark = pytest.mark.integration
 
 TEMPLATE = (
     Path(__file__).resolve().parents[2] / "experiments" / "streamac template.yaml"
@@ -125,19 +128,19 @@ def test_a_branch_the_experiment_did_not_choose_is_absent(configurations):
     assert not [name for name in params if ".adam." in name]
 
 
-def test_the_entry_builds_and_steps_on_what_the_sampler_drew(configurations):
+def test_the_resolved_manifest_assembles_and_steps(configurations):
     """The end of the chain: the names line up where they are finally read."""
 
     config = RunConfig.model_validate(configurations[0])
-    agent = stream_ac.build(
+    program = assemble_stream_ac(
         config.params,
         config.environment,
-        # The only field build reads here is the width, and two streams answer
-        # whether the names line up as well as sixteen do, faster.
-        config.training.model_copy(update={"num_envs": STREAMS}),
+        # Two streams answer whether the names line up as well as sixteen do,
+        # faster.
+        num_envs=STREAMS,
     )
-    state = agent.init(jax.random.key(config.environment.seed))
-    _, metrics = agent.train(jax.random.key(1), state, 2 * STREAMS)
+    state = program.init_fn(jax.random.key(config.environment.seed))
+    _, metrics = program.train_epoch_fn(jax.random.key(1), state, 2 * STREAMS)
 
     assert metrics.interaction.reward.shape == (2, STREAMS)
 

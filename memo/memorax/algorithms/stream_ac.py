@@ -13,36 +13,43 @@ Driven against ``stream_ac.py`` by ``tests/test_layered_parity.py``.
 from __future__ import annotations
 
 from collections.abc import Iterable
-from dataclasses import dataclass, replace
+from dataclasses import dataclass
 from typing import Any
 
 import jax
 import jax.numpy as jnp
 from flax import struct
 
-from memorax.readings import reading, readings
+from memorax.building import BuildContext, ComponentBuilder
+from memorax.networks import Readout, Sequence
+from memorax.networks.backbones import BACKBONE_FAMILY
+from memorax.networks.readouts import ACTOR_HEAD_FAMILY, CRITIC_HEAD_FAMILY
+from memorax.networks.sequence import PLACES
+from memorax.parameters import describe_parameters, group, param, structure
+from memorax.readings import reading, readings, taken
 from memorax.rl import (
-    environment_owns_normalization,
+    EnvironmentStreams,
+    InteractionNormalization,
+    NormalizationState,
+    broadcast_stream,
     make_bounded_rule,
     make_credit,
-    make_normalizer,
     make_td0,
+    select_ended,
 )
+from memorax.rl.credit import CREDIT_FAMILY
+from memorax.rl.normalization import (
+    DISCOUNTED_NORMALIZATION_FAMILY,
+    NORMALIZATION_FAMILY,
+)
+from memorax.rl.updates import BASE_FAMILY, BOUND_FAMILY
+from memorax.runtime import EPISODE_FIELDS
+from memorax.runtime.episode import metric_names
 from memorax.utils import Timestep
-from memorax.utils.axes import (
-    add_time_axis,
-    remove_feature_axis,
-    remove_time_axis,
-)
+from memorax.utils.axes import add_time_axis, remove_feature_axis, remove_time_axis
 from memorax.utils.trees import subtree_norms
 
-from .contract import (
-    ActionDecision,
-    EvaluationConfig,
-    InteractionMetrics,
-    StepMetrics,
-    terminal_of,
-)
+from .contract import ActionDecision, EvaluationConfig, InteractionMetrics, StepMetrics
 
 
 # --------------------------------------------------------------- configuration
@@ -61,6 +68,49 @@ class StreamACConfig:
     credit: str = "rtrl"
     meta_rl: bool = False
     normalization_statistics: str = "ours"
+
+
+STREAM_AC_BACKBONES = BACKBONE_FAMILY.restricted("rtu", "mlp")
+
+
+@dataclass(frozen=True)
+class OptimizerParameters:
+    bound: str = structure(branches=BOUND_FAMILY.branches)
+    base: str = structure(branches=BASE_FAMILY.branches)
+
+
+@dataclass(frozen=True)
+class ActorParameters:
+    head: str = structure(branches=ACTOR_HEAD_FAMILY.branches)
+    optimizer: OptimizerParameters = group(of=OptimizerParameters)
+
+
+@dataclass(frozen=True)
+class CriticParameters:
+    head: str = structure(branches=CRITIC_HEAD_FAMILY.branches)
+    optimizer: OptimizerParameters = group(of=OptimizerParameters)
+
+
+@dataclass(frozen=True)
+class NormalizationParameters:
+    observation: str = structure(branches=NORMALIZATION_FAMILY.branches)
+    reward: str = structure(branches=DISCOUNTED_NORMALIZATION_FAMILY.branches)
+
+
+@dataclass(frozen=True)
+class StreamACParameters:
+    actor: ActorParameters = group(of=ActorParameters)
+    critic: CriticParameters = group(of=CriticParameters)
+    normalization: NormalizationParameters = group(of=NormalizationParameters)
+    backbone: str = structure(branches=STREAM_AC_BACKBONES.branches)
+    credit: str = structure(branches=CREDIT_FAMILY.branches)
+    meta_rl: bool = param(valid=[False, True], search=[False, True])
+    gamma: float = param(valid=(0.5, 0.9999), search=(0.9, 0.9999))
+    trace_lambda: float = param(valid=(0.0, 1.0), search=(0.0, 1.0))
+    entropy_coefficient: float = param(valid=(1e-8, 1.0), search=(1e-8, 1e-2), log=True)
+
+
+PARAMETERS = describe_parameters(StreamACParameters)
 
 
 # ----------------------------------------------------------------------- state
@@ -89,14 +139,6 @@ class NetworkState:
     recurrence: Recurrence
 
 
-@struct.dataclass(frozen=True)
-class Scales:
-    """What the two running estimators carry, and nothing else."""
-
-    observation: Any = None
-    reward: Any = None
-
-
 # -------------------------------------------------------------------- readings
 @dataclass(frozen=True)
 class BlockReports:
@@ -118,6 +160,15 @@ class Reports:
     td_error: bool = reading(at="update.td_error")
     actor: BlockReports = readings(of=BlockReports, at="update.actor")
     critic: BlockReports = readings(of=BlockReports, at="update.critic")
+
+
+PARTS: tuple[str, ...] = PLACES
+REPORTS = Reports()
+TRAINING_METRICS: tuple[str, ...] = taken(REPORTS, parts=PARTS)
+METRICS: tuple[str, ...] = metric_names("train", TRAINING_METRICS) + metric_names(
+    "eval"
+)
+RECORD = frozenset(EPISODE_FIELDS) | set(TRAINING_METRICS)
 
 
 @struct.dataclass(frozen=True)
@@ -171,24 +222,12 @@ class StreamACState:
     timestep: Timestep
 
     env_state: Any
-    scales: Scales
+    scales: NormalizationState
     actor: NetworkState
     critic: NetworkState
 
 
 # ---------------------------------------------------------- shapes and streams
-def _broadcast_env(values, leaf):
-    return values[(slice(None),) + (None,) * (leaf.ndim - 1)]
-
-
-def _where_done(done, fresh, carried):
-    """Take the fresh one for the streams that ended, the carried one for the rest."""
-
-    return jax.tree.map(
-        lambda new, old: jnp.where(_broadcast_env(done, old), new, old), fresh, carried
-    )
-
-
 def _per_stream(objective, params, *streamed):
     """Differentiate each stream's own objective, and only its own."""
 
@@ -199,145 +238,6 @@ def _per_stream(objective, params, *streamed):
     return jax.vmap(jax.grad(one), in_axes=(None, *(0,) * len(streamed)))(
         params, *streamed
     )
-
-
-# ---------------------------------------------- the environment and its scales
-class Environment:
-    """Where every stream is, and nothing about how its numbers are read."""
-
-    def __init__(self, num_envs: int, env: Any, env_params: Any) -> None:
-        self.num_envs = num_envs
-        self.env = env
-        self.env_params = env_params
-
-    def blank_timestep(self, obs) -> Timestep:
-        """The step before the first one: an observation and nothing behind it."""
-
-        action_space = self.env.action_space(self.env_params)
-        return Timestep(
-            obs=obs,
-            action=jnp.zeros(
-                (self.num_envs, *action_space.shape), dtype=action_space.dtype
-            ),
-            reward=jnp.zeros((self.num_envs,), dtype=jnp.float32),
-            done=jnp.zeros((self.num_envs,), dtype=jnp.bool_),
-        )
-
-    def init(self, key: Any):
-        """Every stream opened."""
-
-        keys = jax.random.split(key, self.num_envs)
-        return jax.vmap(self.env.reset, in_axes=(0, None))(keys, self.env_params)
-
-    def reset(self, key, env_state, done):
-        """Begin again wherever an episode ended, at the top of the act."""
-
-        obs, opened = self.init(key)
-        return obs, _where_done(done, opened, env_state)
-
-    def step(self, key, env_state, action):
-        """One transition, before anything has been read through a scale."""
-
-        keys = jax.random.split(key, self.num_envs)
-        obs, env_state, reward, done, info = jax.vmap(
-            self.env.step, in_axes=(0, 0, 0, None)
-        )(keys, env_state, action, self.env_params)
-        return (
-            obs,
-            env_state,
-            jnp.asarray(reward, dtype=jnp.float32),
-            done,
-            terminal_of(info, done),
-            info,
-        )
-
-    def persisted(self, timestep: Timestep) -> Timestep:
-        """What the next step is handed back: an ending feeds nothing forward."""
-
-        broadcast_dims = tuple(range(timestep.done.ndim, timestep.action.ndim))
-        reward = jnp.asarray(timestep.reward, dtype=jnp.float32)
-        return timestep.replace(
-            action=jnp.where(
-                jnp.expand_dims(timestep.done, axis=broadcast_dims),
-                jnp.zeros_like(timestep.action),
-                timestep.action,
-            ),
-            reward=jnp.where(timestep.done, jnp.zeros_like(reward), reward),
-        )
-
-
-class Normalization:
-    """The layer between the environment's numbers and the agent's."""
-
-    def __init__(
-        self,
-        num_envs: int,
-        env: Any,
-        *,
-        observation: Any = None,
-        reward: Any = None,
-        evaluation: EvaluationConfig | None = None,
-    ) -> None:
-        evaluation = evaluation or EvaluationConfig()
-        self.num_envs = num_envs
-
-        def estimator(declared):
-            if declared is None:
-                return None
-            return make_normalizer(
-                replace(
-                    declared,
-                    reset_on_start=evaluation.reset_on_start,
-                    update_during_eval=evaluation.update_during_eval,
-                )
-            )
-
-        self.observation = estimator(observation)
-        self.reward = estimator(reward)
-        self.normalizing = bool(self.observation or self.reward)
-        self.resets_on_start = evaluation.reset_on_start
-        self.updates_during_eval = evaluation.update_during_eval
-        if self.normalizing and environment_owns_normalization(env):
-            raise ValueError(
-                "normalization owner conflict: wrapper and program normalization "
-                "are both enabled"
-            )
-
-    def init(self, obs, scales: Scales | None = None, *, update: bool = True):
-        """The estimators begun, on nothing or on what another run built."""
-
-        observation = None if scales is None else scales.observation
-        reward = None if scales is None else scales.reward
-        if self.observation is not None:
-            obs, observation = self.observation.begin(obs, observation, update=update)
-        if self.reward is not None and reward is None:
-            reward = self.reward.initial(jnp.zeros((self.num_envs,), dtype=jnp.float32))
-        return obs, Scales(observation=observation, reward=reward)
-
-    def reset(self, obs, scales: Scales, done, *, update: bool = True):
-        """The value an episode opens on, for the streams that opened one."""
-
-        observation = scales.observation
-        if self.observation is not None:
-            obs, observation = self.observation.begin(obs, observation, update=update)
-        return obs, scales.replace(
-            observation=_where_done(done, observation, scales.observation)
-        )
-
-    def apply(self, scales: Scales, obs, reward, done, *, update: bool = True):
-        """Both estimators advanced by one transition, or neither if none exists."""
-
-        observation = scales.observation
-        counted = scales.reward
-        if self.observation is not None:
-            obs, observation = self.observation.observe(
-                observation, obs, done=done, update=update
-            )
-        if self.reward is not None:
-            reward, counted = self.reward.observe(
-                counted, reward, done=done, update=update
-            )
-        return obs, reward, Scales(observation=observation, reward=counted)
 
 
 # ------------------------------------------------------- a block of parameters
@@ -426,7 +326,8 @@ class Network:
 
         return jax.tree.map(
             lambda old, grad: (
-                self.trace_decay * (1 - _broadcast_env(reset_before, old)) * old + grad
+                self.trace_decay * (1 - broadcast_stream(reset_before, old)) * old
+                + grad
             ),
             incoming,
             gradient,
@@ -756,16 +657,86 @@ class StreamAC:
         reports: Reports = Reports(),
     ) -> None:
         self.cfg = cfg
-        self.environment = Environment(cfg.num_envs, env, env_params)
-        self.normalization = Normalization(
+        evaluation = evaluation or EvaluationConfig()
+        self.environment = EnvironmentStreams(cfg.num_envs, env, env_params)
+        self.normalization = InteractionNormalization(
             cfg.num_envs,
             env,
             observation=observation_normalization,
             reward=reward_normalization,
-            evaluation=evaluation,
+            reset_on_start=evaluation.reset_on_start,
+            update_during_eval=evaluation.update_during_eval,
         )
         self.core = Core(cfg, actor_network, critic_network, reports)
         self.record = frozenset(record)
+
+    @classmethod
+    def graph(
+        cls,
+        parameters: dict[str, Any],
+        components: ComponentBuilder,
+        context: BuildContext,
+    ) -> StreamAC:
+        """Declare StreamAC's instances and connections using shared builders."""
+
+        gamma = float(parameters["gamma"])
+        meta_rl = bool(parameters["meta_rl"])
+        observation_dim = int(context.observation_space.shape[0])
+        action_dim = int(context.action_space.shape[0])
+        features = observation_dim
+        if meta_rl:
+            features += action_dim + 1
+
+        def sequence(backbone, head):
+            return Sequence(components=(*backbone, Readout(module=head)))
+
+        actor_backbone = components.build(
+            STREAM_AC_BACKBONES,
+            "backbone",
+            features=features,
+            output_dim=None,
+        )
+        critic_backbone = components.build(
+            STREAM_AC_BACKBONES,
+            "backbone",
+            features=features,
+            output_dim=None,
+        )
+        actor_head = components.build(
+            ACTOR_HEAD_FAMILY,
+            "actor.head",
+            action_dim=action_dim,
+        )
+        critic_head = components.build(CRITIC_HEAD_FAMILY, "critic.head")
+
+        return cls(
+            StreamACConfig(
+                num_envs=context.num_envs,
+                gamma=gamma,
+                trace_lambda=float(parameters["trace_lambda"]),
+                actor_bound=components.build(BOUND_FAMILY, "actor.optimizer.bound"),
+                actor_base=components.build(BASE_FAMILY, "actor.optimizer.base"),
+                critic_bound=components.build(BOUND_FAMILY, "critic.optimizer.bound"),
+                critic_base=components.build(BASE_FAMILY, "critic.optimizer.base"),
+                entropy_coefficient=float(parameters["entropy_coefficient"]),
+                credit=components.build(CREDIT_FAMILY, "credit"),
+                meta_rl=meta_rl,
+            ),
+            context.environment,
+            context.environment_parameters,
+            sequence(actor_backbone, actor_head),
+            sequence(critic_backbone, critic_head),
+            observation_normalization=components.build(
+                NORMALIZATION_FAMILY, "normalization.observation"
+            ),
+            reward_normalization=components.build(
+                DISCOUNTED_NORMALIZATION_FAMILY,
+                "normalization.reward",
+                discount=gamma,
+            ),
+            record=RECORD,
+            reports=REPORTS,
+        )
 
     def init(self, key: Any) -> StreamACState:
         # The published kernel's seven, in its order; two go unused.
@@ -804,7 +775,7 @@ class StreamAC:
         obs, scales = self.normalization.reset(obs, state.scales, done, update=update)
         return state.replace(
             timestep=state.timestep.replace(
-                obs=_where_done(done, obs, state.timestep.obs)
+                obs=select_ended(done, obs, state.timestep.obs)
             ),
             env_state=env_state,
             scales=scales,

@@ -16,7 +16,6 @@ import jax
 import jax.numpy as jnp
 import optax
 import pytest
-from conftest import TinyContinuousEnv
 
 from memorax.algorithms.stream_ac import StreamAC, StreamACConfig
 from memorax.networks import (
@@ -35,6 +34,7 @@ from memorax.rl.updates import (
     Sgd,
 )
 from memorax.runtime.rollout import complete_episodes
+from tests.support.environments import TinyContinuousEnv
 
 
 def stream_ac_program(

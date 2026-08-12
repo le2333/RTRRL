@@ -8,6 +8,8 @@ from test_reporter import make_config, make_episode
 from worker.reporter import METRICS_FILENAME, Reporter
 from worker.sinks.aim import AimSink, close_aim_run
 
+pytestmark = [pytest.mark.integration, pytest.mark.service]
+
 
 def _metric_steps(repo_path: str, metric_name: str = "episode_return") -> list[int]:
     repo = Repo.from_path(repo_path)

@@ -39,9 +39,7 @@ import importlib
 
 import jax
 import pytest
-from conftest import TinyContinuousEnv, assert_within, deviations, flattened
 
-from reference import stream_ac as flat
 from memorax.algorithms.contract import EvaluationConfig
 from memorax.networks import heads
 from memorax.networks.components import FFN, LayerNorm, Readout, Tanh
@@ -49,6 +47,11 @@ from memorax.networks.sequence import Sequence
 from memorax.networks.sequence_models import RNN, RTUCell, RTUConfig
 from memorax.rl import NormalizationConfig
 from memorax.rl.updates import ObBound, Sgd
+from reference import stream_ac as flat
+from tests.support.environments import TinyContinuousEnv
+from tests.support.numerics import assert_within, deviations, flattened
+
+pytestmark = pytest.mark.parity
 
 # Asked for by path: the package's lazy ``__getattr__`` hands back the *class*
 # under this name, and what is wanted is the module beside it.

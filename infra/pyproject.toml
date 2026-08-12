@@ -26,6 +26,9 @@ packages = ["src/trainer_infra"]
 # package would bring jax, aim and aimrocks onto a control plane that has no
 # use for any of them, and aimrocks has no Windows wheel at all.
 pythonpath = ["src", "../memo"]
+markers = [
+    "integration: crosses two or more production ownership boundaries",
+]
 
 [tool.ruff]
 line-length = 100
