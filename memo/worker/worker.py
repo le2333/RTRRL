@@ -8,9 +8,9 @@ import sys
 import traceback
 from pathlib import Path
 
+from memorax.observability.sinks.metrics import METRICS_FILENAME
 from worker import objects
 from worker.contract import CONTRACT_VERSION, Catalog, RunConfig
-from worker.reporter import METRICS_FILENAME
 from worker.score import compute_score
 
 CATALOG_PATH = Path("/opt/trainer/catalog.json")

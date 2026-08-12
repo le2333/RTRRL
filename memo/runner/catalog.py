@@ -33,7 +33,11 @@ def discover() -> dict[str, Any]:
     """Import every entry and take what it declares about itself."""
 
     found = {}
-    for module in sorted(info.name for info in pkgutil.iter_modules(entries.__path__)):
+    for module in sorted(
+        info.name
+        for info in pkgutil.iter_modules(entries.__path__)
+        if not info.name.startswith("_")
+    ):
         imported = importlib.import_module(f"{entries.__name__}.{module}")
         missing = [
             name

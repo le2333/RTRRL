@@ -25,6 +25,7 @@ from memorax.networks import Readout, Sequence
 from memorax.networks.backbones import BACKBONE_FAMILY
 from memorax.networks.readouts import ACTOR_HEAD_FAMILY, CRITIC_HEAD_FAMILY
 from memorax.networks.sequence import PLACES
+from memorax.observability.metrics import metric_names
 from memorax.parameters import describe_parameters, group, param, structure
 from memorax.readings import reading, readings, taken
 from memorax.rl import (
@@ -44,7 +45,6 @@ from memorax.rl.normalization import (
 )
 from memorax.rl.updates import BASE_FAMILY, BOUND_FAMILY
 from memorax.runtime import EPISODE_FIELDS
-from memorax.runtime.episode import metric_names
 from memorax.utils import Timestep
 from memorax.utils.axes import add_time_axis, remove_feature_axis, remove_time_axis
 from memorax.utils.trees import subtree_norms

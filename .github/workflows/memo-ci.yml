@@ -59,6 +59,7 @@ jobs:
         memorax/networks/readouts.py
         memorax/networks/sequence.py
         memorax/parameters.py
+        memorax/observability
         memorax/runtime
         entries
         runner

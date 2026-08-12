@@ -16,7 +16,6 @@ from memorax.parameters import expand
 from runner.catalog import write_catalog
 from worker import objects
 from worker.contract import CONTRACT_VERSION, RunConfig
-from worker.sinks.aim import close_aim_run
 from worker.worker import run_manifest
 
 pytestmark = [pytest.mark.integration, pytest.mark.service]
@@ -115,4 +114,3 @@ def test_worker_runs_stream_ac_and_records_critic_trace_norm(
     assert values
     assert all(math.isfinite(value) for value in values)
     assert score["value"] == values[-1]
-    close_aim_run(run)

@@ -10,7 +10,7 @@ capability, not an assumed prerequisite of the semantic refactor.
 one explicit domain meaning, while preserving StreamAC and RTRRL numerical
 behaviour and making the default test loop smaller and faster.
 
-**Execution:** Tasks 1 and 2 completed on 2026-08-10; Task 3 completed on
+**Execution:** Tasks 1 and 2 completed on 2026-08-10; Tasks 3 and 6 completed on
 2026-08-12. The behaviour baseline,
 serialized version-7 fixtures, lightweight test support, explicit test markers,
 and CI selection gates are in place. StreamAC and RTRRL now share the proven
@@ -18,7 +18,9 @@ environment-stream and interaction-normalization components, including the
 normalization state they own. StreamAC declarations and topology now live with
 the algorithm, component families own branch routing and construction, and the
 algorithm-neutral assembly service closes the graph over Runtime's program.
-Task 4 is next.
+Observability now owns metric naming, episode reduction, fan-out, and backend
+adapters; Entry projects deployment configuration into those adapters, while
+Worker no longer owns logging. Task 4 is next.
 
 Before Task 4, the current version-7 Worker path was smoke-tested on 2026-08-12
 with a real StreamAC RTU+RTRL child, Moto S3, local Aim, metrics scoring, and a
@@ -643,7 +645,7 @@ not combine tasks merely because two files are nearby.
   both algorithms use the final contract.
 - Test scheduling with a fake Program and rollout cutting independently.
 
-### Task 6: Refactor observability
+### Task 6: Refactor observability (completed)
 
 - Move Episode statistics and metric naming to observability while retaining
   rollout identity/cutting under Runtime.
@@ -653,6 +655,11 @@ not combine tasks merely because two files are nearby.
 - Make Metrics JSONL the mandatory local scalar artifact and remove heartbeat
   claims.
 - Keep backend failures visible; add no silent catch-all paths.
+
+Completed on 2026-08-12. The pure observability and Runtime boundary tests,
+local Aim/Rerun integration tests, full default suite, and the real StreamAC
+Worker smoke all pass. Rerun writes local RRD files only; uploading the local
+artifact tree remains Task 8.
 
 ### Task 7: Introduce deployment contract version 8
 

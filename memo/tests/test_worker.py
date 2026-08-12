@@ -3,13 +3,15 @@ import sys
 from pathlib import Path
 
 import pytest
-from test_reporter import make_config
 
+from tests.support.run_config import make_run_config
 from worker import objects
 from worker.contract import CONTRACT_VERSION
 from worker.worker import WorkerError, main, run_manifest
 
 pytestmark = [pytest.mark.integration, pytest.mark.service]
+
+make_config = make_run_config
 
 CHILD = """
 import json, os, sys

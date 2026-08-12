@@ -9,7 +9,8 @@ from memorax.algorithms.stream_ac import PARAMETERS as PARAMETERS
 from memorax.algorithms.stream_ac import TRAINING_METRICS, StreamAC
 from memorax.assembly import BuildRequest, EnvironmentSpec, assemble
 from memorax.runtime import Runtime
-from worker.reporter import Reporter
+
+from ._observability import build_reporter, load_run
 
 
 def build_request(config) -> BuildRequest:
@@ -35,8 +36,9 @@ def run(reporter, config) -> None:
 
 def main(argv: list[str] | None = None) -> int:
     del argv
-    with Reporter.from_env() as reporter:
-        run(reporter, reporter.config)
+    config, scratch = load_run()
+    with build_reporter(config, scratch) as reporter:
+        run(reporter, config)
     return 0
 
 

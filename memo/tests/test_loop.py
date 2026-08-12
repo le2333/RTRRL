@@ -17,8 +17,8 @@ import pytest
 
 import entries
 from entries import stream_ac
+from memorax.observability import check_names, statistics
 from memorax.runtime import drive, whole_epochs
-from memorax.runtime.episode import check_names, statistics
 from runner.catalog import build_catalog, discover
 from tests.support.fakes import EpisodeRecorder as Recorder
 from tests.support.programs import (
