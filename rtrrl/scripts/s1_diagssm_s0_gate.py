@@ -207,7 +207,7 @@ def run_gate(relative_tolerance, absolute_tolerance):
     actor_weights = 0.1 * jax.random.normal(keys[6], (2 * modes, 2 * action_size))
     critic_weights = 0.1 * jax.random.normal(keys[7], (2 * modes,))
     epsilon = jax.random.normal(keys[8], (action_size,))
-    hidden = states[-1]
+    hidden = states[-1].reshape(-1)
     output = hidden @ actor_weights
     location, raw_scale = jnp.split(output, 2)
     scale = jax.nn.softplus(-2.0 + 4.0 * jax.nn.sigmoid(raw_scale))
@@ -250,9 +250,8 @@ def run_gate(relative_tolerance, absolute_tolerance):
     # Exercise eligibility with the real recurrent-gradient shape produced by J.
     actor_sources = jax.random.normal(keys[9], (steps, 2 * modes))
     critic_sources = jax.random.normal(keys[10], (steps, 2 * modes))
-    local_gradients = jnp.einsum(
-        "th,tmhq->tmq", actor_sources + critic_sources, local_sensitivities
-    )
+    state_sources = (actor_sources + critic_sources).reshape(steps, modes, 2)
+    local_gradients = jnp.einsum("tmh,tmhq->tmq", state_sources, local_sensitivities)
     recurrent_gradients = jax.vmap(
         lambda value: globalize(value, modes, input_size)
     )(local_gradients)
