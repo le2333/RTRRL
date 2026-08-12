@@ -1,0 +1,10 @@
+experiment: s1-diagssm-qualification
+name: s1-diagssm-rtrl-seed1-10k-acceptance
+group: diagssm-exact-rtrl
+seed: 1
+environment: {id: "brax::halfcheetah", backend: spring, observation_mask: even, episode_horizon: 1000, action_clip: [-1.0, 1.0], gamma: 0.99, recurrent_input: [masked_observation, previous_action, previous_reward]}
+model: {recurrent_model: minimal-diagssm, complex_modes: 16, real_state_dimension: 32, dtype: float32, actor_head: gaussian-mean-and-scale, critic_head: scalar-linear}
+training: {method: exact-online-rtrl, total_steps: 10000, actor_lr: 0.01, critic_lr: 1.0, recurrent_lr: 0.001, eligibility_lambda: 0.9, per_group_global_norm_clip: 1.0, metrics_every_steps: 10000, fixed_eval_every_steps: 10000, checkpoint_every_steps: 10000, stop_on_nonfinite: true, retries: 0}
+evaluation: {episodes: 10, horizon: 1000, environment_seed: 123456, action_noise_seed: 123457, save_individual_returns: true}
+runtime: {device: cpu, instance_type: c7a.medium, queue: dev-cpu-c7am-queue, timeout_minutes: 60}
+artifacts: {output_prefix: "s3://rtrrl-artifacts-007122174918/experiments/s1-diagssm/entry-acceptance/rtrl-seed1-10k", upload_each_checkpoint: true}

@@ -19,6 +19,7 @@ on:
       - rtrrl/config/s1_diagssm_s0_server_gate.yml
       - rtrrl/config/s1_diagssm_rtrl_seed*_300k.yml
       - rtrrl/config/s1_diagssm_bptt128_seed*_300k.yml
+      - rtrrl/config/s1_diagssm_*_seed1_10k_acceptance.yml
 
 permissions:
   contents: read
