@@ -7,9 +7,11 @@ on:
       - .github/workflows/build-hc-cpu-image.yml
       - rtrrl/docker/Dockerfile.hc-cpu
       - rtrrl/scripts/hc_cpu_repro_gate.py
+      - rtrrl/scripts/hc_ctrnn_continuation.py
       - rtrrl/config/hc_cpu_repro_200k_220k.yml
       - rtrrl/config/hc_cpu_repro_step_200001.yml
       - rtrrl/config/hc_bp_step200001_oai_reference.tsv
+      - rtrrl/config/hc_ctrnn_bp_rflo_nominal_300k_1m.yml
 
 permissions:
   contents: read
@@ -30,7 +32,7 @@ jobs:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
       - uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f
       - name: Compile-check the entry
-        run: python -m py_compile rtrrl/scripts/hc_cpu_repro_gate.py
+        run: python -m py_compile rtrrl/scripts/hc_cpu_repro_gate.py rtrrl/scripts/hc_ctrnn_continuation.py
       - name: Build image
         uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8
         with:
@@ -46,7 +48,9 @@ jobs:
           import boto3
           from pathlib import Path
           assert Path("/opt/rtrrl/hc_cpu_repro_gate.py").is_file()
+          assert Path("/opt/rtrrl/hc_ctrnn_continuation.py").is_file()
           assert Path("/opt/rtrrl/hc_bp_step200001_oai_reference.tsv").is_file()
+          assert Path("/opt/rtrrl/hc_ctrnn_continuation.yml").is_file()
           '
       - name: Configure AWS credentials
         if: contains(github.event.head_commit.message, '[push-hc-cpu-image]')

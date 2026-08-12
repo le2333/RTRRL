@@ -1,0 +1,67 @@
+experiment: rtrrl-halfcheetah-platform
+name: hc-ctrnn-bp-rflo-nominal-300k-1m
+phase: continuation-scan
+
+algorithm:
+  recurrent_model: ctrnn
+  recurrent_credit: rflo
+  actor_teaching: bp
+  critic_teaching: bp
+  actor_teaching_scale: 1.0
+  critic_teaching_scale: 1.0
+  hidden_size: 32
+  gamma: 0.99
+  lambda_actor: 0.9
+  lambda_critic: 0.9
+  lambda_rnn: 0.9
+  actor_lr: 0.01
+  critic_lr: 1.0
+  rnn_lr: 0.001
+  update_clip: 1.0
+
+environment:
+  id: brax::halfcheetah
+  backend: spring
+  observation_mask: even
+  episode_horizon: 1000
+  reward_normalization: false
+  observation_normalization: false
+
+continuation:
+  seeds: [1, 2, 3]
+  start_step: 300000
+  target_step: 1000000
+  checkpoint_asset: rtrrl_hc_focused_mechanism_round_20260810.zip
+  checkpoint_member: rtrrl_hc_focused_mechanism_round_20260810/results/exp3_bp_fromscratch_3seed/batch_checkpoints/step_0300000.pkl
+  checkpoint_sha256: 44d02fd5c1e4b1eae5b87692e3a34a81794658c2f86bdc77622298d9f9ca52d5
+
+training:
+  chunk_steps: 20000
+  checkpoint_every_steps: 20000
+  stop_on_nonfinite: true
+  retries: 0
+
+evaluation:
+  every_steps: 20000
+  episodes: 10
+  horizon: 1000
+  environment_seed: 123456
+  action_noise_seed: 123457
+  save_raw_episode_returns: true
+
+runtime:
+  python: "3.13"
+  jax: "0.5.0"
+  jaxlib: "0.5.0"
+  brax: "0.10.5"
+  device: cpu
+  instance_type: c7a.medium
+  queue: run-cpu-c7am-queue
+  timeout_minutes: 60
+
+artifacts:
+  source_prefix: s3://rtrrl-artifacts-007122174918/experiments/rtrrl-halfcheetah/platform/assets
+  output_prefix: s3://rtrrl-artifacts-007122174918/experiments/rtrrl-halfcheetah/platform/runs/hc-ctrnn-bp-rflo-nominal-300k-1m
+  upload_each_checkpoint: true
+  upload_metrics_jsonl: true
+  upload_fixed_eval_jsonl: true
