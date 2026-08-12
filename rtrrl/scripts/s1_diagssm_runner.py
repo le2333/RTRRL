@@ -476,6 +476,7 @@ def load_checkpoint(path: Path, cfg: Config, runner: S1Runner):
 
 def aggregate(metrics):
     values = np.asarray(jax.device_get(metrics))
+    values = values.reshape(-1, values.shape[-1])
     out = {name: float(np.nanmean(values[:, i])) for i, name in enumerate(METRIC_NAMES[:-2])}
     episode_returns = values[:, -2]
     episode_lengths = values[:, -1]
@@ -500,7 +501,8 @@ def main():
     (out / "config.json").write_text(json.dumps(asdict(cfg), indent=2) + "\n")
     runner = S1Runner(cfg)
     state = load_checkpoint(args.resume, cfg, runner) if args.resume else runner.init()
-    step_fn = jax.jit(runner.rtrl_train_step) if cfg.learner == "rtrl" else jax.jit(runner.bptt_chunk)
+    step_fn = jax.jit(runner.bptt_chunk) if cfg.learner == "bptt128" else None
+    rtrl_scans = {}
     final_bptt_fn = None
     started = time.perf_counter()
     window_started = started
@@ -510,7 +512,14 @@ def main():
     while int(state.step) < cfg.steps:
         previous_step = int(state.step)
         if cfg.learner == "rtrl":
-            state, metric = step_fn(state, None)
+            chunk = min(cfg.log_every, cfg.steps - previous_step)
+            if chunk not in rtrl_scans:
+                rtrl_scans[chunk] = jax.jit(
+                    lambda carry, length=chunk: jax.lax.scan(
+                        runner.rtrl_train_step, carry, None, length=length
+                    )
+                )
+            state, metric = rtrl_scans[chunk](state)
         else:
             remaining = cfg.steps - previous_step
             if remaining >= cfg.bptt_length:

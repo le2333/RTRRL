@@ -127,6 +127,14 @@ def command_for(config: dict, python: Path, output: Path) -> list[str]:
         str(output),
     ]
     resume = os.environ.get("S1_RESUME")
+    resume_s3 = os.environ.get("S1_RESUME_S3")
+    if resume and resume_s3:
+        raise ValueError("set only one of S1_RESUME and S1_RESUME_S3")
+    if resume_s3:
+        bucket, key = split_s3(resume_s3)
+        local_resume = output / "parent_checkpoint.pkl"
+        boto3.client("s3", region_name=REGION).download_file(bucket, key, str(local_resume))
+        resume = str(local_resume)
     if resume:
         command.extend(("--resume", resume))
     return command

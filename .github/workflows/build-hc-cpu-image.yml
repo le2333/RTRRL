@@ -17,6 +17,8 @@ on:
       - rtrrl/config/hc_bp_step200001_oai_reference.tsv
       - rtrrl/config/hc_ctrnn_bp_rflo_nominal_300k_1m.yml
       - rtrrl/config/s1_diagssm_s0_server_gate.yml
+      - rtrrl/config/s1_diagssm_rtrl_seed*_300k.yml
+      - rtrrl/config/s1_diagssm_bptt128_seed*_300k.yml
 
 permissions:
   contents: read
