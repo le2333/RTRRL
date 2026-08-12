@@ -100,6 +100,15 @@ def command_for(config: dict, python: Path, output: Path) -> list[str]:
             "--output",
             str(output / "s0_gate.json"),
         ]
+    if mode == "acceptance":
+        return [
+            str(python),
+            "/opt/rtrrl/s1_diagssm_acceptance.py",
+            "--steps",
+            os.environ.get("S1_STEPS", "1024"),
+            "--output",
+            str(output),
+        ]
     if mode != "train":
         raise ValueError(f"unknown S1_MODE: {mode}")
     training = config["training"]

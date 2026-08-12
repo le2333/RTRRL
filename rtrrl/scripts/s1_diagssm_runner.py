@@ -391,27 +391,44 @@ class S1Runner:
         return new_state, metric
 
     def evaluate(self, params):
-        returns = []
-        env_keys = jax.random.split(jax.random.PRNGKey(123456), self.cfg.eval_episodes)
-        policy_keys = jax.random.split(jax.random.PRNGKey(123457), self.cfg.eval_episodes)
-        for env_key, policy_key in zip(env_keys, policy_keys, strict=True):
-            env_state = self.env.reset(env_key)
-            hidden = jnp.zeros((self.cfg.modes, 2), jnp.float32)
-            previous_action = jnp.zeros((self.action_size,), jnp.float32)
-            previous_reward = jnp.array(0.0, jnp.float32)
-            total = jnp.array(0.0, jnp.float32)
-            for age in range(self.cfg.horizon):
-                inputs = jnp.concatenate((env_state.obs[self.mask], previous_action, previous_reward[None]))
-                hidden = self.recurrent_step(hidden, params.recurrent, inputs, jnp.array(age == 0))
-                policy_key, action_key = jax.random.split(policy_key)
-                action = jnp.clip(self.policy(params, hidden, action_key)[0], -1, 1)
-                env_state = self.env.step(env_state, action)
-                previous_action, previous_reward = action, env_state.reward
-                total += env_state.reward
-                if bool(jax.device_get(env_state.done)):
-                    break
-            returns.append(total)
-        return np.asarray(jax.device_get(jnp.stack(returns)))
+        count = self.cfg.eval_episodes
+        env_keys = jax.random.split(jax.random.PRNGKey(123456), count)
+        policy_keys = jax.random.split(jax.random.PRNGKey(123457), count)
+        env_state = jax.vmap(self.env.reset)(env_keys)
+        hidden = jnp.zeros((count, self.cfg.modes, 2), jnp.float32)
+        previous_action = jnp.zeros((count, self.action_size), jnp.float32)
+        previous_reward = jnp.zeros((count,), jnp.float32)
+        active = jnp.ones((count,), bool)
+        total = jnp.zeros((count,), jnp.float32)
+
+        def step(carry, age):
+            env_state, hidden, previous_action, previous_reward, policy_keys, active, total = carry
+            inputs = jnp.concatenate(
+                (env_state.obs[:, self.mask], previous_action, previous_reward[:, None]), axis=1
+            )
+            hidden = jax.vmap(
+                lambda h, u: self.recurrent_step(h, params.recurrent, u, age == 0)
+            )(hidden, inputs)
+            split_keys = jax.vmap(jax.random.split)(policy_keys)
+            policy_keys, action_keys = split_keys[:, 0], split_keys[:, 1]
+            action = jax.vmap(lambda h, k: self.policy(params, h, k)[0])(hidden, action_keys)
+            action = jax.lax.stop_gradient(jnp.clip(action, -1, 1))
+            next_env = jax.vmap(self.env.step)(env_state, action)
+            total = total + jnp.where(active, next_env.reward, 0.0)
+            active = active & ~next_env.done.astype(bool)
+            previous_action = jnp.where(active[:, None], action, 0.0)
+            previous_reward = jnp.where(active, next_env.reward, 0.0)
+            return (
+                next_env, hidden, previous_action, previous_reward,
+                policy_keys, active, total,
+            ), None
+
+        final, _ = jax.lax.scan(
+            step,
+            (env_state, hidden, previous_action, previous_reward, policy_keys, active, total),
+            jnp.arange(self.cfg.horizon),
+        )
+        return np.asarray(jax.device_get(final[-1]))
 
 
 METRIC_NAMES = (
