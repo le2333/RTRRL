@@ -13,7 +13,7 @@ description: "" # [自用]
 
 image: 007122174918.dkr.ecr.eu-north-1.amazonaws.com/rtrrl@sha256:b33d69821d4dd8e601fea78b3dde331bacfd2797bda256da1dbdfeb5b1ce12a5
 entry: stream_ac # [透传] 镜像 catalog 里的入口名
-storage: s3://rtrrl-artifacts-007122174918/trainer # [消费] → score.s3、rerun 落点
+storage: s3://rtrrl-artifacts-007122174918/trainer # [消费] → 每个 run 的 artifact root
 
 # ── 以下整块透传 ──────────────────────────────────────────
 
@@ -40,7 +40,7 @@ logging:
   enable_rerun: true
   rerun_every_steps: 20000
 
-# [透传] 除 s3 外；s3 由 infra 从 storage 生成
+# [自用] 评分由 Infra 对 Worker 上传的 metrics.jsonl 执行
 score:
   metric: eval/episode/return_per_step
   window_steps: [0, 2000000] # 取值范围
@@ -57,6 +57,7 @@ compute:
 hpo:
   rounds: 5
   trials_per_round: 4
+  parallel_jobs: 1 # 每轮 Batch job 数；每个 job 内的 trial 串行运行
   startup_trials: 4
   seed: 0
 

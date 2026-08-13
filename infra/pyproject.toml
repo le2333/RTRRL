@@ -2,7 +2,7 @@
 name = "streaming-rtrrl-infra"
 version = "0.0.0"
 requires-python = ">=3.11,<3.12"
-dependencies = ["optuna>=4,<5", "pyyaml>=6,<7"]
+dependencies = ["boto3>=1.40,<2", "optuna>=4,<5", "pyyaml>=6,<7"]
 
 [project.scripts]
 trainerctl = "trainer_infra.cli:main"

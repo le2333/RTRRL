@@ -7,6 +7,7 @@ from typing import Any
 
 import yaml
 
+from trainer_infra import cli
 from trainer_infra.cli import main
 
 LAUNCH = "20260807-120000"
@@ -91,3 +92,69 @@ def test_run_command_executes_every_hpo_round(
     assert [trial["number"] for trial in payload["trials"]] == [0, 1, 2, 3]
     assert [trial["value"] for trial in payload["trials"]] == [1.0, 2.0, 3.0, 4.0]
     assert payload["best"] == {"number": 3, "value": 4.0}
+
+
+def test_batch_run_routes_deployment_fields_to_batch_executor(
+    tmp_path: Path,
+    capsys: Any,
+    monkeypatch: Any,
+    experiment: dict[str, Any],
+    catalog: dict[str, Any],
+) -> None:
+    experiment["compute"] = {"instance_type": "c7a.large", "timeout_minutes": 90}
+    experiment["hpo"]["parallel_jobs"] = 2
+    experiment_path = tmp_path / "experiment.yaml"
+    experiment_path.write_text(yaml.safe_dump(experiment), encoding="utf-8")
+    catalog_path = tmp_path / "catalog.json"
+    catalog_path.write_text(json.dumps(catalog), encoding="utf-8")
+    captured: dict[str, Any] = {}
+
+    class Session:
+        def client(self, name: str) -> str:
+            return name
+
+    class Executor:
+        def __init__(self, **options: Any) -> None:
+            captured.update(options)
+
+        def __call__(self, configurations: tuple[dict, ...], score: Any) -> tuple[dict, ...]:
+            return tuple(
+                {
+                    "trial": configuration["identity"]["trial"],
+                    "value": float(configuration["identity"]["trial"]),
+                }
+                for configuration in configurations
+            )
+
+    monkeypatch.setattr(cli, "_batch_session", Session)
+    monkeypatch.setattr(cli, "BatchRoundExecutor", Executor)
+
+    assert (
+        main(
+            [
+                "run",
+                str(experiment_path),
+                "--backend",
+                "batch",
+                "--catalog",
+                str(catalog_path),
+                "--database",
+                str(tmp_path / "study.db"),
+                "--launch-id",
+                LAUNCH,
+                "--queues",
+                "dev",
+            ]
+        )
+        == 0
+    )
+
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["best"] == {"number": 1, "value": 1.0}
+    assert captured["s3"] == "s3"
+    assert captured["batch"] == "batch"
+    assert captured["logs"] == "logs"
+    assert captured["job_queue"] == "dev-cpu-c7al-queue"
+    assert captured["job_definition"] == "trainer-c7al-" + "b" * 64
+    assert captured["timeout_seconds"] == 5400
+    assert captured["parallel_jobs"] == 2

@@ -99,3 +99,7 @@ Worker 按 manifest 顺序在隔离的 scratch 中启动各 Entry。Entry 和 lo
 ## 本地执行
 
 `trainerctl run --backend local` 使用 `LocalRoundExecutor` 完整运行实验，而不是只打印首轮配置。实验的 `storage` 必须是本地 `file://` URI；executor 为每轮写入真实 config 和 manifest，启动独立 Worker 进程，读取 Worker 发布的 `result.json` 与 `metrics.jsonl`，再交给 Infra Scorer 和 HPO。Worker 命令可通过最后一个参数 `--worker-command ...` 注入；未指定时使用当前 Python 的 `python -m worker`。本地与 S3 使用同一 Worker 监督和 artifact 相对路径契约，仅对象传输 scheme 不同。
+
+## Batch 执行
+
+`trainerctl run --backend batch` 使用 `BatchRoundExecutor`。它从固定镜像 digest 和 `compute.instance_type` 得到 job definition，从 `--queues run|dev` 得到队列；`hpo.parallel_jobs` 决定每轮拆成几个 manifest，同一 manifest 内的 trial 仍由 Worker 串行执行。Executor 先将配置与 manifest 写入实验的 S3 前缀，再一次性提交本轮所有 job。任一 job 失败时，它终止仍未结束的同轮 sibling，读取 CloudWatch 日志尾部并令整轮失败；全部成功后才读取各 run 的 `result.json/metrics.jsonl`、评分并反馈 HPO。当前固定 AWS 区域为 `eu-north-1`。

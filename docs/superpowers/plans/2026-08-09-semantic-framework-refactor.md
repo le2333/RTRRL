@@ -740,7 +740,7 @@ round. The deterministic fake executor scores local metrics artifacts through
 the real Scorer. Infra passes 63 tests and no longer imports Memo or carries
 Pydantic solely for cross-source tests.
 
-### Task 10: Add the missing concrete execution capability (local completed)
+### Task 10: Add the missing concrete execution capability (implementation complete)
 
 - First implement a local/mock round executor that writes real config/manifest
   files and exercises Worker as a subprocess.
@@ -759,8 +759,18 @@ runs every configured HPO round and prints the completed Optuna study rather
 than stopping after `ask()`. Infra's 65 default tests and Memo's 311 default
 tests pass; an explicit cross-process service test also passes through Infra,
 the real Worker module, a fake Entry, local artifact transport, Scorer, and
-Optuna. The Batch half remains open and still requires remote pushed-commit
-acceptance plus explicit approval before any AWS-mutating verification.
+Optuna.
+
+The Batch implementation completed offline on 2026-08-13. It packs each round
+according to `hpo.parallel_jobs`, uploads v8 configs/manifests to S3, routes the
+pinned digest and instance profile to the run/dev queue plus job definition,
+submits all siblings, polls to terminal state, terminates nonterminal siblings
+on the first failure, exposes the CloudWatch tail, and collects/scorers results
+only after full success. CLI supports both backends, the shipped template now
+declares `parallel_jobs`, and 69 default Infra tests pass. Fake S3/Batch/Logs
+cover the complete AWS API flow without mutating AWS. Task 10 is not remotely
+accepted until this pushed commit runs successfully on real Batch; that final
+gate still requires explicit approval before AWS mutation.
 
 ### Task 11: Complete public entry/catalog migration and cleanup
 
