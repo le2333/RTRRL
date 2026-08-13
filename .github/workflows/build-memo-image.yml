@@ -121,7 +121,7 @@ jobs:
           # costs an instance to discover.
           docker run --rm "$IMAGE" python -c '
           import importlib, importlib.util, json
-          import memorax, training_sdk
+          import memorax
           assert importlib.util.find_spec("trainer_infra") is None
           with open("/opt/trainer/catalog.json", encoding="utf-8") as handle:
               catalog = json.load(handle)
