@@ -95,3 +95,7 @@ Worker 按 manifest 顺序在隔离的 scratch 中启动各 Entry。Entry 和 lo
 ## 评分与 HPO 反馈
 
 `ScoreSpec` 和指标文件的数值归约属于 Infra。`ExperimentRunner.run(round_executor)` 将本轮运行配置和实验的 `ScoreSpec` 一起交给 executor；executor 收集各运行的 `metrics.jsonl`，调用 Infra Scorer，并按 trial 返回数值。Infra 在整轮结果齐全后才调用 `HPO.tell()`。executor、评分或结果关联失败时，本轮已 ask 的 trial 全部标记为 `FAIL`，异常继续向上抛出，且不启动下一轮。
+
+## 本地执行
+
+`trainerctl run --backend local` 使用 `LocalRoundExecutor` 完整运行实验，而不是只打印首轮配置。实验的 `storage` 必须是本地 `file://` URI；executor 为每轮写入真实 config 和 manifest，启动独立 Worker 进程，读取 Worker 发布的 `result.json` 与 `metrics.jsonl`，再交给 Infra Scorer 和 HPO。Worker 命令可通过最后一个参数 `--worker-command ...` 注入；未指定时使用当前 Python 的 `python -m worker`。本地与 S3 使用同一 Worker 监督和 artifact 相对路径契约，仅对象传输 scheme 不同。

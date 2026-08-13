@@ -740,7 +740,7 @@ round. The deterministic fake executor scores local metrics artifacts through
 the real Scorer. Infra passes 63 tests and no longer imports Memo or carries
 Pydantic solely for cross-source tests.
 
-### Task 10: Add the missing concrete execution capability
+### Task 10: Add the missing concrete execution capability (local completed)
 
 - First implement a local/mock round executor that writes real config/manifest
   files and exercises Worker as a subprocess.
@@ -750,6 +750,17 @@ Pydantic solely for cross-source tests.
 - Extend CLI from first-round JSON printing to the complete selected backend.
 - Do not claim Batch completion until a pushed remote commit passes the remote
   acceptance run.
+
+The local half completed on 2026-08-13. `LocalRoundExecutor` writes serialized
+run documents and manifests, starts Worker as an independent command, collects
+`result.json` plus `metrics.jsonl`, and feeds the Infra Scorer. Worker supports
+the same artifact contract over local `file://` storage as over S3. The CLI now
+runs every configured HPO round and prints the completed Optuna study rather
+than stopping after `ask()`. Infra's 65 default tests and Memo's 311 default
+tests pass; an explicit cross-process service test also passes through Infra,
+the real Worker module, a fake Entry, local artifact transport, Scorer, and
+Optuna. The Batch half remains open and still requires remote pushed-commit
+acceptance plus explicit approval before any AWS-mutating verification.
 
 ### Task 11: Complete public entry/catalog migration and cleanup
 
