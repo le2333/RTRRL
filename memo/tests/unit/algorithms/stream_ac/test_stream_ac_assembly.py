@@ -42,29 +42,31 @@ def test_stream_ac_declarations_live_with_its_graph_and_entry_reexports_them():
 
 def test_entry_only_projects_the_run_config_for_assembly():
     config = SimpleNamespace(
-        params={"gamma": 0.9},
-        environment=SimpleNamespace(
-            id="tiny",
-            backend="test",
-            observed=[0, 1],
-            episode_length=8,
+        algorithm=SimpleNamespace(
+            parameters={"gamma": 0.9},
+            environment=SimpleNamespace(
+                id="tiny",
+                backend="test",
+                observed=[0, 1],
+                episode_length=8,
+            ),
+            num_envs=2,
         ),
-        training=SimpleNamespace(num_envs=2),
-        evaluation=SimpleNamespace(steps=16),
     )
 
     request = entry.build_request(config)
 
-    assert request.parameters is config.params
+    assert request.parameters is config.algorithm.parameters
     assert request.environment.id == "tiny"
     assert request.num_envs == 2
 
 
 def test_entry_projects_only_the_runtime_schedule():
     config = SimpleNamespace(
-        environment=SimpleNamespace(seed=7),
-        training=SimpleNamespace(num_envs=2, total_steps=32, epoch_steps=8),
-        evaluation=SimpleNamespace(steps=4),
+        algorithm=SimpleNamespace(num_envs=2),
+        runtime=SimpleNamespace(
+            seed=7, total_steps=32, epoch_steps=8, evaluation_steps=4
+        ),
     )
 
     schedule = entry.runtime_config(config)

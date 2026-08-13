@@ -1,148 +1,93 @@
-# 控制面与 worker 之间的契约
+# 训练部署契约 v8
 
-两侧不共享任何代码。它们之间只有 **S3 上的 JSON**，和这份文档。
+Infra、训练镜像中的 Worker 和 Entry 不共享 Python 类型。跨环境接口是版本化 JSON，当前版本为 `8`。同一份序列化 fixture 位于 `tests/contracts/v8/`，各接收方只解析自己消费的投影。
 
-| | ctrler | worker |
-| --- | --- | --- |
-| 职责 | HPO、task 分发、托管 aim server、aim/rerun 可视化 | 跑若干指定配置、回报结果 |
-| Python 依赖 | optuna, pyyaml | 训练框架, aim(客户端), rerun-sdk, numpy, boto3, pydantic |
-| 同机进程 | aim server、rerun viewer，各自安装 | — |
+## Catalog
 
-发送方负责构造，**接收方负责校验**。共享一个 pydantic 类只在两侧同时发布时才安全，而 worker 是镜像、ctrler 是控制面，本来就不同时发布。
+镜像构建时运行：
 
-## `CONTRACT_VERSION`
+```bash
+python -m deployment.catalog --print-label
+```
 
-一个整数，当前 **7**，写在 `memo/worker/contract.py`。catalog 和 run configuration 各带一份。worker 收到不等于自己实现的版本就**拒绝执行**，不做兼容猜测。
-
-改动这四种形状里的任何一种——加字段、改语义、换类型——都要同时改这个数，否则一个旧 worker 会把新配置读成它以为的样子。
-
-## 四种形状
-
-### catalog.json
-
-镜像构建时由 `memo/runner/catalog.py` 扫描 `entries/` 生成，写进镜像标签。控制面从标签读它，**不导入任何 Python**——那台机器装不了 jax。
+`memo/deployment/catalog.py` 只发现 `entries/` 中名称不以下划线开头、且同时导出 `PARAMETERS`、`METRICS` 和 `main` 的模块。Catalog 结构为：
 
 ```json
 {
-  "contract": 6,
+  "contract": 8,
   "entries": {
     "stream_ac": {
       "command": ["python", "-m", "entries.stream_ac"],
-      "metrics": ["train/...", "eval/..."],
-      "parameters": { "<名字>": { "kind": "param"|"structure", ... } }
+      "parameters": {},
+      "metrics": []
     }
   }
 }
 ```
 
-`parameters` 是一棵树，**只有一种节点**。叶子是 `{"valid": ..., "search": ...}`，其余是分组：
+Infra 从镜像产物读取 Catalog，不导入训练代码。
+
+## 实验配置与运行配置
+
+实验 YAML 属于 Infra，包含镜像、计算资源、HPO、搜索空间和评分策略。Infra 根据 Catalog 验证并采样，然后为每个 trial 生成嵌套运行配置：
+
+```yaml
+contract: 8
+identity:
+  run_id: stream-ac-launch-t0
+  experiment: stream-ac
+  launch_id: launch
+  trial: 0
+  digest: sha256:...
+entry: stream_ac
+artifacts:
+  root: s3://bucket/experiment/launch/run
+algorithm:
+  environment:
+    id: brax::hopper
+    backend: spring
+    observed: [0, 2, 4]
+    episode_length: 1000
+  num_envs: 16
+  parameters: {}
+runtime:
+  seed: 0
+  total_steps: 2000000
+  epoch_steps: 10000
+  evaluation_steps: 1000
+logging:
+  aim:
+    url: aim://host:53800
+  rerun:
+    every_steps: 20000
+```
+
+运行配置不包含 `score`。评分策略由 Infra 持有，也不包含 `score.s3` 或 `logging.rerun_s3`。Worker 只需要一个 `artifacts.root`。
+
+## 接收方边界
+
+- Worker 的 v8 投影定义在 `memo/worker/envelope.py`，只解释 `contract`、`identity`、`entry` 和 `artifacts`；`algorithm`、`runtime`、`logging` 保持为交给子进程的 JSON。`run_manifest` 在 Task 8 切换到该投影。
+- Entry 使用 `memo/entries/_contract.py` 验证完整运行配置，再分别投影到算法 assembly、Runtime 和 observability。
+- Catalog 类型及版本位于 `memo/deployment/contract.py`，不属于 Worker。
+
+## Infra 前置验证
+
+启动 trial 之前必须满足：
+
+- `score.metric` 是所选 Catalog Entry 声明的指标；
+- 实验覆盖值或范围位于参数声明的 `valid` 域；
+- 每个可达的结构参数 `kind` 在同一实验内只有一个选项；
+- `space` 不包含 Catalog 未声明的参数；
+- 镜像引用固定到 digest。
+
+数值参数可以搜索；结构扫描要等基础设施显式支持后再开放。
+
+## Manifest
+
+Manifest 仍只按顺序列出运行配置位置：
 
 ```json
-"backbone": {
-  "kind": { "valid": {"type": "choice", "values": ["mlp", "rtu"]},
-            "search": {"type": "choice", "values": ["rtu"]} },
-  "rtu":  { "hidden_dim": { "valid": {...}, "search": {...} } },
-  "mlp":  { "hidden_dim": {...}, "initialization": {...} }
-}
+{"runs": ["s3://bucket/configs/run-t0.json"]}
 ```
 
-选组件不是第二种节点，是一个叫 **`kind`** 的参数，住在它的分支所在的那一组里。所以作用域是组本身：`ob` 在两个角色下各有一份、`sparse` 在六处初始化各有一份，它们是不同节点而不是重名——**没有一个平坦命名空间供它们相撞**。运行配置里的点名（`actor_optimizer_bound.ob.kappa`）是树路径的渲染，不是命名空间。
-
-`valid` 是组件说什么值有意义，`search` 是它建议搜哪一段、实验可以在其内收窄。
-
-**树是条件结构**：一个分支下的参数只属于选中了那条分支的试验。所以两侧都按 `kind` 递归——worker 从运行配置读它再往下建图，控制面在打开分支前一行抽它。扁平表说不出这件事，也就是为什么这里不是扁平表。
-
-整棵树绑定在镜像 digest 上：**改了文件不重建镜像，就不可能悄悄扩大一个实验的搜索空间**。
-
-### manifest
-
-控制面写，worker 从 `TRAINER_MANIFEST` 指向的位置读。
-
-```json
-{ "runs": ["s3://.../config-0.json", "s3://.../config-1.json"] }
-```
-
-worker **串行**执行其中每一个 run。
-
-### run configuration
-
-控制面写一份，worker 通过 `TRAINER_RUN_CONFIG` 读一份，由 `memo/worker/contract.py:RunConfig` 校验。
-
-```json
-{
-  "contract": 7,
-  "run_id": "...", "experiment": "...", "launch_id": "...",
-  "trial": 0, "entry": "stream_ac", "digest": "sha256:...",
-  "environment": { "id": "brax::hopper", "backend": "spring", "seed": 0,
-                   "episode_length": 1000, "observed": [0, 2, 4] },
-  "training":   { "num_envs": 16, "total_steps": 2000000, "epoch_steps": 10000 },
-  "evaluation": { "steps": 1000 },
-  "params":     { "<扁平名>": <标量> },
-  "logging":    { "aim": "...", "enable_rerun": false,
-                  "rerun_s3": null, "rerun_every_steps": null },
-  "score":      { "metric": "...", "window_steps": [0, 0], "reduce": "mean",
-                  "direction": "maximize", "non_finite": "worst", "s3": "s3://..." }
-}
-```
-
-#### 三组字段，按读者分
-
-| 组 | 字段 | 读者 |
-| --- | --- | --- |
-| **图** | `params`、`environment.{id,backend,observed,episode_length}`、`training.num_envs` | 入口的 `build` |
-| **预算** | `environment.seed`、`training.{total_steps,epoch_steps}`、`evaluation.steps` | `memorax.runtime.Runtime` |
-| **协调** | `contract` `run_id` `experiment` `launch_id` `trial` `entry` `digest`、`logging.*`、`score.*` | worker / reporter / sinks |
-
-`training.num_envs` 是唯一一个从预算块穿进组装器的字段：每个 carry、trace、sensitivity 都在这个宽度上开，建图时钉死。
-
-#### contract 6 → 7 删掉的四个字段
-
-`training.chunk_steps`、`training.early_stop_patience`、`evaluation.num_envs`、顶层 `name`——四个都**没有任何实现读**（`name` 尤其误导：aim 的 run 名用的是 `run_id`；实验文件里的 `name` 是 optuna study 名，属于 infra，不过河）。
-
-`evaluation.num_envs` 删得比另外三个硬：评估复用 `cfg.num_envs`，也就是训练那张图的宽度。按它的字面意思实现需要第二张图，所以它不只是没实现，是**与单图假设矛盾**。
-
-### score
-
-worker 写到 `score.s3`，控制面读回来喂给 Optuna。
-
-```json
-{ "run_id": "...", "trial": 0, "value": 123.4 }
-```
-
-## 一条跨侧约束，不在 JSON 里
-
-**worker 的 aim 客户端与 ctrler 的 aim 服务端主版本必须一致。** worker 现在钉在 `aim==3.28.*`。
-
-以前这条靠"两边装同一个包"隐式保证;拆开之后没有任何机制保证它，只有这一行。升级任何一侧都要同时升另一侧。
-
-## 实验文件：运行配置是从哪来的
-
-infra 的输入，样板见 `experiments/streamac template.yaml`，由 `trainer_infra.experiment` 读。它与运行配置**共用一套字段名**——不是两个 schema 加一个翻译层，是一个形状填两次。
-
-```
-[透传] environment  training  evaluation  logging  score(除 s3)
-[消费] image → digest        storage → score.s3、logging.rerun_s3
-[生成] contract(抄 catalog 的)  launch_id  run_id  trial
-[采样] space ⊕ catalog 的搜索域 → params
-[自用] name(optuna study)  description  compute  hpo
-```
-
-**运行配置 = 实验配置的外围参数（透传）+ 采样(catalog 的搜索域 ⊕ 实验配置的覆盖)**，加上只有提供方知道的协调字段。外围参数只能透传：catalog 能声明的是空间，而空间需要采样器，一个值没有空间。
-
-infra 在**产出任何配置之前**校验自己的输入完整（`trainer_infra.experiment.REQUIRED`）。少一个 `epoch_steps` 是零个容器起来，不是一轮 HPO 起 N 个各自读到同一个空字段再死。它校验的是"我的输入格式完整吗"，不是"worker 会不会喜欢这个值"——它不理解任何名字的语义。
-
-三个 fail-fast，都在起容器之前：
-
-| 拒绝 | 为什么 |
-| --- | --- |
-| 实验文件缺字段 | 见上 |
-| `space` 里有 catalog 没声明的名字 | 那是个不接线的旋钮，采样器永远不会填，运行会带着作者以为设过的值开始 |
-| `image` 没钉到 digest | tag 可以移动，而搜索空间绑在镜像上；浮动 tag 会让空间在一个已记录试验的 study 底下改变 |
-
-### 保持两份形状相等的机制
-
-只有往返测试：catalog → `trainer_infra` 真实解析与采样 → `RunConfig` 校验 → 入口 `build` 并跑一步。链绿 = 两份拷贝仍然相等；红 = 有人只改了一边。
-
-上半（协调与外围）在 `infra/tests/test_round_trip.py`，跑在 infra 侧：它按源码 import `worker.contract`，而那条链只到 pydantic——`memorax.parameters` 不碰任何数组库，`memorax/__init__.py` 是惰性的。所以控制面不为此背任何东西，pydantic 只在它的 dev 组里。
-
-下半（参数）等 catalog 的参数树重构后接上，见 `docs/roadmap.md` R1d。
+Worker 当前的旧评分执行路径不消费 v8 RunSpec；切换 envelope、artifact 上传和 `result.json` 属于下一阶段的监督与传输实现。

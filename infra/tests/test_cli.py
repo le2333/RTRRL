@@ -34,14 +34,14 @@ def test_run_command_emits_first_round_without_metric_feedback(
 
     configurations = json.loads(capsys.readouterr().out)["configurations"]
 
-    assert [configuration["trial"] for configuration in configurations] == [0, 1]
+    assert [configuration["identity"]["trial"] for configuration in configurations] == [0, 1]
     for configuration in configurations:
         assert configuration["entry"] == "stream_ac"
-        assert configuration["digest"] == DIGEST
-        assert configuration["environment"]["id"] == "brax::hopper"
-        assert configuration["training"]["num_envs"] == 4
-        assert configuration["score"]["direction"] == "maximize"
-        assert configuration["score"]["s3"].endswith("/score.json")
-        assert configuration["params"]["gamma"] in (0.9, 0.95)
-        assert configuration["params"]["backbone.rtu.hidden_dim"] == 32
-        assert configuration["params"]["backbone.kind"] == "rtu"
+        assert configuration["identity"]["digest"] == DIGEST
+        assert configuration["algorithm"]["environment"]["id"] == "brax::hopper"
+        assert configuration["algorithm"]["num_envs"] == 4
+        assert "score" not in configuration
+        parameters = configuration["algorithm"]["parameters"]
+        assert parameters["gamma"] in (0.9, 0.95)
+        assert parameters["backbone.rtu.hidden_dim"] == 32
+        assert parameters["backbone.kind"] == "rtu"

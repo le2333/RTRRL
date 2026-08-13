@@ -71,6 +71,9 @@ space:
   actor:
     head:
       kind: [global_std]
+      global_std:
+        initialization:
+          kind: [lecun]
     optimizer:
       bound:
         kind: [none]
@@ -79,6 +82,9 @@ space:
   critic:
     head:
       kind: [value]
+      value:
+        initialization:
+          kind: [lecun]
     optimizer:
       bound:
         kind: [none]

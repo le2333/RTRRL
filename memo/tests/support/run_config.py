@@ -1,36 +1,39 @@
-"""Version-7 run documents shared by deployment tests."""
+"""Version-8 run documents shared by deployment tests."""
 
 from __future__ import annotations
 
-from worker.contract import CONTRACT_VERSION, RunConfig
+from deployment.contract import CONTRACT_VERSION
+from entries._contract import RunSpec
 
 
-def make_run_config(**logging: object) -> RunConfig:
-    return RunConfig.model_validate(
+def make_run_config(**logging: object) -> RunSpec:
+    return RunSpec.model_validate(
         {
             "contract": CONTRACT_VERSION,
-            "run_id": "smoke-20260725-000000-t0",
-            "experiment": "infra-acceptance",
-            "launch_id": "20260725-000000",
-            "trial": 0,
+            "identity": {
+                "run_id": "smoke-20260725-000000-t0",
+                "experiment": "infra-acceptance",
+                "launch_id": "20260725-000000",
+                "trial": 0,
+                "digest": "registry.example/trainer@sha256:" + "a" * 64,
+            },
             "entry": "e",
-            "digest": "registry.example/trainer@sha256:" + "a" * 64,
-            "environment": {
-                "id": "brax::hopper",
-                "backend": "spring",
+            "artifacts": {"root": "s3://bucket/runs/smoke-t0"},
+            "algorithm": {
+                "environment": {
+                    "id": "brax::hopper",
+                    "backend": "spring",
+                    "episode_length": 1000,
+                },
+                "num_envs": 1,
+                "parameters": {"learning_rate": 0.0003},
+            },
+            "runtime": {
                 "seed": 0,
+                "total_steps": 100,
+                "epoch_steps": 100,
+                "evaluation_steps": 0,
             },
-            "training": {"num_envs": 1, "total_steps": 100, "epoch_steps": 100},
-            "evaluation": {"steps": 0},
-            "params": {"learning_rate": 0.0003},
-            "logging": {"aim": "aim://127.0.0.1:1", **logging},
-            "score": {
-                "metric": "episode_return",
-                "window_steps": [0, 4],
-                "reduce": "mean",
-                "direction": "maximize",
-                "non_finite": "worst",
-                "s3": "s3://bucket/score.json",
-            },
+            "logging": {"aim": {"url": "aim://127.0.0.1:1"}, **logging},
         }
     )

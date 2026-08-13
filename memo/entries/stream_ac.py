@@ -16,28 +16,30 @@ from ._observability import build_reporter, load_run
 def build_request(config) -> BuildRequest:
     """Project the deployment run document onto assembly's input."""
 
-    environment = config.environment
+    algorithm = config.algorithm
+    environment = algorithm.environment
     return BuildRequest(
-        parameters=config.params,
+        parameters=algorithm.parameters,
         environment=EnvironmentSpec(
             id=environment.id,
             backend=environment.backend,
             observed=environment.observed,
             episode_length=environment.episode_length,
         ),
-        num_envs=config.training.num_envs,
+        num_envs=algorithm.num_envs,
     )
 
 
 def runtime_config(config) -> RuntimeConfig:
     """Project the deployment run document onto Runtime's input."""
 
+    runtime = config.runtime
     return RuntimeConfig(
-        total_steps=config.training.total_steps,
-        epoch_steps=config.training.epoch_steps,
-        eval_steps=config.evaluation.steps,
-        num_envs=config.training.num_envs,
-        seed=config.environment.seed,
+        total_steps=runtime.total_steps,
+        epoch_steps=runtime.epoch_steps,
+        eval_steps=runtime.evaluation_steps,
+        num_envs=config.algorithm.num_envs,
+        seed=runtime.seed,
     )
 
 

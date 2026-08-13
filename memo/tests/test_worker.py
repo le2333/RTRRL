@@ -5,8 +5,8 @@ from pathlib import Path
 import pytest
 
 from tests.support.run_config import make_run_config
+from deployment.contract import CONTRACT_VERSION
 from worker import objects
-from worker.contract import CONTRACT_VERSION
 from worker.worker import WorkerError, main, run_manifest
 
 pytestmark = [pytest.mark.integration, pytest.mark.service]

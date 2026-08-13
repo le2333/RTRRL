@@ -78,7 +78,7 @@ jobs:
         working-directory: memo
         run: |
           set -euo pipefail
-          CATALOG="$(uv run --frozen python -m runner.catalog --print-label)"
+          CATALOG="$(uv run --frozen python -m deployment.catalog --print-label)"
           echo "value=$CATALOG" >> "$GITHUB_OUTPUT"
 
       - name: Build local image
@@ -228,7 +228,7 @@ jobs:
         working-directory: memo
         run: |
           set -euo pipefail
-          CATALOG="$(uv run --frozen python -m runner.catalog --print-label)"
+          CATALOG="$(uv run --frozen python -m deployment.catalog --print-label)"
           echo "value=$CATALOG" >> "$GITHUB_OUTPUT"
 
       - name: Rebuild local image

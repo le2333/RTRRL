@@ -13,41 +13,42 @@ from memorax.observability.sinks import (
     MetricsSink,
     RerunSink,
 )
-from worker.contract import RunConfig
+
+from ._contract import RunSpec
 
 
-def load_run() -> tuple[RunConfig, Path]:
+def load_run() -> tuple[RunSpec, Path]:
     config_path = Path(os.environ["TRAINER_RUN_CONFIG"])
     scratch = Path(os.environ["TRAINER_SCRATCH"])
-    config = RunConfig.model_validate(
-        json.loads(config_path.read_text(encoding="utf-8"))
-    )
+    config = RunSpec.model_validate(json.loads(config_path.read_text(encoding="utf-8")))
     return config, scratch
 
 
-def build_reporter(config: RunConfig, scratch: Path) -> Reporter:
+def build_reporter(config: RunSpec, scratch: Path) -> Reporter:
+    identity = config.identity
     metadata = RunMetadata(
-        run_id=config.run_id,
-        experiment=config.experiment,
-        launch_id=config.launch_id,
-        trial=config.trial,
+        run_id=identity.run_id,
+        experiment=identity.experiment,
+        launch_id=identity.launch_id,
+        trial=identity.trial,
         entry=config.entry,
-        digest=config.digest,
+        digest=identity.digest,
     )
     scalar_sinks = [
         MetricsSink(Path(scratch) / METRICS_FILENAME),
-        AimSink(config.logging.aim, metadata, parameters=config.params),
+        AimSink(
+            config.logging.aim.url,
+            metadata,
+            parameters=config.algorithm.parameters,
+        ),
     ]
     episode_sinks = []
-    if config.logging.enable_rerun:
-        every_steps = config.logging.rerun_every_steps
-        if every_steps is None:
-            raise ValueError("enabled Rerun logging requires rerun_every_steps")
+    if config.logging.rerun is not None:
         episode_sinks.append(
             RerunSink(
                 scratch,
-                every_steps=every_steps,
-                num_envs=config.training.num_envs,
+                every_steps=config.logging.rerun.every_steps,
+                num_envs=config.algorithm.num_envs,
                 metadata=metadata,
             )
         )

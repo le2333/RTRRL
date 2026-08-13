@@ -68,3 +68,55 @@ def test_a_pin_nested_under_a_group_is_named_by_where_it_was_written() -> None:
 
     with pytest.raises(SpaceError, match=r"actor\.knid"):
         resolve_parameter_ranges(declared, {"actor": {"knid": ["sgd"]}})
+
+
+@pytest.mark.parametrize(
+    "override",
+    ([0.8, 1.1], {"type": "float", "low": 0.8, "high": 1.1}),
+)
+def test_an_override_outside_the_declared_valid_domain_is_refused(override) -> None:
+    declared = {
+        "gamma": {
+            "valid": {"type": "float", "low": 0.0, "high": 1.0},
+            "search": {"type": "choice", "values": [0.99]},
+        }
+    }
+
+    with pytest.raises(SpaceError, match="gamma"):
+        resolve_parameter_ranges(declared, {"gamma": override})
+
+
+def test_a_choice_override_must_belong_to_the_declared_domain() -> None:
+    declared = {
+        "credit": {
+            "kind": {
+                "valid": {"type": "choice", "values": ["rtrl", "tbptt"]},
+                "search": {"type": "choice", "values": ["rtrl"]},
+            }
+        }
+    }
+
+    with pytest.raises(SpaceError, match="credit.kind"):
+        resolve_parameter_ranges(declared, {"credit": {"kind": ["other"]}})
+
+
+def test_structure_is_fixed_for_every_trial_in_one_experiment() -> None:
+    declared = {
+        "backbone": {
+            "kind": {
+                "valid": {"type": "choice", "values": ["mlp", "rtu"]},
+                "search": {"type": "choice", "values": ["mlp", "rtu"]},
+            },
+            "mlp": {},
+            "rtu": {},
+        }
+    }
+
+    with pytest.raises(SpaceError, match="backbone.kind"):
+        resolve_parameter_ranges(declared, {})
+    with pytest.raises(SpaceError, match="backbone.kind"):
+        resolve_parameter_ranges(declared, {"backbone": {"kind": ["mlp", "rtu"]}})
+
+    assert resolve_parameter_ranges(declared, {"backbone": {"kind": ["rtu"]}})["backbone"][
+        "kind"
+    ] == {"type": "choice", "values": ["rtu"]}

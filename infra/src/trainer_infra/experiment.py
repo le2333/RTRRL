@@ -1,15 +1,4 @@
-"""An experiment file, and the run configurations it turns into.
-
-The names here are the worker's. Five blocks are passed through unchanged, so
-this side never learns what ``episode_length`` or ``non_finite`` mean -- it
-checks that the file said something and hands it on. That is why there is no
-schema negotiation between the two sides: there is one shape, written down in
-docs/contract.md, and this file is the half that fills it in.
-
-What this side does own is the coordination: which image, which run is which,
-and where each run's result goes. None of it is a preference an experiment
-could be missing, so all of it is derived here rather than asked for.
-"""
+"""Turn one experiment and image catalog into nested run specifications."""
 
 from __future__ import annotations
 
@@ -26,22 +15,24 @@ RoundExecutor = Callable[
     Sequence[Mapping[str, int | float]],
 ]
 
-# Handed to the worker exactly as written. A block here is the worker's shape,
-# not this side's, and the round-trip test is what keeps that true.
-PASSED_THROUGH: tuple[str, ...] = (
-    "environment",
-    "training",
-    "evaluation",
-    "logging",
-    "score",
-)
-
 # What a file must say before any container starts. Checking it here rather
 # than in the worker is the difference between one failure and a round's worth
 # of jobs that each start, read the same missing field, and die.
 REQUIRED: Mapping[str, tuple[str, ...]] = {
-    "": ("experiment", "name", "image", "entry", "storage", "hpo", "space")
-    + PASSED_THROUGH,
+    "": (
+        "experiment",
+        "name",
+        "image",
+        "entry",
+        "storage",
+        "hpo",
+        "space",
+        "environment",
+        "training",
+        "evaluation",
+        "logging",
+        "score",
+    ),
     "environment": ("id", "backend", "seed", "episode_length"),
     "training": ("num_envs", "total_steps", "epoch_steps"),
     "evaluation": ("steps",),
@@ -75,9 +66,7 @@ def _digest(image: str) -> str:
 
     _, pinned, digest = image.partition("@")
     if not pinned:
-        raise ExperimentError(
-            f"image {image!r} is not pinned to a digest; use name@sha256:..."
-        )
+        raise ExperimentError(f"image {image!r} is not pinned to a digest; use name@sha256:...")
     return digest
 
 
@@ -100,11 +89,12 @@ class ExperimentRunner:
 
         entry = experiment["entry"]
         try:
-            declared = catalog["entries"][entry]["parameters"]
+            descriptor = catalog["entries"][entry]
         except KeyError:
-            raise ExperimentError(
-                f"the image catalog declares no entry {entry!r}"
-            ) from None
+            raise ExperimentError(f"the image catalog declares no entry {entry!r}") from None
+        metric = experiment["score"]["metric"]
+        if metric not in descriptor["metrics"]:
+            raise ExperimentError(f"entry {entry!r} declares no score metric {metric!r}")
         # Echoed, not asserted: what the run configurations must claim is
         # whatever the image that will read them implements.
         self.contract = catalog["contract"]
@@ -118,7 +108,7 @@ class ExperimentRunner:
             trials_per_round=hpo["trials_per_round"],
             startup_trials=hpo["startup_trials"],
             seed=hpo["seed"],
-            parameters=resolve_parameter_ranges(declared, experiment["space"]),
+            parameters=resolve_parameter_ranges(descriptor["parameters"], experiment["space"]),
         )
 
     def next_round(self) -> tuple[dict[str, Any], ...]:
@@ -146,19 +136,34 @@ class ExperimentRunner:
                 run_id,
             )
         )
-        blocks = {name: dict(experiment[name]) for name in PASSED_THROUGH}
-        blocks["score"]["s3"] = f"{artifacts}/score.json"
-        if blocks["logging"].get("enable_rerun"):
-            blocks["logging"].setdefault("rerun_s3", f"{artifacts}/rerun")
+        environment = dict(experiment["environment"])
+        seed = environment.pop("seed")
+        training = experiment["training"]
+        logging = {"aim": {"url": experiment["logging"]["aim"]}}
+        if experiment["logging"].get("enable_rerun"):
+            logging["rerun"] = {"every_steps": experiment["logging"]["rerun_every_steps"]}
 
         return {
             "contract": self.contract,
-            "run_id": run_id,
-            "experiment": experiment["experiment"],
-            "launch_id": self.launch_id,
-            "trial": trial.number,
+            "identity": {
+                "run_id": run_id,
+                "experiment": experiment["experiment"],
+                "launch_id": self.launch_id,
+                "trial": trial.number,
+                "digest": self.digest,
+            },
             "entry": experiment["entry"],
-            "digest": self.digest,
-            "params": dict(trial.parameters),
-            **blocks,
+            "artifacts": {"root": artifacts},
+            "algorithm": {
+                "environment": environment,
+                "num_envs": training["num_envs"],
+                "parameters": dict(trial.parameters),
+            },
+            "runtime": {
+                "seed": seed,
+                "total_steps": training["total_steps"],
+                "epoch_steps": training["epoch_steps"],
+                "evaluation_steps": experiment["evaluation"]["steps"],
+            },
+            "logging": logging,
         }

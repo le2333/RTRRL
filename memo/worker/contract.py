@@ -1,47 +1,21 @@
-"""What a run configuration is, as the worker receives it.
+"""Legacy execution and score models pending Worker transport migration.
 
-The control plane writes these and this side validates what arrives, refusing
-a version it does not implement. Neither side imports the other: they answer to
-the shape written down in docs/contract.md and to ``CONTRACT_VERSION``, which is
-what makes a mismatch a refusal rather than a misreading.
+The versioned catalog is owned by :mod:`deployment.contract`; the version-8
+Worker projection is :mod:`worker.envelope`. Task 8 removes the remaining flat
+execution model together with Worker-owned scoring.
 """
 
 from __future__ import annotations
 
-from typing import Any, Literal
+from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, model_validator
 
 from memorax.parameters import Scalar
 
-CONTRACT_VERSION = 7
-
 
 class _Frozen(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
-
-
-class EntryDescriptor(_Frozen):
-    command: tuple[str, ...]
-    metrics: tuple[str, ...]
-    # Left opaque on purpose. Nothing on this side reads the parameter tree --
-    # the entry reads the values a run configuration carries, not the space
-    # they were drawn from -- and the only reader is the control plane, which
-    # has its own vocabulary for it and does not import this one.
-    parameters: dict[str, Any]
-
-    @model_validator(mode="after")
-    def _non_empty(self) -> "EntryDescriptor":
-        if not self.command:
-            raise ValueError("command must not be empty")
-        if not self.metrics:
-            raise ValueError("metrics must not be empty")
-        return self
-
-
-class Catalog(_Frozen):
-    contract: int
-    entries: dict[str, EntryDescriptor]
 
 
 class EnvironmentConfig(_Frozen):
@@ -92,8 +66,7 @@ class TrainingConfig(_Frozen):
             )
         if self.epoch_steps % self.num_envs:
             raise ValueError(
-                f"epoch_steps {self.epoch_steps} is not "
-                f"{self.num_envs} streams' worth"
+                f"epoch_steps {self.epoch_steps} is not {self.num_envs} streams' worth"
             )
         return self
 

@@ -129,4 +129,4 @@ jobs:
           JAX_ENABLE_X64: "1"
         run: uv run pytest tests/test_lru_precision.py -v -s
       - name: Build the catalog the image will carry
-        run: uv run python -m runner.catalog --print-label > /dev/null
+        run: uv run python -m deployment.catalog --print-label > /dev/null

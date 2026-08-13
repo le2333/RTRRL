@@ -693,6 +693,19 @@ artifact tree remains Task 8.
   deployment/image adapter.
 - Replace source-import round trips with serialized fixture tests.
 
+Completed on 2026-08-13. The shared wire shape is now contract 8 with nested
+identity, artifact, algorithm, runtime, and logging projections. Infra emits
+that shape without score policy or sink-specific object-store destinations;
+the Worker envelope and Entry parser independently consume the same serialized
+fixture. Catalog ownership moved to `deployment`, and Entry projects the full
+RunSpec to assembly, Runtime, and observability. Infra now refuses undeclared
+score metrics, overrides outside declared valid domains, and any reachable
+structure choice that is not fixed for the experiment. The real StreamAC
+template was completed with its two reachable head-initialization choices.
+Infra passes 35 tests, Memo's default suite passes 324 tests, and the real
+catalog-to-StreamAC round trip assembles and steps. Activating the Worker
+envelope and removing its legacy flat score path remains Task 8.
+
 ### Task 8: Reduce Worker to supervision and artifact transport
 
 - Remove score imports and score computation from Worker.

@@ -26,7 +26,7 @@ from memorax.runtime import (
     RuntimeConfig,
     whole_epochs,
 )
-from runner.catalog import build_catalog, discover
+from deployment.catalog import build_catalog, discover
 from tests.support.fakes import EpisodeRecorder as Recorder
 from tests.support.programs import (
     EPOCH_STEPS,
@@ -36,7 +36,7 @@ from tests.support.programs import (
     TOTAL_STEPS,
     arithmetic_program,
 )
-from worker.contract import Catalog
+from deployment.contract import Catalog
 
 
 def run_arithmetic(recorder, **overrides):

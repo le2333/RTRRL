@@ -18,7 +18,7 @@ IMAGE = f"registry.example/trainer@{DIGEST}"
 @pytest.fixture
 def catalog() -> dict[str, Any]:
     return {
-        "contract": 7,
+        "contract": 8,
         "entries": {
             "stream_ac": {
                 "command": ["python", "-m", "entries.stream_ac"],

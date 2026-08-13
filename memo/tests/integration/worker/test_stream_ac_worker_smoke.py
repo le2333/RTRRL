@@ -13,9 +13,10 @@ from aim import Repo
 
 from memorax.algorithms.stream_ac import PARAMETERS
 from memorax.parameters import expand
-from runner.catalog import write_catalog
+from deployment.catalog import write_catalog
+from deployment.contract import CONTRACT_VERSION
+from entries._contract import RunSpec
 from worker import objects
-from worker.contract import CONTRACT_VERSION, RunConfig
 from worker.worker import run_manifest
 
 pytestmark = [pytest.mark.integration, pytest.mark.service]
@@ -63,7 +64,7 @@ def test_worker_runs_stream_ac_and_records_critic_trace_norm(
     aim_path = tmp_path / "aim"
     Repo.from_path(str(aim_path), init=True)
     score_uri = f"{s3_base}/smoke/score.json"
-    config = RunConfig.model_validate(
+    config = RunSpec.model_validate(
         {
             "contract": CONTRACT_VERSION,
             "run_id": "stream-ac-worker-smoke-t0",

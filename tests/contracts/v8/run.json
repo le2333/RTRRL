@@ -1,0 +1,34 @@
+{
+  "contract": 8,
+  "identity": {
+    "run_id": "stream-ac-baseline-t0",
+    "experiment": "stream-ac-baseline",
+    "launch_id": "20260813-000000",
+    "trial": 0,
+    "digest": "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+  },
+  "entry": "stream_ac",
+  "artifacts": {
+    "root": "s3://artifacts/trainer/stream-ac/launch/run-t0"
+  },
+  "algorithm": {
+    "environment": {
+      "id": "brax::hopper",
+      "backend": "spring",
+      "observed": [0, 2, 4],
+      "episode_length": 1000
+    },
+    "num_envs": 2,
+    "parameters": {"gamma": 0.99}
+  },
+  "runtime": {
+    "seed": 0,
+    "total_steps": 100,
+    "epoch_steps": 100,
+    "evaluation_steps": 10
+  },
+  "logging": {
+    "aim": {"url": "aim://aim:53800"},
+    "rerun": {"every_steps": 100}
+  }
+}

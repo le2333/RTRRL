@@ -1,6 +1,6 @@
 """The whole chain, from what the image declares to an agent taking a step.
 
-    catalog -> control-plane resolver and sampler -> RunConfig -> assembly
+    catalog -> control-plane resolver and sampler -> RunSpec -> assembly
 
 Neither side imports the other in production. They answer to a shape written
 down in docs/contract.md, and two copies of one shape stay equal only if
@@ -25,10 +25,11 @@ from trainer_infra.experiment import ExperimentRunner
 from trainer_infra.hpo import sample_parameters
 
 from entries import stream_ac
+from entries._contract import RunSpec
 from memorax.parameters import KIND, expand, flatten
-from runner.catalog import build_catalog
+from deployment.catalog import build_catalog
+from deployment.contract import CONTRACT_VERSION
 from tests.support.builders import assemble_stream_ac
-from worker.contract import CONTRACT_VERSION, RunConfig
 
 optuna = pytest.importorskip("optuna")
 
@@ -74,14 +75,14 @@ def test_the_control_plane_accepts_the_catalog_this_image_would_ship(catalog):
 def test_every_configuration_a_round_produces_is_one_this_side_accepts(configurations):
     assert configurations
     for configuration in configurations:
-        assert RunConfig.model_validate(configuration).contract == CONTRACT_VERSION
+        assert RunSpec.model_validate(configuration).contract == CONTRACT_VERSION
 
 
 def test_the_sampler_draws_only_names_the_entry_declares(configurations, catalog):
     declared = set(flatten(stream_ac.PARAMETERS))
 
     for configuration in configurations:
-        unknown = sorted(set(configuration["params"]) - declared)
+        unknown = sorted(set(configuration["algorithm"]["parameters"]) - declared)
 
         assert not unknown, f"the sampler produced {unknown}"
 
@@ -113,7 +114,7 @@ def test_each_configuration_is_the_whole_of_one_walk_and_no_more(configurations)
     """
 
     for configuration in configurations:
-        params = configuration["params"]
+        params = configuration["algorithm"]["parameters"]
 
         assert set(expand(stream_ac.PARAMETERS, params)) == set(params)
 
@@ -121,7 +122,7 @@ def test_each_configuration_is_the_whole_of_one_walk_and_no_more(configurations)
 def test_a_branch_the_experiment_did_not_choose_is_absent(configurations):
     """Not filled in with something that would read as chosen."""
 
-    params = configurations[0]["params"]
+    params = configurations[0]["algorithm"]["parameters"]
 
     assert params[f"backbone.{KIND}"] == "rtu"
     assert not [name for name in params if name.startswith("backbone.mlp.")]
@@ -131,21 +132,21 @@ def test_a_branch_the_experiment_did_not_choose_is_absent(configurations):
 def test_the_resolved_manifest_assembles_and_steps(configurations):
     """The end of the chain: the names line up where they are finally read."""
 
-    config = RunConfig.model_validate(configurations[0])
+    config = RunSpec.model_validate(configurations[0])
     program = assemble_stream_ac(
-        config.params,
-        config.environment,
+        config.algorithm.parameters,
+        config.algorithm.environment,
         # Two streams answer whether the names line up as well as sixteen do,
         # faster.
         num_envs=STREAMS,
     )
-    state = program.init(jax.random.key(config.environment.seed))
+    state = program.init(jax.random.key(config.runtime.seed))
     _, metrics = program.train(jax.random.key(1), state, 2 * STREAMS)
 
     assert metrics.interaction.reward.shape == (2, STREAMS)
 
 
-def test_the_score_names_a_metric_this_entry_reports(configurations):
+def test_the_score_names_a_metric_this_entry_reports(experiment, configurations):
     """Otherwise the run finishes and the control plane has nothing to read."""
 
-    assert configurations[0]["score"]["metric"] in stream_ac.METRICS
+    assert experiment["score"]["metric"] in stream_ac.METRICS

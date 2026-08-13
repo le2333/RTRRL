@@ -11,15 +11,13 @@ from tests.support.run_config import make_run_config
 pytestmark = [pytest.mark.integration, pytest.mark.service]
 
 
-def config_with_local_aim(tmp_path, **logging):
+def config_with_local_aim(tmp_path, *, rerun=None):
     endpoint = str(tmp_path / "aim")
     Repo.from_path(endpoint, init=True)
     config = make_run_config()
-    return config.model_copy(
-        update={
-            "logging": config.logging.model_copy(update={"aim": endpoint, **logging})
-        }
-    )
+    payload = config.model_dump(mode="json")
+    payload["logging"] = {"aim": {"url": endpoint}, "rerun": rerun}
+    return type(config).model_validate(payload)
 
 
 def test_entry_loads_the_deployment_document_and_scratch(tmp_path, monkeypatch):
@@ -40,8 +38,7 @@ def test_entry_composes_mandatory_scalars_and_optional_local_episodes(tmp_path):
     scratch = tmp_path / "scratch"
     config = config_with_local_aim(
         tmp_path,
-        enable_rerun=True,
-        rerun_every_steps=1,
+        rerun={"every_steps": 1},
     )
 
     with build_reporter(config, scratch) as reporter:
