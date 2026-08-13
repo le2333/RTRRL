@@ -37,7 +37,7 @@ def tiny_environment(identifier, **options):
 def test_stream_ac_declarations_live_with_its_graph_and_entry_reexports_them():
     assert entry.PARAMETERS is stream_ac.PARAMETERS
     assert entry.METRICS is stream_ac.METRICS
-    assert entry.TRAINING_METRICS is stream_ac.TRAINING_METRICS
+    assert stream_ac.OBSERVATIONS.series == stream_ac.TRAINING_METRICS
 
 
 def test_entry_only_projects_the_run_config_for_assembly():
@@ -50,6 +50,7 @@ def test_entry_only_projects_the_run_config_for_assembly():
             episode_length=8,
         ),
         training=SimpleNamespace(num_envs=2),
+        evaluation=SimpleNamespace(steps=16),
     )
 
     request = entry.build_request(config)
@@ -59,8 +60,24 @@ def test_entry_only_projects_the_run_config_for_assembly():
     assert request.num_envs == 2
 
 
+def test_entry_projects_only_the_runtime_schedule():
+    config = SimpleNamespace(
+        environment=SimpleNamespace(seed=7),
+        training=SimpleNamespace(num_envs=2, total_steps=32, epoch_steps=8),
+        evaluation=SimpleNamespace(steps=4),
+    )
+
+    schedule = entry.runtime_config(config)
+
+    assert schedule.total_steps == 32
+    assert schedule.epoch_steps == 8
+    assert schedule.eval_steps == 4
+    assert schedule.num_envs == 2
+    assert schedule.seed == 7
+
+
 def test_generic_assembly_closes_stream_ac_over_the_runtime_program():
-    program = assemble(
+    built = assemble(
         stream_ac.StreamAC,
         BuildRequest(
             parameters=parameters(),
@@ -75,12 +92,13 @@ def test_generic_assembly_closes_stream_ac_over_the_runtime_program():
         environment_factory=tiny_environment,
     )
 
-    graph = program.init_fn.__self__
+    graph = built.program.init.__self__
     assert graph.core.actor.block.network is not graph.core.critic.block.network
+    assert built.observations is stream_ac.OBSERVATIONS
 
-    state = program.init_fn(jax.random.key(0))
-    trained, metrics = program.train_epoch_fn(jax.random.key(1), state, 2)
-    evaluated = program.evaluate_fn(jax.random.key(2), trained, 2)
+    state = built.program.init(jax.random.key(0))
+    trained, metrics = built.program.train(jax.random.key(1), state, 2)
+    evaluated = built.program.evaluate(jax.random.key(2), trained, 2)
 
     assert int(trained.step) == 2
     assert metrics.interaction.reward.shape == (2, 1)

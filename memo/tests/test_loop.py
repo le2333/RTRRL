@@ -18,7 +18,14 @@ import pytest
 import entries
 from entries import stream_ac
 from memorax.observability import check_names, statistics
-from memorax.runtime import drive, whole_epochs
+from memorax.runtime import (
+    BuiltAlgorithm,
+    ObservationSchema,
+    Program,
+    Runtime,
+    RuntimeConfig,
+    whole_epochs,
+)
 from runner.catalog import build_catalog, discover
 from tests.support.fakes import EpisodeRecorder as Recorder
 from tests.support.programs import (
@@ -40,15 +47,27 @@ def run_arithmetic(recorder, **overrides):
         "eval_steps": EVAL_STEPS,
         "num_envs": NUM_ENVS,
         "seed": 0,
-        "series": SERIES,
     }
-    drive(
-        recorder,
-        init_fn=init_fn,
-        train_fn=train_fn,
-        evaluate_fn=evaluate_fn,
-        **(settings | overrides),
-    )
+    reward = overrides.pop("reward", "interaction.reward")
+    Runtime(
+        algorithm=BuiltAlgorithm(
+            program=Program(
+                init=init_fn,
+                train=train_fn,
+                evaluate=evaluate_fn,
+            ),
+            observations=ObservationSchema(
+                reward=reward,
+                done="interaction.done",
+                terminal="interaction.terminal",
+                observation="interaction.observation",
+                next_observation="interaction.next_observation",
+                action="interaction.action",
+                series=SERIES,
+            ),
+        ),
+        config=RuntimeConfig(**(settings | overrides)),
+    ).run(recorder)
 
 
 def test_a_completed_episode_is_the_only_reporting_occasion():

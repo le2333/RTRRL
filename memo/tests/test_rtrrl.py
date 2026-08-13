@@ -25,6 +25,7 @@ from memorax.networks import heads
 from memorax.networks.components import FFN, LayerNorm, Tanh
 from memorax.networks.sequence import Sequence
 from memorax.networks.sequence_models import LRUCell, LRUConfig, Memoroid
+from memorax.rl.updates import Adam
 from tests.support.environments import TinyContinuousEnv
 
 ENVS = 3
@@ -33,12 +34,8 @@ HIDDEN = 2
 CELL = "components_3"
 
 
-def build(head: str = "state_std", reports=None, **overrides) -> RTRRL:
-    """The kernel, on the smallest sequence that still has a recurrence in it."""
-
-    env = TinyContinuousEnv()
-    action_dim = int(env.action_space(env.default_params).shape[0])
-    torso = Sequence(
+def torso_network() -> Sequence:
+    return Sequence(
         components=(
             FFN(features=FEATURES),
             LayerNorm(),
@@ -48,14 +45,22 @@ def build(head: str = "state_std", reports=None, **overrides) -> RTRRL:
             ),
         )
     )
+
+
+def build(head: str = "state_std", reports=None, **overrides) -> RTRRL:
+    """The kernel, on the smallest sequence that still has a recurrence in it."""
+
+    env = TinyContinuousEnv()
+    action_dim = int(env.action_space(env.default_params).shape[0])
+    torso = torso_network()
     settings = {
         "num_envs": ENVS,
         "gamma": 0.9,
         "lambda_pi": 0.8,
         "lambda_v": 0.7,
         "lambda_rnn": 0.6,
-        "torso_lr": 1e-3,
-        "head_lr": 1e-3,
+        "torso_optimizer": Adam(lr=1e-3),
+        "heads_optimizer": Adam(lr=1e-3),
         "eta_pi": 0.5,
         "eta_f": 0.5,
         "entropy_rate": 1e-3,
@@ -194,7 +199,14 @@ def test_the_torso_still_hears_what_is_not_traced():
             ({"torso_grad_clip": 1e-8}, {"torso_grad_clip": 0.0}),
             ("torso",),
         ),
-        ("the head rate", ({"head_lr": 1e-3}, {"head_lr": 1e-5}), ("actor", "critic")),
+        (
+            "the head rate",
+            (
+                {"heads_optimizer": Adam(lr=1e-3)},
+                {"heads_optimizer": Adam(lr=1e-5)},
+            ),
+            ("actor", "critic"),
+        ),
     ],
 )
 def test_a_dial_moves_its_own_group_and_no_other(dial, overrides, expected):
@@ -210,7 +222,13 @@ def test_a_dial_moves_its_own_group_and_no_other(dial, overrides, expected):
 @pytest.mark.parametrize(
     "overrides,crosses_to",
     [
-        (({"head_lr": 1e-3}, {"head_lr": 1e-5}), ("torso",)),
+        (
+            (
+                {"heads_optimizer": Adam(lr=1e-3)},
+                {"heads_optimizer": Adam(lr=1e-5)},
+            ),
+            ("torso",),
+        ),
         (
             ({"torso_grad_clip": 1e-8}, {"torso_grad_clip": 0.0}),
             ("actor", "critic"),

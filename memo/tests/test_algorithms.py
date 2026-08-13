@@ -17,7 +17,7 @@ import jax.numpy as jnp
 import optax
 import pytest
 
-from memorax.algorithms.stream_ac import StreamAC, StreamACConfig
+from memorax.algorithms.stream_ac import OBSERVATIONS, StreamAC, StreamACConfig
 from memorax.networks import (
     FFN,
     Readout,
@@ -248,9 +248,7 @@ def test_the_algorithm_restarts_the_environment_when_an_episode_ends():
             phase="train",
             start_env_steps=0,
             num_envs=1,
-            transitions="interaction",
-            reward="interaction.reward",
-            terminal="interaction.terminal",
+            observations=OBSERVATIONS,
         )
     )
     assert [len(episode.rewards) for episode in episodes] == [horizon, horizon]

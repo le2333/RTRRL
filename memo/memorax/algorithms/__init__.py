@@ -5,7 +5,6 @@ from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
     from .contract import ActionDecision as ActionDecision
-    from .contract import AgentProgram as AgentProgram
     from .contract import EvalSummary as EvalSummary
     from .contract import EvaluationConfig as EvaluationConfig
     from .dqn import DQN as DQN
@@ -42,7 +41,6 @@ if TYPE_CHECKING:
 
 _EXPORTS = {
     "ActionDecision": (".contract", "ActionDecision"),
-    "AgentProgram": (".contract", "AgentProgram"),
     "EvalSummary": (".contract", "EvalSummary"),
     "EvaluationConfig": (".contract", "EvaluationConfig"),
     "DQN": (".dqn", "DQN"),
@@ -92,7 +90,6 @@ __all__ = [
     "RTRRL",
     "SAC",
     "ActionDecision",
-    "AgentProgram",
     "DQNConfig",
     "DQNState",
     "EvalSummary",

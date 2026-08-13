@@ -22,6 +22,7 @@ import jax
 import jax.numpy as jnp
 import optax
 
+from memorax.rl import make_exact_rtrl_credit
 from memorax.utils import Timestep
 
 
@@ -45,8 +46,8 @@ def published():
     return traces
 
 
-def make_reference(agent):
-    """A step function over the same networks and configuration ``agent`` holds."""
+def make_reference(agent, sequence):
+    """A step function over an explicitly supplied copy of the same topology."""
 
     traces = published()
     compute_updates = traces.compute_updates
@@ -56,8 +57,7 @@ def make_reference(agent):
     torso = agent.core.torso
     actor = agent.core.actor
     critic = agent.core.critic
-    sequence = torso.network
-    credit = torso.block.credit
+    credit = make_exact_rtrl_credit(sequence.core)
 
     def params_of(core, name):
         return core.torso.params if name == "torso" else getattr(core, name).params
@@ -67,15 +67,23 @@ def make_reference(agent):
         chain.append(optax.clip_by_global_norm(cfg.torso_grad_clip))
     chain.extend(
         (
-            optax.scale_by_adam(b1=cfg.b1, b2=cfg.b2, eps=cfg.eps),
-            optax.scale(cfg.torso_lr),
+            optax.scale_by_adam(
+                b1=cfg.torso_optimizer.b1,
+                b2=cfg.torso_optimizer.b2,
+                eps=cfg.torso_optimizer.eps,
+            ),
+            optax.scale(cfg.torso_optimizer.lr),
         )
     )
     transforms = {
         "torso": optax.chain(*chain),
         "heads": optax.chain(
-            optax.scale_by_adam(b1=cfg.b1, b2=cfg.b2, eps=cfg.eps),
-            optax.scale(cfg.head_lr),
+            optax.scale_by_adam(
+                b1=cfg.heads_optimizer.b1,
+                b2=cfg.heads_optimizer.b2,
+                eps=cfg.heads_optimizer.eps,
+            ),
+            optax.scale(cfg.heads_optimizer.lr),
         ),
     }
 

@@ -34,7 +34,7 @@ from memorax.utils.typing import (
     PyTree,
 )
 
-from .contract import AgentProgram, EvalSummary
+from .contract import EvalSummary
 from .rtrrl import (
     RTRRLConfig,
     follow_torso,
@@ -754,21 +754,3 @@ class IndependentRTRRL:
     def evaluate(self, key, state, num_steps):
         """Preserve the legacy state-only evaluation lifecycle."""
         return self._evaluate_with_summary(key, state, num_steps)[0]
-
-    def as_program(self) -> AgentProgram:
-        """Expose the fixed independent state schema through the common program."""
-
-        def train_epoch_fn(key, state, num_steps):
-            keys = jax.random.split(key, num_steps // self.cfg.num_envs)
-            return jax.lax.scan(self._update_step, state, keys)
-
-        def evaluate_fn(key, state, num_steps):
-            return self._evaluate_with_summary(key, state, num_steps)
-
-        return AgentProgram(
-            init_fn=self.init,
-            train_epoch_fn=train_epoch_fn,
-            evaluate_fn=evaluate_fn,
-            state_schema=IndependentRTRRLState,
-            metric_schema=IndependentStepMetrics,
-        )

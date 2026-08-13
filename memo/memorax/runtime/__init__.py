@@ -1,30 +1,14 @@
-"""Driving an algorithm to its budget, and the program it is driven through.
+"""Runtime scheduling and the closed algorithm contract it executes."""
 
-What an entry assembles and starts. It knows an algorithm only by its three
-arrows, so a kernel becomes runnable by having them rather than by being
-registered anywhere.
-"""
-
-from .driver import (
-    DEFAULT_REWARD,
-    EPISODE_FIELDS,
-    TRANSITIONS,
-    Destination,
-    Runtime,
-    drive,
-    whole_epochs,
-)
-from .program import INIT_NAMES, AgentProgram, program_of
+from .driver import Destination, Runtime, RuntimeConfig, whole_epochs
+from .program import BuiltAlgorithm, ObservationSchema, Program
 
 __all__ = [
-    "DEFAULT_REWARD",
-    "EPISODE_FIELDS",
-    "INIT_NAMES",
-    "TRANSITIONS",
-    "AgentProgram",
+    "BuiltAlgorithm",
     "Destination",
+    "ObservationSchema",
+    "Program",
     "Runtime",
-    "drive",
-    "program_of",
+    "RuntimeConfig",
     "whole_epochs",
 ]

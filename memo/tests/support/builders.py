@@ -17,4 +17,4 @@ def assemble_stream_ac(parameters, environment, *, num_envs):
             ),
             num_envs=num_envs,
         ),
-    )
+    ).program

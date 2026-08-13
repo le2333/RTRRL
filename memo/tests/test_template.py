@@ -68,9 +68,9 @@ def test_every_choice_of_component_is_pinned_to_exactly_one_branch(pins, declare
     for name, pinned in pins.items():
         if not name.endswith(f".{KIND}"):
             continue
-        assert (
-            isinstance(pinned, list) and len(pinned) == 1
-        ), f"{name} chooses a component and is not searched; pin it to one"
+        assert isinstance(pinned, list) and len(pinned) == 1, (
+            f"{name} chooses a component and is not searched; pin it to one"
+        )
         assert pinned[0] in declared[name].valid.values, (
             f"{name} names {pinned[0]!r}, not one of "
             f"{', '.join(sorted(map(str, declared[name].valid.values)))}"
@@ -104,7 +104,7 @@ def test_the_manifest_assembles_and_steps(experiment, pins):
         SimpleNamespace(**section),
         num_envs=2,
     )
-    state = program.init_fn(jax.random.key(int(section["seed"])))
-    _, metrics = program.train_epoch_fn(jax.random.key(1), state, 4)
+    state = program.init(jax.random.key(int(section["seed"])))
+    _, metrics = program.train(jax.random.key(1), state, 4)
 
     assert metrics.interaction.reward.shape == (2, 2)

@@ -16,29 +16,27 @@ needed it first.
 
 from __future__ import annotations
 
-from collections.abc import Iterable, Iterator, Mapping
+from collections.abc import Iterator, Mapping
 
 import numpy as np
 
 from memorax.runtime.episode import Episode
+from memorax.runtime.program import ObservationSchema
 
 
 def complete_episodes(
     summary,
     *,
+    observations: ObservationSchema,
     phase: str,
     start_env_steps: int,
     num_envs: int,
     stride: int | None = None,
     first_number: int = 1,
-    transitions: str = "",
-    reward: str = "reward",
-    terminal: str = "terminal",
-    series: Iterable[str] = (),
 ) -> Iterator[Episode]:
     """Yield every episode that both starts and ends inside the chunk.
 
-    ``reward`` names where the environment's own reward sits, because what an
+    ``observations.reward`` names where the environment's own reward sits, because what an
     episode is worth is a statement about the task and an algorithm is entitled
     to learn on another scale. A kernel that normalises internally keeps the
     untouched one under its ordinary name; one that normalises in an environment
@@ -50,33 +48,34 @@ def complete_episodes(
     measures the policy as it stood there, and spreading its episodes forward
     would date them to training that has not happened.
 
-    ``terminal`` names the failure ending; what is done without being terminal
+    ``observations.terminal`` names the failure ending; what is done without being terminal
     was truncated. A kernel that does not tell the two apart reports every
     ending as a termination, which is what it knew.
 
-    ``transitions`` is where the transition sits, for a kernel that groups what
-    a step observed by what produced it. The names below are read under it, and
-    ``reward`` and ``terminal`` are read whole, since an entry that keeps the
-    environment's own reward somewhere else knows the whole path to it.
+    All paths come from the built algorithm. Runtime owns the cutting rule, but
+    it does not infer the layout of an algorithm's observation tree.
     """
 
     stride = num_envs if stride is None else stride
-    under = f"{transitions}." if transitions else ""
-    rewards = np.asarray(read(summary, reward))
-    dones = np.asarray(read(summary, f"{under}done")).astype(bool)
-    found = read(summary, terminal)
+    rewards = np.asarray(read(summary, observations.reward))
+    dones = np.asarray(read(summary, observations.done)).astype(bool)
+    found = (
+        None if observations.terminal is None else read(summary, observations.terminal)
+    )
     terminals = dones if found is None else np.asarray(found).astype(bool)
     steps = dones.shape[0]
     traces = {
         name: _streamed(found, steps, num_envs)
-        for name in series
+        for name in observations.series
         if (found := read(summary, name)) is not None
     }
-    walked = [
-        read(summary, f"{under}{name}")
-        for name in ("observation", "next_observation", "action")
-    ]
-    trajectory = all(one is not None for one in walked)
+    trajectory_paths = (
+        observations.observation,
+        observations.next_observation,
+        observations.action,
+    )
+    walked = [read(summary, path) for path in trajectory_paths if path is not None]
+    trajectory = len(walked) == 3 and all(one is not None for one in walked)
     if trajectory:
         before, after, actions = (np.asarray(one) for one in walked)
 

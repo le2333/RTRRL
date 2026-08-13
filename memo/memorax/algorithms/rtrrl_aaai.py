@@ -18,7 +18,7 @@ Rebuilt from ``../RTRRL-AAAI25/rtrrl.py``. Driven against it by
 from __future__ import annotations
 
 from collections.abc import Iterable
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any
 
 import jax
@@ -26,7 +26,14 @@ import jax.numpy as jnp
 import optax
 from flax import struct
 
-from memorax.readings import reading, readings
+from memorax.building import BuildContext, ComponentBuilder, ComponentFamily
+from memorax.networks.backbones import Lru, backbone
+from memorax.networks.components import FFN, LayerNorm, Tanh
+from memorax.networks.readouts import ACTOR_HEAD_FAMILY, CRITIC_HEAD_FAMILY
+from memorax.networks.sequence import PLACES, Sequence
+from memorax.observability.metrics import metric_names
+from memorax.parameters import describe_parameters, group, param, structure
+from memorax.readings import reading, readings, taken
 from memorax.rl import (
     EnvironmentStreams,
     InteractionNormalization,
@@ -37,6 +44,12 @@ from memorax.rl import (
     make_td0,
     select_ended,
 )
+from memorax.rl.normalization import (
+    DISCOUNTED_NORMALIZATION_FAMILY,
+    NORMALIZATION_FAMILY,
+)
+from memorax.rl.updates import BASE_FAMILY, Adam
+from memorax.runtime import ObservationSchema
 from memorax.utils import Timestep
 from memorax.utils.axes import (
     add_feature_axis,
@@ -72,15 +85,90 @@ class RTRRLConfig:
     eta_f: float = 1.0
     entropy_rate: float = 1e-5
 
-    torso_lr: float = 1e-4
-    head_lr: float = 1e-4
-    b1: float = 0.9
-    b2: float = 0.999
-    eps: float = 1e-8
+    torso_optimizer: Adam = field(default_factory=lambda: Adam(lr=1e-4))
+    heads_optimizer: Adam = field(default_factory=lambda: Adam(lr=1e-4))
     torso_grad_clip: float = 1.0
     torso_follow: float = 1.0
 
     meta_rl: bool = True
+
+
+RTRRL_OPTIMIZERS = BASE_FAMILY.restricted("adam")
+
+
+def _construct_torso(selection, builder):
+    """Build the private feature projection and exact-RTRL LRU subgraph."""
+
+    del builder
+    settings = selection.parameters
+    recurrent = backbone(
+        selection.kind,
+        features=settings.feature_dim,
+        hidden_dim=settings.hidden_dim,
+    )
+    return Sequence(
+        components=(
+            FFN(features=settings.feature_dim),
+            LayerNorm(),
+            Tanh(),
+            *recurrent,
+        )
+    )
+
+
+RTRRL_TORSO_FAMILY = ComponentFamily(
+    branches={"lru": Lru},
+    construct=_construct_torso,
+)
+
+
+@dataclass(frozen=True)
+class TorsoParameters:
+    backbone: str = structure(branches=RTRRL_TORSO_FAMILY.branches)
+    optimizer: str = structure(branches=RTRRL_OPTIMIZERS.branches)
+    grad_clip: float = param(valid=(0.0, 100.0), search=(0.0, 10.0))
+    follow: float = param(valid=(0.0, 1.0), search=(0.0, 1.0))
+
+
+@dataclass(frozen=True)
+class HeadsParameters:
+    optimizer: str = structure(branches=RTRRL_OPTIMIZERS.branches)
+
+
+@dataclass(frozen=True)
+class ActorParameters:
+    head: str = structure(branches=ACTOR_HEAD_FAMILY.branches)
+
+
+@dataclass(frozen=True)
+class CriticParameters:
+    head: str = structure(branches=CRITIC_HEAD_FAMILY.branches)
+
+
+@dataclass(frozen=True)
+class NormalizationParameters:
+    observation: str = structure(branches=NORMALIZATION_FAMILY.branches)
+    reward: str = structure(branches=DISCOUNTED_NORMALIZATION_FAMILY.branches)
+
+
+@dataclass(frozen=True)
+class RTRRLParameters:
+    torso: TorsoParameters = group(of=TorsoParameters)
+    heads: HeadsParameters = group(of=HeadsParameters)
+    actor: ActorParameters = group(of=ActorParameters)
+    critic: CriticParameters = group(of=CriticParameters)
+    normalization: NormalizationParameters = group(of=NormalizationParameters)
+    gamma: float = param(valid=(0.5, 0.9999), search=(0.9, 0.9999))
+    lambda_pi: float = param(valid=(0.0, 1.0), search=(0.0, 1.0))
+    lambda_v: float = param(valid=(0.0, 1.0), search=(0.0, 1.0))
+    lambda_rnn: float = param(valid=(0.0, 1.0), search=(0.0, 1.0))
+    eta_pi: float = param(valid=(0.0, 100.0), search=(0.0, 10.0))
+    eta_f: float = param(valid=(0.0, 100.0), search=(0.0, 10.0))
+    entropy_rate: float = param(valid=(0.0, 1.0), search=(1e-8, 1e-2), log=True)
+    meta_rl: bool = param(valid=[False, True], search=[True])
+
+
+PARAMETERS = describe_parameters(RTRRLParameters)
 
 
 # ----------------------------------------------------------------------- state
@@ -155,6 +243,24 @@ class Reports:
     critic: BlockReports = readings(of=BlockReports, at="update.critic")
     torso_step: GroupReports = readings(of=GroupReports, at="update.torso_step")
     heads_step: GroupReports = readings(of=GroupReports, at="update.heads_step")
+
+
+PARTS: tuple[str, ...] = PLACES
+REPORTS = Reports()
+TRAINING_METRICS: tuple[str, ...] = taken(REPORTS, parts=PARTS)
+METRICS: tuple[str, ...] = metric_names("train", TRAINING_METRICS) + metric_names(
+    "eval"
+)
+OBSERVATIONS = ObservationSchema(
+    reward="interaction.reward",
+    done="interaction.done",
+    terminal="interaction.terminal",
+    observation="interaction.observation",
+    next_observation="interaction.next_observation",
+    action="interaction.action",
+    series=TRAINING_METRICS,
+)
+RECORD = OBSERVATIONS.required_fields
 
 
 @struct.dataclass(frozen=True)
@@ -239,109 +345,69 @@ def _from_batch(tree):
 def make_rules(cfg: RTRRLConfig):
     """One rule per group, both answering the same contract."""
 
+    torso_base = cfg.torso_optimizer
+    heads_base = cfg.heads_optimizer
     torso: list[Any] = []
     if cfg.torso_grad_clip:
         torso.append(optax.clip_by_global_norm(cfg.torso_grad_clip))
     torso.extend(
         (
-            optax.scale_by_adam(b1=cfg.b1, b2=cfg.b2, eps=cfg.eps),
-            optax.scale(cfg.torso_lr),
+            optax.scale_by_adam(b1=torso_base.b1, b2=torso_base.b2, eps=torso_base.eps),
+            optax.scale(torso_base.lr),
         )
     )
     return {
-        TORSO_GROUP: make_optax_rule(optax.chain(*torso), rate=cfg.torso_lr),
+        TORSO_GROUP: make_optax_rule(optax.chain(*torso), rate=torso_base.lr),
         HEAD_GROUP: make_optax_rule(
             optax.chain(
-                optax.scale_by_adam(b1=cfg.b1, b2=cfg.b2, eps=cfg.eps),
-                optax.scale(cfg.head_lr),
+                optax.scale_by_adam(
+                    b1=heads_base.b1, b2=heads_base.b2, eps=heads_base.eps
+                ),
+                optax.scale(heads_base.lr),
             ),
-            rate=cfg.head_lr,
+            rate=heads_base.lr,
         ),
     }
 
 
-# ------------------------------------------------------- a block of parameters
-class Network:
-    """One block of parameters that nothing else owns."""
+# ------------------------------------------------------------ shared algebra
+def _initial_traces(params, num_envs):
+    """One trace per parameter per stream, which is what online means."""
 
-    def __init__(
-        self,
-        module: Any,
-        *,
-        num_envs: int,
-        decay: float,
-        credit=None,
-        reports: BlockReports = BlockReports(),
-    ) -> None:
-        self.module = module
-        self.num_envs = num_envs
-        self.decay = decay
-        self.credit = credit
-        self.reports = reports
+    return jax.tree.map(
+        lambda parameter: jnp.zeros((num_envs, *parameter.shape)), params
+    )
 
-    def apply(self, params, x, *, done, action=None, reward=None, recurrence=None):
-        if self.credit is None:
-            output, _ = self.module.apply(
-                {"params": params}, x, action=action, reward=reward, done=done
-            )
-            return recurrence, output
-        (carry, sensitivity), output = self.module.walk(
-            params,
-            x,
-            done=done,
-            carries=recurrence.carry,
-            sensitivity=recurrence.sensitivity,
-            credit=self.credit,
-        )
-        return Recurrence(carry=carry, sensitivity=sensitivity), output
 
-    def _norms(self, tree):
-        """One norm per part, per stream."""
+def _advance_trace(incoming, gradient, *, decay, reset_before, emphasis):
+    """RTRRL's post-transition trace recurrence for one semantic block."""
 
-        grouped = (
-            self.module.split(tree)
-            if hasattr(self.module, "split")
-            else {"readout": tree}
-        )
-        return subtree_norms(grouped, streams=True)
+    return jax.tree.map(
+        lambda old, grad: (
+            decay * (1 - broadcast_stream(reset_before, old)) * old
+            + broadcast_stream(emphasis, grad) * grad
+        ),
+        incoming,
+        gradient,
+    )
 
-    def initial_traces(self, params):
-        """One trace per parameter per stream, which is what online means."""
 
-        return jax.tree.map(
-            lambda param: jnp.zeros((self.num_envs, *param.shape)), params
-        )
+def _gradient_norms(module, tree):
+    """One norm per algorithmic position, per stream."""
 
-    def trace(self, incoming, gradient, *, reset_before, emphasis):
-        """RTRRL's post-transition trace recurrence, at this block's own decay."""
-
-        return jax.tree.map(
-            lambda old, grad: (
-                self.decay * (1 - broadcast_stream(reset_before, old)) * old
-                + broadcast_stream(emphasis, grad) * grad
-            ),
-            incoming,
-            gradient,
-        )
+    grouped = module.split(tree) if hasattr(module, "split") else {"readout": tree}
+    return subtree_norms(grouped, streams=True)
 
 
 # ------------------------------------------------------------ the shared block
 class Torso:
     """The one block both heads read, and the only one credited by RTRL."""
 
-    def __init__(
-        self, cfg: RTRRLConfig, network: Any, reports: Reports = Reports()
-    ) -> None:
+    def __init__(self, cfg: RTRRLConfig, network: Any) -> None:
         self.cfg = cfg
-        self.reports = reports
-        self.network = network
-        self.block = Network(
-            network,
-            num_envs=cfg.num_envs,
-            decay=cfg.gamma * cfg.lambda_rnn,
-            credit=make_exact_rtrl_credit(network.core),
-            reports=reports.torso,
-        )
+        self._network = network
+        self._credit = make_exact_rtrl_credit(network.core)
+        self._decay = cfg.gamma * cfg.lambda_rnn
 
     @property
     def carry_shape(self):
@@ -367,19 +433,25 @@ class Torso:
         """One forward pass over one sequence-shaped step."""
 
         _, done, _, _ = timestep
-        return self.block.apply(
-            params, self._input(timestep), done=done, recurrence=recurrence
+        (carry, sensitivity), output = self._network.walk(
+            params,
+            self._input(timestep),
+            done=done,
+            carries=recurrence.carry,
+            sensitivity=recurrence.sensitivity,
+            credit=self._credit,
         )
+        return Recurrence(carry=carry, sensitivity=sensitivity), output
 
     def init(self, keys, timestep: Timestep) -> TorsoState:
         """Fresh online state for the shared block, and a copy for it to follow."""
 
         param_key, torso_key, dropout_key = keys
         _, done, _, _ = timestep
-        carry = self.network.initialize_carry(jax.random.key(0), self.carry_shape)
-        sensitivity = self.block.credit.initialize(param_key, self.carry_shape)
-        with self.block.credit.initialization():
-            variables = self.network.init(
+        carry = self._network.initialize_carry(jax.random.key(0), self.carry_shape)
+        sensitivity = self._credit.initialize(param_key, self.carry_shape)
+        with self._credit.initialization():
+            variables = self._network.init(
                 {"params": param_key, "torso": torso_key, "dropout": dropout_key},
                 self._input(timestep),
                 done=done,
@@ -388,7 +460,7 @@ class Torso:
         params = variables["params"]
         return TorsoState(
             params=params,
-            traces=self.block.initial_traces(params),
+            traces=_initial_traces(params, self.cfg.num_envs),
             slow_params=params,
             recurrence=Recurrence(carry=carry, sensitivity=sensitivity),
         )
@@ -398,10 +470,22 @@ class Torso:
 
         return state.replace(
             recurrence=Recurrence(
-                carry=self.network.initialize_carry(key, self.carry_shape),
-                sensitivity=self.block.credit.initialize(key, self.carry_shape),
+                carry=self._network.initialize_carry(key, self.carry_shape),
+                sensitivity=self._credit.initialize(key, self.carry_shape),
             )
         )
+
+    def advance_trace(self, incoming, gradient, *, reset_before, emphasis):
+        return _advance_trace(
+            incoming,
+            gradient,
+            decay=self._decay,
+            reset_before=reset_before,
+            emphasis=emphasis,
+        )
+
+    def gradient_norms(self, tree):
+        return _gradient_norms(self._network, tree)
 
     def followed(self, params, slow_params):
         """The reading copy takes one step toward the copy that was updated."""
@@ -415,31 +499,38 @@ class Torso:
 class Actor:
     """The policy. It chooses, and it names the two directions it ascends."""
 
-    def __init__(
-        self, cfg: RTRRLConfig, head: Any, reports: Reports = Reports()
-    ) -> None:
+    def __init__(self, cfg: RTRRLConfig, head: Any) -> None:
         self.cfg = cfg
-        self.reports = reports
-        self.block = Network(
-            head,
-            num_envs=cfg.num_envs,
-            decay=cfg.gamma * cfg.lambda_pi,
-            reports=reports.actor,
-        )
+        self._head = head
+        self._decay = cfg.gamma * cfg.lambda_pi
 
     def init(self, key, hidden, timestep: Timestep) -> BlockState:
         _, done, action, reward = timestep
-        params = self.block.module.init(
+        params = self._head.init(
             {"params": key}, hidden, action=action, reward=reward, done=done
         )["params"]
-        return BlockState(params=params, traces=self.block.initial_traces(params))
+        return BlockState(
+            params=params, traces=_initial_traces(params, self.cfg.num_envs)
+        )
 
     def apply(self, params, hidden, timestep: Timestep):
         _, done, action, reward = timestep
-        _, dist = self.block.apply(
-            params, hidden, done=done, action=action, reward=reward
+        dist, _ = self._head.apply(
+            {"params": params}, hidden, action=action, reward=reward, done=done
         )
         return dist
+
+    def advance_trace(self, incoming, gradient, *, reset_before, emphasis):
+        return _advance_trace(
+            incoming,
+            gradient,
+            decay=self._decay,
+            reset_before=reset_before,
+            emphasis=emphasis,
+        )
+
+    def gradient_norms(self, tree):
+        return _gradient_norms(self._head, tree)
 
     def traced_objective(self, params, hidden, timestep: Timestep, action):
         """What ascends through the trace: the log-probability of what was done."""
@@ -457,31 +548,38 @@ class Actor:
 class Critic:
     """The value. It reads, and it ascends its own reading."""
 
-    def __init__(
-        self, cfg: RTRRLConfig, head: Any, reports: Reports = Reports()
-    ) -> None:
+    def __init__(self, cfg: RTRRLConfig, head: Any) -> None:
         self.cfg = cfg
-        self.reports = reports
-        self.block = Network(
-            head,
-            num_envs=cfg.num_envs,
-            decay=cfg.gamma * cfg.lambda_v,
-            reports=reports.critic,
-        )
+        self._head = head
+        self._decay = cfg.gamma * cfg.lambda_v
 
     def init(self, key, hidden, timestep: Timestep) -> BlockState:
         _, done, action, reward = timestep
-        params = self.block.module.init(
+        params = self._head.init(
             {"params": key}, hidden, action=action, reward=reward, done=done
         )["params"]
-        return BlockState(params=params, traces=self.block.initial_traces(params))
+        return BlockState(
+            params=params, traces=_initial_traces(params, self.cfg.num_envs)
+        )
 
     def apply(self, params, hidden, timestep: Timestep):
         _, done, action, reward = timestep
-        _, value = self.block.apply(
-            params, hidden, done=done, action=action, reward=reward
+        value, _ = self._head.apply(
+            {"params": params}, hidden, action=action, reward=reward, done=done
         )
         return remove_feature_axis(remove_time_axis(value))
+
+    def advance_trace(self, incoming, gradient, *, reset_before, emphasis):
+        return _advance_trace(
+            incoming,
+            gradient,
+            decay=self._decay,
+            reset_before=reset_before,
+            emphasis=emphasis,
+        )
+
+    def gradient_norms(self, tree):
+        return _gradient_norms(self._head, tree)
 
     def traced_objective(self, params, hidden, timestep: Timestep):
         """What ascends through the trace: the value itself, with no error in it."""
@@ -503,9 +601,9 @@ class Core:
     ) -> None:
         self.cfg = cfg
         self.reports = reports
-        self.torso = Torso(cfg, torso_network, reports)
-        self.actor = Actor(cfg, actor_head, reports)
-        self.critic = Critic(cfg, critic_head, reports)
+        self.torso = Torso(cfg, torso_network)
+        self.actor = Actor(cfg, actor_head)
+        self.critic = Critic(cfg, critic_head)
         self.td0 = make_td0()
         self.rules = make_rules(cfg)
         self.group_of = {
@@ -635,6 +733,119 @@ class Core:
             jax.random.split(key, self.cfg.num_envs),
         )
 
+    def _td_error(self, state, timestep, value, terminal):
+        return self.td0(
+            reward=timestep.reward,
+            value=state.value,
+            next_value=value,
+            terminal=terminal,
+            gamma=self.cfg.gamma,
+        )
+
+    def _take_updates(self, state, traced, direct, delta, step):
+        """Apply the torso rule once and the joint readout rule once."""
+
+        direct = {**direct, "critic": jax.tree.map(jnp.zeros_like, traced["critic"])}
+        params = {
+            "torso": state.torso.params,
+            "actor": state.actor.params,
+            "critic": state.critic.params,
+        }
+        grouped_params = self._grouped(params)
+        grouped_traces = self._grouped(
+            {
+                "torso": state.torso.traces,
+                "actor": state.actor.traces,
+                "critic": state.critic.traces,
+            }
+        )
+        grouped_direct = self._grouped(direct)
+        deltas = {TORSO_GROUP: delta * self.cfg.eta_f, HEAD_GROUP: delta}
+        taken = {
+            group: rule.apply(
+                grouped_traces[group],
+                grouped_direct[group],
+                state.rule[group],
+                delta=deltas[group],
+                step=step,
+                params=grouped_params[group],
+            )
+            for group, rule in self.rules.items()
+        }
+        stepped = {
+            name: jax.tree.map(
+                lambda parameter, update: parameter + update,
+                params[name],
+                taken[self.group_of[name]].updates[name],
+            )
+            for name in params
+        }
+        return stepped, taken, grouped_traces
+
+    def _advance_traces(self, state, grouped_traces, traced, reset_before):
+        """Advance each block's trace after the current update has used it."""
+
+        emphasis = (
+            self.cfg.gamma * state.emphasis * (1 - reset_before) + reset_before
+        ).astype(jnp.float32)
+        advanced = {
+            name: block.advance_trace(
+                grouped_traces[self.group_of[name]][name],
+                traced[name],
+                reset_before=reset_before,
+                emphasis=emphasis,
+            )
+            for name, block in (
+                ("torso", self.torso),
+                ("actor", self.actor),
+                ("critic", self.critic),
+            )
+        }
+        return emphasis, advanced
+
+    def _update_reading(self, delta, emphasis, traced, advanced, taken):
+        """Project update products onto the readings this graph declares."""
+
+        blocks = {
+            "torso": self.torso,
+            "actor": self.actor,
+            "critic": self.critic,
+        }
+
+        def block_reading(name):
+            reports = getattr(self.reports, name)
+            block = blocks[name]
+            return BlockUpdate(
+                grad_norm=(
+                    block.gradient_norms(traced[name]) if reports.grad_norm else None
+                ),
+                trace_norm=(
+                    block.gradient_norms(advanced[name]) if reports.trace_norm else None
+                ),
+            )
+
+        return UpdateMetrics(
+            td_error=delta if self.reports.td_error else None,
+            emphasis=emphasis if self.reports.emphasis else None,
+            torso=block_reading("torso"),
+            actor=block_reading("actor"),
+            critic=block_reading("critic"),
+            torso_step=GroupUpdate(
+                step_size=(
+                    taken[TORSO_GROUP].metrics.get("step_size")
+                    if self.reports.torso_step.step_size
+                    else None
+                )
+            ),
+            heads_step=GroupUpdate(
+                step_size=(
+                    taken[HEAD_GROUP].metrics.get("step_size")
+                    if self.reports.heads_step.step_size
+                    else None
+                )
+            ),
+        )
+
     def update_parameters(
         self,
         key,
@@ -651,68 +862,13 @@ class Core:
             key, state, timestep
         )
 
-        delta = self.td0(
-            reward=timestep.reward,
-            value=state.value,
-            next_value=value,
-            terminal=terminal,
-            gamma=self.cfg.gamma,
+        delta = self._td_error(state, timestep, value, terminal)
+        stepped, taken, grouped_traces = self._take_updates(
+            state, traced, direct, delta, step
         )
-
-        deltas = {TORSO_GROUP: delta * self.cfg.eta_f, HEAD_GROUP: delta}
-        direct = {**direct, "critic": jax.tree.map(jnp.zeros_like, traced["critic"])}
-
-        params = {
-            "torso": state.torso.params,
-            "actor": state.actor.params,
-            "critic": state.critic.params,
-        }
-        grouped_params = self._grouped(params)
-        grouped_traces = self._grouped(
-            {
-                "torso": state.torso.traces,
-                "actor": state.actor.traces,
-                "critic": state.critic.traces,
-            }
+        emphasis, advanced = self._advance_traces(
+            state, grouped_traces, traced, reset_before
         )
-        grouped_direct = self._grouped(direct)
-
-        taken = {
-            group: rule.apply(
-                grouped_traces[group],
-                grouped_direct[group],
-                state.rule[group],
-                delta=deltas[group],
-                step=step,
-                params=grouped_params[group],
-            )
-            for group, rule in self.rules.items()
-        }
-        stepped = {
-            name: jax.tree.map(
-                lambda param, update: param + update,
-                params[name],
-                taken[self.group_of[name]].updates[name],
-            )
-            for name in params
-        }
-
-        emphasis = (
-            self.cfg.gamma * state.emphasis * (1 - reset_before) + reset_before
-        ).astype(jnp.float32)
-        advanced = {
-            name: block.trace(
-                grouped_traces[self.group_of[name]][name],
-                traced[name],
-                reset_before=reset_before,
-                emphasis=emphasis,
-            )
-            for name, block in (
-                ("torso", self.torso.block),
-                ("actor", self.actor.block),
-                ("critic", self.critic.block),
-            )
-        }
 
         return (
             state.replace(
@@ -735,68 +891,15 @@ class Core:
                 actor=actor_reading,
                 critic=CriticForward(value=value if self.reports.value else None),
             ),
-            UpdateMetrics(
-                td_error=delta if self.reports.td_error else None,
-                emphasis=emphasis if self.reports.emphasis else None,
-                torso=BlockUpdate(
-                    grad_norm=(
-                        self.torso.block._norms(traced["torso"])
-                        if self.reports.torso.grad_norm
-                        else None
-                    ),
-                    trace_norm=(
-                        self.torso.block._norms(advanced["torso"])
-                        if self.reports.torso.trace_norm
-                        else None
-                    ),
-                ),
-                actor=BlockUpdate(
-                    grad_norm=(
-                        self.actor.block._norms(traced["actor"])
-                        if self.reports.actor.grad_norm
-                        else None
-                    ),
-                    trace_norm=(
-                        self.actor.block._norms(advanced["actor"])
-                        if self.reports.actor.trace_norm
-                        else None
-                    ),
-                ),
-                critic=BlockUpdate(
-                    grad_norm=(
-                        self.critic.block._norms(traced["critic"])
-                        if self.reports.critic.grad_norm
-                        else None
-                    ),
-                    trace_norm=(
-                        self.critic.block._norms(advanced["critic"])
-                        if self.reports.critic.trace_norm
-                        else None
-                    ),
-                ),
-                # Per group, not per block. The two readouts took one step
-                # between them, so there is one step size for the pair.
-                torso_step=GroupUpdate(
-                    step_size=(
-                        taken[TORSO_GROUP].metrics.get("step_size")
-                        if self.reports.torso_step.step_size
-                        else None
-                    )
-                ),
-                heads_step=GroupUpdate(
-                    step_size=(
-                        taken[HEAD_GROUP].metrics.get("step_size")
-                        if self.reports.heads_step.step_size
-                        else None
-                    )
-                ),
-            ),
+            self._update_reading(delta, emphasis, traced, advanced, taken),
         )
 
 
 # -------------------------------------------------------------------- the flow
 class RTRRL:
     """One-invocation train/evaluation flow around the three layers."""
+
+    observations = OBSERVATIONS
 
     def __init__(
         self,
@@ -826,6 +929,55 @@ class RTRRL:
         )
         self.core = Core(cfg, torso_network, actor_head, critic_head, reports)
         self.record = frozenset(record)
+
+    @classmethod
+    def graph(
+        cls,
+        parameters: dict[str, Any],
+        components: ComponentBuilder,
+        context: BuildContext,
+    ) -> RTRRL:
+        """Declare the shared torso, two readouts, and their two rule groups."""
+
+        gamma = float(parameters["gamma"])
+        torso_optimizer = components.build(RTRRL_OPTIMIZERS, "torso.optimizer")
+        heads_optimizer = components.build(RTRRL_OPTIMIZERS, "heads.optimizer")
+        return cls(
+            RTRRLConfig(
+                num_envs=context.num_envs,
+                gamma=gamma,
+                lambda_pi=float(parameters["lambda_pi"]),
+                lambda_v=float(parameters["lambda_v"]),
+                lambda_rnn=float(parameters["lambda_rnn"]),
+                eta_pi=float(parameters["eta_pi"]),
+                eta_f=float(parameters["eta_f"]),
+                entropy_rate=float(parameters["entropy_rate"]),
+                torso_grad_clip=float(parameters["torso.grad_clip"]),
+                torso_follow=float(parameters["torso.follow"]),
+                meta_rl=bool(parameters["meta_rl"]),
+                torso_optimizer=torso_optimizer,
+                heads_optimizer=heads_optimizer,
+            ),
+            context.environment,
+            context.environment_parameters,
+            components.build(RTRRL_TORSO_FAMILY, "torso.backbone"),
+            components.build(
+                ACTOR_HEAD_FAMILY,
+                "actor.head",
+                action_dim=int(context.action_space.shape[0]),
+            ),
+            components.build(CRITIC_HEAD_FAMILY, "critic.head"),
+            observation_normalization=components.build(
+                NORMALIZATION_FAMILY, "normalization.observation"
+            ),
+            reward_normalization=components.build(
+                DISCOUNTED_NORMALIZATION_FAMILY,
+                "normalization.reward",
+                discount=gamma,
+            ),
+            record=RECORD,
+            reports=REPORTS,
+        )
 
     def init(self, key: Any) -> RTRRLState:
         (

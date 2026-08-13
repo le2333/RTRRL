@@ -44,7 +44,7 @@ from memorax.rl.normalization import (
     NORMALIZATION_FAMILY,
 )
 from memorax.rl.updates import BASE_FAMILY, BOUND_FAMILY
-from memorax.runtime import EPISODE_FIELDS
+from memorax.runtime import ObservationSchema
 from memorax.utils import Timestep
 from memorax.utils.axes import add_time_axis, remove_feature_axis, remove_time_axis
 from memorax.utils.trees import subtree_norms
@@ -168,7 +168,16 @@ TRAINING_METRICS: tuple[str, ...] = taken(REPORTS, parts=PARTS)
 METRICS: tuple[str, ...] = metric_names("train", TRAINING_METRICS) + metric_names(
     "eval"
 )
-RECORD = frozenset(EPISODE_FIELDS) | set(TRAINING_METRICS)
+OBSERVATIONS = ObservationSchema(
+    reward="interaction.reward",
+    done="interaction.done",
+    terminal="interaction.terminal",
+    observation="interaction.observation",
+    next_observation="interaction.next_observation",
+    action="interaction.action",
+    series=TRAINING_METRICS,
+)
+RECORD = OBSERVATIONS.required_fields
 
 
 @struct.dataclass(frozen=True)
@@ -424,9 +433,7 @@ class Actor:
             dist.log_prob(add_time_axis(action))
         ) + self.cfg.entropy_coefficient * jnp.sign(
             jax.lax.stop_gradient(delta)
-        ) * remove_time_axis(
-            dist.entropy()
-        )
+        ) * remove_time_axis(dist.entropy())
 
     def gradient(self, state: NetworkState, timestep: Timestep, action, delta):
         """This head's ascent, one stream at a time."""
@@ -641,6 +648,8 @@ class Core:
 # -------------------------------------------------------------------- the flow
 class StreamAC:
     """One-invocation train/evaluation flow around the three layers."""
+
+    observations = OBSERVATIONS
 
     def __init__(
         self,

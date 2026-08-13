@@ -14,6 +14,7 @@ from typing import Any
 
 from memorax.building import BuildContext, ComponentBuilder
 from memorax.environments import make
+from memorax.runtime import BuiltAlgorithm, Program
 
 
 @dataclass(frozen=True)
@@ -36,7 +37,7 @@ def assemble(
     request: BuildRequest,
     *,
     environment_factory: Callable[..., tuple[Any, Any]] = make,
-) -> Any:
+) -> BuiltAlgorithm:
     """Build one graph without interpreting any algorithm-specific relation."""
 
     specification = request.environment
@@ -55,6 +56,11 @@ def assemble(
     )
     components = ComponentBuilder(request.parameters, context)
     graph = definition.graph(request.parameters, components, context)
-    from memorax.runtime.program import program_of
-
-    return program_of(graph)
+    return BuiltAlgorithm(
+        program=Program(
+            init=graph.init,
+            train=graph.train,
+            evaluate=graph.evaluate,
+        ),
+        observations=definition.observations,
+    )

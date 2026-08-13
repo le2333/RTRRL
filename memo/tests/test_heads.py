@@ -145,7 +145,7 @@ def test_a_head_is_drawn_the_way_its_own_branch_says():
         seed=0,
     )
     program = assemble_stream_ac(pinned, environment, num_envs=2)
-    state = program.init_fn(jax.random.key(0))
+    state = program.init(jax.random.key(0))
 
     def kernel(params):
         for path, leaf in jax.tree_util.tree_leaves_with_path(params):

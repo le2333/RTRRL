@@ -6,9 +6,9 @@ import sys
 
 from memorax.algorithms.stream_ac import METRICS as METRICS
 from memorax.algorithms.stream_ac import PARAMETERS as PARAMETERS
-from memorax.algorithms.stream_ac import TRAINING_METRICS, StreamAC
+from memorax.algorithms.stream_ac import StreamAC
 from memorax.assembly import BuildRequest, EnvironmentSpec, assemble
-from memorax.runtime import Runtime
+from memorax.runtime import Runtime, RuntimeConfig
 
 from ._observability import build_reporter, load_run
 
@@ -29,9 +29,21 @@ def build_request(config) -> BuildRequest:
     )
 
 
+def runtime_config(config) -> RuntimeConfig:
+    """Project the deployment run document onto Runtime's input."""
+
+    return RuntimeConfig(
+        total_steps=config.training.total_steps,
+        epoch_steps=config.training.epoch_steps,
+        eval_steps=config.evaluation.steps,
+        num_envs=config.training.num_envs,
+        seed=config.environment.seed,
+    )
+
+
 def run(reporter, config) -> None:
-    program = assemble(StreamAC, build_request(config))
-    Runtime.from_config(program, config, series=TRAINING_METRICS).run(reporter)
+    algorithm = assemble(StreamAC, build_request(config))
+    Runtime(algorithm=algorithm, config=runtime_config(config)).run(reporter)
 
 
 def main(argv: list[str] | None = None) -> int:

@@ -11,7 +11,7 @@ one explicit domain meaning, while preserving StreamAC and RTRRL numerical
 behaviour and making the default test loop smaller and faster.
 
 **Execution:** Tasks 1 and 2 completed on 2026-08-10; Tasks 3 and 6 completed on
-2026-08-12. The behaviour baseline,
+2026-08-12; Task 4 completed on 2026-08-13. The behaviour baseline,
 serialized version-7 fixtures, lightweight test support, explicit test markers,
 and CI selection gates are in place. StreamAC and RTRRL now share the proven
 environment-stream and interaction-normalization components, including the
@@ -20,7 +20,10 @@ the algorithm, component families own branch routing and construction, and the
 algorithm-neutral assembly service closes the graph over Runtime's program.
 Observability now owns metric naming, episode reduction, fan-out, and backend
 adapters; Entry projects deployment configuration into those adapters, while
-Worker no longer owns logging. Task 4 is next.
+Worker no longer owns logging. RTRRL now declares and assembles its shared-torso
+graph through the same algorithm-neutral service as StreamAC, while its private
+Torso, Actor, and Critic subgraphs hide module and credit internals. Task 5 is
+next.
 
 Before Task 4, the current version-7 Worker path was smoke-tested on 2026-08-12
 with a real StreamAC RTU+RTRL child, Moto S3, local Aim, metrics scoring, and a
@@ -626,7 +629,7 @@ not combine tasks merely because two files are nearby.
   tests, then declaration, StreamAC graph topology, tiny train/eval, local
   numerical, and entry composition tests.
 
-### Task 4: Repair RTRRL's graph boundaries
+### Task 4: Repair RTRRL's graph boundaries (completed)
 
 - Replace the leaky RTRRL `Network` abstraction with semantic private subgraphs
   whose modules, credit state, and forward modes do not escape their contracts.
@@ -636,6 +639,12 @@ not combine tasks merely because two files are nearby.
 - Gate every changed leaf/update quantity numerically, then one complete parity
   run.
 
+Completed on 2026-08-13. The behaviour plus published-reference suite passes
+29/29, the combined declaration/assembly/numerical gate passes 32/32, and the
+default repository suite passes 320 tests. A direct catalog-parameter-to-graph
+Brax run trained for 256 steps with distinct torso and heads Adam rates and
+finite TD-error and recurrent-trace readings.
+
 ### Task 5: Finalize Runtime
 
 - Move Program/BuiltAlgorithm execution contracts into Runtime.
@@ -644,6 +653,17 @@ not combine tasks merely because two files are nearby.
 - Delete `drive()`, `program_of()`, and compatibility result-shape branches after
   both algorithms use the final contract.
 - Test scheduling with a fake Program and rollout cutting independently.
+
+Completed on 2026-08-13. Runtime now owns `Program`, `BuiltAlgorithm`,
+`ObservationSchema`, and `RuntimeConfig`. Generic assembly closes StreamAC and
+RTRRL directly over that contract; Entry explicitly projects the deployment
+document into assembly and Runtime inputs. Episode cutting reads only the
+algorithm-provided schema. The old `AgentProgram`, `program_of()`, `drive()`,
+full-config duck typing, and evaluation result-shape compatibility paths are
+removed. The focused Runtime/rollout/assembly gate passes 78 tests and the
+default repository suite passes 321 tests.
+The final Entry-to-Runtime path also completed a 256-step Brax Hopper run,
+producing four training episodes and one evaluation episode.
 
 ### Task 6: Refactor observability (completed)
 

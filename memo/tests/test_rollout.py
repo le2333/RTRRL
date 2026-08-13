@@ -7,9 +7,12 @@ trainer inherits the boundary rule rather than inventing one beside it.
 
 from __future__ import annotations
 
+from dataclasses import replace
+
 import numpy as np
 import pytest
 
+from memorax.runtime import ObservationSchema
 from memorax.runtime.rollout import complete_episodes, read
 
 
@@ -32,9 +35,21 @@ def chunk(done, **extra) -> Chunk:
     )
 
 
-def cut(summary, **overrides):
+OBSERVATIONS = ObservationSchema(
+    reward="reward",
+    done="done",
+    terminal="terminal",
+    observation="observation",
+    next_observation="next_observation",
+    action="action",
+)
+
+
+def cut(summary, *, observations=OBSERVATIONS, **overrides):
     settings = {"phase": "eval", "start_env_steps": 0, "num_envs": 2}
-    return list(complete_episodes(summary, **(settings | overrides)))
+    return list(
+        complete_episodes(summary, observations=observations, **(settings | overrides))
+    )
 
 
 def test_a_partial_episode_at_either_end_is_left_out():
@@ -61,7 +76,10 @@ def test_a_declared_series_is_carried_alongside_the_rewards():
         chunk(
             [[0, 0], [1, 0], [0, 1], [0, 0]], td_error=steps, by_part={"torso": steps}
         ),
-        series=("td_error", "by_part.torso", "never_produced"),
+        observations=replace(
+            OBSERVATIONS,
+            series=("td_error", "by_part.torso", "never_produced"),
+        ),
     )
 
     assert set(episodes[0].series) == {"td_error", "by_part.torso"}
@@ -77,7 +95,7 @@ def test_a_quantity_the_kernel_reduced_over_the_batch_belongs_to_every_stream():
 
     episodes = cut(
         chunk([[0, 0], [1, 0], [0, 1], [0, 0]], entropy=np.arange(4, dtype=float)),
-        series=("entropy",),
+        observations=replace(OBSERVATIONS, series=("entropy",)),
     )
 
     assert episodes[0].series["entropy"] == (0.0, 1.0)
@@ -90,7 +108,7 @@ def test_the_environments_own_reward_can_live_somewhere_else():
     paid = np.full((4, 2), 7.0)
     episodes = cut(
         chunk([[0, 0], [1, 0], [0, 0], [0, 0]], info={"environment_reward": paid}),
-        reward="info.environment_reward",
+        observations=replace(OBSERVATIONS, reward="info.environment_reward"),
     )
 
     assert episodes[0].rewards == (7.0, 7.0)
@@ -133,7 +151,7 @@ def test_an_episode_says_which_of_the_two_endings_it_reached():
             [[0, 0], [1, 0], [0, 1], [0, 0]],
             terminal=[[0, 0], [1, 0], [0, 0], [0, 0]],
         ),
-        terminal="terminal",
+        observations=replace(OBSERVATIONS, terminal="terminal"),
     )
 
     assert episodes[0].terminals[-1] and not episodes[0].truncations[-1]

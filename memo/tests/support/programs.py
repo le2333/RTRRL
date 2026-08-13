@@ -62,7 +62,7 @@ def arithmetic_program():
         del key
         column = jnp.arange(num_steps * NUM_ENVS, dtype=jnp.float32)
         grid = column.reshape(num_steps, NUM_ENVS)
-        return state, Metrics(
+        return Metrics(
             interaction=InteractionMetrics(
                 observation=grid[..., None],
                 next_observation=grid[..., None] + 1,

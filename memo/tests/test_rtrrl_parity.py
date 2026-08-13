@@ -51,9 +51,9 @@ import pytest
 # The kernel both files drive, built once. Two copies of a builder are two
 # kernels the moment either drifts, and this file's whole job is to compare
 # one thing against another.
-from test_rtrrl import build
+from test_rtrrl import build, torso_network
 
-from memorax.algorithms.rtrrl_aaai import Network, RTRRLConfig
+from memorax.algorithms.rtrrl_aaai import RTRRLConfig, _advance_trace
 from memorax.networks.sequence_models import LRUCell, LRUConfig, Memoroid
 from memorax.rl import make_exact_rtrl_credit
 from tests.support.numerics import assert_within, deviations, flattened
@@ -120,9 +120,10 @@ def _algebra():
         # Jitted on both sides: ``trace_update`` carries ``@jax.jit`` and XLA
         # fuses its multiply-add, so an eager comparison is a sub-ulp apart for
         # reasons that are the format's and not the algorithm's.
-        block = Network(module=None, num_envs=ENVS, decay=rate)
         mine = jax.jit(
-            lambda i, g, r, e, b=block: b.trace(i, g, reset_before=r, emphasis=e)
+            lambda i, g, r, e, d=rate: _advance_trace(
+                i, g, decay=d, reset_before=r, emphasis=e
+            )
         )(incoming, gradient, done, emphasis)
         found[name] = (flattened(mine), flattened(theirs))
     return found
@@ -162,7 +163,7 @@ def _wiring(steps, **overrides):
 
     agent = build(**overrides)
     start = agent.init(jax.random.key(0))
-    reference = make_reference(agent)
+    reference = make_reference(agent, torso_network())
 
     keys = jax.random.split(jax.random.key(7), steps)
     mine = theirs = start
