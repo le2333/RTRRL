@@ -66,7 +66,7 @@ logging:
 
 ## 接收方边界
 
-- Worker 的 v8 投影定义在 `memo/worker/envelope.py`，只解释 `contract`、`identity`、`entry` 和 `artifacts`；`algorithm`、`runtime`、`logging` 保持为交给子进程的 JSON。`run_manifest` 在 Task 8 切换到该投影。
+- Worker 的 v8 投影定义在 `memo/worker/envelope.py`，只解释 `contract`、`identity`、`entry` 和 `artifacts`；`algorithm`、`runtime`、`logging` 保持为交给子进程的 JSON。
 - Entry 使用 `memo/entries/_contract.py` 验证完整运行配置，再分别投影到算法 assembly、Runtime 和 observability。
 - Catalog 类型及版本位于 `memo/deployment/contract.py`，不属于 Worker。
 
@@ -90,4 +90,4 @@ Manifest 仍只按顺序列出运行配置位置：
 {"runs": ["s3://bucket/configs/run-t0.json"]}
 ```
 
-Worker 当前的旧评分执行路径不消费 v8 RunSpec；切换 envelope、artifact 上传和 `result.json` 属于下一阶段的监督与传输实现。
+Worker 按 manifest 顺序在隔离的 scratch 中启动各 Entry。Entry 和 logger 只在 `scratch/artifacts/` 下生成本地产物；子进程成功后，Worker 将该目录递归上传到 `artifacts.root` 并保留相对路径，最后写入 `result.json`。只有完成上传和结果写入后才清理 scratch；子进程或上传失败会立即停止 manifest，并保留失败运行的本地目录供诊断。Worker 不读取指标，也不计算 HPO 分数。

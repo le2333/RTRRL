@@ -11,11 +11,11 @@ from pathlib import Path
 import pytest
 from aim import Repo
 
-from memorax.algorithms.stream_ac import PARAMETERS
-from memorax.parameters import expand
 from deployment.catalog import write_catalog
 from deployment.contract import CONTRACT_VERSION
 from entries._contract import RunSpec
+from memorax.algorithms.stream_ac import PARAMETERS
+from memorax.parameters import expand
 from worker import objects
 from worker.worker import run_manifest
 
@@ -49,7 +49,7 @@ def stream_ac_parameters() -> dict:
     )
 
 
-def test_worker_runs_stream_ac_and_records_critic_trace_norm(
+def test_worker_runs_stream_ac_and_publishes_critic_trace_norm(
     s3_base: str,
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -63,35 +63,36 @@ def test_worker_runs_stream_ac_and_records_critic_trace_norm(
 
     aim_path = tmp_path / "aim"
     Repo.from_path(str(aim_path), init=True)
-    score_uri = f"{s3_base}/smoke/score.json"
+    artifact_root = f"{s3_base}/smoke/artifacts"
     config = RunSpec.model_validate(
         {
             "contract": CONTRACT_VERSION,
-            "run_id": "stream-ac-worker-smoke-t0",
-            "experiment": "stream-ac-worker-smoke",
-            "launch_id": "20260812-000000",
-            "trial": 0,
+            "identity": {
+                "run_id": "stream-ac-worker-smoke-t0",
+                "experiment": "stream-ac-worker-smoke",
+                "launch_id": "20260812-000000",
+                "trial": 0,
+                "digest": "local@sha256:" + "a" * 64,
+            },
             "entry": "stream_ac",
-            "digest": "local@sha256:" + "a" * 64,
-            "environment": {
-                "id": "brax::hopper",
-                "backend": "spring",
+            "artifacts": {"root": artifact_root},
+            "algorithm": {
+                "environment": {
+                    "id": "brax::hopper",
+                    "backend": "spring",
+                    "episode_length": 4,
+                    "observed": [0, 2, 4],
+                },
+                "num_envs": 1,
+                "parameters": stream_ac_parameters(),
+            },
+            "runtime": {
                 "seed": 0,
-                "episode_length": 4,
-                "observed": [0, 2, 4],
+                "total_steps": 4,
+                "epoch_steps": 4,
+                "evaluation_steps": 0,
             },
-            "training": {"num_envs": 1, "total_steps": 4, "epoch_steps": 4},
-            "evaluation": {"steps": 0},
-            "params": stream_ac_parameters(),
-            "logging": {"aim": str(aim_path), "enable_rerun": False},
-            "score": {
-                "metric": TRACE_METRIC,
-                "window_steps": [0, 4],
-                "reduce": "last",
-                "direction": "maximize",
-                "non_finite": "worst",
-                "s3": score_uri,
-            },
+            "logging": {"aim": {"url": str(aim_path)}},
         }
     )
     config_uri = f"{s3_base}/smoke/config.json"
@@ -101,17 +102,31 @@ def test_worker_runs_stream_ac_and_records_critic_trace_norm(
 
     run_manifest(manifest_uri, tmp_path / "worker")
 
-    score = json.loads(objects.get_bytes(score_uri))
-    assert score["run_id"] == config.run_id
-    assert math.isfinite(score["value"])
+    records = [
+        json.loads(line)
+        for line in objects.get_bytes(f"{artifact_root}/metrics.jsonl")
+        .decode()
+        .splitlines()
+    ]
+    values = [
+        row["metrics"][TRACE_METRIC]
+        for row in records
+        if TRACE_METRIC in row["metrics"]
+    ]
+    assert values
+    assert all(math.isfinite(value) for value in values)
+
+    result = json.loads(objects.get_bytes(f"{artifact_root}/result.json"))
+    assert result["identity"]["run_id"] == config.identity.run_id
+    assert result["success"] is True
+    assert "metrics.jsonl" in result["artifacts"]
 
     repo = Repo.from_path(str(aim_path))
     runs = list(repo.iter_runs())
     assert len(runs) == 1
-    run = runs[0]
-    metrics = {metric.name: metric for metric in run.metrics()}
+    metrics = {metric.name: metric for metric in runs[0].metrics()}
     assert TRACE_METRIC in metrics
-    values = metrics[TRACE_METRIC].data.values_list()[0]
-    assert values
-    assert all(math.isfinite(value) for value in values)
-    assert score["value"] == values[-1]
+    aim_values = metrics[TRACE_METRIC].data.values_list()[0]
+    assert aim_values
+    assert all(math.isfinite(value) for value in aim_values)
+    assert values[-1] == aim_values[-1]

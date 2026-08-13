@@ -5,16 +5,17 @@ import os
 import shutil
 import subprocess
 import sys
+import tempfile
 import traceback
 from pathlib import Path
 
-from deployment.contract import CONTRACT_VERSION, Catalog
-from memorax.observability.sinks.metrics import METRICS_FILENAME
+from deployment.contract import Catalog
 from worker import objects
-from worker.contract import RunConfig
-from worker.score import compute_score
+from worker.envelope import WorkerEnvelope
 
 CATALOG_PATH = Path("/opt/trainer/catalog.json")
+ARTIFACTS_DIRECTORY = "artifacts"
+RESULT_FILENAME = "result.json"
 
 
 class WorkerError(RuntimeError):
@@ -23,47 +24,26 @@ class WorkerError(RuntimeError):
 
 def load_catalog() -> Catalog:
     path = Path(os.environ.get("TRAINER_CATALOG", CATALOG_PATH))
-    catalog = Catalog.model_validate(json.loads(path.read_text(encoding="utf-8")))
-    if catalog.contract != CONTRACT_VERSION:
-        raise WorkerError(
-            f"image catalog declares contract {catalog.contract}; "
-            f"this worker implements contract {CONTRACT_VERSION}"
-        )
-    return catalog
+    return Catalog.model_validate(json.loads(path.read_text(encoding="utf-8")))
 
 
 def run_manifest(manifest_uri: str, workspace: Path) -> None:
-    """Execute every run in a manifest serially.
-
-    Raises ``WorkerError`` when a run does not complete, or ``ScoreError`` when
-    a run completes but its metrics do not yield a usable score; either stops
-    the manifest at that run.
-    """
+    """Execute every run serially and publish successful local artifacts."""
     catalog = load_catalog()
     manifest = json.loads(objects.get_bytes(manifest_uri))
+    workspace.mkdir(parents=True, exist_ok=True)
     for config_uri in manifest["runs"]:
-        config = RunConfig.model_validate(json.loads(objects.get_bytes(config_uri)))
-        if config.contract != CONTRACT_VERSION:
-            raise WorkerError(
-                f"run configuration declares contract {config.contract}; "
-                f"this worker implements contract {CONTRACT_VERSION}"
-            )
-        scratch = Path(workspace) / config.run_id
-        scratch.mkdir(parents=True, exist_ok=True)
-        try:
-            _execute(config, catalog, scratch)
-            value = compute_score(scratch / METRICS_FILENAME, config.score)
-            objects.put_bytes(
-                config.score.s3,
-                json.dumps(
-                    {"run_id": config.run_id, "trial": config.trial, "value": value}
-                ).encode(),
-            )
-        finally:
-            shutil.rmtree(scratch, ignore_errors=True)
+        config = WorkerEnvelope.model_validate(
+            json.loads(objects.get_bytes(config_uri))
+        )
+        scratch = Path(tempfile.mkdtemp(prefix="run-", dir=workspace))
+        _execute(config, catalog, scratch)
+        artifacts = _upload_artifacts(config, scratch)
+        _publish_result(config, artifacts)
+        shutil.rmtree(scratch)
 
 
-def _execute(config: RunConfig, catalog: Catalog, scratch: Path) -> None:
+def _execute(config: WorkerEnvelope, catalog: Catalog, scratch: Path) -> None:
     entry = catalog.entries.get(config.entry)
     if entry is None:
         raise WorkerError(f"image catalog does not declare entry {config.entry!r}")
@@ -78,7 +58,32 @@ def _execute(config: RunConfig, catalog: Catalog, scratch: Path) -> None:
     # ways to kill a healthy run.
     code = subprocess.call(list(entry.command), env=environment)
     if code != 0:
-        raise WorkerError(f"run {config.run_id} exited with exit code {code}")
+        raise WorkerError(f"run {config.identity.run_id} exited with exit code {code}")
+
+
+def _upload_artifacts(config: WorkerEnvelope, scratch: Path) -> list[str]:
+    directory = scratch / ARTIFACTS_DIRECTORY
+    if not directory.is_dir():
+        raise WorkerError(
+            f"run {config.identity.run_id} produced no artifact directory"
+        )
+    paths = sorted(path for path in directory.rglob("*") if path.is_file())
+    relative_names = [path.relative_to(directory).as_posix() for path in paths]
+    root = config.artifacts.root.rstrip("/")
+    for path, relative_name in zip(paths, relative_names, strict=True):
+        objects.put_file(f"{root}/{relative_name}", path)
+    return relative_names
+
+
+def _publish_result(config: WorkerEnvelope, artifacts: list[str]) -> None:
+    payload = {
+        "contract": config.contract,
+        "identity": config.identity.model_dump(mode="json"),
+        "success": True,
+        "artifacts": artifacts,
+    }
+    uri = f"{config.artifacts.root.rstrip('/')}/{RESULT_FILENAME}"
+    objects.put_bytes(uri, json.dumps(payload, sort_keys=True).encode())
 
 
 def main() -> int:

@@ -46,8 +46,8 @@ def test_entry_composes_mandatory_scalars_and_optional_local_episodes(tmp_path):
 
     records = [
         json.loads(line)
-        for line in (scratch / METRICS_FILENAME).read_text().splitlines()
+        for line in (scratch / "artifacts" / METRICS_FILENAME).read_text().splitlines()
     ]
     assert records[0]["step"] == 8
     assert records[0]["metrics"]["train/episode/return"] == 4.0
-    assert (scratch / "train-000001.rrd").exists()
+    assert (scratch / "artifacts" / "rerun" / "train-000001.rrd").exists()

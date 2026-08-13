@@ -10,26 +10,20 @@ capability, not an assumed prerequisite of the semantic refactor.
 one explicit domain meaning, while preserving StreamAC and RTRRL numerical
 behaviour and making the default test loop smaller and faster.
 
-**Execution:** Tasks 1 and 2 completed on 2026-08-10; Tasks 3 and 6 completed on
-2026-08-12; Task 4 completed on 2026-08-13. The behaviour baseline,
-serialized version-7 fixtures, lightweight test support, explicit test markers,
-and CI selection gates are in place. StreamAC and RTRRL now share the proven
-environment-stream and interaction-normalization components, including the
-normalization state they own. StreamAC declarations and topology now live with
-the algorithm, component families own branch routing and construction, and the
-algorithm-neutral assembly service closes the graph over Runtime's program.
-Observability now owns metric naming, episode reduction, fan-out, and backend
-adapters; Entry projects deployment configuration into those adapters, while
-Worker no longer owns logging. RTRRL now declares and assembles its shared-torso
-graph through the same algorithm-neutral service as StreamAC, while its private
-Torso, Actor, and Critic subgraphs hide module and credit internals. Task 5 is
-next.
+**Execution:** Tasks 1-8 completed by 2026-08-13. StreamAC and RTRRL share only
+the proven interaction components and expose closed Programs to Runtime;
+algorithm topology and private subgraphs remain algorithm-owned. Observability
+owns metric naming, episode reduction, fan-out, and local backend artifacts.
+The version-8 deployment contract separates Catalog, Worker-envelope, and Entry
+projections. Worker now owns only serial process supervision, isolated scratch,
+artifact upload, and completion results. Task 9, moving the preserved pure
+scoring policy and tests into Infra, is next.
 
 Before Task 4, the current version-7 Worker path was smoke-tested on 2026-08-12
 with a real StreamAC RTU+RTRL child, Moto S3, local Aim, metrics scoring, and a
 four-step Brax episode. The recurrent critic eligibility-trace norm reached
-both Aim and the Worker score. This proves the current path remains operable;
-it does not replace the Worker responsibility changes scheduled in Task 8.
+both Aim and the Worker score. Task 8 has since replaced that legacy scoring
+path with version-8 artifact transport.
 
 ## Governing rules
 
@@ -703,10 +697,10 @@ score metrics, overrides outside declared valid domains, and any reachable
 structure choice that is not fixed for the experiment. The real StreamAC
 template was completed with its two reachable head-initialization choices.
 Infra passes 35 tests, Memo's default suite passes 324 tests, and the real
-catalog-to-StreamAC round trip assembles and steps. Activating the Worker
-envelope and removing its legacy flat score path remains Task 8.
+catalog-to-StreamAC round trip assembles and steps. Task 8 subsequently
+activated the Worker envelope and removed its legacy flat score path.
 
-### Task 8: Reduce Worker to supervision and artifact transport
+### Task 8: Reduce Worker to supervision and artifact transport (completed)
 
 - Remove score imports and score computation from Worker.
 - Run each manifest item serially in isolated scratch.
@@ -714,6 +708,16 @@ envelope and removing its legacy flat score path remains Task 8.
 - Preserve fail-fast semantics and visible diagnostics; align cleanup with the
   declared failure policy.
 - Test with a fake entry process and fake object store; keep moto/S3 separate.
+
+Completed on 2026-08-13. Worker now consumes only its version-8 envelope,
+starts manifest items serially in unique scratch directories, recursively
+uploads `scratch/artifacts/`, and writes `result.json` as the successful commit
+marker. A child or upload failure stops the manifest and preserves that run's
+scratch; fully published runs are cleaned. Worker no longer imports scoring or
+emits `score.json`. Seven fake-store/fake-child supervision tests are part of
+the default suite, which passes 331 tests. A separate Moto/local-Aim StreamAC
+smoke confirms the critic trace metric reaches both Aim and the uploaded
+`metrics.jsonl` before Worker publishes the result.
 
 ### Task 9: Move scoring into Infra
 

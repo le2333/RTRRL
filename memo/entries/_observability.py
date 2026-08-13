@@ -26,6 +26,7 @@ def load_run() -> tuple[RunSpec, Path]:
 
 def build_reporter(config: RunSpec, scratch: Path) -> Reporter:
     identity = config.identity
+    artifacts = Path(scratch) / "artifacts"
     metadata = RunMetadata(
         run_id=identity.run_id,
         experiment=identity.experiment,
@@ -35,7 +36,7 @@ def build_reporter(config: RunSpec, scratch: Path) -> Reporter:
         digest=identity.digest,
     )
     scalar_sinks = [
-        MetricsSink(Path(scratch) / METRICS_FILENAME),
+        MetricsSink(artifacts / METRICS_FILENAME),
         AimSink(
             config.logging.aim.url,
             metadata,
@@ -46,7 +47,7 @@ def build_reporter(config: RunSpec, scratch: Path) -> Reporter:
     if config.logging.rerun is not None:
         episode_sinks.append(
             RerunSink(
-                scratch,
+                artifacts / "rerun",
                 every_steps=config.logging.rerun.every_steps,
                 num_envs=config.algorithm.num_envs,
                 metadata=metadata,

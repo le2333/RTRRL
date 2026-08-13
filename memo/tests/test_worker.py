@@ -1,38 +1,77 @@
+"""Worker supervision and artifact-transport integration tests."""
+
+from __future__ import annotations
+
 import json
 import sys
 from pathlib import Path
 
 import pytest
+from pydantic import ValidationError
 
-from tests.support.run_config import make_run_config
 from deployment.contract import CONTRACT_VERSION
+from tests.support.run_config import make_run_config
 from worker import objects
 from worker.worker import WorkerError, main, run_manifest
 
-pytestmark = [pytest.mark.integration, pytest.mark.service]
-
-make_config = make_run_config
+pytestmark = pytest.mark.integration
 
 CHILD = """
 import json, os, sys
-config = json.loads(open(os.environ["TRAINER_RUN_CONFIG"]).read())
-scratch = os.environ["TRAINER_SCRATCH"]
-mode = os.environ.get("CHILD_MODE", "ok")
-if mode == "crash":
+from pathlib import Path
+
+config = json.loads(Path(os.environ["TRAINER_RUN_CONFIG"]).read_text())
+scratch = Path(os.environ["TRAINER_SCRATCH"])
+trial = config["identity"]["trial"]
+with Path(os.environ["TRAINER_CHILD_LOG"]).open("a") as handle:
+    handle.write(json.dumps({
+        "trial": trial,
+        "scratch": str(scratch),
+        "started_clean": not (scratch / "artifacts").exists(),
+    }) + "\\n")
+if str(trial) == os.environ.get("TRAINER_CHILD_FAIL_TRIAL"):
+    (scratch / "failure.txt").write_text(f"trial {trial} failed")
     sys.exit(3)
-with open(os.path.join(scratch, "metrics.jsonl"), "a") as handle:
-    for step in (0, 4):
-        handle.write(json.dumps({"step": step, "metrics": {"episode_return": 2.0}}) + "\\n")
-        handle.flush()
-if mode == "empty_metrics":
-    open(os.path.join(scratch, "metrics.jsonl"), "w").close()
+artifacts = scratch / "artifacts"
+(artifacts / "rerun").mkdir(parents=True)
+(artifacts / "metrics.jsonl").write_text(
+    json.dumps({"step": 4, "metrics": {"episode_return": float(trial)}}) + "\\n"
+)
+(artifacts / "rerun" / "episode.rrd").write_bytes(f"rrd-{trial}".encode())
 """
 
 
+class FakeStore:
+    def __init__(self) -> None:
+        self.data: dict[str, bytes] = {}
+        self.fail_upload: str | None = None
+
+    def get_bytes(self, uri: str) -> bytes:
+        return self.data[uri]
+
+    def put_bytes(self, uri: str, payload: bytes) -> None:
+        self.data[uri] = payload
+
+    def put_file(self, uri: str, path: Path) -> None:
+        if uri == self.fail_upload:
+            raise RuntimeError(f"upload failed for {uri}")
+        self.data[uri] = path.read_bytes()
+
+
 @pytest.fixture
-def catalog(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
+def store(monkeypatch: pytest.MonkeyPatch) -> FakeStore:
+    fake = FakeStore()
+    monkeypatch.setattr(objects, "get_bytes", fake.get_bytes)
+    monkeypatch.setattr(objects, "put_bytes", fake.put_bytes)
+    monkeypatch.setattr(objects, "put_file", fake.put_file)
+    return fake
+
+
+@pytest.fixture
+def catalog(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> tuple[Path, Path]:
     child = tmp_path / "child.py"
     child.write_text(CHILD, encoding="utf-8")
+    child_log = tmp_path / "children.jsonl"
     path = tmp_path / "catalog.json"
     path.write_text(
         json.dumps(
@@ -42,15 +81,7 @@ def catalog(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
                     "e": {
                         "command": [sys.executable, str(child)],
                         "metrics": ["episode_return"],
-                        "parameters": {
-                            "learning_rate": {
-                                "kind": "param",
-                                "value_type": "float",
-                                "valid": {"type": "float", "low": 0.0, "high": 1.0},
-                                "search": [0.001],
-                                "placeholder": 0.001,
-                            }
-                        },
+                        "parameters": {},
                     }
                 },
             }
@@ -58,139 +89,157 @@ def catalog(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
         encoding="utf-8",
     )
     monkeypatch.setenv("TRAINER_CATALOG", str(path))
-    return path
+    monkeypatch.setenv("TRAINER_CHILD_LOG", str(child_log))
+    return path, child_log
 
 
-def publish(s3_base: str, trial: int, *, entry: str = "e") -> str:
-    config = make_config().model_copy(
-        update={
-            "trial": trial,
-            "run_id": f"smoke-20260725-000000-t{trial}",
-            "entry": entry,
-            "score": make_config().score.model_copy(
-                update={"s3": f"{s3_base}/trials/t{trial}/score.json"}
-            ),
-        }
-    )
-    uri = f"{s3_base}/trials/t{trial}/config.json"
-    objects.put_bytes(uri, config.model_dump_json().encode())
+def publish(
+    store: FakeStore,
+    trial: int,
+    *,
+    entry: str = "e",
+    contract: int = CONTRACT_VERSION,
+) -> str:
+    payload = make_run_config().model_dump(mode="json")
+    payload["contract"] = contract
+    payload["identity"]["trial"] = trial
+    payload["identity"]["run_id"] = f"smoke-20260725-000000-t{trial}"
+    payload["entry"] = entry
+    payload["artifacts"]["root"] = f"memory://runs/t{trial}"
+    uri = f"memory://configs/t{trial}.json"
+    store.put_bytes(uri, json.dumps(payload).encode())
     return uri
 
 
-def write_manifest(s3_base: str, uris: list[str]) -> str:
-    manifest = f"{s3_base}/rounds/round-000/job-0.json"
-    objects.put_bytes(manifest, json.dumps({"runs": uris}).encode())
-    return manifest
+def write_manifest(store: FakeStore, uris: list[str]) -> str:
+    uri = "memory://manifests/round-000/job-0.json"
+    store.put_bytes(uri, json.dumps({"runs": uris}).encode())
+    return uri
 
 
-def test_every_run_is_executed_and_scored(
-    s3_base: str, tmp_path: Path, catalog: Path
+def result(store: FakeStore, trial: int) -> dict:
+    return json.loads(store.data[f"memory://runs/t{trial}/result.json"])
+
+
+def test_runs_are_serially_isolated_and_publish_artifact_trees(
+    store: FakeStore,
+    tmp_path: Path,
+    catalog: tuple[Path, Path],
 ) -> None:
-    manifest = write_manifest(s3_base, [publish(s3_base, 0), publish(s3_base, 1)])
-    run_manifest(manifest, tmp_path)
+    _, child_log = catalog
+    manifest = write_manifest(store, [publish(store, 0), publish(store, 1)])
+
+    run_manifest(manifest, tmp_path / "worker")
+
+    starts = [json.loads(line) for line in child_log.read_text().splitlines()]
+    assert [item["trial"] for item in starts] == [0, 1]
+    assert len({item["scratch"] for item in starts}) == 2
+    assert all(item["started_clean"] for item in starts)
+    assert list((tmp_path / "worker").iterdir()) == []
     for trial in (0, 1):
-        payload = json.loads(objects.get_bytes(f"{s3_base}/trials/t{trial}/score.json"))
-        assert payload["value"] == 2.0
-        assert payload["run_id"] == f"smoke-20260725-000000-t{trial}"
+        assert store.data[f"memory://runs/t{trial}/rerun/episode.rrd"] == (
+            f"rrd-{trial}".encode()
+        )
+        payload = result(store, trial)
+        assert payload == {
+            "contract": CONTRACT_VERSION,
+            "identity": {
+                "run_id": f"smoke-20260725-000000-t{trial}",
+                "experiment": "infra-acceptance",
+                "launch_id": "20260725-000000",
+                "trial": trial,
+                "digest": "registry.example/trainer@sha256:" + "a" * 64,
+            },
+            "success": True,
+            "artifacts": ["metrics.jsonl", "rerun/episode.rrd"],
+        }
 
 
-def test_scratch_is_removed_between_runs(
-    s3_base: str, tmp_path: Path, catalog: Path
+def test_child_failure_stops_manifest_and_preserves_failed_scratch(
+    store: FakeStore,
+    tmp_path: Path,
+    catalog: tuple[Path, Path],
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    manifest = write_manifest(s3_base, [publish(s3_base, 0), publish(s3_base, 1)])
-    run_manifest(manifest, tmp_path)
-    assert list(tmp_path.glob("*/metrics.jsonl")) == []
+    _, child_log = catalog
+    monkeypatch.setenv("TRAINER_CHILD_FAIL_TRIAL", "1")
+    manifest = write_manifest(
+        store,
+        [publish(store, 0), publish(store, 1), publish(store, 2)],
+    )
 
-
-def test_crashing_run_stops_the_manifest(
-    s3_base: str, tmp_path: Path, catalog: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    monkeypatch.setenv("CHILD_MODE", "crash")
-    manifest = write_manifest(s3_base, [publish(s3_base, 100), publish(s3_base, 101)])
     with pytest.raises(WorkerError, match="exit code 3"):
-        run_manifest(manifest, tmp_path)
-    assert objects.exists(f"{s3_base}/trials/t100/score.json") is False
-    assert objects.exists(f"{s3_base}/trials/t101/score.json") is False
+        run_manifest(manifest, tmp_path / "worker")
+
+    starts = [json.loads(line) for line in child_log.read_text().splitlines()]
+    assert [item["trial"] for item in starts] == [0, 1]
+    assert result(store, 0)["success"] is True
+    assert "memory://runs/t1/result.json" not in store.data
+    assert "memory://runs/t2/result.json" not in store.data
+    scratch = list((tmp_path / "worker").iterdir())
+    assert len(scratch) == 1
+    assert (scratch[0] / "failure.txt").read_text() == "trial 1 failed"
+
+
+def test_upload_failure_is_visible_and_preserves_scratch(
+    store: FakeStore,
+    tmp_path: Path,
+    catalog: tuple[Path, Path],
+) -> None:
+    store.fail_upload = "memory://runs/t0/rerun/episode.rrd"
+    manifest = write_manifest(store, [publish(store, 0)])
+
+    with pytest.raises(RuntimeError, match="upload failed"):
+        run_manifest(manifest, tmp_path / "worker")
+
+    assert "memory://runs/t0/result.json" not in store.data
+    scratch = list((tmp_path / "worker").iterdir())
+    assert len(scratch) == 1
+    assert (scratch[0] / "artifacts" / "rerun" / "episode.rrd").is_file()
 
 
 def test_catalog_contract_mismatch(
-    s3_base: str, tmp_path: Path, catalog: Path, monkeypatch: pytest.MonkeyPatch
+    store: FakeStore,
+    tmp_path: Path,
+    catalog: tuple[Path, Path],
 ) -> None:
-    catalog.write_text(
-        json.dumps(
-            {
-                "contract": 1,
-                "entries": {
-                    "e": {
-                        "command": ["true"],
-                        "metrics": ["episode_return"],
-                        "parameters": {
-                            "learning_rate": {
-                                "kind": "param",
-                                "value_type": "float",
-                                "valid": {"type": "float", "low": 0.0, "high": 1.0},
-                                "search": [0.001],
-                                "placeholder": 0.001,
-                            }
-                        },
-                    }
-                },
-            }
-        ),
-        encoding="utf-8",
-    )
-    manifest = write_manifest(s3_base, [publish(s3_base, 0)])
-    with pytest.raises(WorkerError, match="image catalog declares contract 1"):
-        run_manifest(manifest, tmp_path)
+    path, _ = catalog
+    payload = json.loads(path.read_text())
+    payload["contract"] = 1
+    path.write_text(json.dumps(payload))
+    manifest = write_manifest(store, [publish(store, 0)])
+
+    with pytest.raises(ValidationError, match="contract"):
+        run_manifest(manifest, tmp_path / "worker")
 
 
-def test_run_config_contract_mismatch(
-    s3_base: str, tmp_path: Path, catalog: Path
+def test_run_contract_mismatch(
+    store: FakeStore,
+    tmp_path: Path,
+    catalog: tuple[Path, Path],
 ) -> None:
-    config = make_config().model_copy(
-        update={
-            "contract": 1,
-            "score": make_config().score.model_copy(
-                update={"s3": f"{s3_base}/trials/t0/score.json"}
-            ),
-        }
-    )
-    uri = f"{s3_base}/trials/t0/config.json"
-    objects.put_bytes(uri, config.model_dump_json().encode())
-    manifest = write_manifest(s3_base, [uri])
-    with pytest.raises(WorkerError, match="run configuration declares contract 1"):
-        run_manifest(manifest, tmp_path)
+    manifest = write_manifest(store, [publish(store, 0, contract=1)])
+
+    with pytest.raises(ValidationError, match="contract"):
+        run_manifest(manifest, tmp_path / "worker")
 
 
-def test_missing_catalog_entry(s3_base: str, tmp_path: Path, catalog: Path) -> None:
-    manifest = write_manifest(s3_base, [publish(s3_base, 0, entry="missing")])
+def test_missing_catalog_entry(
+    store: FakeStore,
+    tmp_path: Path,
+    catalog: tuple[Path, Path],
+) -> None:
+    manifest = write_manifest(store, [publish(store, 0, entry="missing")])
+
     with pytest.raises(
         WorkerError, match="image catalog does not declare entry 'missing'"
     ):
-        run_manifest(manifest, tmp_path)
-
-
-def test_score_computation_failure_stops_manifest(
-    s3_base: str, tmp_path: Path, catalog: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    from worker.score import ScoreError
-
-    monkeypatch.setenv("CHILD_MODE", "empty_metrics")
-    manifest = write_manifest(s3_base, [publish(s3_base, 200), publish(s3_base, 201)])
-    with pytest.raises(ScoreError, match="no reported value for metric"):
-        run_manifest(manifest, tmp_path)
-    assert objects.exists(f"{s3_base}/trials/t200/score.json") is False
-    assert objects.exists(f"{s3_base}/trials/t201/score.json") is False
+        run_manifest(manifest, tmp_path / "worker")
 
 
 def test_main_reports_a_missing_manifest_variable(
     capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """The image's default command is this entry point, so it must explain itself.
-
-    A Batch job started without the manifest is misconfigured by the control
-    plane, and the only trace left behind is what lands in CloudWatch.
-    """
     monkeypatch.delenv("TRAINER_MANIFEST", raising=False)
 
     assert main() == 1
