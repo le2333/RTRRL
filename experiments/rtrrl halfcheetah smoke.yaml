@@ -3,7 +3,7 @@ experiment: rtrrl-halfcheetah-smoke
 name: rtrrl-halfcheetah-smoke
 description: "RTRRL platform acceptance with trace-norm observability"
 
-image: 007122174918.dkr.ecr.eu-north-1.amazonaws.com/rtrrl@sha256:b33d69821d4dd8e601fea78b3dde331bacfd2797bda256da1dbdfeb5b1ce12a5
+image: 007122174918.dkr.ecr.eu-north-1.amazonaws.com/rtrrl@sha256:c59e18625742a18ce040bf367812909faae4539e784e1152c88c10d4450fee0f
 entry: rtrrl
 storage: s3://rtrrl-artifacts-007122174918/trainer
 
