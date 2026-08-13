@@ -178,10 +178,12 @@ jobs:
           docker run --rm "$IMAGE" python -c '
           import jax
           from memorax.environments import make
-          env, params = make("brax::hopper", mode="P", backend="spring")
+          observed = (0, 2, 4, 6, 8, 10)
+          env, params = make(
+              "brax::hopper", observed=observed, backend="spring"
+          )
           observation, _ = env.reset(jax.random.key(0), params)
-          assert observation.shape == (11,), observation.shape
-          assert (observation[5:] == 0).all(), "velocities survived the P mask"
+          assert observation.shape == (len(observed),), observation.shape
           assert env.action_space(params).shape == (3,)
 
           env, params = make("brax::halfcheetah", backend="spring")
