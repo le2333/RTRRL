@@ -91,3 +91,7 @@ Manifest 仍只按顺序列出运行配置位置：
 ```
 
 Worker 按 manifest 顺序在隔离的 scratch 中启动各 Entry。Entry 和 logger 只在 `scratch/artifacts/` 下生成本地产物；子进程成功后，Worker 将该目录递归上传到 `artifacts.root` 并保留相对路径，最后写入 `result.json`。只有完成上传和结果写入后才清理 scratch；子进程或上传失败会立即停止 manifest，并保留失败运行的本地目录供诊断。Worker 不读取指标，也不计算 HPO 分数。
+
+## 评分与 HPO 反馈
+
+`ScoreSpec` 和指标文件的数值归约属于 Infra。`ExperimentRunner.run(round_executor)` 将本轮运行配置和实验的 `ScoreSpec` 一起交给 executor；executor 收集各运行的 `metrics.jsonl`，调用 Infra Scorer，并按 trial 返回数值。Infra 在整轮结果齐全后才调用 `HPO.tell()`。executor、评分或结果关联失败时，本轮已 ask 的 trial 全部标记为 `FAIL`，异常继续向上抛出，且不启动下一轮。

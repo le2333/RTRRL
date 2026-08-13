@@ -10,14 +10,15 @@ capability, not an assumed prerequisite of the semantic refactor.
 one explicit domain meaning, while preserving StreamAC and RTRRL numerical
 behaviour and making the default test loop smaller and faster.
 
-**Execution:** Tasks 1-8 completed by 2026-08-13. StreamAC and RTRRL share only
+**Execution:** Tasks 1-9 completed by 2026-08-13. StreamAC and RTRRL share only
 the proven interaction components and expose closed Programs to Runtime;
 algorithm topology and private subgraphs remain algorithm-owned. Observability
 owns metric naming, episode reduction, fan-out, and local backend artifacts.
 The version-8 deployment contract separates Catalog, Worker-envelope, and Entry
 projections. Worker now owns only serial process supervision, isolated scratch,
-artifact upload, and completion results. Task 9, moving the preserved pure
-scoring policy and tests into Infra, is next.
+artifact upload, and completion results; scoring policy, metric reduction, and
+HPO feedback belong to Infra. Task 10's concrete local and Batch execution
+capability is next.
 
 Before Task 4, the current version-7 Worker path was smoke-tested on 2026-08-12
 with a real StreamAC RTU+RTRL child, Moto S3, local Aim, metrics scoring, and a
@@ -719,7 +720,7 @@ the default suite, which passes 331 tests. A separate Moto/local-Aim StreamAC
 smoke confirms the critic trace metric reaches both Aim and the uploaded
 `metrics.jsonl` before Worker publishes the result.
 
-### Task 9: Move scoring into Infra
+### Task 9: Move scoring into Infra (completed)
 
 - Move the pure scoring implementation and tests to Infra.
 - Let the round executor collect metrics artifacts, apply the experiment's
@@ -728,6 +729,16 @@ smoke confirms the critic trace metric reaches both Aim and the uploaded
   running in Optuna.
 - Keep `ExperimentRunner.run(round_executor)` as the backend seam and test it
   with a deterministic fake executor.
+
+Completed on 2026-08-13. `ScoreSpec`, the scorer, and all numerical policy tests
+now live in Infra; Memo and Worker contain no scoring model or implementation.
+`ExperimentRunner` passes the experiment-owned score policy to the round
+executor, validates a complete one-result-per-trial return, and correlates
+out-of-order results before HPO feedback. HPO marks every still-running trial
+in a failed round as `FAIL`, re-raises the original error, and asks no next
+round. The deterministic fake executor scores local metrics artifacts through
+the real Scorer. Infra passes 63 tests and no longer imports Memo or carries
+Pydantic solely for cross-source tests.
 
 ### Task 10: Add the missing concrete execution capability
 

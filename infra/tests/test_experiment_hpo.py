@@ -1,10 +1,12 @@
 from pathlib import Path
 from typing import Any
 
+import optuna
 import pytest
 from conftest import DIGEST
 
 from trainer_infra import ExperimentError, ExperimentRunner, SpaceError
+from trainer_infra.scoring import ScoreSpec, compute_score
 
 LAUNCH = "20260807-120000"
 
@@ -140,21 +142,25 @@ def test_an_undeclared_score_metric_starts_nothing(
         runner(experiment, catalog, tmp_path)
 
 
-def test_two_rounds_complete_from_out_of_order_worker_results(
+def test_two_rounds_score_out_of_order_metric_artifacts_before_asking_next(
     experiment: Any, catalog: Any, tmp_path: Path
 ) -> None:
     experiment["hpo"]["rounds"] = 2
     rounds: list[tuple[dict[str, object], ...]] = []
 
-    def execute(configurations: tuple[dict[str, object], ...]) -> tuple[dict, ...]:
+    def execute(
+        configurations: tuple[dict[str, object], ...], score: ScoreSpec
+    ) -> tuple[dict, ...]:
         rounds.append(configurations)
-        return tuple(
-            {
-                "trial": configuration["identity"]["trial"],
-                "value": float(configuration["identity"]["trial"]),
-            }
-            for configuration in reversed(configurations)
-        )
+        results = []
+        for configuration in reversed(configurations):
+            trial = configuration["identity"]["trial"]
+            metrics = tmp_path / f"metrics-{trial}.jsonl"
+            metrics.write_text(
+                f'{{"step": 200, "metrics": {{"eval/episode/return_per_step": {trial}.0}}}}\n'
+            )
+            results.append({"trial": trial, "value": compute_score(metrics, score)})
+        return tuple(results)
 
     study = runner(experiment, catalog, tmp_path).run(execute)
 
@@ -163,3 +169,34 @@ def test_two_rounds_complete_from_out_of_order_worker_results(
         [2, 3],
     ]
     assert [trial.value for trial in study.trials] == [0.0, 1.0, 2.0, 3.0]
+
+
+def test_an_incomplete_round_result_fails_every_asked_trial(
+    experiment: Any, catalog: Any, tmp_path: Path
+) -> None:
+    experiment["hpo"]["rounds"] = 2
+    calls = 0
+
+    def execute(
+        configurations: tuple[dict[str, object], ...], score: ScoreSpec
+    ) -> tuple[dict, ...]:
+        nonlocal calls
+        calls += 1
+        first = configurations[0]
+        return (
+            {
+                "trial": first["identity"]["trial"],
+                "value": 1.0,
+            },
+        )
+
+    experiment_runner = runner(experiment, catalog, tmp_path)
+    with pytest.raises(ExperimentError, match="round returned trials"):
+        experiment_runner.run(execute)
+
+    persisted = optuna.load_study(
+        study_name=experiment["name"],
+        storage=f"sqlite:///{tmp_path / 'study.db'}",
+    )
+    assert calls == 1
+    assert [trial.state.name for trial in persisted.trials] == ["FAIL", "FAIL"]

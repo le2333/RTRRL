@@ -133,9 +133,19 @@ class HPO:
         trials: Sequence[SampledTrial],
         values: Sequence[float],
     ) -> None:
+        if len(trials) != len(values):
+            raise ValueError(f"received {len(values)} values for {len(trials)} asked trials")
         study = self._open()
-        for trial, value in zip(trials, values):
-            study.tell(trial.number, float(value))
+        converted = tuple(float(value) for value in values)
+        for trial, value in zip(trials, converted, strict=True):
+            study.tell(trial.number, value)
+
+    def _fail(self, trials: Sequence[SampledTrial]) -> None:
+        study = self._open()
+        states = {trial.number: trial.state for trial in study.get_trials(deepcopy=False)}
+        for trial in trials:
+            if states[trial.number] == optuna.trial.TrialState.RUNNING:
+                study.tell(trial.number, state=optuna.trial.TrialState.FAIL)
 
     def run(self, run_round: RunRound) -> optuna.Study:
         """Run each trial round and persist its results before asking the next."""
@@ -143,7 +153,11 @@ class HPO:
         study = self._open()
         for _ in range(self.rounds):
             trials = self.ask()
-            self.tell(trials, run_round(trials))
+            try:
+                self.tell(trials, run_round(trials))
+            except Exception:
+                self._fail(trials)
+                raise
 
         return study
 

@@ -4,31 +4,28 @@ from pathlib import Path
 
 import pytest
 
-from worker.contract import ScoreConfig
-from worker.score import WORST_MAGNITUDE, ScoreError, compute_score
+from trainer_infra.scoring import WORST_MAGNITUDE, ScoreError, ScoreSpec, compute_score
 
 
 def write_metrics(path: Path, rows: list[tuple[int, float]]) -> None:
     path.write_text(
         "\n".join(
-            json.dumps({"step": step, "metrics": {"episode_return": value}})
-            for step, value in rows
+            json.dumps({"step": step, "metrics": {"episode_return": value}}) for step, value in rows
         ),
         encoding="utf-8",
     )
 
 
-def spec(**overrides: object) -> ScoreConfig:
+def spec(**overrides: object) -> ScoreSpec:
     payload = {
         "metric": "episode_return",
         "window_steps": [10, 20],
         "reduce": "mean",
         "direction": "maximize",
         "non_finite": "worst",
-        "s3": "s3://bucket/score.json",
     }
     payload.update(overrides)
-    return ScoreConfig.model_validate(payload)
+    return ScoreSpec.from_mapping(payload)
 
 
 def test_window_is_inclusive_and_mean_is_used(tmp_path: Path) -> None:
@@ -48,6 +45,20 @@ def test_empty_window_raises_naming_metric_and_window(tmp_path: Path) -> None:
     write_metrics(path, [(1, 1.0)])
     with pytest.raises(ScoreError, match="episode_return.*10.*20"):
         compute_score(path, spec())
+
+
+def test_score_window_must_be_ordered() -> None:
+    with pytest.raises(ValueError, match="window_steps must be ordered"):
+        spec(window_steps=[20, 10])
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [("reduce", "sum"), ("direction", "sideways"), ("non_finite", "ignore")],
+)
+def test_score_policy_options_are_validated(field: str, value: str) -> None:
+    with pytest.raises(ValueError, match=field):
+        spec(**{field: value})
 
 
 def test_non_finite_becomes_worst_for_each_direction(tmp_path: Path) -> None:
@@ -147,9 +158,7 @@ def test_nan_position_in_window_does_not_affect_score(tmp_path: Path) -> None:
     write_metrics(start_nan, [(10, math.nan), (15, 10.0), (20, 20.0)])
     write_metrics(middle_nan, [(10, 10.0), (15, math.nan), (20, 20.0)])
     score_config = spec(reduce="median")
-    assert compute_score(start_nan, score_config) == compute_score(
-        middle_nan, score_config
-    )
+    assert compute_score(start_nan, score_config) == compute_score(middle_nan, score_config)
     assert compute_score(start_nan, score_config) == -WORST_MAGNITUDE
 
 

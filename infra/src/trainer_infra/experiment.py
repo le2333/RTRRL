@@ -9,9 +9,10 @@ from typing import Any
 
 from trainer_infra.adapter import resolve_parameter_ranges
 from trainer_infra.hpo import HPO
+from trainer_infra.scoring import ScoreSpec
 
 RoundExecutor = Callable[
-    [tuple[dict[str, Any], ...]],
+    [tuple[dict[str, Any], ...], ScoreSpec],
     Sequence[Mapping[str, int | float]],
 ]
 
@@ -98,12 +99,13 @@ class ExperimentRunner:
         # Echoed, not asserted: what the run configurations must claim is
         # whatever the image that will read them implements.
         self.contract = catalog["contract"]
+        self.score = ScoreSpec.from_mapping(experiment["score"])
 
         hpo = experiment["hpo"]
         self.hpo = HPO(
             name=experiment["name"],
             database=database,
-            direction=experiment["score"]["direction"],
+            direction=self.score.direction,
             rounds=hpo["rounds"],
             trials_per_round=hpo["trials_per_round"],
             startup_trials=hpo["startup_trials"],
@@ -116,8 +118,18 @@ class ExperimentRunner:
 
     def run(self, round_executor: RoundExecutor) -> Any:
         def run_round(trials: Any) -> tuple[float, ...]:
-            results = round_executor(self._configurations(trials))
-            values = {result["trial"]: result["value"] for result in results}
+            results = round_executor(self._configurations(trials), self.score)
+            values: dict[int, float] = {}
+            for result in results:
+                trial = int(result["trial"])
+                if trial in values:
+                    raise ExperimentError(f"round returned trial {trial} more than once")
+                values[trial] = float(result["value"])
+            expected = {trial.number for trial in trials}
+            if set(values) != expected:
+                raise ExperimentError(
+                    f"round returned trials {sorted(values)}; expected {sorted(expected)}"
+                )
             return tuple(float(values[trial.number]) for trial in trials)
 
         return self.hpo.run(run_round)

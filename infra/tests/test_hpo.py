@@ -1,6 +1,7 @@
 from pathlib import Path
 
 import optuna
+import pytest
 
 from trainer_infra import HPO, SampledTrial
 
@@ -30,9 +31,7 @@ def test_ask_generates_a_round_without_metric_feedback(tmp_path: Path) -> None:
         study_name="streamac",
         storage=f"sqlite:///{database}",
     )
-    assert all(
-        trial.state == optuna.trial.TrialState.RUNNING for trial in persisted.trials
-    )
+    assert all(trial.state == optuna.trial.TrialState.RUNNING for trial in persisted.trials)
 
 
 def test_run_hpo_records_each_round_before_starting_the_next(tmp_path: Path) -> None:
@@ -48,10 +47,7 @@ def test_run_hpo_records_each_round_before_starting_the_next(tmp_path: Path) -> 
             storage=f"sqlite:///{database}",
         )
         completed_before_round.append(
-            sum(
-                trial.state == optuna.trial.TrialState.COMPLETE
-                for trial in persisted.trials
-            )
+            sum(trial.state == optuna.trial.TrialState.COMPLETE for trial in persisted.trials)
         )
         round_trials.append(tuple(trial.number for trial in trials))
         sampled_parameters.append(tuple(trial.parameters for trial in trials))
@@ -98,3 +94,37 @@ def test_run_continues_an_existing_study(tmp_path: Path) -> None:
 
     assert [trial.number for trial in study.trials] == [0, 1]
     assert [trial.value for trial in study.trials] == [1.0, 2.0]
+
+
+def test_a_failed_round_marks_every_asked_trial_failed_and_starts_no_next_round(
+    tmp_path: Path,
+) -> None:
+    database = tmp_path / "study.db"
+    calls = 0
+    hpo = HPO(
+        name="streamac",
+        database=database,
+        direction="maximize",
+        rounds=2,
+        trials_per_round=2,
+        startup_trials=2,
+        parameters=NO_PARAMETERS,
+    )
+
+    def fail_round(trials: tuple[SampledTrial, ...]) -> list[float]:
+        nonlocal calls
+        calls += 1
+        raise RuntimeError("executor failed")
+
+    with pytest.raises(RuntimeError, match="executor failed"):
+        hpo.run(fail_round)
+
+    persisted = optuna.load_study(
+        study_name="streamac",
+        storage=f"sqlite:///{database}",
+    )
+    assert calls == 1
+    assert [trial.state for trial in persisted.trials] == [
+        optuna.trial.TrialState.FAIL,
+        optuna.trial.TrialState.FAIL,
+    ]
