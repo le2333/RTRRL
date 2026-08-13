@@ -5,7 +5,6 @@ from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
     from .contract import ActionDecision as ActionDecision
-    from .contract import EvalSummary as EvalSummary
     from .contract import EvaluationConfig as EvaluationConfig
     from .dqn import DQN as DQN
     from .dqn import DQNConfig as DQNConfig
@@ -13,9 +12,6 @@ if TYPE_CHECKING:
     from .gradient_ppo import GradientPPO as GradientPPO
     from .gradient_ppo import GradientPPOConfig as GradientPPOConfig
     from .gradient_ppo import GradientPPOState as GradientPPOState
-    from .independent_rtrrl import IndependentRTRRL as IndependentRTRRL
-    from .independent_rtrrl import IndependentRTRRLConfig as IndependentRTRRLConfig
-    from .independent_rtrrl import IndependentRTRRLState as IndependentRTRRLState
     from .mappo import MAPPO as MAPPO
     from .mappo import MAPPOConfig as MAPPOConfig
     from .mappo import MAPPOState as MAPPOState
@@ -28,9 +24,9 @@ if TYPE_CHECKING:
     from .r2d2 import R2D2 as R2D2
     from .r2d2 import R2D2Config as R2D2Config
     from .r2d2 import R2D2State as R2D2State
-    from .rtrrl import RTRRL as RTRRL
-    from .rtrrl import RTRRLConfig as RTRRLConfig
-    from .rtrrl import RTRRLState as RTRRLState
+    from .rtrrl_aaai import RTRRL as RTRRL
+    from .rtrrl_aaai import RTRRLConfig as RTRRLConfig
+    from .rtrrl_aaai import RTRRLState as RTRRLState
     from .sac import SAC as SAC
     from .sac import SACConfig as SACConfig
     from .sac import SACState as SACState
@@ -41,7 +37,6 @@ if TYPE_CHECKING:
 
 _EXPORTS = {
     "ActionDecision": (".contract", "ActionDecision"),
-    "EvalSummary": (".contract", "EvalSummary"),
     "EvaluationConfig": (".contract", "EvaluationConfig"),
     "DQN": (".dqn", "DQN"),
     "DQNConfig": (".dqn", "DQNConfig"),
@@ -64,18 +59,9 @@ _EXPORTS = {
     "SAC": (".sac", "SAC"),
     "SACConfig": (".sac", "SACConfig"),
     "SACState": (".sac", "SACState"),
-    "IndependentRTRRL": (".independent_rtrrl", "IndependentRTRRL"),
-    "IndependentRTRRLConfig": (
-        ".independent_rtrrl",
-        "IndependentRTRRLConfig",
-    ),
-    "IndependentRTRRLState": (
-        ".independent_rtrrl",
-        "IndependentRTRRLState",
-    ),
-    "RTRRL": (".rtrrl", "RTRRL"),
-    "RTRRLConfig": (".rtrrl", "RTRRLConfig"),
-    "RTRRLState": (".rtrrl", "RTRRLState"),
+    "RTRRL": (".rtrrl_aaai", "RTRRL"),
+    "RTRRLConfig": (".rtrrl_aaai", "RTRRLConfig"),
+    "RTRRLState": (".rtrrl_aaai", "RTRRLState"),
     "StreamAC": (".stream_ac", "StreamAC"),
     "StreamACConfig": (".stream_ac", "StreamACConfig"),
     "StreamACState": (".stream_ac", "StreamACState"),
@@ -92,14 +78,10 @@ __all__ = [
     "ActionDecision",
     "DQNConfig",
     "DQNState",
-    "EvalSummary",
     "EvaluationConfig",
     "GradientPPO",
     "GradientPPOConfig",
     "GradientPPOState",
-    "IndependentRTRRL",
-    "IndependentRTRRLConfig",
-    "IndependentRTRRLState",
     "MAPPOConfig",
     "MAPPOState",
     "PPOConfig",

@@ -20,6 +20,11 @@ python -m deployment.catalog --print-label
       "command": ["python", "-m", "entries.stream_ac"],
       "parameters": {},
       "metrics": []
+    },
+    "rtrrl": {
+      "command": ["python", "-m", "entries.rtrrl"],
+      "parameters": {},
+      "metrics": []
     }
   }
 }

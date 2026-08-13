@@ -1,0 +1,88 @@
+# Small end-to-end acceptance run for the public RTRRL entry.
+experiment: rtrrl-halfcheetah-smoke
+name: rtrrl-halfcheetah-smoke
+description: "RTRRL platform acceptance with trace-norm observability"
+
+image: 007122174918.dkr.ecr.eu-north-1.amazonaws.com/rtrrl@sha256:b33d69821d4dd8e601fea78b3dde331bacfd2797bda256da1dbdfeb5b1ce12a5
+entry: rtrrl
+storage: s3://rtrrl-artifacts-007122174918/trainer
+
+environment:
+  id: brax::halfcheetah
+  backend: spring
+  seed: 0
+  episode_length: 64
+
+training:
+  num_envs: 1
+  total_steps: 256
+  epoch_steps: 256
+
+evaluation:
+  steps: 64
+
+logging:
+  aim: aim://172.31.62.192:53801
+  enable_rerun: false
+
+score:
+  metric: eval/episode/return_per_step
+  window_steps: [0, 256]
+  reduce: last
+  non_finite: worst
+  direction: maximize
+
+compute:
+  instance_type: c7a.large
+  timeout_minutes: 30
+
+hpo:
+  rounds: 1
+  trials_per_round: 1
+  parallel_jobs: 1
+  startup_trials: 1
+  seed: 0
+
+space:
+  torso:
+    backbone:
+      kind: [lru]
+      lru:
+        feature_dim: [32]
+        hidden_dim: [32]
+    optimizer:
+      kind: [adam]
+      adam:
+        lr: [0.001]
+    grad_clip: [1.0]
+    follow: [1.0]
+  heads:
+    optimizer:
+      kind: [adam]
+      adam:
+        lr: [0.001]
+  actor:
+    head:
+      kind: [state_std]
+      state_std:
+        initialization:
+          kind: [lecun]
+  critic:
+    head:
+      kind: [value]
+      value:
+        initialization:
+          kind: [lecun]
+  normalization:
+    observation:
+      kind: [none]
+    reward:
+      kind: [none]
+  gamma: [0.99]
+  lambda_pi: [0.99]
+  lambda_v: [0.99]
+  lambda_rnn: [0.99]
+  eta_pi: [1.0]
+  eta_f: [1.0]
+  entropy_rate: [0.00001]
+  meta_rl: [false]

@@ -213,10 +213,18 @@ class CoreState:
 # -------------------------------------------------------------------- readings
 @dataclass(frozen=True)
 class BlockReports:
-    """Which of one block's readings to take."""
+    """Which position-split torso readings to take."""
 
     grad_norm: bool = reading(at="grad_norm", split=True)
     trace_norm: bool = reading(at="trace_norm", split=True)
+
+
+@dataclass(frozen=True)
+class HeadReports:
+    """Which whole-readout readings to take."""
+
+    grad_norm: bool = reading(at="grad_norm")
+    trace_norm: bool = reading(at="trace_norm")
 
 
 @dataclass(frozen=True)
@@ -239,8 +247,8 @@ class Reports:
     td_error: bool = reading(at="update.td_error")
     emphasis: bool = reading(at="update.emphasis")
     torso: BlockReports = readings(of=BlockReports, at="update.torso")
-    actor: BlockReports = readings(of=BlockReports, at="update.actor")
-    critic: BlockReports = readings(of=BlockReports, at="update.critic")
+    actor: HeadReports = readings(of=HeadReports, at="update.actor")
+    critic: HeadReports = readings(of=HeadReports, at="update.critic")
     torso_step: GroupReports = readings(of=GroupReports, at="update.torso_step")
     heads_step: GroupReports = readings(of=GroupReports, at="update.heads_step")
 
@@ -399,6 +407,12 @@ def _gradient_norms(module, tree):
     return subtree_norms(grouped, streams=True)
 
 
+def _head_gradient_norm(tree):
+    """One per-stream norm for a readout that has no sequence positions."""
+
+    return subtree_norms({"head": tree}, streams=True)["head"]
+
+
 # ------------------------------------------------------------ the shared block
 class Torso:
     """The one block both heads read, and the only one credited by RTRL."""
@@ -530,7 +544,7 @@ class Actor:
         )
 
     def gradient_norms(self, tree):
-        return _gradient_norms(self._head, tree)
+        return _head_gradient_norm(tree)
 
     def traced_objective(self, params, hidden, timestep: Timestep, action):
         """What ascends through the trace: the log-probability of what was done."""
@@ -579,7 +593,7 @@ class Critic:
         )
 
     def gradient_norms(self, tree):
-        return _gradient_norms(self._head, tree)
+        return _head_gradient_norm(tree)
 
     def traced_objective(self, params, hidden, timestep: Timestep):
         """What ascends through the trace: the value itself, with no error in it."""

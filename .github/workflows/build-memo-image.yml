@@ -107,7 +107,7 @@ jobs:
           # runs. Without a manifest the worker must refuse and say why: that
           # message is all CloudWatch would show.
           CMD="$(docker image inspect --format '{{ join .Config.Cmd " " }}' "$IMAGE")"
-          test "$CMD" = 'python -m training_sdk.worker'
+          test "$CMD" = 'python -m worker'
           if docker run --rm "$IMAGE" >worker-start.log 2>&1; then
             echo "the worker exited 0 without a manifest" >&2
             exit 1
@@ -166,7 +166,7 @@ jobs:
           # one job if the stack can be read out of it.
           docker run --rm "$IMAGE" gdb --version | head -n 1
 
-      - name: Verify the Hopper the experiment asks for actually builds
+      - name: Verify the shipped Brax environments actually build
         shell: bash
         run: |
           set -euo pipefail
@@ -183,6 +183,11 @@ jobs:
           assert observation.shape == (11,), observation.shape
           assert (observation[5:] == 0).all(), "velocities survived the P mask"
           assert env.action_space(params).shape == (3,)
+
+          env, params = make("brax::halfcheetah", backend="spring")
+          observation, _ = env.reset(jax.random.key(1), params)
+          assert observation.shape == (17,), observation.shape
+          assert env.action_space(params).shape == (6,)
           '
 
   push:

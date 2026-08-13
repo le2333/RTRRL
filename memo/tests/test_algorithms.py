@@ -5,11 +5,9 @@ assembled from a config, a set of modules, and a choice of update rule, and a
 mistake in that assembly shows up as a shape error or a silent NaN rather than
 as an import failure.
 
-RTRRL was here too, and is not. Its kernel takes four modules in named slots and
-routes its three-domain gradient by those names -- ``RECURRENT_DOMAINS`` is
-``("feature_extractor", "torso")`` -- so it cannot be handed a sequence without
-being rewritten, and the shape it does take no longer exists. Its programs and
-the two gate ablations come back when that rewrite does.
+RTRRL has a different shared-torso graph and lives in its own semantic and
+assembly suites. This file exercises StreamAC's independent online blocks and
+its optimizer variants only.
 """
 
 import jax

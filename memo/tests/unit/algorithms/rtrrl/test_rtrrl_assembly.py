@@ -1,5 +1,11 @@
+from types import SimpleNamespace
+
 import jax
 
+import memorax
+import memorax.algorithms as algorithms
+from entries import rtrrl as entry
+from memorax.algorithms import RTRRL
 from memorax.algorithms import rtrrl_aaai as rtrrl
 from memorax.assembly import BuildRequest, EnvironmentSpec, assemble
 from memorax.networks.sequence import PLACES
@@ -38,12 +44,55 @@ def tiny_environment(identifier, **options):
 
 
 def test_rtrrl_declares_parameters_and_observations_beside_its_graph():
+    assert RTRRL is rtrrl.RTRRL
+    assert entry.PARAMETERS is rtrrl.PARAMETERS
+    assert entry.METRICS is rtrrl.METRICS
     assert rtrrl.PARAMETERS
     assert rtrrl.TRAINING_METRICS == taken(rtrrl.REPORTS, parts=PLACES)
     assert rtrrl.METRICS == metric_names(
         "train", rtrrl.TRAINING_METRICS
     ) + metric_names("eval")
     assert set(rtrrl.TRAINING_METRICS) <= rtrrl.RECORD
+
+
+def test_only_the_current_rtrrl_contract_is_public():
+    assert memorax.RTRRL is algorithms.RTRRL is rtrrl.RTRRL
+    for obsolete in ("EvalSummary", "IndependentRTRRL"):
+        assert obsolete not in algorithms.__all__
+        assert obsolete not in memorax.__all__
+
+
+def test_entry_only_projects_the_run_config_for_assembly_and_runtime():
+    config = SimpleNamespace(
+        algorithm=SimpleNamespace(
+            parameters={"gamma": 0.9},
+            environment=SimpleNamespace(
+                id="tiny",
+                backend="test",
+                observed=[0, 1],
+                episode_length=8,
+            ),
+            num_envs=2,
+        ),
+        runtime=SimpleNamespace(
+            seed=7,
+            total_steps=32,
+            epoch_steps=8,
+            evaluation_steps=4,
+        ),
+    )
+
+    request = entry.build_request(config)
+    schedule = entry.runtime_config(config)
+
+    assert request.parameters is config.algorithm.parameters
+    assert request.environment.id == "tiny"
+    assert request.num_envs == 2
+    assert schedule.total_steps == 32
+    assert schedule.epoch_steps == 8
+    assert schedule.eval_steps == 4
+    assert schedule.num_envs == 2
+    assert schedule.seed == 7
 
 
 def test_generic_assembly_closes_one_shared_torso_rtrrl_graph():

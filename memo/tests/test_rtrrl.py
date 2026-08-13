@@ -419,8 +419,8 @@ def test_declaring_less_compiles_to_less():
             td_error=False,
             emphasis=False,
             torso=rtrrl.BlockReports(False, False),
-            actor=rtrrl.BlockReports(False, False),
-            critic=rtrrl.BlockReports(False, False),
+            actor=rtrrl.HeadReports(False, False),
+            critic=rtrrl.HeadReports(False, False),
             torso_step=rtrrl.GroupReports(False),
             heads_step=rtrrl.GroupReports(False),
         )

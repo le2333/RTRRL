@@ -10,15 +10,15 @@ capability, not an assumed prerequisite of the semantic refactor.
 one explicit domain meaning, while preserving StreamAC and RTRRL numerical
 behaviour and making the default test loop smaller and faster.
 
-**Execution:** Tasks 1-9 completed by 2026-08-13. StreamAC and RTRRL share only
+**Execution:** Tasks 1-11 are implemented locally as of 2026-08-13. StreamAC and RTRRL share only
 the proven interaction components and expose closed Programs to Runtime;
 algorithm topology and private subgraphs remain algorithm-owned. Observability
 owns metric naming, episode reduction, fan-out, and local backend artifacts.
 The version-8 deployment contract separates Catalog, Worker-envelope, and Entry
 projections. Worker now owns only serial process supervision, isolated scratch,
 artifact upload, and completion results; scoring policy, metric reduction, and
-HPO feedback belong to Infra. Task 10's concrete local and Batch execution
-capability is next.
+HPO feedback belong to Infra. Local and Batch round executors are implemented;
+the pushed image and real Batch acceptance remain the final remote gates.
 
 Before Task 4, the current version-7 Worker path was smoke-tested on 2026-08-12
 with a real StreamAC RTU+RTRL child, Moto S3, local Aim, metrics scoring, and a
@@ -772,7 +772,7 @@ cover the complete AWS API flow without mutating AWS. Task 10 is not remotely
 accepted until this pushed commit runs successfully on real Batch; that final
 gate still requires explicit approval before AWS mutation.
 
-### Task 11: Complete public entry/catalog migration and cleanup
+### Task 11: Complete public entry/catalog migration and cleanup (completed locally)
 
 - Add RTRRL's real Entry and catalog item using the same composition contract.
 - Remove obsolete RTRRL exports/dual paths including the broken `EvalSummary`
@@ -781,6 +781,18 @@ gate still requires explicit approval before AWS mutation.
 - Remove old tests only after every assertion is mapped above.
 - Run unit, integration, local parity, external parity, Docker, and finally
   remote Batch gates in that order.
+
+Completed locally on 2026-08-13. The public `RTRRL` export, the new `rtrrl`
+Entry, and catalog discovery now select the semantic RTRRL implementation. The
+obsolete older RTRRL and broken IndependentRTRRL/EvalSummary public paths are
+removed. RTRRL trace observations now reflect their actual graph boundaries:
+the shared torso is split into before/recurrence/after, while each readout owns
+one whole actor or critic trace norm. Every norm and its variance reaches both
+Metrics JSONL and Aim in the Worker service smoke. The contract-8 HalfCheetah
+smoke resolves through the real catalog and Infra HPO before assembling and
+stepping. Ruff passes, Memo's 314 default tests pass, and the seven explicit
+external parity tests pass. Docker and real Batch acceptance follow the pushed
+commit and are intentionally not claimed by this local result.
 
 ## Deliberately unresolved implementation details
 

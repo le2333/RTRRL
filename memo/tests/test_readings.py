@@ -64,13 +64,9 @@ def test_what_rtrrl_declares_is_what_rtrrl_emits():
     state = agent.init(jax.random.key(0))
     _, metrics = agent.train(jax.random.key(1), state, 2 * ENVS)
 
-    published = set(taken(rtrrl.Reports(), parts=("before", "recurrence", "readout")))
+    published = set(taken(rtrrl.Reports(), parts=PLACES))
     produced = emitted(metrics)
-    # A split reading's parts come from the networks, so compare the stems.
-    stems = {name.rsplit(".", 1)[0] if "_norm." in name else name for name in produced}
-    for name in published:
-        stem = name.rsplit(".", 1)[0] if "_norm." in name else name
-        assert stem in stems, f"{name} is published and not produced"
+    assert produced == published
 
 
 def test_a_field_that_is_not_declared_is_refused():

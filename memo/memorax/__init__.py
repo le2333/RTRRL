@@ -16,9 +16,6 @@ if TYPE_CHECKING:
     from memorax.algorithms import GradientPPO as GradientPPO
     from memorax.algorithms import GradientPPOConfig as GradientPPOConfig
     from memorax.algorithms import GradientPPOState as GradientPPOState
-    from memorax.algorithms import IndependentRTRRL as IndependentRTRRL
-    from memorax.algorithms import IndependentRTRRLConfig as IndependentRTRRLConfig
-    from memorax.algorithms import IndependentRTRRLState as IndependentRTRRLState
     from memorax.algorithms import MAPPOConfig as MAPPOConfig
     from memorax.algorithms import MAPPOState as MAPPOState
     from memorax.algorithms import PPOConfig as PPOConfig
@@ -67,9 +64,6 @@ _ALGORITHM_EXPORTS = {
     "RTRRL",
     "RTRRLConfig",
     "RTRRLState",
-    "IndependentRTRRL",
-    "IndependentRTRRLConfig",
-    "IndependentRTRRLState",
     "StreamAC",
     "StreamACConfig",
     "StreamACState",
@@ -93,9 +87,6 @@ __all__ = [
     "GradientPPO",
     "GradientPPOConfig",
     "GradientPPOState",
-    "IndependentRTRRL",
-    "IndependentRTRRLConfig",
-    "IndependentRTRRLState",
     "MAPPOConfig",
     "MAPPOState",
     "Sequence",
