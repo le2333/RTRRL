@@ -249,6 +249,15 @@ The target network is never initialized by independently unrolling only the
 `next_observation` sequence. That loses the history preceding each next state.
 Targets are stopped before the online loss is differentiated.
 
+For ordinary continuation, the shifted input at `t + 1` is the recorded next
+observation and the alignment above is literal.  A time-limit truncation is the
+one exception: the next collected input is a reset observation, while the
+bootstrap-eligible successor is the transition's recorded pre-reset terminal
+observation.  The learner therefore applies that recorded successor once from
+the online and target recurrences produced at `t` and substitutes its Q values
+for the shifted reset-observation values.  This is not an independent unroll
+from zero; it preserves the exact preceding recurrent history.
+
 ## Standard TBPTT branch
 
 The structural selection is `learning.kind: tbptt`. A replay item has fixed
@@ -322,6 +331,7 @@ The state follows the same nested semantic shape as the online algorithms:
 R2D2State
   step
   timestep
+  episode-start flags
   environment state
   replay state
   CoreState
@@ -335,6 +345,11 @@ R2D2State
 The acting recurrence is part of `CoreState` but is excluded from replay
 learning except when its pre-action value is copied into a TBPTT replay record.
 Full BPTT always initializes recurrence at the episode boundary.
+
+Episode-start flags are explicit rather than inferred only from the previous
+transition's `done`: the initial observations begin episodes even though no
+previous environment transition exists.  After interaction they equal the
+per-stream `done` values until the reset observation has been consumed.
 
 Training interaction uses epsilon-greedy actions and writes replay. Evaluation
 starts from a fresh environment and fresh recurrent carry, uses the evaluation
