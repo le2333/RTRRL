@@ -5,8 +5,8 @@ description: >
   keeps the even observation mask and records one Rerun training episode plus
   an evaluation return at each 10M-step boundary through 50M steps.
 
-# Replaced with the immutable digest produced by the deployment build.
-image: 007122174918.dkr.ecr.eu-north-1.amazonaws.com/rtrrl@sha256:0000000000000000000000000000000000000000000000000000000000000000
+# Immutable memo CPU image built and verified from commit 110bba1.
+image: 007122174918.dkr.ecr.eu-north-1.amazonaws.com/rtrrl@sha256:261b4b4c793b147abdc83fad7b7a27fe702130597422e4708f2bf75115fe3b96
 entry: rtrrl
 storage: s3://rtrrl-artifacts-007122174918/trainer
 
