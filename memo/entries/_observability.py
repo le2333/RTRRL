@@ -43,14 +43,9 @@ def build_reporter(config: RunSpec, scratch: Path) -> Reporter:
             parameters=config.algorithm.parameters,
         ),
     ]
-    episode_sinks = []
+    # The sampling interval stays in the run document; Runtime expands it into
+    # the sample points it schedules, and the sink only serializes what it gets.
+    trajectory_sinks = []
     if config.logging.rerun is not None:
-        episode_sinks.append(
-            RerunSink(
-                artifacts / "rerun",
-                every_steps=config.logging.rerun.every_steps,
-                num_envs=config.algorithm.num_envs,
-                metadata=metadata,
-            )
-        )
-    return Reporter(scalar_sinks=scalar_sinks, episode_sinks=episode_sinks)
+        trajectory_sinks.append(RerunSink(artifacts / "rerun", metadata=metadata))
+    return Reporter(scalar_sinks=scalar_sinks, trajectory_sinks=trajectory_sinks)

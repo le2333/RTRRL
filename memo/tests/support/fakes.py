@@ -9,15 +9,33 @@ from typing import Any
 
 @dataclass
 class EpisodeRecorder:
+    """Both of Runtime's reporting occasions, kept apart the way they arrive."""
+
     episodes: list[Any] = field(default_factory=list)
+    trajectories: list[Any] = field(default_factory=list)
 
     def log_episode(self, episode: Any) -> None:
         self.episodes.append(episode)
+
+    def log_trajectory(self, trajectory: Any) -> None:
+        self.trajectories.append(trajectory)
 
     def of(self, phase: str) -> list[Any]:
         return [
             episode for episode in self.episodes if getattr(episode, "phase") == phase
         ]
+
+
+@dataclass
+class TrajectoryRecorder:
+    trajectories: list[Any] = field(default_factory=list)
+    closed: bool = False
+
+    def log_trajectory(self, trajectory: Any) -> None:
+        self.trajectories.append(trajectory)
+
+    def close(self) -> None:
+        self.closed = True
 
 
 @dataclass

@@ -5,7 +5,7 @@ from aim import Repo
 
 from entries._observability import build_reporter, load_run
 from memorax.observability.sinks.metrics import METRICS_FILENAME
-from tests.support.observability import completed_episode
+from tests.support.observability import completed_episode, completed_trajectory
 from tests.support.run_config import make_run_config
 
 pytestmark = [pytest.mark.integration, pytest.mark.service]
@@ -43,11 +43,27 @@ def test_entry_composes_mandatory_scalars_and_optional_local_episodes(tmp_path):
 
     with build_reporter(config, scratch) as reporter:
         reporter.log_episode(completed_episode())
+        reporter.log_trajectory(completed_trajectory(sample_step=8))
 
     records = [
         json.loads(line)
         for line in (scratch / "artifacts" / METRICS_FILENAME).read_text().splitlines()
     ]
+    assert len(records) == 1
     assert records[0]["step"] == 8
     assert records[0]["metrics"]["train/episode/return"] == 4.0
-    assert (scratch / "artifacts" / "rerun" / "train-000001.rrd").exists()
+    assert [path.name for path in (scratch / "artifacts" / "rerun").glob("*.rrd")] == [
+        "train-sample-000000000008.rrd"
+    ]
+
+
+def test_entry_writes_no_rerun_artifact_when_the_run_asks_for_none(tmp_path):
+    scratch = tmp_path / "scratch"
+    config = config_with_local_aim(tmp_path, rerun=None)
+
+    with build_reporter(config, scratch) as reporter:
+        reporter.log_episode(completed_episode())
+        reporter.log_trajectory(completed_trajectory(sample_step=8))
+
+    assert (scratch / "artifacts" / METRICS_FILENAME).exists()
+    assert not (scratch / "artifacts" / "rerun").exists()

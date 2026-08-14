@@ -1,4 +1,4 @@
-"""Sample complete episodes into local Rerun recordings."""
+"""Serialize the trajectories Runtime selected into local Rerun recordings."""
 
 from __future__ import annotations
 
@@ -10,40 +10,26 @@ from rerun.any_value import AnyValues
 from rerun.archetypes.tensor import Tensor
 from rerun.recording_stream import RecordingStream
 
-from memorax.runtime.episode import Episode
+from memorax.runtime.episode import SampledTrajectory
 
 from ..metadata import RunMetadata
 
 
 class RerunSink:
-    def __init__(
-        self,
-        directory: Path,
-        *,
-        every_steps: int,
-        num_envs: int,
-        metadata: RunMetadata,
-    ) -> None:
+    """One RRD per requested sample. It chooses nothing; Runtime chose."""
+
+    def __init__(self, directory: Path, *, metadata: RunMetadata) -> None:
         self._directory = Path(directory)
-        self._every = every_steps
-        self._streams = num_envs
         self._metadata = metadata
 
-    def _sampled(self, episode: Episode) -> bool:
-        first = -(-episode.start_env_steps // self._every) * self._every
-        return any(
-            step % self._streams == episode.stream
-            for step in range(first, episode.end_env_steps, self._every)
-        )
-
-    def log_episode(self, episode: Episode) -> None:
-        if not self._sampled(episode):
-            return
+    def log_trajectory(self, trajectory: SampledTrajectory) -> None:
+        episode = trajectory.episode
         self._directory.mkdir(parents=True, exist_ok=True)
-        path = self._directory / f"{episode.phase}-{episode.number:06d}.rrd"
-        self._write(path, episode)
+        name = f"{episode.phase}-sample-{trajectory.sample_step:012d}.rrd"
+        self._write(self._directory / name, trajectory)
 
-    def _write(self, path: Path, episode: Episode) -> None:
+    def _write(self, path: Path, trajectory: SampledTrajectory) -> None:
+        episode = trajectory.episode
         stream = RecordingStream("memorax", recording_id=path.stem)
         stream.save(path)
         stream.log(
@@ -54,6 +40,8 @@ class RerunSink:
                 trial=self._metadata.trial,
                 episode=episode.number,
                 phase=episode.phase,
+                sample_step=trajectory.sample_step,
+                stream=episode.stream,
                 start_env_steps=episode.start_env_steps,
                 end_env_steps=episode.end_env_steps,
             ),
@@ -65,6 +53,9 @@ class RerunSink:
             "rewards": episode.rewards,
             "terminals": episode.terminals,
             "truncations": episode.truncations,
+            # Which transitions were taken after the training budget, so a walk
+            # never reads a continuation as if it had trained.
+            "post_budget": trajectory.post_budget,
         }
         series: dict[str, Sequence[object]] = {
             entity: values for entity, values in walked.items() if values is not None

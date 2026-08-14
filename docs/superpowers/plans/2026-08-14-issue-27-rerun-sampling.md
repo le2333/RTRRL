@@ -438,7 +438,7 @@ class Reporter:
 - RRD filenames are keyed by requested sample step:
   `train-sample-000010000000.rrd` for sample 10M.
 
-- [ ] **Step 1: Write failing Reporter routing tests**
+- [x] **Step 1: Write failing Reporter routing tests**
 
 Add a trajectory recorder to the support fakes and verify strict separation:
 
@@ -458,7 +458,7 @@ def test_reporter_reduces_every_episode_but_routes_only_sampled_trajectories():
     assert len(scalars.reports) == 1
 ```
 
-- [ ] **Step 2: Replace Rerun sampling tests with serialization tests**
+- [x] **Step 2: Replace Rerun sampling tests with serialization tests**
 
 Delete tests of `RerunSink._sampled()` behavior. Add:
 
@@ -482,7 +482,7 @@ def test_rerun_serializes_the_runtime_selected_sample_and_budget_mask(tmp_path):
 The metadata test must read the RRD and verify `sample_step`, stream, start, and
 end values rather than asserting only that a file exists.
 
-- [ ] **Step 3: Run focused tests and verify RED**
+- [x] **Step 3: Run focused tests and verify RED**
 
 Run:
 
@@ -495,7 +495,7 @@ uv run --project memo pytest \
 Expected: FAIL because the sampled-trajectory protocol and sink method do not
 exist.
 
-- [ ] **Step 4: Implement the two reporting paths**
+- [x] **Step 4: Implement the two reporting paths**
 
 Add `TrajectorySink`, store `trajectory_sinks` in `Reporter`, and make
 `log_trajectory()` fan out without computing scalar statistics. Refactor
@@ -507,7 +507,7 @@ Update `build_reporter()` to pass Rerun sinks through `trajectory_sinks` and
 remove `every_steps` and `num_envs` from the sink constructor. The interval
 remains in the run config for Runtime projection in Task 5.
 
-- [ ] **Step 5: Update composition fixtures to use a sampled trajectory**
+- [x] **Step 5: Update composition fixtures to use a sampled trajectory**
 
 Add to `tests/support/observability.py`:
 
@@ -527,7 +527,7 @@ def completed_trajectory(
 Change the entry composition test to call both `reporter.log_episode()` and
 `reporter.log_trajectory()`. Assert one scalar record and one RRD.
 
-- [ ] **Step 6: Run observability tests**
+- [x] **Step 6: Run observability tests**
 
 Run:
 
@@ -540,7 +540,7 @@ uv run --project memo pytest \
 
 Expected: PASS.
 
-- [ ] **Step 7: Commit Task 3**
+- [x] **Step 7: Commit Task 3**
 
 ```bash
 git add memo/memorax/observability memo/entries/_observability.py \

@@ -4,10 +4,10 @@ from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
 
-from memorax.runtime.episode import Episode
+from memorax.runtime.episode import Episode, SampledTrajectory
 
 from .metrics import statistics
-from .protocols import EpisodeSink, ScalarSink
+from .protocols import EpisodeSink, ScalarSink, TrajectorySink
 
 
 class Reporter:
@@ -16,9 +16,11 @@ class Reporter:
         *,
         scalar_sinks: Sequence[ScalarSink] = (),
         episode_sinks: Sequence[EpisodeSink] = (),
+        trajectory_sinks: Sequence[TrajectorySink] = (),
     ) -> None:
         self._scalar_sinks = tuple(scalar_sinks)
         self._episode_sinks = tuple(episode_sinks)
+        self._trajectory_sinks = tuple(trajectory_sinks)
 
     def report(self, step: int, metrics: Mapping[str, float]) -> None:
         for sink in self._scalar_sinks:
@@ -29,8 +31,21 @@ class Reporter:
         for sink in self._episode_sinks:
             sink.log_episode(episode)
 
+    def log_trajectory(self, trajectory: SampledTrajectory) -> None:
+        """Fan out one requested walk.
+
+        Its episode was reduced when it completed, so nothing is reduced here.
+        """
+
+        for sink in self._trajectory_sinks:
+            sink.log_trajectory(trajectory)
+
     def close(self) -> None:
-        for sink in (*self._scalar_sinks, *self._episode_sinks):
+        for sink in (
+            *self._scalar_sinks,
+            *self._episode_sinks,
+            *self._trajectory_sinks,
+        ):
             sink.close()
 
     def __enter__(self) -> Reporter:

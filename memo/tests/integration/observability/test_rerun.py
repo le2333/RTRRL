@@ -3,46 +3,9 @@ from rerun.experimental import RrdReader
 
 from memorax.observability import RunMetadata
 from memorax.observability.sinks.rerun import RerunSink
-from tests.support.observability import completed_episode
+from tests.support.observability import completed_trajectory
 
 pytestmark = [pytest.mark.integration, pytest.mark.service]
-
-
-def test_rerun_keeps_a_local_rrd_and_has_no_upload_destination(tmp_path):
-    metadata = RunMetadata(
-        run_id="run-t0",
-        experiment="experiment",
-        launch_id="launch",
-        trial=0,
-        entry="stream_ac",
-        digest="local@sha256:" + "a" * 64,
-    )
-    sink = RerunSink(
-        tmp_path,
-        every_steps=1,
-        num_envs=1,
-        metadata=metadata,
-    )
-
-    sink.log_episode(completed_episode())
-    sink.close()
-
-    path = tmp_path / "train-000001.rrd"
-    assert path.exists()
-    summary = RrdReader(path).store().summary()
-    assert "/episode/rewards" in summary
-    assert "/episode/series/td_error" in summary
-
-
-def recorded_numbers(sink, directory, episodes):
-    for episode in episodes:
-        sink.log_episode(episode)
-    sink.close()
-    return [
-        episode.number
-        for episode in episodes
-        if (directory / f"{episode.phase}-{episode.number:06d}.rrd").exists()
-    ]
 
 
 def metadata():
@@ -56,40 +19,70 @@ def metadata():
     )
 
 
-def test_sampling_interval_is_over_environment_steps(tmp_path):
-    sink = RerunSink(tmp_path, every_steps=100, num_envs=1, metadata=metadata())
-    episodes = [
-        completed_episode(1, span=(0, 90)),
-        completed_episode(2, span=(110, 190)),
-        completed_episode(3, span=(190, 260)),
-    ]
+def recorded(path, entity):
+    """Return one entity's logged values, one list per component."""
 
-    assert recorded_numbers(sink, tmp_path, episodes) == [1, 3]
-
-
-def test_sample_step_selects_only_the_stream_it_belongs_to(tmp_path):
-    sink = RerunSink(tmp_path, every_steps=10, num_envs=4, metadata=metadata())
-    episodes = [
-        completed_episode(1, span=(0, 40), stream=0),
-        completed_episode(2, span=(0, 40), stream=1),
-        completed_episode(3, span=(0, 40), stream=2),
-    ]
-
-    assert recorded_numbers(sink, tmp_path, episodes) == [1, 3]
+    columns: dict[str, list] = {}
+    for chunk in RrdReader(path).store().stream().to_chunks():
+        if chunk.entity_path != entity:
+            continue
+        batch = chunk.to_record_batch()
+        for name in batch.schema.names:
+            if name.startswith("rerun.controls"):
+                continue
+            columns.setdefault(name, []).extend(batch.column(name).to_pylist())
+    assert columns, f"{entity} is not in {path.name}"
+    return columns
 
 
-def test_zero_span_evaluation_episode_contains_no_training_sample(tmp_path):
-    sink = RerunSink(tmp_path, every_steps=1, num_envs=1, metadata=metadata())
-    episodes = [completed_episode(1, phase="eval", span=(64, 64))]
+def test_rerun_serializes_the_runtime_selected_sample_and_budget_mask(tmp_path):
+    sink = RerunSink(tmp_path, metadata=metadata())
 
-    assert recorded_numbers(sink, tmp_path, episodes) == []
-
-
-def test_phase_is_part_of_the_local_artifact_name(tmp_path):
-    sink = RerunSink(tmp_path, every_steps=1, num_envs=1, metadata=metadata())
-    sink.log_episode(completed_episode(1, phase="train"))
-    sink.log_episode(completed_episode(1, phase="eval", span=(0, 8)))
+    sink.log_trajectory(
+        completed_trajectory(sample_step=10_000_000, post_budget=(False, True))
+    )
     sink.close()
 
-    assert (tmp_path / "train-000001.rrd").exists()
-    assert (tmp_path / "eval-000001.rrd").exists()
+    path = tmp_path / "train-sample-000010000000.rrd"
+    summary = RrdReader(path).store().summary()
+    assert "/episode/post_budget" in summary
+    assert "/episode/rewards" in summary
+    assert "/episode/series/td_error" in summary
+
+
+def test_rerun_records_which_sample_and_which_stream_the_trajectory_answers(tmp_path):
+    sink = RerunSink(tmp_path, metadata=metadata())
+
+    sink.log_trajectory(completed_trajectory(sample_step=10_000_000, stream=3))
+    sink.close()
+
+    written = recorded(tmp_path / "train-sample-000010000000.rrd", "/episode/metadata")
+
+    assert written["sample_step"] == [[10_000_000]]
+    assert written["stream"] == [[3]]
+    assert written["start_env_steps"] == [[0]]
+    assert written["end_env_steps"] == [[8]]
+    assert written["run_id"] == [["run-t0"]]
+
+
+def test_rerun_names_one_artifact_per_requested_sample(tmp_path):
+    sink = RerunSink(tmp_path, metadata=metadata())
+
+    sink.log_trajectory(completed_trajectory(sample_step=10_000_000))
+    sink.log_trajectory(completed_trajectory(sample_step=20_000_000))
+    sink.close()
+
+    assert sorted(path.name for path in tmp_path.glob("*.rrd")) == [
+        "train-sample-000010000000.rrd",
+        "train-sample-000020000000.rrd",
+    ]
+
+
+def test_rerun_writes_nothing_of_its_own_accord(tmp_path):
+    """Runtime decides what is sampled, so an unasked sink produces no artifact."""
+
+    sink = RerunSink(tmp_path, metadata=metadata())
+    sink.close()
+
+    assert not hasattr(sink, "log_episode")
+    assert list(tmp_path.glob("*.rrd")) == []
