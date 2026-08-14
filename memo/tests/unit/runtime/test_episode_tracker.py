@@ -197,6 +197,14 @@ def test_report_completed_false_still_returns_sample_and_advances_number():
     assert tracker.next_number == 2
 
 
+def test_sample_at_non_aligned_start_uses_current_transition_stream():
+    tracker = make_tracker(sample_steps=(1,))
+
+    result = tracker.consume(summary(1, [[1, 1]]), start_env_steps=1)
+
+    assert [sample.episode.stream for sample in result.sampled] == [0]
+
+
 def test_episode_longer_than_declared_limit_fails_instead_of_truncating():
     tracker = make_tracker(max_episode_steps=2)
     with pytest.raises(ValueError, match="maximum episode length"):

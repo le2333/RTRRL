@@ -120,7 +120,7 @@ class EpisodeTracker:
         for row in range(steps):
             for stream in range(self._num_envs):
                 position = start_env_steps + row * self._num_envs + stream
-                self._attach_samples(position, series)
+                self._attach_samples(position, stream, series)
                 slot = self._slot(stream, position, series)
 
                 if len(slot.rewards) >= self._max_episode_steps:
@@ -173,7 +173,7 @@ class EpisodeTracker:
                 self._slots[stream] = None
 
         ending_boundary = start_env_steps + steps * self._num_envs
-        self._attach_samples(ending_boundary, series)
+        self._attach_samples(ending_boundary, 0, series)
         return TrackingResult(tuple(completed), tuple(sampled))
 
     def _slot(
@@ -201,6 +201,7 @@ class EpisodeTracker:
     def _attach_samples(
         self,
         position: int,
+        stream: int,
         series: dict[str, np.ndarray],
     ) -> None:
         while (
@@ -208,7 +209,6 @@ class EpisodeTracker:
             and self._sample_steps[self._sample_index] == position
         ):
             sample = self._sample_steps[self._sample_index]
-            stream = sample % self._num_envs
             self._slot(stream, position, series).samples.append(sample)
             self._sample_index += 1
 
