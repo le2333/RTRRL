@@ -1,14 +1,14 @@
+from __future__ import annotations
+
+from collections.abc import Iterable
 from dataclasses import dataclass
-from functools import partial
 from typing import Any, Callable
 
 import flax.linen as nn
 import jax
 import jax.numpy as jnp
-import lox
 import optax
-from flashbax.utils import get_tree_shape_prefix
-from flax import core, struct
+from flax import struct
 
 from memorax.buffers import (
     PrioritisedEpisodeBufferSample,
@@ -16,46 +16,40 @@ from memorax.buffers import (
 )
 from memorax.networks import FFN, LayerNorm, Sequence, Tanh, backbone
 from memorax.networks.heads import DiscreteQNetwork
-from memorax.rl import periodic_incremental_update
-from memorax.utils import Timestep, Transition, utils
-from memorax.utils.axes import add_feature_axis, remove_feature_axis, remove_time_axis
+from memorax.observability.metrics import metric_names
+from memorax.readings import reading, taken
+from memorax.rl import EnvironmentStreams, periodic_incremental_update, select_ended
+from memorax.runtime import ObservationSchema
+from memorax.utils import Timestep
 from memorax.utils.typing import (
     Array,
     Buffer,
     BufferState,
     Environment,
     EnvParams,
-    EnvState,
     Key,
-    PyTree,
 )
+
+from .contract import ActionDecision, InteractionMetrics, StepMetrics
 
 
 @struct.dataclass(frozen=True)
 class R2D2Config:
     num_envs: int
-    gamma: float
-    tau: float
-    target_update_frequency: int
-    train_frequency: int
-    burn_in_length: int = 10
-    sequence_length: int = 80
-    n_step: int = 5
-    priority_exponent: float = 0.9
-    importance_sampling_exponent: float = 0.6
+    epsilon_start: float
+    epsilon_end: float
+    epsilon_decay_steps: int
+    evaluation_epsilon: float
 
 
 @struct.dataclass(frozen=True)
 class R2D2State:
-    step: int
-    update_step: int
+    step: Any
     timestep: Timestep
-    carry: tuple
-    env_state: EnvState
-    params: core.FrozenDict[str, Any]
-    target_params: core.FrozenDict[str, Any]
-    optimizer_state: optax.OptState
-    buffer_state: BufferState
+    episode_start: Any
+    env_state: Any
+    buffer_state: Any
+    core: CoreState
 
 
 @struct.dataclass(frozen=True)
@@ -359,6 +353,35 @@ class UpdateMetrics:
     gradient_norm: Any
     importance_weight: Any
     priority: Any
+
+
+@dataclass(frozen=True)
+class Reports:
+    selected_q: bool = reading(at="forward.selected_q")
+    epsilon: bool = reading(at="forward.epsilon")
+    loss: bool = reading(at="update.loss")
+    td_error: bool = reading(at="update.td_error")
+    q_value: bool = reading(at="update.q_value")
+    gradient_norm: bool = reading(at="update.gradient_norm")
+    importance_weight: bool = reading(at="update.importance_weight")
+    priority: bool = reading(at="update.priority")
+
+
+REPORTS = Reports()
+TRAINING_METRICS: tuple[str, ...] = taken(REPORTS)
+METRICS: tuple[str, ...] = metric_names("train", TRAINING_METRICS) + metric_names(
+    "eval"
+)
+OBSERVATIONS = ObservationSchema(
+    reward="interaction.reward",
+    done="interaction.done",
+    terminal="interaction.terminal",
+    observation="interaction.observation",
+    next_observation="interaction.next_observation",
+    action="interaction.action",
+    series=TRAINING_METRICS,
+)
+RECORD = OBSERVATIONS.required_fields
 
 
 @struct.dataclass(frozen=True)
@@ -820,400 +843,309 @@ def sequence_priorities(td_error: Array, valid: Array, *, max_weight: float) -> 
     return max_weight * maximum + (1.0 - max_weight) * mean
 
 
-def compute_n_step_returns(
-    rewards: Array,
-    dones: Array,
-    next_q_values: Array,
-    n_step: int,
-    gamma: float,
-) -> Array:
-    batch_size, sequence_length = rewards.shape
-    num_targets = sequence_length - n_step + 1
-
-    def compute_target(start_idx: int):
-        n_step_return = jnp.zeros(batch_size)
-        discount = 1.0
-        done = jnp.ones(batch_size)
-
-        for i in range(n_step):
-            idx = start_idx + i
-            n_step_return = n_step_return + discount * rewards[:, idx] * done
-            discount = discount * gamma
-            done = done * (1.0 - dones[:, idx])
-
-        bootstrap_idx = start_idx + n_step - 1
-        n_step_return = (
-            n_step_return + discount * next_q_values[:, bootstrap_idx] * done
-        )
-
-        return n_step_return
-
-    targets = jax.vmap(compute_target)(jnp.arange(num_targets))
-    targets = targets.T
-
-    return targets
-
-
-@dataclass
+@dataclass(frozen=True)
 class R2D2:
     cfg: R2D2Config
     env: Environment
     env_params: EnvParams
-    q_network: nn.Module
-    optimizer: optax.GradientTransformation
+    core: Core
     buffer: Buffer
-    epsilon_schedule: optax.Schedule
-    beta_schedule: optax.Schedule
+    reports: Reports = Reports()
+    record: Iterable[str] = ()
 
-    def __post_init__(self):
-        assert self.cfg.train_frequency >= self.cfg.num_envs, (
-            f"train_frequency ({self.cfg.train_frequency}) must be >= num_envs ({self.cfg.num_envs})"
+    def __post_init__(self) -> None:
+        object.__setattr__(
+            self,
+            "environment",
+            EnvironmentStreams(self.cfg.num_envs, self.env, self.env_params),
         )
-        assert self.cfg.train_frequency % self.cfg.num_envs == 0, (
-            f"train_frequency ({self.cfg.train_frequency}) must be divisible by num_envs ({self.cfg.num_envs})"
-        )
-        assert self.cfg.sequence_length > self.cfg.burn_in_length, (
-            f"sequence_length ({self.cfg.sequence_length}) must be > burn_in_length ({self.cfg.burn_in_length})"
-        )
+        object.__setattr__(self, "record", frozenset(self.record))
 
-    def _greedy_action(
-        self, key: Key, state: R2D2State
-    ) -> tuple[R2D2State, Array, Array, dict]:
-        torso_key = key
-        obs, done, action, reward = state.timestep.to_sequence()
-        (carry, (q_values, _)), intermediates = self.q_network.apply(
-            state.params,
-            observation=obs,
-            done=done,
-            action=action,
-            reward=reward,
-            initial_carry=state.carry,
-            rngs={"torso": torso_key},
-            mutable=["intermediates"],
-        )
-        q_values = remove_time_axis(q_values)
-        action = jnp.argmax(q_values, axis=-1)
-        state = state.replace(carry=carry)
-        return state, action, q_values, intermediates
-
-    def _random_action(
-        self, key: Key, state: R2D2State
-    ) -> tuple[R2D2State, Array, None, dict]:
-        action_key = jax.random.split(key, self.cfg.num_envs)
-        action = jax.vmap(self.env.action_space(self.env_params).sample)(action_key)
-        return state, action, None, {}
-
-    def _epsilon_greedy_action(
-        self, key: Key, state: R2D2State
-    ) -> tuple[R2D2State, Array, Array, dict]:
-        random_key, greedy_key, sample_key = jax.random.split(key, 3)
-
-        state, random_action, _, _ = self._random_action(random_key, state)
-        state, greedy_action, q_values, intermediates = self._greedy_action(greedy_key, state)
-
-        epsilon = self.epsilon_schedule(state.step)
-        action = jnp.where(
-            jax.random.uniform(sample_key, greedy_action.shape) < epsilon,
-            random_action,
-            greedy_action,
-        )
-        return state, action, q_values, intermediates
-
-    def _step(self, state: R2D2State, key: Key, *, policy: Callable) -> tuple[R2D2State, Transition]:
-        action_key, step_key = jax.random.split(key)
-
-        initial_carry = state.carry
-
-        state, action, intermediates = policy(action_key, state)
-        num_envs, *_ = state.timestep.obs.shape
-        step_key = jax.random.split(step_key, num_envs)
-        next_obs, env_state, reward, done, info = jax.vmap(
-            self.env.step, in_axes=(0, 0, 0, None)
-        )(step_key, state.env_state, action, self.env_params)
-
-        intermediates = jax.tree.map(
-            lambda x: jnp.mean(jnp.stack(x)),
-            intermediates.get("intermediates", {}),
-            is_leaf=lambda x: isinstance(x, tuple),
+    @staticmethod
+    def _inputs(timestep: Timestep, episode_start: Any) -> RecurrentInputs:
+        return RecurrentInputs(
+            observation=jax.tree.map(lambda value: value[:, None], timestep.obs),
+            previous_action=timestep.action[:, None],
+            previous_reward=timestep.reward[:, None],
+            episode_start=episode_start[:, None],
         )
 
-        first = Timestep(
-            obs=state.timestep.obs,
-            action=state.timestep.action,
-            reward=state.timestep.reward,
-            done=state.timestep.done,
-        )
-        second = Timestep(
-            obs=next_obs,
-            action=action,
-            reward=reward,
-            done=done,
-        )
-        lox.log({"info": info, "intermediates": intermediates})
-
-        transition = Transition(
-            first=first,
-            second=second,
-            carry=initial_carry,
+    @staticmethod
+    def _no_update_metrics() -> UpdateMetrics:
+        zero = jnp.asarray(0.0, dtype=jnp.float32)
+        return UpdateMetrics(
+            applied=jnp.asarray(False),
+            loss=zero,
+            td_error=zero,
+            q_value=zero,
+            gradient_norm=zero,
+            importance_weight=zero,
+            priority=zero,
         )
 
-        buffer_transition = jax.tree.map(lambda x: jnp.expand_dims(x, 1), transition)
-        buffer_state = self.buffer.add(state.buffer_state, buffer_transition)
+    def _epsilon(self, step: Array) -> Array:
+        progress = jnp.clip(step / self.cfg.epsilon_decay_steps, 0.0, 1.0)
+        return self.cfg.epsilon_start + progress * (
+            self.cfg.epsilon_end - self.cfg.epsilon_start
+        )
 
-        next_reward = jnp.asarray(reward, dtype=jnp.float32)
-        state = state.replace(
-            step=state.step + self.cfg.num_envs,
-            timestep=Timestep(
-                obs=next_obs,
-                action=jnp.where(done, jnp.zeros_like(action), action),
-                reward=jnp.where(done, jnp.zeros_like(next_reward), next_reward),
-                done=done,
+    def _reset(self, key: Key, state: R2D2State) -> R2D2State:
+        obs, env_state = self.environment.reset(
+            key, state.env_state, state.timestep.done
+        )
+        return state.replace(
+            timestep=state.timestep.replace(
+                obs=select_ended(state.timestep.done, obs, state.timestep.obs)
             ),
             env_state=env_state,
-            buffer_state=buffer_state,
-        )
-        return state, transition
-
-    def _update(self, key: Key, state: R2D2State):
-        sample_key, torso_key, next_torso_key = jax.random.split(key, 3)
-        batch = self.buffer.sample(state.buffer_state, sample_key)
-
-        experience = batch.experience
-
-        initial_carry = None
-        initial_target_carry = None
-        if experience.carry is not None:
-            initial_carry = jax.tree.map(lambda x: x[:, 0], experience.carry)
-            initial_target_carry = jax.tree.map(lambda x: x[:, 0], experience.carry)
-
-        initial_carry = utils.burn_in(self.q_network, state.params, experience.first, initial_carry, self.cfg.burn_in_length)
-        initial_target_carry = utils.burn_in(self.q_network, state.target_params, experience.second, initial_target_carry, self.cfg.burn_in_length)
-        experience = jax.tree.map(lambda x: x[:, self.cfg.burn_in_length:], experience)
-
-        next_obs, next_done, next_action, next_reward = experience.second
-        _, (next_target_q_values, _) = self.q_network.apply(
-            state.target_params,
-            observation=next_obs,
-            done=next_done,
-            action=next_action,
-            reward=next_reward,
-            initial_carry=initial_target_carry,
-            rngs={"torso": next_torso_key},
         )
 
-        next_target_q_value = jnp.max(next_target_q_values, axis=-1)
-
-        _, sequence_length = experience.second.reward.shape
-        if self.cfg.n_step > 1 and sequence_length >= self.cfg.n_step:
-            n_step_targets = compute_n_step_returns(
-                experience.second.reward,
-                experience.second.done,
-                next_target_q_value,
-                self.cfg.n_step,
-                self.cfg.gamma,
-            )
-            _, num_targets = n_step_targets.shape
-            experience = jax.tree.map(lambda x: x[:, :num_targets], experience)
-            td_target = n_step_targets
-        else:
-            td_target = (
-                experience.second.reward
-                + self.cfg.gamma * (1 - experience.second.done) * next_target_q_value
-            )
-
-        beta = self.beta_schedule(state.step)
-        add_batch_size, max_length_time_axis = get_tree_shape_prefix(
-            state.buffer_state.experience, n_axes=2
-        )
-        buffer_capacity = add_batch_size * max_length_time_axis
-        buffer_size = jnp.where(
-            state.buffer_state.is_full,
-            buffer_capacity,
-            state.buffer_state.current_index * add_batch_size,
-        )
-        buffer_size = jnp.maximum(buffer_size, 1)
-        importance_weights = compute_importance_weights(
-            batch.probabilities, buffer_size, beta
-        )
-        importance_weights = importance_weights[:, None]
-
-        first_obs, first_done, first_action, first_reward = experience.first
-
-        def loss_fn(params: PyTree):
-            carry, (q_values, aux) = self.q_network.apply(
-                params,
-                observation=first_obs,
-                done=first_done,
-                action=first_action,
-                reward=first_reward,
-                initial_carry=initial_carry,
-                rngs={"torso": torso_key},
-            )
-            action = add_feature_axis(experience.second.action)
-            q_value = jnp.take_along_axis(q_values, action, axis=-1)
-            q_value = remove_feature_axis(q_value)
-            td_error = q_value - td_target
-
-            loss = (
-                importance_weights
-                * self.q_network.head.loss(
-                    q_value, aux, td_target, transitions=experience
-                )
-            ).mean()
-            return loss, (q_value, td_error, carry)
-
-        (loss, (q_value, td_error, carry)), grads = jax.value_and_grad(
-            loss_fn, has_aux=True
-        )(state.params)
-        lox.log({"q_network/gradient_norm": optax.global_norm(grads)})
-
-        updates, optimizer_state = self.optimizer.update(
-            grads, state.optimizer_state, state.params
-        )
-        params = optax.apply_updates(state.params, updates)
-        target_params = periodic_incremental_update(
-            params,
-            state.target_params,
-            state.step,
-            self.cfg.target_update_frequency,
-            self.cfg.tau,
+    def _interaction(
+        self,
+        *,
+        observation,
+        next_observation,
+        action,
+        reward,
+        done,
+        terminal,
+        info,
+    ) -> InteractionMetrics:
+        walked = "interaction.observation" in self.record
+        return InteractionMetrics(
+            observation=observation if walked else None,
+            next_observation=next_observation if walked else None,
+            action=action if walked else None,
+            action_decision=ActionDecision(
+                sampled_action=action,
+                logprob_action=action,
+                env_action=action,
+            ),
+            reward=reward,
+            done=done,
+            terminal=terminal,
+            info=info,
         )
 
-        mean_td_error = jnp.abs(td_error).mean(axis=1)
-        new_priorities = mean_td_error + 1e-6
-        buffer_state = self.buffer.set_priorities(
-            state.buffer_state, batch.indices, new_priorities
+    def _forward_metrics(self, metrics: ForwardMetrics) -> ForwardMetrics:
+        return ForwardMetrics(
+            selected_q=metrics.selected_q if self.reports.selected_q else None,
+            epsilon=metrics.epsilon if self.reports.epsilon else None,
         )
 
-        info = {
-            "q_network/loss": loss,
-            "q_network/q_value": q_value.mean(),
-            "q_network/td_error": mean_td_error.mean(),
-            "training/epsilon": self.epsilon_schedule(state.step),
-        }
-
-        state = state.replace(
-            params=params,
-            target_params=target_params,
-            optimizer_state=optimizer_state,
-            buffer_state=buffer_state,
+    def _update_metrics(self, metrics: UpdateMetrics) -> UpdateMetrics:
+        return UpdateMetrics(
+            applied=metrics.applied,
+            loss=metrics.loss if self.reports.loss else None,
+            td_error=metrics.td_error if self.reports.td_error else None,
+            q_value=metrics.q_value if self.reports.q_value else None,
+            gradient_norm=(
+                metrics.gradient_norm if self.reports.gradient_norm else None
+            ),
+            importance_weight=(
+                metrics.importance_weight
+                if self.reports.importance_weight
+                else None
+            ),
+            priority=metrics.priority if self.reports.priority else None,
         )
 
-        return state, info
-
-    def _update_step(self, state: R2D2State, key: Key) -> tuple[R2D2State, None]:
-        step_key, update_key = jax.random.split(key)
-
-        step_keys = jax.random.split(step_key, self.cfg.train_frequency // self.cfg.num_envs)
-        state, _ = jax.lax.scan(
-            partial(self._step, policy=self._epsilon_greedy_action),
-            state,
-            step_keys,
-        )
-
-        state, info = self._update(update_key, state)
-
-        lox.log(info)
-
-        return state.replace(update_step=state.update_step + 1), None
-
-    def init(self, key: Key) -> R2D2State:
-        env_key, q_key, torso_key = jax.random.split(key, 3)
-        env_keys = jax.random.split(env_key, self.cfg.num_envs)
-
-        obs, env_state = jax.vmap(self.env.reset, in_axes=(0, None))(
-            env_keys, self.env_params
-        )
-        action_space = self.env.action_space(self.env_params)
-        action = jnp.zeros(
-            (self.cfg.num_envs, *action_space.shape), dtype=action_space.dtype
-        )
-        reward = jnp.zeros((self.cfg.num_envs,), dtype=jnp.float32)
-        done = jnp.ones((self.cfg.num_envs,), dtype=jnp.bool_)
-        carry = self.q_network.initialize_carry((self.cfg.num_envs, None))
-
-        timestep = Timestep(
-            obs=obs, action=action, reward=reward, done=done
-        ).to_sequence()
-        ts_obs, ts_done, ts_action, ts_reward = timestep
-        params = self.q_network.init(
-            {"params": q_key, "torso": torso_key},
-            observation=ts_obs,
-            done=ts_done,
-            action=ts_action,
-            reward=ts_reward,
-            initial_carry=carry,
-        )
-        target_params = params
-        optimizer_state = self.optimizer.init(params)
-
-        timestep = timestep.from_sequence()
-        transition = Transition(
-            first=timestep,
-            second=timestep,
-            carry=carry,
-        )
-        buffer_state = self.buffer.init(jax.tree.map(lambda x: x[0], transition))
-
-        return R2D2State(
-            step=0,
-            update_step=0,
-            timestep=timestep,
-            carry=carry,
-            env_state=env_state,
-            params=params,
-            target_params=target_params,
-            optimizer_state=optimizer_state,
-            buffer_state=buffer_state,
-        )
-
-    def warmup(self, key: Key, state: R2D2State, num_steps: int) -> R2D2State:
-        step_keys = jax.random.split(key, num_steps // self.cfg.num_envs)
-        state, _ = jax.lax.scan(
-            partial(self._step, policy=self._random_action),
-            state,
-            step_keys,
-        )
-        return state
-
-    def train(
+    def _maybe_update(
         self,
         key: Key,
-        state: R2D2State,
-        num_steps: int,
-    ) -> R2D2State:
-        num_outer_steps = num_steps // self.cfg.train_frequency
-        keys = jax.random.split(key, num_outer_steps)
-        state, _ = jax.lax.scan(
-            self._update_step,
-            state,
-            keys,
+        step: Array,
+        core_state: CoreState,
+        buffer_state: BufferState,
+    ) -> tuple[CoreState, BufferState, UpdateMetrics]:
+        sample_key, learner_key = jax.random.split(key)
+
+        def update(operand):
+            current_core, current_buffer = operand
+            sample = self.buffer.sample(current_buffer, sample_key)
+            transition_count = jax.tree.leaves(sample.experience)[0].shape[1]
+            sequence = learner_sequence(
+                sample,
+                transition_count=transition_count,
+                full_episode=self.core.learning_kind == "full_bptt",
+            )
+            next_core, metrics, priorities = self.core.update_parameters(
+                learner_key, current_core, sequence, step=step
+            )
+            next_buffer = self.buffer.set_priorities(
+                current_buffer, sample.indices, priorities + 1e-6
+            )
+            return next_core, next_buffer, metrics
+
+        def no_update(operand):
+            current_core, current_buffer = operand
+            return current_core, current_buffer, self._no_update_metrics()
+
+        return jax.lax.cond(
+            self.buffer.can_sample(buffer_state),
+            update,
+            no_update,
+            (core_state, buffer_state),
         )
 
-        return state
-
-    def evaluate(self, key: Key, state: R2D2State, num_steps: int) -> R2D2State:
-        reset_key, eval_key = jax.random.split(key)
-        reset_key = jax.random.split(reset_key, self.cfg.num_envs)
-        obs, env_state = jax.vmap(self.env.reset, in_axes=(0, None))(
-            reset_key, self.env_params
+    def init(self, key: Key) -> R2D2State:
+        env_key, core_key = jax.random.split(key)
+        obs, env_state = self.environment.init(env_key)
+        timestep = self.environment.blank_timestep(obs)
+        episode_start = jnp.ones((self.cfg.num_envs,), dtype=jnp.bool_)
+        core_state = self.core.init(
+            core_key, self._inputs(timestep, episode_start)
         )
-        action_space = self.env.action_space(self.env_params)
-        action = jnp.zeros(
-            (self.cfg.num_envs, *action_space.shape), dtype=action_space.dtype
+        transition = ReplayTransition(
+            observation=timestep.obs,
+            previous_action=timestep.action,
+            previous_reward=timestep.reward,
+            episode_start=episode_start,
+            action=timestep.action,
+            reward=timestep.reward,
+            next_observation=timestep.obs,
+            done=timestep.done,
+            terminal=jnp.zeros_like(timestep.done),
+            actor_recurrence=core_state.recurrence,
         )
-        reward = jnp.zeros((self.cfg.num_envs,), dtype=jnp.float32)
-        done = jnp.ones((self.cfg.num_envs,), dtype=jnp.bool_)
-        timestep = Timestep(obs=obs, action=action, reward=reward, done=done)
-        carry = self.q_network.initialize_carry((self.cfg.num_envs, None))
-
-        state = state.replace(timestep=timestep, carry=carry, env_state=env_state)
-
-        step_keys = jax.random.split(eval_key, num_steps)
-        state, _ = jax.lax.scan(
-            partial(self._step, policy=self._greedy_action),
-            state,
-            step_keys,
+        buffer_state = self.buffer.init(
+            jax.tree.map(lambda value: value[0], transition)
         )
 
-        return state
+        return R2D2State(
+            step=jnp.asarray(0, dtype=jnp.int32),
+            timestep=timestep,
+            episode_start=episode_start,
+            env_state=env_state,
+            buffer_state=buffer_state,
+            core=core_state,
+        )
+
+    def train_step(
+        self, state: R2D2State, key: Key
+    ) -> tuple[R2D2State, StepMetrics]:
+        reset_key, action_key, env_key, update_key = jax.random.split(key, 4)
+        state = self._reset(reset_key, state)
+        observation = state.timestep.obs
+        actor_recurrence = state.core.recurrence
+        epsilon = self._epsilon(state.step)
+        recurrence, action, forward = self.core.act(
+            action_key,
+            state.core,
+            self._inputs(state.timestep, state.episode_start),
+            epsilon=epsilon,
+        )
+        next_obs, env_state, reward, done, terminal, info = self.environment.step(
+            env_key, state.env_state, action
+        )
+        transition = ReplayTransition(
+            observation=observation,
+            previous_action=state.timestep.action,
+            previous_reward=state.timestep.reward,
+            episode_start=state.episode_start,
+            action=action,
+            reward=reward,
+            next_observation=next_obs,
+            done=done,
+            terminal=terminal,
+            actor_recurrence=actor_recurrence,
+        )
+        buffer_state = self.buffer.add(state.buffer_state, transition)
+        next_timestep = self.environment.persisted(
+            Timestep(obs=next_obs, action=action, reward=reward, done=done)
+        )
+        next_step = state.step + self.cfg.num_envs
+        core_state, buffer_state, update = self._maybe_update(
+            update_key,
+            next_step,
+            state.core.replace(recurrence=recurrence),
+            buffer_state,
+        )
+        next_state = state.replace(
+            step=next_step,
+            timestep=next_timestep,
+            episode_start=done,
+            env_state=env_state,
+            buffer_state=buffer_state,
+            core=core_state,
+        )
+        return next_state, StepMetrics(
+            interaction=self._interaction(
+                observation=observation,
+                next_observation=next_obs,
+                action=action,
+                reward=reward,
+                done=done,
+                terminal=terminal,
+                info=info,
+            ),
+            forward=self._forward_metrics(forward),
+            update=self._update_metrics(update),
+        )
+
+    def _evaluation_state(self, key: Key, state: R2D2State) -> R2D2State:
+        env_key, recurrence_key = jax.random.split(key)
+        obs, env_state = self.environment.init(env_key)
+        return state.replace(
+            timestep=self.environment.blank_timestep(obs),
+            episode_start=jnp.ones((self.cfg.num_envs,), dtype=jnp.bool_),
+            env_state=env_state,
+            core=self.core.reset(recurrence_key, state.core),
+        )
+
+    def evaluate_step(
+        self, state: R2D2State, key: Key
+    ) -> tuple[R2D2State, StepMetrics]:
+        reset_key, action_key, env_key = jax.random.split(key, 3)
+        state = self._reset(reset_key, state)
+        observation = state.timestep.obs
+        recurrence, action, forward = self.core.act(
+            action_key,
+            state.core,
+            self._inputs(state.timestep, state.episode_start),
+            epsilon=jnp.asarray(self.cfg.evaluation_epsilon),
+        )
+        next_obs, env_state, reward, done, terminal, info = self.environment.step(
+            env_key, state.env_state, action
+        )
+        next_timestep = self.environment.persisted(
+            Timestep(obs=next_obs, action=action, reward=reward, done=done)
+        )
+        return state.replace(
+            step=state.step + self.cfg.num_envs,
+            timestep=next_timestep,
+            episode_start=done,
+            env_state=env_state,
+            core=state.core.replace(recurrence=recurrence),
+        ), StepMetrics(
+            interaction=self._interaction(
+                observation=observation,
+                next_observation=next_obs,
+                action=action,
+                reward=reward,
+                done=done,
+                terminal=terminal,
+                info=info,
+            ),
+            forward=self._forward_metrics(forward),
+        )
+
+    @staticmethod
+    def _num_scan_steps(num_steps: int, num_envs: int) -> int:
+        return num_steps // num_envs
+
+    def train(
+        self, key: Key, state: R2D2State, num_steps: int
+    ) -> tuple[R2D2State, StepMetrics]:
+        scan_steps = self._num_scan_steps(num_steps, self.cfg.num_envs)
+        keys = jax.random.split(key, scan_steps)
+        return jax.lax.scan(self.train_step, state, keys)
+
+    def evaluate(
+        self, key: Key, state: R2D2State, num_steps: int
+    ) -> StepMetrics:
+        reset_key, rollout_key = jax.random.split(key)
+        eval_state = self._evaluation_state(reset_key, state)
+        scan_steps = self._num_scan_steps(num_steps, self.cfg.num_envs)
+        keys = jax.random.split(rollout_key, scan_steps)
+        _, metrics = jax.lax.scan(self.evaluate_step, eval_state, keys)
+        return metrics
