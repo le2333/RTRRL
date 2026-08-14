@@ -1,6 +1,16 @@
 **
 !memo
-!memo/**
+!memo/pyproject.toml
+!memo/uv.lock
+!memo/catalog.json
+!memo/docker
+!memo/docker/**
+!memo/entries
+!memo/entries/**
+!memo/memorax
+!memo/memorax/**
+!memo/runner
+!memo/runner/**
 !training-sdk
 !training-sdk/**
 !rtrrl

@@ -7,7 +7,13 @@ on:
     paths:
       - .github/workflows/build-memo-image.yml
       - .dockerignore
-      - memo/**
+      - memo/pyproject.toml
+      - memo/uv.lock
+      - memo/catalog.json
+      - memo/docker/**
+      - memo/entries/**
+      - memo/memorax/**
+      - memo/runner/**
       - training-sdk/**
   workflow_dispatch:
     inputs:
@@ -170,18 +176,21 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          # Building the environment is the step that needs brax present and
-          # the observation mask intact. A partially observed Hopper that
-          # quietly hands back its velocities is still a Hopper that trains, so
-          # the mask is checked by value rather than by shape: the run would
-          # otherwise look healthy and mean nothing.
+          # Build the exact partially observed Hopper used by the experiment.
+          # Check both reduced shape and values so a wrong selection cannot pass.
           docker run --rm "$IMAGE" python -c '
           import jax
+          import jax.numpy as jnp
           from memorax.environments import make
-          env, params = make("brax::hopper", mode="P", backend="spring")
-          observation, _ = env.reset(jax.random.key(0), params)
-          assert observation.shape == (11,), observation.shape
-          assert (observation[5:] == 0).all(), "velocities survived the P mask"
+          kept = (0, 2, 4, 6, 8, 10)
+          wide, params = make("brax::hopper", backend="spring")
+          env, _ = make("brax::hopper", observed=kept, backend="spring")
+          key = jax.random.key(0)
+          whole, _ = wide.reset(key, params)
+          observation, _ = env.reset(key, params)
+          assert observation.shape == (len(kept),), observation.shape
+          assert jnp.array_equal(observation, whole[jnp.asarray(kept)])
+          assert env.observation_space(params).shape == (len(kept),)
           assert env.action_space(params).shape == (3,)
           '
 
