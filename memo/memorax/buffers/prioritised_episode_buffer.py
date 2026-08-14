@@ -257,19 +257,29 @@ def prioritised_episode_add(
         batch,
     )
 
+    new_current_index = state.current_index + add_sequence_length
+    new_running_index = state.running_index + add_sequence_length
+    new_is_full = state.is_full | (new_current_index >= max_length_time_axis)
+    new_current_index = new_current_index % max_length_time_axis
+
     new_item_time_indices = (
         jnp.arange(add_sequence_length) + state.current_index
     ) % max_length_time_axis
 
     row_offsets = jnp.arange(add_batch_size)[:, None] * max_length_time_axis
-    newly_valid_items = (new_item_time_indices[None, :] + row_offsets).flatten()
+    newly_valid_time_indices = (
+        new_item_time_indices - (sample_sequence_length - 1) + max_length_time_axis
+    ) % max_length_time_axis
+    newly_valid_items = (
+        newly_valid_time_indices[None, :] + row_offsets
+    ).flatten()
 
     new_priorities = jnp.full(
         newly_valid_items.shape, state.sum_tree_state.max_recorded_priority
     )
 
     invalid_time_start = (
-        state.current_index - (sample_sequence_length - 1) + max_length_time_axis
+        new_current_index - (sample_sequence_length - 1) + max_length_time_axis
     ) % max_length_time_axis
 
     invalid_time_indices = (
@@ -281,19 +291,12 @@ def prioritised_episode_add(
 
     new_sum_tree_state = SET_BATCH_FN[device](
         state.sum_tree_state,
-        newly_invalid_items,
-        invalid_priorities,
-    )
-    new_sum_tree_state = SET_BATCH_FN[device](
-        new_sum_tree_state,
         newly_valid_items,
         new_priorities,
     )
-
-    new_current_index = state.current_index + add_sequence_length
-    new_running_index = state.running_index + add_sequence_length
-    new_is_full = state.is_full | (new_current_index >= max_length_time_axis)
-    new_current_index = new_current_index % max_length_time_axis
+    new_sum_tree_state = SET_BATCH_FN[device](
+        new_sum_tree_state, newly_invalid_items, invalid_priorities
+    )
 
     return state.replace(
         experience=new_experience,

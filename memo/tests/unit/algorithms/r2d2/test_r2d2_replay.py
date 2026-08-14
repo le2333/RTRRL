@@ -1,3 +1,6 @@
+from functools import partial
+
+import jax
 import jax.numpy as jnp
 import numpy as np
 
@@ -9,6 +12,7 @@ from memorax.algorithms.r2d2 import (
 )
 from memorax.buffers.prioritised_episode_buffer import (
     PrioritisedEpisodeBufferSample,
+    make_prioritised_episode_buffer,
 )
 
 
@@ -156,3 +160,41 @@ def test_tbptt_starts_require_one_learning_transition_after_burn_in():
         tbptt_starts(experience, burn_in_length=2),
         [[False, False, True, False, False, True]],
     )
+
+
+def _fill_streaming_replay(experience):
+    transition_count = 5
+    buffer = make_prioritised_episode_buffer(
+        max_length=8,
+        min_length=transition_count,
+        sample_batch_size=1,
+        sample_sequence_length=transition_count,
+        get_start_flags=partial(
+            completed_episode_starts, transition_count=transition_count
+        ),
+        add_sequences=False,
+        add_batch_size=1,
+    )
+    state = buffer.init(jax.tree.map(lambda value: value[0, 0], experience))
+    for index in range(transition_count):
+        state = buffer.add(
+            state, jax.tree.map(lambda value: value[:, index], experience)
+        )
+    return buffer, state
+
+
+def test_buffer_rejects_partial_episode_and_accepts_completed_episode():
+    partial_experience = _transition(
+        done=[False, False, False, False, False],
+        episode_start=[True, False, False, False, False],
+    )
+    completed_experience = _transition(
+        done=[False, False, True, False, False],
+        episode_start=[True, False, False, False, False],
+    )
+
+    partial_buffer, partial_state = _fill_streaming_replay(partial_experience)
+    completed_buffer, completed_state = _fill_streaming_replay(completed_experience)
+
+    assert not bool(partial_buffer.can_sample(partial_state))
+    assert bool(completed_buffer.can_sample(completed_state))
