@@ -14,6 +14,8 @@ from memorax.buffers import (
     PrioritisedEpisodeBufferSample,
     compute_importance_weights,
 )
+from memorax.networks import FFN, LayerNorm, Sequence, Tanh, backbone
+from memorax.networks.heads import DiscreteQNetwork
 from memorax.rl import periodic_incremental_update
 from memorax.utils import Timestep, Transition, utils
 from memorax.utils.axes import add_feature_axis, remove_feature_axis, remove_time_axis
@@ -21,7 +23,6 @@ from memorax.utils.typing import (
     Array,
     Buffer,
     BufferState,
-    Carry,
     Environment,
     EnvParams,
     EnvState,
@@ -182,6 +183,157 @@ def learner_sequence(
         indices=sample.indices,
         buffer_size=sample.buffer_size,
     )
+
+
+def encode_recurrent_inputs(inputs: RecurrentInputs, *, action_dim: int) -> Array:
+    prefix = inputs.previous_action.shape
+    observation = jnp.asarray(inputs.observation, dtype=jnp.float32).reshape(
+        (*prefix, -1)
+    )
+    previous_action = jax.nn.one_hot(
+        inputs.previous_action, action_dim, dtype=observation.dtype
+    )
+    previous_reward = jnp.asarray(
+        inputs.previous_reward, dtype=observation.dtype
+    )[..., None]
+    episode_start = jnp.asarray(
+        inputs.episode_start, dtype=observation.dtype
+    )[..., None]
+    return jnp.concatenate(
+        (observation, previous_action, previous_reward, episode_start), axis=-1
+    )
+
+
+class DuelingQHead(nn.Module):
+    action_dim: int
+
+    @nn.compact
+    def __call__(self, hidden: Array) -> Array:
+        value = nn.Dense(1, name="value")(hidden)
+        advantage = nn.Dense(self.action_dim, name="advantage")(hidden)
+        return value + advantage - advantage.mean(axis=-1, keepdims=True)
+
+
+class _QGraph(nn.Module):
+    action_dim: int
+    feature_dim: int
+    hidden_dim: int
+    backbone_kind: str
+    head_kind: str
+
+    @nn.nowrap
+    def sequence(self) -> Sequence:
+        return Sequence(
+            (
+                FFN(features=self.feature_dim),
+                LayerNorm(),
+                Tanh(),
+                *backbone(
+                    self.backbone_kind,
+                    features=self.feature_dim,
+                    hidden_dim=self.hidden_dim,
+                    output_dim=self.feature_dim,
+                ),
+            )
+        )
+
+    @nn.compact
+    def __call__(
+        self,
+        encoded: Array,
+        episode_start: Array,
+        initial_recurrence: Any,
+    ) -> tuple[Any, Array]:
+        recurrence, hidden = self.sequence()(
+            encoded,
+            done=episode_start,
+            initial_carry=initial_recurrence,
+        )
+        head = {
+            "linear": DiscreteQNetwork(action_dim=self.action_dim),
+            "dueling": DuelingQHead(action_dim=self.action_dim),
+        }[self.head_kind]
+        output = head(hidden)
+        q_values = output[0] if self.head_kind == "linear" else output
+        return recurrence, q_values
+
+    @nn.nowrap
+    def initialize_carry(self, key: Key, input_shape: tuple[int, ...]) -> Any:
+        return self.sequence().initialize_carry(key, input_shape)
+
+
+@dataclass(frozen=True)
+class QFunction:
+    action_dim: int
+    feature_dim: int
+    hidden_dim: int
+    backbone_kind: str
+    head_kind: str
+
+    @property
+    def network(self) -> _QGraph:
+        return _QGraph(
+            action_dim=self.action_dim,
+            feature_dim=self.feature_dim,
+            hidden_dim=self.hidden_dim,
+            backbone_kind=self.backbone_kind,
+            head_kind=self.head_kind,
+        )
+
+    def init(self, key: Key, timestep: RecurrentInputs) -> tuple[Any, Any]:
+        params_key, recurrence_key = jax.random.split(key)
+        encoded = encode_recurrent_inputs(timestep, action_dim=self.action_dim)
+        recurrence = self.network.initialize_carry(
+            recurrence_key, (encoded.shape[0], self.feature_dim)
+        )
+        params = self.network.init(
+            params_key,
+            encoded,
+            timestep.episode_start,
+            recurrence,
+        )
+        return params, recurrence
+
+    def reset(self, key: Key, recurrence: Any) -> Any:
+        batch_size = jax.tree.leaves(recurrence)[0].shape[0]
+        return self.network.initialize_carry(key, (batch_size, self.feature_dim))
+
+    def apply(
+        self, params: Any, timestep: RecurrentInputs, recurrence: Any
+    ) -> tuple[Any, Array]:
+        encoded = encode_recurrent_inputs(timestep, action_dim=self.action_dim)
+        return self.network.apply(
+            params, encoded, timestep.episode_start, recurrence
+        )
+
+    def _unroll_with_recurrences(
+        self, params: Any, timesteps: RecurrentInputs, recurrence: Any
+    ) -> tuple[Any, Array, Any]:
+        time_major = jax.tree.map(lambda value: jnp.swapaxes(value, 0, 1), timesteps)
+
+        def step(carry, timestep):
+            length_one = jax.tree.map(
+                lambda value: jnp.expand_dims(value, axis=1), timestep
+            )
+            next_carry, q_values = self.apply(params, length_one, carry)
+            return next_carry, (q_values[:, 0], next_carry)
+
+        final_recurrence, (q_values, post_recurrences) = jax.lax.scan(
+            step, recurrence, time_major
+        )
+        q_values = jnp.swapaxes(q_values, 0, 1)
+        post_recurrences = jax.tree.map(
+            lambda value: jnp.swapaxes(value, 0, 1), post_recurrences
+        )
+        return final_recurrence, q_values, post_recurrences
+
+    def unroll(
+        self, params: Any, timesteps: RecurrentInputs, recurrence: Any
+    ) -> tuple[Any, Array]:
+        final_recurrence, q_values, _ = self._unroll_with_recurrences(
+            params, timesteps, recurrence
+        )
+        return final_recurrence, q_values
 
 
 def signed_hyperbolic(x: Array, epsilon: float = 1e-3) -> Array:
