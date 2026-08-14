@@ -16,11 +16,34 @@ REGION = "eu-north-1"
 JOB_LOG_GROUP = "/trainer/jobs"
 TERMINAL = {"SUCCEEDED", "FAILED"}
 
-_PROFILES = {
-    "c7a.medium": ("c7am", "run-cpu-c7am-queue", "dev-cpu-c7am-queue"),
-    "c7a.large": ("c7al", "run-cpu-c7al-queue", "dev-cpu-c7al-queue"),
-    "c7a.xlarge": ("c7ax", "run-cpu-c7ax-queue", "dev-cpu-c7ax-queue"),
-    "g6.xlarge": ("g6x", "run-gpu-queue", "dev-gpu-queue"),
+ACCOUNT_ID = "007122174918"
+JOB_ROLE_ARN = f"arn:aws:iam::{ACCOUNT_ID}:role/rtrrl-batch-job-role"
+EXECUTION_ROLE_ARN = f"arn:aws:iam::{ACCOUNT_ID}:role/rtrrl-batch-execution-role"
+
+
+@dataclass(frozen=True)
+class BatchProfile:
+    profile: str
+    run_queue: str
+    dev_queue: str
+    vcpus: int
+    memory_mib: int
+    gpus: int = 0
+
+
+PROFILES = {
+    "c7a.medium": BatchProfile(
+        "c7am", "run-cpu-c7am-queue", "dev-cpu-c7am-queue", 1, 1600
+    ),
+    "c7a.large": BatchProfile(
+        "c7al", "run-cpu-c7al-queue", "dev-cpu-c7al-queue", 2, 3200
+    ),
+    "c7a.xlarge": BatchProfile(
+        "c7ax", "run-cpu-c7ax-queue", "dev-cpu-c7ax-queue", 4, 7168
+    ),
+    "g6.xlarge": BatchProfile(
+        "g6x", "run-gpu-queue", "dev-gpu-queue", 4, 12000, 1
+    ),
 }
 
 
@@ -35,11 +58,11 @@ class BatchTarget:
 
 
 def batch_target(instance_type: str, tier: str, digest: str) -> BatchTarget:
-    profile, run_queue, dev_queue = _PROFILES[instance_type]
-    queue = {"run": run_queue, "dev": dev_queue}[tier]
+    profile = PROFILES[instance_type]
+    queue = {"run": profile.run_queue, "dev": profile.dev_queue}[tier]
     return BatchTarget(
         queue=queue,
-        job_definition=f"trainer-{profile}-{digest.removeprefix('sha256:')}",
+        job_definition=f"trainer-{profile.profile}-{digest.removeprefix('sha256:')}",
     )
 
 

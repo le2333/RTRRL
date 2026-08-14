@@ -1,0 +1,99 @@
+experiment: e2e
+name: rtrrl-hopper-hpo-3x2-20m
+description: >
+  Six-trial TPE search of memo RTRRL on the AAAI Hopper setup. Three sequential
+  rounds run two trials in parallel; each trial trains for 20M steps and is
+  ranked by its maximum evaluation episode return within that budget. Rerun
+  trajectory capture is disabled for every HPO trial.
+
+# Replaced with the immutable digest produced by the deployment build.
+image: 007122174918.dkr.ecr.eu-north-1.amazonaws.com/rtrrl@sha256:0000000000000000000000000000000000000000000000000000000000000000
+entry: rtrrl
+storage: s3://rtrrl-artifacts-007122174918/trainer
+
+environment:
+  id: brax::hopper
+  backend: spring
+  observed: [0, 2, 4, 6, 8, 10]
+  seed: 1
+  episode_length: 1000
+
+training:
+  num_envs: 1
+  total_steps: 20000000
+  epoch_steps: 10000000
+
+evaluation:
+  steps: 1000
+
+logging:
+  aim: aim://172.31.62.192:53801
+  enable_rerun: false
+
+score:
+  metric: eval/episode/return
+  window_steps: [0, 20000000]
+  reduce: max
+  non_finite: worst
+  direction: maximize
+
+compute:
+  instance_type: c7a.large
+  timeout_minutes: 720
+
+hpo:
+  rounds: 3
+  trials_per_round: 2
+  parallel_jobs: 2
+  startup_trials: 2
+  seed: 20260814
+
+space:
+  torso:
+    backbone:
+      kind: [lru]
+      lru:
+        feature_dim: [32]
+        hidden_dim: [32]
+    optimizer:
+      kind: [adam]
+      adam:
+        lr: {type: float, low: 1.0e-5, high: 1.0e-3, log: true}
+        b1: [0.9]
+        b2: [0.999]
+        eps: [1.0e-8]
+    grad_clip: [1.0]
+    follow: [1.0]
+  heads:
+    optimizer:
+      kind: [adam]
+      adam:
+        lr: {type: float, low: 1.0e-5, high: 1.0e-3, log: true}
+        b1: [0.9]
+        b2: [0.999]
+        eps: [1.0e-8]
+  actor:
+    head:
+      kind: [bounded]
+      bounded:
+        initialization:
+          kind: [lecun]
+  critic:
+    head:
+      kind: [value]
+      value:
+        initialization:
+          kind: [lecun]
+  normalization:
+    observation:
+      kind: [none]
+    reward:
+      kind: [none]
+  gamma: [0.99]
+  lambda_pi: {type: float, low: 0.5, high: 0.99}
+  lambda_v: {type: float, low: 0.5, high: 0.99}
+  lambda_rnn: {type: float, low: 0.5, high: 0.99}
+  eta_pi: [1.0]
+  eta_f: [1.0]
+  entropy_rate: {type: float, low: 1.0e-6, high: 1.0e-3, log: true}
+  meta_rl: [true]

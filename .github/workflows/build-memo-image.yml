@@ -7,8 +7,12 @@ on:
     paths:
       - .github/workflows/build-memo-image.yml
       - .dockerignore
-      - memo/**
-      - training-sdk/**
+      - memo/pyproject.toml
+      - memo/uv.lock
+      - memo/docker/**
+      - memo/deployment/**
+      - memo/entries/**
+      - memo/memorax/**
   workflow_dispatch:
     inputs:
       push:
@@ -132,6 +136,42 @@ jobs:
               importlib.import_module(command[2])
               print("entry", name, "->", command[2])
           '
+
+      - name: Verify the RTRRL deployment experiments against this catalog
+        shell: bash
+        run: |
+          set -euo pipefail
+          docker run --rm "$IMAGE" cat /opt/trainer/catalog.json > /tmp/trainer-catalog.json
+          uv run --directory infra --frozen python - <<'PY'
+          import json
+          import tempfile
+          from pathlib import Path
+
+          import yaml
+
+          from trainer_infra.experiment import ExperimentRunner
+
+          catalog = json.loads(Path("/tmp/trainer-catalog.json").read_text())
+          experiments = (
+              Path("experiments/rtrrl-hopper-aaai-fixed-50m.yaml"),
+              Path("experiments/rtrrl-hopper-hpo-3x2-20m.yaml"),
+          )
+          with tempfile.TemporaryDirectory() as directory:
+              for experiment_path in experiments:
+                  experiment = yaml.safe_load(experiment_path.read_text())
+                  runner = ExperimentRunner(
+                      experiment=experiment,
+                      catalog=catalog,
+                      database=Path(directory) / f"{experiment_path.stem}.db",
+                      launch_id="catalog-validation",
+                  )
+                  configurations = runner.next_round()
+                  assert len(configurations) == experiment["hpo"]["trials_per_round"]
+                  for configuration in configurations:
+                      assert configuration["contract"] == catalog["contract"]
+                      assert configuration["identity"]["digest"] == experiment["image"].split("@", 1)[1]
+                  print("validated", experiment_path)
+          PY
 
       - name: Verify the CPU image stays on the CPU
         if: ${{ matrix.variant == 'cpu' }}

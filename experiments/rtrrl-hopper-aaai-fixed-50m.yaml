@@ -1,0 +1,99 @@
+experiment: e2e
+name: rtrrl-hopper-aaai-fixed-50m
+description: >
+  Fixed-parameter reproduction of the AAAI RTRRL Hopper reference. The run
+  keeps the even observation mask and records one Rerun training episode plus
+  an evaluation return at each 10M-step boundary through 50M steps.
+
+# Replaced with the immutable digest produced by the deployment build.
+image: 007122174918.dkr.ecr.eu-north-1.amazonaws.com/rtrrl@sha256:0000000000000000000000000000000000000000000000000000000000000000
+entry: rtrrl
+storage: s3://rtrrl-artifacts-007122174918/trainer
+
+environment:
+  id: brax::hopper
+  backend: spring
+  observed: [0, 2, 4, 6, 8, 10]
+  seed: 1
+  episode_length: 1000
+
+training:
+  num_envs: 1
+  total_steps: 50000000
+  epoch_steps: 10000000
+
+evaluation:
+  steps: 1000
+
+logging:
+  aim: aim://172.31.62.192:53801
+  enable_rerun: true
+  rerun_every_steps: 10000000
+
+score:
+  metric: eval/episode/return
+  window_steps: [0, 50000000]
+  reduce: max
+  non_finite: worst
+  direction: maximize
+
+compute:
+  instance_type: c7a.large
+  timeout_minutes: 1440
+
+hpo:
+  rounds: 1
+  trials_per_round: 1
+  parallel_jobs: 1
+  startup_trials: 1
+  seed: 0
+
+space:
+  torso:
+    backbone:
+      kind: [lru]
+      lru:
+        feature_dim: [32]
+        hidden_dim: [32]
+    optimizer:
+      kind: [adam]
+      adam:
+        lr: [1.0e-4]
+        b1: [0.9]
+        b2: [0.999]
+        eps: [1.0e-8]
+    grad_clip: [1.0]
+    follow: [1.0]
+  heads:
+    optimizer:
+      kind: [adam]
+      adam:
+        lr: [1.0e-4]
+        b1: [0.9]
+        b2: [0.999]
+        eps: [1.0e-8]
+  actor:
+    head:
+      kind: [bounded]
+      bounded:
+        initialization:
+          kind: [lecun]
+  critic:
+    head:
+      kind: [value]
+      value:
+        initialization:
+          kind: [lecun]
+  normalization:
+    observation:
+      kind: [none]
+    reward:
+      kind: [none]
+  gamma: [0.99]
+  lambda_pi: [0.9]
+  lambda_v: [0.9]
+  lambda_rnn: [0.9]
+  eta_pi: [1.0]
+  eta_f: [1.0]
+  entropy_rate: [1.0e-5]
+  meta_rl: [true]
