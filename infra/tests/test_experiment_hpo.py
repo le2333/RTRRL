@@ -75,11 +75,19 @@ def test_each_run_has_one_artifact_root(experiment: Any, catalog: Any, tmp_path:
 def test_rerun_gets_no_destination_when_it_is_off(
     experiment: Any, catalog: Any, tmp_path: Path
 ) -> None:
+    """A search says so once, and no trial of it writes a trajectory.
+
+    Nothing downstream infers that a run is a search: the run document either
+    names a Rerun destination or it does not.
+    """
+
     experiment["logging"]["enable_rerun"] = False
 
-    configuration = runner(experiment, catalog, tmp_path).next_round()[0]
+    configurations = runner(experiment, catalog, tmp_path).next_round()
 
-    assert "rerun" not in configuration["logging"]
+    assert configurations
+    for configuration in configurations:
+        assert "rerun" not in configuration["logging"]
 
 
 def test_the_sampled_parameters_honour_what_the_experiment_pinned(

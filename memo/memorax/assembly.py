@@ -30,6 +30,10 @@ class BuildRequest:
     parameters: Mapping[str, Any]
     environment: EnvironmentSpec
     num_envs: int
+    # Which of the observation schema's heavy per-step fields this run needs.
+    # Empty is the ordinary case: nothing walks the trajectories, so nothing
+    # keeps them.
+    record: frozenset[str] = frozenset()
 
 
 def assemble(
@@ -55,7 +59,9 @@ def assemble(
         num_envs=request.num_envs,
     )
     components = ComponentBuilder(request.parameters, context)
-    graph = definition.graph(request.parameters, components, context)
+    graph = definition.graph(
+        request.parameters, components, context, record=request.record
+    )
     return BuiltAlgorithm(
         program=Program(
             init=graph.init,
@@ -63,5 +69,5 @@ def assemble(
             evaluate=graph.evaluate,
             interact=graph.interact,
         ),
-        observations=definition.observations,
+        observations=definition.observations.recording(request.record),
     )

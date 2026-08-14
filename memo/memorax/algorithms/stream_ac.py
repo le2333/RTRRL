@@ -173,7 +173,6 @@ OBSERVATIONS = ObservationSchema(
     action="interaction.action",
     series=TRAINING_METRICS,
 )
-RECORD = OBSERVATIONS.required_fields
 
 
 @struct.dataclass(frozen=True)
@@ -711,6 +710,8 @@ class StreamAC:
         parameters: dict[str, Any],
         components: ComponentBuilder,
         context: BuildContext,
+        *,
+        record: Iterable[str] = (),
     ) -> StreamAC:
         """Declare StreamAC's instances and connections using shared builders."""
 
@@ -772,7 +773,7 @@ class StreamAC:
                 "normalization.reward",
                 discount=gamma,
             ),
-            record=RECORD,
+            record=record,
             reports=REPORTS,
         )
 

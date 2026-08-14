@@ -751,7 +751,7 @@ git commit -m "feat: bound runtime scans and complete final samples"
 - `BuildRequest.record: frozenset[str]` carries requested heavy trajectory paths into the algorithm graph.
 - Entry runtime projection expands `every_steps` into explicit sample points and sets `max_episode_steps` from the environment specification.
 
-- [ ] **Step 1: Write failing observation-field partition tests**
+- [x] **Step 1: Write failing observation-field partition tests**
 
 ```python
 def test_observation_schema_separates_episode_and_trajectory_fields():
@@ -768,7 +768,7 @@ def test_observation_schema_separates_episode_and_trajectory_fields():
 Remove assertions against the old module-level `RECORD`; requested heavy paths
 are now a build input, not an algorithm constant.
 
-- [ ] **Step 2: Write failing Entry projection tests**
+- [x] **Step 2: Write failing Entry projection tests**
 
 For each entry, construct one config with
 `logging.rerun.every_steps=10`, `total_steps=50`, `num_envs=2`, and environment
@@ -790,14 +790,14 @@ assert entry.build_request(config).record == frozenset()
 assert entry.runtime_config(config).sample_steps == ()
 ```
 
-- [ ] **Step 3: Write the failing graph-recording test**
+- [x] **Step 3: Write the failing graph-recording test**
 
 Assemble RTRRL and StreamAC twice, once with empty `record` and once with the
 schema's trajectory fields. Invoke a short train chunk and assert observation,
 next observation, and action are `None` in the first output and arrays in the
 second. Reward and `done` must be arrays in both.
 
-- [ ] **Step 4: Run focused tests and verify RED**
+- [x] **Step 4: Run focused tests and verify RED**
 
 Run:
 
@@ -811,7 +811,7 @@ uv run --project memo pytest \
 Expected: FAIL because schema partition properties, `BuildRequest.record`, and
 runtime sample projection do not exist.
 
-- [ ] **Step 5: Implement schema partition and graph record injection**
+- [x] **Step 5: Implement schema partition and graph record injection**
 
 Replace `ObservationSchema.required_fields` with explicit properties:
 
@@ -828,7 +828,7 @@ keyword-only `record` argument to each algorithm's `graph()` method, then to the
 algorithm constructor. Delete the static `RECORD` constant and do not add an
 alias. Algorithm topology, reports, and scalar readings remain unchanged.
 
-- [ ] **Step 6: Implement Entry projection**
+- [x] **Step 6: Implement Entry projection**
 
 In each entry use one local helper with this exact schedule rule:
 
@@ -845,13 +845,13 @@ Set `BuildRequest.record` to `algorithm.OBSERVATIONS.trajectory_fields` only
 when `rerun is not None`. Set `RuntimeConfig.max_episode_steps` from
 `config.algorithm.environment.episode_length` and pass `sample_steps`.
 
-- [ ] **Step 7: Preserve Infra's explicit Rerun-off behavior**
+- [x] **Step 7: Preserve Infra's explicit Rerun-off behavior**
 
 Extend `infra/tests/test_experiment_hpo.py` so an experiment with
 `enable_rerun: false` produces run configs with no `logging.rerun` member for
 every trial. Do not make Runtime infer HPO mode and do not change HPO sampling.
 
-- [ ] **Step 8: Run entry, assembly, and Infra tests**
+- [x] **Step 8: Run entry, assembly, and Infra tests**
 
 Run:
 
@@ -865,7 +865,7 @@ uv run --project infra pytest infra/tests/test_experiment_hpo.py -q
 
 Expected: PASS.
 
-- [ ] **Step 9: Commit Task 5**
+- [x] **Step 9: Commit Task 5**
 
 ```bash
 git add memo/memorax/runtime/program.py memo/memorax/assembly.py \

@@ -5,12 +5,14 @@ from __future__ import annotations
 import sys
 
 from memorax.algorithms.stream_ac import METRICS as METRICS
+from memorax.algorithms.stream_ac import OBSERVATIONS
 from memorax.algorithms.stream_ac import PARAMETERS as PARAMETERS
 from memorax.algorithms.stream_ac import StreamAC
 from memorax.assembly import BuildRequest, EnvironmentSpec, assemble
 from memorax.runtime import Runtime, RuntimeConfig
 
 from ._observability import build_reporter, load_run
+from ._schedule import sample_steps, trajectory_record
 
 
 def build_request(config) -> BuildRequest:
@@ -27,6 +29,7 @@ def build_request(config) -> BuildRequest:
             episode_length=environment.episode_length,
         ),
         num_envs=algorithm.num_envs,
+        record=trajectory_record(config, OBSERVATIONS),
     )
 
 
@@ -40,6 +43,8 @@ def runtime_config(config) -> RuntimeConfig:
         eval_steps=runtime.evaluation_steps,
         num_envs=config.algorithm.num_envs,
         seed=runtime.seed,
+        max_episode_steps=config.algorithm.environment.episode_length,
+        sample_steps=sample_steps(config),
     )
 
 

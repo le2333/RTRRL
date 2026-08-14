@@ -300,7 +300,6 @@ OBSERVATIONS = ObservationSchema(
     action="interaction.action",
     series=TRAINING_METRICS,
 )
-RECORD = OBSERVATIONS.required_fields
 
 
 @struct.dataclass(frozen=True)
@@ -1001,6 +1000,8 @@ class RTRRL:
         parameters: dict[str, Any],
         components: ComponentBuilder,
         context: BuildContext,
+        *,
+        record: Iterable[str] = (),
     ) -> RTRRL:
         """Declare the shared torso, two readouts, and their two rule groups."""
 
@@ -1044,7 +1045,7 @@ class RTRRL:
                 "normalization.reward",
                 discount=gamma,
             ),
-            record=RECORD,
+            record=record,
             reports=REPORTS,
         )
 

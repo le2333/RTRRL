@@ -51,7 +51,7 @@ def parameters(backbone="lru", differentiation="exact_rtrl"):
     )
 
 
-def assembled(backbone="lru", differentiation="exact_rtrl"):
+def assembled(backbone="lru", differentiation="exact_rtrl", record=None):
     return assemble(
         rtrrl.RTRRL,
         BuildRequest(
@@ -63,8 +63,34 @@ def assembled(backbone="lru", differentiation="exact_rtrl"):
                 episode_length=8,
             ),
             num_envs=1,
+            record=(
+                rtrrl.OBSERVATIONS.trajectory_fields if record is None else record
+            ),
         ),
         environment_factory=tiny_environment,
+    )
+
+
+def run_document(*, every_steps=None, total_steps=50, episode_length=7):
+    rerun = None if every_steps is None else SimpleNamespace(every_steps=every_steps)
+    return SimpleNamespace(
+        algorithm=SimpleNamespace(
+            parameters={"gamma": 0.9},
+            environment=SimpleNamespace(
+                id="tiny",
+                backend="test",
+                observed=[0, 1],
+                episode_length=episode_length,
+            ),
+            num_envs=2,
+        ),
+        runtime=SimpleNamespace(
+            seed=7,
+            total_steps=total_steps,
+            epoch_steps=10,
+            evaluation_steps=4,
+        ),
+        logging=SimpleNamespace(rerun=rerun),
     )
 
 
@@ -116,7 +142,18 @@ def test_rtrrl_declares_parameters_and_observations_beside_its_graph():
     assert rtrrl.METRICS == metric_names(
         "train", rtrrl.TRAINING_METRICS
     ) + metric_names("eval")
-    assert set(rtrrl.TRAINING_METRICS) <= rtrrl.RECORD
+
+
+def test_observation_schema_separates_episode_and_trajectory_fields():
+    schema = rtrrl.OBSERVATIONS
+
+    assert schema.episode_fields == frozenset(
+        (schema.reward, schema.done, schema.terminal, *schema.series)
+    )
+    assert schema.trajectory_fields == frozenset(
+        (schema.observation, schema.next_observation, schema.action)
+    )
+    assert set(rtrrl.TRAINING_METRICS) <= schema.episode_fields
 
 
 def test_only_the_current_rtrrl_contract_is_public():
@@ -127,24 +164,7 @@ def test_only_the_current_rtrrl_contract_is_public():
 
 
 def test_entry_only_projects_the_run_config_for_assembly_and_runtime():
-    config = SimpleNamespace(
-        algorithm=SimpleNamespace(
-            parameters={"gamma": 0.9},
-            environment=SimpleNamespace(
-                id="tiny",
-                backend="test",
-                observed=[0, 1],
-                episode_length=8,
-            ),
-            num_envs=2,
-        ),
-        runtime=SimpleNamespace(
-            seed=7,
-            total_steps=32,
-            epoch_steps=8,
-            evaluation_steps=4,
-        ),
-    )
+    config = run_document(every_steps=10)
 
     request = entry.build_request(config)
     schedule = entry.runtime_config(config)
@@ -152,28 +172,60 @@ def test_entry_only_projects_the_run_config_for_assembly_and_runtime():
     assert request.parameters is config.algorithm.parameters
     assert request.environment.id == "tiny"
     assert request.num_envs == 2
-    assert schedule.total_steps == 32
-    assert schedule.epoch_steps == 8
+    assert schedule.total_steps == 50
+    assert schedule.epoch_steps == 10
     assert schedule.eval_steps == 4
     assert schedule.num_envs == 2
     assert schedule.seed == 7
 
 
+def test_entry_expands_the_rerun_interval_into_the_steps_it_names():
+    config = run_document(every_steps=10)
+
+    request = entry.build_request(config)
+    schedule = entry.runtime_config(config)
+
+    # The schedule begins at the first interval, and the environment's own
+    # episode limit is what bounds a train call.
+    assert schedule.sample_steps == (10, 20, 30, 40, 50)
+    assert schedule.max_episode_steps == 7
+    assert request.record == rtrrl.OBSERVATIONS.trajectory_fields
+
+
+def test_a_run_without_rerun_asks_for_no_sample_and_keeps_no_walk():
+    config = run_document(every_steps=None)
+
+    assert entry.build_request(config).record == frozenset()
+    assert entry.runtime_config(config).sample_steps == ()
+
+
+def test_a_graph_keeps_the_walk_only_when_the_build_asked_for_it():
+    kept = assembled()
+    dropped = assembled(record=frozenset())
+
+    state = kept.program.init(jax.random.key(0))
+    _, walked = kept.program.train(jax.random.key(1), state, 2)
+    state = dropped.program.init(jax.random.key(0))
+    _, plain = dropped.program.train(jax.random.key(1), state, 2)
+
+    for reading in (walked, plain):
+        assert reading.interaction.reward.shape == (2, 1)
+        assert reading.interaction.done.shape == (2, 1)
+    assert walked.interaction.observation is not None
+    assert walked.interaction.next_observation is not None
+    assert walked.interaction.action is not None
+    assert plain.interaction.observation is None
+    assert plain.interaction.next_observation is None
+    assert plain.interaction.action is None
+
+    # Runtime is handed the schema the graph will actually answer.
+    assert kept.observations is rtrrl.OBSERVATIONS
+    assert dropped.observations.trajectory_fields == frozenset()
+    assert dropped.observations.episode_fields == rtrrl.OBSERVATIONS.episode_fields
+
+
 def test_generic_assembly_closes_one_shared_torso_rtrrl_graph():
-    built = assemble(
-        rtrrl.RTRRL,
-        BuildRequest(
-            parameters=parameters(),
-            environment=EnvironmentSpec(
-                id="tiny",
-                backend=None,
-                observed=None,
-                episode_length=8,
-            ),
-            num_envs=1,
-        ),
-        environment_factory=tiny_environment,
-    )
+    built = assembled()
 
     graph = built.program.init.__self__
     assert isinstance(graph.core.torso, rtrrl.Torso)
@@ -229,20 +281,7 @@ def test_interaction_moves_no_learned_quantity():
 def test_semantic_subgraphs_do_not_expose_the_old_generic_network_layer():
     assert not hasattr(rtrrl, "Network")
 
-    graph = assemble(
-        rtrrl.RTRRL,
-        BuildRequest(
-            parameters=parameters(),
-            environment=EnvironmentSpec(
-                id="tiny",
-                backend=None,
-                observed=None,
-                episode_length=8,
-            ),
-            num_envs=1,
-        ),
-        environment_factory=tiny_environment,
-    ).program.init.__self__
+    graph = assembled().program.init.__self__
 
     for subgraph in (graph.core.torso, graph.core.actor, graph.core.critic):
         assert not hasattr(subgraph, "block")
