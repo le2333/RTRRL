@@ -2,7 +2,7 @@
 
 import pytest
 
-from memorax.runtime.episode import Episode
+from memorax.runtime.episode import Episode, SampledTrajectory
 
 
 def make_episode(**overrides) -> Episode:
@@ -38,3 +38,24 @@ def test_trajectory_must_have_one_more_observation_than_actions():
 def test_unfinished_episode_is_not_an_episode():
     with pytest.raises(ValueError, match="complete"):
         make_episode(terminals=[False, False])
+
+
+def test_sampled_trajectory_marks_every_transition_budget_side():
+    episode = make_episode()
+    sampled = SampledTrajectory(
+        episode=episode,
+        sample_step=1,
+        post_budget=(False, True),
+    )
+
+    assert sampled.sample_step == 1
+    assert sampled.post_budget == (False, True)
+
+
+def test_sampled_trajectory_requires_one_budget_mark_per_transition():
+    with pytest.raises(ValueError, match="post_budget"):
+        SampledTrajectory(
+            episode=make_episode(),
+            sample_step=1,
+            post_budget=(False,),
+        )

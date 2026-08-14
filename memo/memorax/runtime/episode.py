@@ -58,3 +58,15 @@ class Episode:
             )
         if self.end_env_steps < self.start_env_steps:
             raise ValueError("end_env_steps must not precede start_env_steps")
+
+
+@dataclass(frozen=True)
+class SampledTrajectory:
+    episode: Episode
+    sample_step: int
+    post_budget: tuple[bool, ...]
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "post_budget", tuple(self.post_budget))
+        if len(self.post_budget) != len(self.episode.rewards):
+            raise ValueError("post_budget must hold one value per transition")
