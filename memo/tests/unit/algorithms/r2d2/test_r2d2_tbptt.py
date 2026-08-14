@@ -5,6 +5,7 @@ import optax
 
 from memorax.algorithms.r2d2 import (
     Core,
+    CoreState,
     LearnerSequence,
     RecurrentInputs,
     _burn_in,
@@ -127,7 +128,7 @@ def _identity(value):
     return value
 
 
-def _identifiable_core(*, gamma=0.5):
+def _identifiable_core(*, gamma=0.5, beta=0.4):
     return Core(
         q_function=IdentifiableQFunction(),
         optimizer=optax.sgd(0.1),
@@ -135,7 +136,7 @@ def _identifiable_core(*, gamma=0.5):
         n_step=1,
         burn_in_length=0,
         unroll_length=2,
-        importance_sampling_exponent=0.4,
+        importance_sampling_exponent=beta,
         max_priority_weight=0.75,
         target_update_period=2,
         transform=_identity,
@@ -195,8 +196,10 @@ def test_alignment_uses_shifted_q_and_history_preserving_truncation_bootstrap():
         jnp.asarray(0.0),
         jnp.asarray(100.0),
         sample,
+        sample.inputs,
         jnp.zeros((1,)),
         jnp.zeros((1,)),
+        transition_start=0,
     )
 
     np.testing.assert_array_equal(
@@ -224,23 +227,60 @@ def test_alignment_uses_shifted_q_and_history_preserving_truncation_bootstrap():
 
 
 def test_importance_weights_apply_once_at_sequence_reduction():
-    core = _identifiable_core(gamma=0.0)
+    core = _identifiable_core(gamma=0.0, beta=1.0)
     sample = _learner_sample(
         observations=jnp.zeros((2, 3)),
         rewards=jnp.asarray([[1.0, 1.0], [2.0, 2.0]]),
         dones=jnp.asarray([[False, True], [False, True]]),
         terminals=jnp.asarray([[False, True], [False, True]]),
+    ).replace(
+        probabilities=jnp.asarray([0.5, 0.25]),
+    )
+    state = CoreState(
+        update_step=jnp.asarray(0),
+        recurrence=jnp.zeros((2,)),
+        params=jnp.asarray(0.0),
+        target_params=jnp.asarray(0.0),
+        optimizer_state=core.optimizer.init(jnp.asarray(0.0)),
     )
 
-    loss, readings = core._tbptt_loss(
-        jnp.asarray(0.0),
-        jnp.asarray(0.0),
+    _, metrics, priorities = core.update_parameters(
+        jax.random.key(0),
+        state,
         sample,
-        jnp.asarray([0.5, 1.0]),
+        step=jnp.asarray(1),
     )
 
-    np.testing.assert_allclose(loss, 1.125)
-    np.testing.assert_allclose(readings.priority, jnp.asarray([1.0, 2.0]))
+    np.testing.assert_allclose(metrics.loss, 1.125)
+    np.testing.assert_allclose(metrics.importance_weight, 0.75)
+    np.testing.assert_allclose(priorities, jnp.asarray([1.0, 2.0]))
+
+
+def test_update_metrics_ignore_invalid_padded_transitions():
+    core = _identifiable_core(gamma=0.0)
+    sample = _learner_sample(
+        observations=jnp.asarray([[1.0, 100.0, 0.0]]),
+        rewards=jnp.zeros((1, 2)),
+        dones=jnp.asarray([[False, True]]),
+        terminals=jnp.asarray([[False, True]]),
+    ).replace(valid=jnp.asarray([[True, False]]))
+    state = CoreState(
+        update_step=jnp.asarray(0),
+        recurrence=jnp.zeros((1,)),
+        params=jnp.asarray(0.0),
+        target_params=jnp.asarray(0.0),
+        optimizer_state=core.optimizer.init(jnp.asarray(0.0)),
+    )
+
+    _, metrics, _ = core.update_parameters(
+        jax.random.key(1),
+        state,
+        sample,
+        step=jnp.asarray(1),
+    )
+
+    np.testing.assert_allclose(metrics.td_error, 1.0)
+    np.testing.assert_allclose(metrics.q_value, 1.0)
 
 
 def test_core_uses_online_action_selection_and_target_action_evaluation():

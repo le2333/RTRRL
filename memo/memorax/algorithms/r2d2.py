@@ -366,6 +366,7 @@ class UpdateMetrics:
 class _UpdateReadings:
     td_error: Any
     q_value: Any
+    valid: Any
     priority: Any
     importance_weight: Any
 
@@ -491,34 +492,33 @@ class Core:
         params: Any,
         target_params: Any,
         sample: LearnerSequence,
+        learning_inputs: RecurrentInputs,
         recurrence: Any,
         target_recurrence: Any,
+        *,
+        transition_start: int,
     ) -> tuple[Array, Array, Array, Array, Array, Array]:
-        learning_inputs = _slice_time(
-            sample.inputs,
-            self.burn_in_length,
-            self.burn_in_length + self.unroll_length + 1,
-        )
         _, online_q, online_post = self.q_function._unroll_with_recurrences(
             params, learning_inputs, recurrence
         )
         _, target_q, target_post = self.q_function._unroll_with_recurrences(
             target_params, learning_inputs, target_recurrence
         )
-        start = self.burn_in_length
-        stop = start + self.unroll_length
+        transition_count = jax.tree.leaves(learning_inputs)[0].shape[1] - 1
+        start = transition_start
+        stop = start + transition_count
         bootstrap_inputs = _slice_time(sample.bootstrap_inputs, start, stop)
         online_bootstrap = _bootstrap_q_values(
             self.q_function,
             params,
             bootstrap_inputs,
-            _slice_time(online_post, 0, self.unroll_length),
+            _slice_time(online_post, 0, transition_count),
         )
         target_bootstrap = _bootstrap_q_values(
             self.q_function,
             target_params,
             bootstrap_inputs,
-            _slice_time(target_post, 0, self.unroll_length),
+            _slice_time(target_post, 0, transition_count),
         )
         dones = sample.dones[:, start:stop]
         terminals = sample.terminals[:, start:stop]
@@ -547,7 +547,7 @@ class Core:
         sample: LearnerSequence,
         importance_weights: Array,
     ) -> tuple[Array, _UpdateReadings]:
-        recurrence, target_recurrence, _ = _burn_in(
+        recurrence, target_recurrence, learning_inputs = _burn_in(
             self.q_function,
             params,
             target_params,
@@ -555,6 +555,9 @@ class Core:
             sample.initial_recurrence,
             sample.initial_recurrence,
             burn_in_length=self.burn_in_length,
+        )
+        learning_inputs = _slice_time(
+            learning_inputs, 0, self.unroll_length + 1
         )
         (
             current_online_q,
@@ -564,7 +567,13 @@ class Core:
             rewards,
             valid,
         ) = self._aligned_unroll(
-            params, target_params, sample, recurrence, target_recurrence
+            params,
+            target_params,
+            sample,
+            learning_inputs,
+            recurrence,
+            target_recurrence,
+            transition_start=self.burn_in_length,
         )
         start = self.burn_in_length
         stop = start + self.unroll_length
@@ -591,6 +600,7 @@ class Core:
         return loss, _UpdateReadings(
             td_error=td_error,
             q_value=q_value,
+            valid=valid,
             priority=priority,
             importance_weight=importance_weights,
         )
@@ -648,11 +658,15 @@ class Core:
             target_params=target_params,
             optimizer_state=optimizer_state,
         )
+        metric_mask = readings.valid.astype(readings.q_value.dtype)
+        metric_count = jnp.maximum(jnp.sum(metric_mask), 1.0)
         metrics = UpdateMetrics(
             applied=jnp.asarray(True),
             loss=loss,
-            td_error=jnp.mean(jnp.abs(readings.td_error)),
-            q_value=jnp.mean(readings.q_value),
+            td_error=jnp.sum(
+                jnp.abs(readings.td_error) * metric_mask
+            ) / metric_count,
+            q_value=jnp.sum(readings.q_value * metric_mask) / metric_count,
             gradient_norm=optax.tree.norm(grads),
             importance_weight=jnp.mean(readings.importance_weight),
             priority=jnp.mean(readings.priority),
