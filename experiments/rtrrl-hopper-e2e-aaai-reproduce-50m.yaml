@@ -1,0 +1,83 @@
+experiment: e2e
+name: rtrrl-hopper-aaai-reproduce-50m
+description: >
+  Fixed-parameter behavioral reproduction of the AAAI RTRRL Hopper baseline
+  using memo's RTRRL implementation. This run is the correctness baseline for
+  the subsequent 5x2 search: it changes no hyperparameter, keeps the AAAI even
+  observation indices, and records the 10M/20M/30M/40M/50M learning curve.
+
+# Immutable memo CPU image built and verified from commit d1afa69.
+image: 007122174918.dkr.ecr.eu-north-1.amazonaws.com/rtrrl@sha256:e0d9fd390955a13c7d8b5defe8b459ceb972dd668c36d81ae7a8265aeb54ae28
+entry: rtrrl
+storage: s3://rtrrl-artifacts-007122174918/trainer
+
+environment:
+  id: brax::hopper
+  backend: spring
+  observed: [0, 2, 4, 6, 8, 10]
+  num_envs: 1
+
+budget:
+  total_steps: 50000000
+  epoch_steps: 10000000
+  eval_steps: 1000
+
+compute:
+  instance_type: c7a.large
+  timeout_minutes: 1440
+
+hpo:
+  sampler: grid
+  rounds: 1
+  trials_per_round: 1
+  parallel_jobs: 1
+
+space:
+  seed: [1]
+
+  backbone: [lru]
+  hidden_dim: [32]
+  feature_dim: [32]
+  meta_rl: [true]
+  bound_actor: [true]
+  act_clip: [1.0]
+  actor_to_recurrent: [true]
+  critic_to_recurrent: [true]
+  normalize_observation: [false]
+  normalize_reward: [false]
+
+  gamma: [0.99]
+  freeze_gamma: [false]
+  lambda_pi: [0.9]
+  lambda_v: [0.9]
+  lambda_rnn: [0.9]
+  eta_pi: [1.0]
+  eta_f: [1.0]
+  entropy_rate: [1.0e-5]
+  update_period: [1.0]
+  update_trace_before_td: [false]
+  logprob_scale: [1.0]
+
+  update_rule: [adam]
+  td_lr: [1.0e-4]
+  rnn_lr: [1.0e-4]
+  eps: [1.0e-8]
+  b1: [0.9]
+  b2: [0.999]
+  rnn_grad_clip: [1.0]
+
+  # Required by the memo entry but inactive while update_rule=adam.
+  kappa: [2.0]
+  obgd_beta2: [0.999]
+  obgd_rule: [obgd]
+
+score:
+  metric: eval/episode_return
+  window_steps: [0, 50000000]
+  reduce: max
+  direction: maximize
+  non_finite: worst
+
+logging:
+  aim: aim://172.31.62.192:53801
+  every_steps: 1
