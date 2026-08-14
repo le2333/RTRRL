@@ -54,6 +54,100 @@ class R2D2State:
     buffer_state: BufferState
 
 
+def signed_hyperbolic(x: Array, epsilon: float = 1e-3) -> Array:
+    return jnp.sign(x) * (jnp.sqrt(jnp.abs(x) + 1.0) - 1.0) + epsilon * x
+
+
+def signed_parabolic(x: Array, epsilon: float = 1e-3) -> Array:
+    discriminant = jnp.sqrt(1.0 + 4.0 * epsilon * (jnp.abs(x) + 1.0 + epsilon))
+    magnitude = (2.0 * (jnp.abs(x) + 1.0 + epsilon) / (discriminant + 1.0)) ** 2 - 1.0
+    return jnp.sign(x) * magnitude
+
+
+def double_q_n_step_targets(
+    rewards: Array,
+    terminals: Array,
+    online_q: Array,
+    target_q: Array,
+    valid: Array,
+    *,
+    gamma: float,
+    n_step: int,
+    transform: Callable[[Array], Array],
+    inverse_transform: Callable[[Array], Array],
+) -> Array:
+    online_actions = jnp.argmax(online_q[:, 1:], axis=-1)
+    target_next_q = jnp.take_along_axis(
+        target_q[:, 1:], online_actions[..., None], axis=-1
+    ).squeeze(axis=-1)
+    target_next_q = inverse_transform(target_next_q)
+    _, sequence_length = rewards.shape
+    valid = valid.astype(jnp.bool_)
+    terminals = terminals.astype(jnp.bool_)
+
+    def target_for_start(start: Array) -> Array:
+        def accumulate(
+            _: int, carry: tuple[Array, Array, Array, Array, Array]
+        ) -> tuple[Array, Array, Array, Array, Array]:
+            total, discount, accumulating, bootstrap, bootstrap_index = carry
+            index = start + _
+            in_sequence = index < sequence_length
+            index = jnp.minimum(index, sequence_length - 1)
+            active = accumulating & in_sequence & valid[:, index]
+            total = total + jnp.where(active, discount * rewards[:, index], 0.0)
+            return (
+                total,
+                jnp.where(active, discount * gamma, discount),
+                active & ~terminals[:, index],
+                jnp.where(active, ~terminals[:, index], bootstrap),
+                jnp.where(active, index, bootstrap_index),
+            )
+
+        total, discount, _, bootstrap, bootstrap_index = jax.lax.fori_loop(
+            0,
+            n_step,
+            accumulate,
+            (
+                jnp.zeros(rewards.shape[0], dtype=rewards.dtype),
+                jnp.ones(rewards.shape[0], dtype=rewards.dtype),
+                jnp.ones(rewards.shape[0], dtype=jnp.bool_),
+                jnp.zeros(rewards.shape[0], dtype=jnp.bool_),
+                jnp.full((rewards.shape[0],), start, dtype=jnp.int32),
+            ),
+        )
+        bootstrap_q = jnp.take_along_axis(
+            target_next_q, bootstrap_index[:, None], axis=1
+        ).squeeze(axis=1)
+        total = total + jnp.where(
+            bootstrap,
+            discount * bootstrap_q,
+            0.0,
+        )
+        return transform(total)
+
+    targets = jax.vmap(target_for_start)(jnp.arange(sequence_length))
+    return jax.lax.stop_gradient(targets.T)
+
+
+def masked_sequence_loss(
+    td_error: Array, valid: Array, importance_weights: Array
+) -> Array:
+    mask = valid.astype(td_error.dtype)
+    per_sequence = 0.5 * jnp.sum(jnp.square(td_error) * mask, axis=1)
+    per_sequence = per_sequence / jnp.maximum(jnp.sum(mask, axis=1), 1.0)
+    return jnp.mean(per_sequence * importance_weights)
+
+
+def sequence_priorities(td_error: Array, valid: Array, *, max_weight: float) -> Array:
+    mask = valid.astype(jnp.bool_)
+    absolute_error = jnp.abs(td_error)
+    maximum = jnp.max(jnp.where(mask, absolute_error, 0.0), axis=1)
+    mean = jnp.sum(jnp.where(mask, absolute_error, 0.0), axis=1) / jnp.sum(
+        mask, axis=1
+    )
+    return max_weight * maximum + (1.0 - max_weight) * mean
+
+
 def compute_n_step_returns(
     rewards: Array,
     dones: Array,
