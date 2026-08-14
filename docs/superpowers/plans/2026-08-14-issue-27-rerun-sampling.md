@@ -582,7 +582,7 @@ class RuntimeConfig:
 - Runtime publishes `TrackingResult.completed` through `log_episode()` and
   `TrackingResult.sampled` through `log_trajectory()`.
 
-- [ ] **Step 1: Write the failing memory-shape scheduling test**
+- [x] **Step 1: Write the failing memory-shape scheduling test**
 
 Use a fake program whose train function records and rejects large requests:
 
@@ -610,7 +610,7 @@ def test_long_epoch_is_executed_as_bounded_train_calls():
 This is a behavior test. Do not inspect source text or monkeypatch
 `jax.random.split`.
 
-- [ ] **Step 2: Write the failing Runtime sampling test**
+- [x] **Step 2: Write the failing Runtime sampling test**
 
 Build a deterministic two-stream program whose episode crosses two train
 calls and whose sample at a done boundary must select the following episode:
@@ -632,7 +632,7 @@ def test_runtime_reports_exact_sampled_episode_across_train_calls():
     assert recorder.trajectories[1].episode.observations == NEXT_EPISODE_AFTER_DONE
 ```
 
-- [ ] **Step 3: Write the failing final-budget continuation test**
+- [x] **Step 3: Write the failing final-budget continuation test**
 
 The fake state's separate `updates` and `interactions` counters make accidental
 training visible:
@@ -654,7 +654,7 @@ def test_final_sample_is_finished_without_an_update():
 Also assert `interact` was called exactly twice and `train` was never called
 after total step 8.
 
-- [ ] **Step 4: Run focused tests and verify RED**
+- [x] **Step 4: Run focused tests and verify RED**
 
 Run:
 
@@ -667,7 +667,7 @@ uv run --project memo pytest \
 Expected: FAIL because `RuntimeConfig` has no bound/sample schedule and Runtime
 still submits an epoch-sized train call.
 
-- [ ] **Step 5: Implement bounded epoch scheduling**
+- [x] **Step 5: Implement bounded epoch scheduling**
 
 Replace one train call per epoch with a nested loop:
 
@@ -689,7 +689,7 @@ Preserve the existing evaluation state/date semantics. Create a fresh tracker
 for each fresh evaluation rollout, seed evaluation numbering from its previous
 value, and publish only its completed episodes.
 
-- [ ] **Step 6: Implement final sampled-episode continuation**
+- [x] **Step 6: Implement final sampled-episode continuation**
 
 After the last train chunk has applied the exact final boundary sample, copy the
 final state into a local continuation variable. While
@@ -701,14 +701,14 @@ Limit this loop to `max_episode_steps` vectorized interactions. If a pending
 sample remains, raise `ValueError("sampled episode exceeded maximum episode length")`.
 Do not assign the continuation state back to the final training state.
 
-- [ ] **Step 7: Remove train sampling from stateless rollout cutting**
+- [x] **Step 7: Remove train sampling from stateless rollout cutting**
 
 Keep `read()` and any evaluation-only stateless helpers in `rollout.py`. Runtime
 training must use `EpisodeTracker`; no call to `complete_episodes()` may treat a
 train chunk boundary as reset. Update `test_loop.py` expectations so a training
 episode spanning chunks is reported once and whole.
 
-- [ ] **Step 8: Run Runtime and rollout tests**
+- [x] **Step 8: Run Runtime and rollout tests**
 
 Run:
 
@@ -721,7 +721,7 @@ uv run --project memo pytest \
 
 Expected: PASS.
 
-- [ ] **Step 9: Commit Task 4**
+- [x] **Step 9: Commit Task 4**
 
 ```bash
 git add memo/memorax/runtime memo/tests/support \

@@ -13,6 +13,11 @@ TOTAL_STEPS = 16
 TRAIN_REWARD = jnp.array([[1.0, 5.0], [3.0, 5.0], [7.0, 5.0], [9.0, 5.0]])
 TRAIN_DONE = jnp.array([[False, False], [True, False], [False, True], [False, False]])
 TRAIN_LOSS = jnp.array([[0.0, 0.0], [2.0, 1.0], [4.0, 1.0], [6.0, 1.0]])
+# A run that walks its training episodes keeps the transition either side of
+# each step, which is the shape the schema's trajectory paths name.
+TRAIN_OBSERVATION = jnp.arange(4 * NUM_ENVS, dtype=jnp.float32).reshape(4, NUM_ENVS)[
+    ..., None
+]
 
 EVAL_REWARD = jnp.array([[2.0, 0.0], [4.0, 0.0], [0.0, 0.0]])
 EVAL_DONE = jnp.array([[False, False], [True, False], [False, False]])
@@ -23,7 +28,7 @@ INTERACT_REWARD = jnp.array([11.0, 13.0])
 INTERACT_DONE = jnp.array([True, True])
 INTERACT_LOSS = jnp.array([8.0, 9.0])
 
-SERIES = ("loss", "by_part.torso", "only_sometimes")
+SERIES = ("loss", "by_part.torso")
 
 
 class InteractionMetrics(NamedTuple):
@@ -54,6 +59,9 @@ def arithmetic_program():
         del key, num_steps
         return state + EPOCH_STEPS, Metrics(
             interaction=InteractionMetrics(
+                observation=TRAIN_OBSERVATION,
+                next_observation=TRAIN_OBSERVATION + 1,
+                action=TRAIN_OBSERVATION,
                 reward=TRAIN_REWARD,
                 done=TRAIN_DONE,
                 terminal=TRAIN_DONE,

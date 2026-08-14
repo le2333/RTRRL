@@ -47,8 +47,12 @@ def run_arithmetic(recorder, **overrides):
         "eval_steps": EVAL_STEPS,
         "num_envs": NUM_ENVS,
         "seed": 0,
+        # Four transitions is what the arithmetic's longest episode runs to, so
+        # one train call is one whole epoch and the chunking is not the subject.
+        "max_episode_steps": 4,
     }
     reward = overrides.pop("reward", "interaction.reward")
+    series = overrides.pop("series", SERIES)
     Runtime(
         algorithm=BuiltAlgorithm(
             program=Program(
@@ -64,7 +68,7 @@ def run_arithmetic(recorder, **overrides):
                 observation="interaction.observation",
                 next_observation="interaction.next_observation",
                 action="interaction.action",
-                series=SERIES,
+                series=series,
             ),
         ),
         config=RuntimeConfig(**(settings | overrides)),
@@ -75,7 +79,8 @@ def test_a_completed_episode_is_the_only_reporting_occasion():
     recorder = Recorder()
     run_arithmetic(recorder)
 
-    # Two whole episodes per training chunk and one per evaluation, twice.
+    # Two endings per training epoch and one per evaluation, twice. An epoch
+    # boundary is not an ending, so the second pair began in the first epoch.
     assert len(recorder.of("train")) == 4
     assert len(recorder.of("eval")) == 2
     assert [episode.number for episode in recorder.of("train")] == [1, 2, 3, 4]
@@ -116,9 +121,9 @@ def test_two_streams_are_two_series_and_not_one_average():
     run_arithmetic(recorder)
 
     ends = [episode.end_env_steps for episode in recorder.of("train")]
-    assert ends == [4, 6, 12, 14]
+    assert ends == [4, 7, 12, 15]
     returns = [sum(episode.rewards) for episode in recorder.of("train")]
-    assert returns == [4.0, 15.0, 4.0, 15.0]
+    assert returns == [4.0, 15.0, 20.0, 20.0]
 
 
 def test_an_episode_the_budget_cut_off_emits_nothing():
@@ -128,10 +133,38 @@ def test_an_episode_the_budget_cut_off_emits_nothing():
     run_arithmetic(recorder)
 
     assert all(episode.terminals[-1] for episode in recorder.episodes)
-    assert [len(episode.rewards) for episode in recorder.of("train")] == [2, 3, 2, 3]
+    assert [len(episode.rewards) for episode in recorder.of("train")] == [2, 3, 4, 4]
 
 
-def test_a_diagnostic_the_configuration_never_produced_is_left_out():
+def test_an_episode_that_outlives_a_train_call_is_reported_once_and_whole():
+    """A call boundary is a transport size, so it ends nothing.
+
+    The third and fourth episodes each begin in the first epoch and end in the
+    second; cutting per call would report each of them as two shorter ones.
+    """
+
+    recorder = Recorder()
+    run_arithmetic(recorder)
+
+    third, fourth = recorder.of("train")[2:]
+    assert third.rewards == (7.0, 9.0, 1.0, 3.0)
+    assert (third.start_env_steps, third.end_env_steps) == (4, 12)
+    assert fourth.rewards == (5.0, 5.0, 5.0, 5.0)
+    assert (fourth.start_env_steps, fourth.end_env_steps) == (7, 15)
+
+
+def test_a_diagnostic_the_configuration_names_but_never_produces_is_refused():
+    """A reading the schema names and no chunk carries is a build fault.
+
+    Reporting the episode without it would hide a graph that was asked for a
+    diagnostic and never wired one up.
+    """
+
+    with pytest.raises(ValueError, match="only_sometimes"):
+        run_arithmetic(Recorder(), series=(*SERIES, "only_sometimes"))
+
+
+def test_a_diagnostic_the_configuration_declared_reaches_every_episode():
     recorder = Recorder()
     run_arithmetic(recorder)
 

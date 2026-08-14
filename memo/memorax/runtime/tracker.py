@@ -91,7 +91,13 @@ class EpisodeTracker:
         for name in observations.series:
             found = read(summary, name)
             if found is None:
-                raise ValueError(f"configured series path {name!r} is missing")
+                if not post_budget:
+                    raise ValueError(f"configured series path {name!r} is missing")
+                # A post-budget transition performed no update, so its update
+                # readings do not exist. Saying so is the point; a zero here
+                # would read as a measurement that was never taken.
+                series[name] = np.full((steps, self._num_envs), np.nan)
+                continue
             series[name] = _streamed(found, steps, self._num_envs)
 
         trajectory_paths = (
