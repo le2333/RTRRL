@@ -1,12 +1,23 @@
 from types import SimpleNamespace
 
 import jax
+import numpy as np
 
 from entries import stream_ac as entry
 from memorax.algorithms import stream_ac
 from memorax.assembly import BuildRequest, EnvironmentSpec, assemble
 from memorax.parameters import expand
 from tests.support.environments import TinyContinuousEnv
+from tests.support.numerics import flattened
+
+
+def assert_tree_equal(actual, expected, what):
+    """Assert two trees hold the same leaves bit for bit."""
+
+    got, wanted = flattened(actual), flattened(expected)
+    assert set(got) == set(wanted), f"{what}: the trees have different leaves"
+    moved = [path for path, leaf in wanted.items() if not np.array_equal(got[path], leaf)]
+    assert not moved, f"{what}: {moved} moved"
 
 
 def parameters():
@@ -31,6 +42,23 @@ def tiny_environment(identifier, **options):
     del identifier, options
     environment = TinyContinuousEnv()
     return environment, environment.default_params
+
+
+def assembled():
+    return assemble(
+        stream_ac.StreamAC,
+        BuildRequest(
+            parameters=parameters(),
+            environment=EnvironmentSpec(
+                id="tiny",
+                backend=None,
+                observed=None,
+                episode_length=8,
+            ),
+            num_envs=1,
+        ),
+        environment_factory=tiny_environment,
+    )
 
 
 def test_stream_ac_declarations_live_with_its_graph_and_entry_reexports_them():
@@ -85,21 +113,39 @@ def test_entry_projects_only_the_runtime_schedule():
     assert schedule.seed == 7
 
 
-def test_generic_assembly_closes_stream_ac_over_the_runtime_program():
-    built = assemble(
-        stream_ac.StreamAC,
-        BuildRequest(
-            parameters=parameters(),
-            environment=EnvironmentSpec(
-                id="tiny",
-                backend=None,
-                observed=None,
-                episode_length=8,
-            ),
-            num_envs=1,
-        ),
-        environment_factory=tiny_environment,
+def test_program_exposes_no_learning_interaction():
+    built = assembled()
+    state = built.program.init(jax.random.key(0))
+
+    advanced, metrics = built.program.interact(jax.random.key(1), state)
+
+    assert metrics.interaction.reward.shape == (1,)
+    assert int(advanced.update_step) == int(state.update_step)
+    assert int(advanced.step) == int(state.step)
+    assert not np.array_equal(
+        np.asarray(advanced.timestep.obs), np.asarray(state.timestep.obs)
     )
+    assert int(advanced.env_state.step_count[0]) == int(state.env_state.step_count[0]) + 1
+
+
+def test_interaction_moves_no_learned_quantity():
+    built = assembled()
+    state = built.program.init(jax.random.key(0))
+
+    advanced, _ = built.program.interact(jax.random.key(2), state)
+
+    assert_tree_equal(advanced.actor.params, state.actor.params, "actor params")
+    assert_tree_equal(advanced.actor.rule, state.actor.rule, "actor rule state")
+    assert_tree_equal(advanced.critic.params, state.critic.params, "critic params")
+    assert_tree_equal(advanced.critic.rule, state.critic.rule, "critic rule state")
+    assert_tree_equal(
+        advanced.critic.recurrence, state.critic.recurrence, "critic recurrence"
+    )
+    assert_tree_equal(advanced.scales, state.scales, "normalization scales")
+
+
+def test_generic_assembly_closes_stream_ac_over_the_runtime_program():
+    built = assembled()
 
     graph = built.program.init.__self__
     assert graph.core.actor.block.network is not graph.core.critic.block.network

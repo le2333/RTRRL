@@ -95,7 +95,7 @@ class EpisodeTracker:
 - Invariant: transition at scan row `r`, stream `e` has global position `start_env_steps + r * num_envs + e`; a sample is attached immediately before the transition at the same position.
 - Invariant: `consume()` also applies a sample exactly equal to the chunk's ending boundary, so a final-budget sample becomes pending before continuation.
 
-- [ ] **Step 1: Write failing value-contract tests**
+- [x] **Step 1: Write failing value-contract tests**
 
 Add to `test_episode.py`:
 
@@ -121,7 +121,7 @@ def test_sampled_trajectory_requires_one_budget_mark_per_transition():
         )
 ```
 
-- [ ] **Step 2: Write the failing deterministic tracker test**
+- [x] **Step 2: Write the failing deterministic tracker test**
 
 Create a `summary()` helper that returns NumPy arrays for observations, actions,
 rewards, `done`, terminal, and a `td_error` series. Feed three chunks whose
@@ -153,7 +153,7 @@ The fixture must make step 10 the boundary after a `done` for stream zero. Its
 expected value begins with the next reset observation, not the preceding
 episode.
 
-- [ ] **Step 3: Write failing bounded-slot and multi-episode tests**
+- [x] **Step 3: Write failing bounded-slot and multi-episode tests**
 
 ```python
 def test_one_stream_reuses_its_slot_for_multiple_episodes_in_one_chunk():
@@ -179,7 +179,7 @@ def test_episode_longer_than_declared_limit_fails_instead_of_truncating():
         tracker.consume(three_steps_without_done(), start_env_steps=0)
 ```
 
-- [ ] **Step 4: Run the focused tests and verify RED**
+- [x] **Step 4: Run the focused tests and verify RED**
 
 Run:
 
@@ -192,7 +192,7 @@ uv run --project memo pytest \
 Expected: collection fails because `SampledTrajectory` and `EpisodeTracker` do
 not exist.
 
-- [ ] **Step 5: Implement the immutable sampled value and tracker**
+- [x] **Step 5: Implement the immutable sampled value and tracker**
 
 Implement `SampledTrajectory.__post_init__()` so it freezes the mask and checks
 that its length equals `len(episode.rewards)`. In `tracker.py`, extract the
@@ -218,7 +218,7 @@ On `done`, construct one `Episode`, construct one `SampledTrajectory` per
 attached sample, increment the global episode number, and replace only that
 stream's slot. Never retain a finalized slot.
 
-- [ ] **Step 6: Run focused and existing rollout tests**
+- [x] **Step 6: Run focused and existing rollout tests**
 
 Run:
 
@@ -231,7 +231,7 @@ uv run --project memo pytest \
 
 Expected: PASS.
 
-- [ ] **Step 7: Commit Task 1**
+- [x] **Step 7: Commit Task 1**
 
 ```bash
 git add memo/memorax/runtime memo/tests/unit/runtime
@@ -257,7 +257,7 @@ git commit -m "feat: track sampled episodes across chunks"
 - Produces: `Program.interact(key, state) -> tuple[state, StepMetrics]` for one vectorized environment interaction with stochastic behavior-policy action and no learning mutation.
 - The returned state may change only environment state, timestep/terminal state, normalization output values without changing normalization statistics, and actor/torso recurrent carry.
 
-- [ ] **Step 1: Write failing Program closure assertions**
+- [x] **Step 1: Write failing Program closure assertions**
 
 Extend both assembly tests:
 
@@ -276,7 +276,7 @@ def test_program_exposes_no_learning_interaction():
 For StreamAC use its existing update counter field. Assert environment state or
 timestep observation changes so the test cannot pass through an identity stub.
 
-- [ ] **Step 2: Write failing learning-state preservation assertions**
+- [x] **Step 2: Write failing learning-state preservation assertions**
 
 Add a tree comparison helper in each algorithm test and assert exact equality
 for parameters, traces, optimizer/rule state, and normalization statistics:
@@ -296,7 +296,7 @@ assert_tree_equal(advanced.scales, state.scales)
 Use the corresponding StreamAC actor/critic/rule field names rather than an
 adapter layer.
 
-- [ ] **Step 3: Run the focused tests and verify RED**
+- [x] **Step 3: Run the focused tests and verify RED**
 
 Run:
 
@@ -308,7 +308,7 @@ uv run --project memo pytest \
 
 Expected: FAIL because `Program` has no `interact` member.
 
-- [ ] **Step 4: Implement each algorithm's semantic interaction**
+- [x] **Step 4: Implement each algorithm's semantic interaction**
 
 Add `interact()` to RTRRL and StreamAC. The RTRRL shape is:
 
@@ -352,7 +352,7 @@ Implement the same semantics through StreamAC's own actor recurrence and
 `core.sample_action`; do not introduce a cross-algorithm helper that knows their
 state layouts.
 
-- [ ] **Step 5: Close assembly and test programs over the fourth operation**
+- [x] **Step 5: Close assembly and test programs over the fourth operation**
 
 Add the required field to `Program`:
 
@@ -369,7 +369,7 @@ Set `interact=graph.interact` in `assemble()`. Extend `arithmetic_program()` to
 return an interaction function and update its sole `Program(...)` test
 construction. Do not provide a default or compatibility shim.
 
-- [ ] **Step 6: Run focused algorithm and loop tests**
+- [x] **Step 6: Run focused algorithm and loop tests**
 
 Run:
 
@@ -382,7 +382,7 @@ uv run --project memo pytest \
 
 Expected: PASS.
 
-- [ ] **Step 7: Run RTRRL numerical guard tests**
+- [x] **Step 7: Run RTRRL numerical guard tests**
 
 Run:
 
@@ -395,7 +395,7 @@ uv run --project memo pytest \
 
 Expected: PASS with the pre-existing third-party warnings only.
 
-- [ ] **Step 8: Commit Task 2**
+- [x] **Step 8: Commit Task 2**
 
 ```bash
 git add memo/memorax/assembly.py memo/memorax/runtime/program.py \

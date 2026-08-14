@@ -897,6 +897,47 @@ class StreamAC:
             update=update_reading,
         )
 
+    def interact(
+        self, key: Any, state: StreamACState
+    ) -> tuple[StreamACState, StepMetrics]:
+        """One behavior-policy transition that learns nothing and costs no budget.
+
+        The stochastic policy and the actor's recurrence continue exactly where
+        training left them, so a sampled episode can be finished after the
+        training budget without either step counter, the parameters, the rule
+        states, or the normalization statistics moving.
+        """
+
+        reset_key, action_key, env_key = jax.random.split(key, 3)
+        state = self._reset(reset_key, state, update=False)
+        observation = state.timestep.obs
+
+        recurrence, action, _ = self.core.sample_action(
+            action_key, state.timestep, state.actor, deterministic=False
+        )
+        obs, env_state, environment_reward, done, terminal, info = (
+            self.environment.step(env_key, state.env_state, action)
+        )
+        obs, reward, _ = self.normalization.apply(
+            state.scales, obs, environment_reward, done, update=False
+        )
+        next_timestep = Timestep(obs=obs, action=action, reward=reward, done=done)
+        return state.replace(
+            timestep=self.environment.persisted(next_timestep),
+            env_state=env_state,
+            actor=state.actor.replace(recurrence=recurrence),
+        ), StepMetrics(
+            interaction=self._interaction(
+                observation=observation,
+                next_observation=next_timestep.obs,
+                action=action,
+                reward=environment_reward,
+                done=next_timestep.done,
+                terminal=terminal,
+                info=info,
+            ),
+        )
+
     def evaluate_step(
         self, state: StreamACState, key: Any
     ) -> tuple[StreamACState, StepMetrics]:

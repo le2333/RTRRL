@@ -40,7 +40,7 @@ from deployment.contract import Catalog
 
 
 def run_arithmetic(recorder, **overrides):
-    init_fn, train_fn, evaluate_fn = arithmetic_program()
+    init_fn, train_fn, evaluate_fn, interact_fn = arithmetic_program()
     settings: dict[str, Any] = {
         "total_steps": TOTAL_STEPS,
         "epoch_steps": EPOCH_STEPS,
@@ -55,6 +55,7 @@ def run_arithmetic(recorder, **overrides):
                 init=init_fn,
                 train=train_fn,
                 evaluate=evaluate_fn,
+                interact=interact_fn,
             ),
             observations=ObservationSchema(
                 reward=reward,

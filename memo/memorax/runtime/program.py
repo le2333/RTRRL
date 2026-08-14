@@ -9,11 +9,17 @@ from typing import Any
 
 @dataclass(frozen=True)
 class Program:
-    """The three compiled arrows Runtime schedules."""
+    """The four compiled arrows Runtime schedules.
+
+    ``interact`` is one vectorized behavior-policy transition that learns
+    nothing: Runtime schedules it only to finish a sampled episode that the
+    training budget cut short.
+    """
 
     init: Callable[..., Any]
     train: Callable[..., Any]
     evaluate: Callable[..., Any]
+    interact: Callable[..., Any]
 
 
 @dataclass(frozen=True)

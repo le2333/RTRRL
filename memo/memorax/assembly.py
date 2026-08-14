@@ -61,6 +61,7 @@ def assemble(
             init=graph.init,
             train=graph.train,
             evaluate=graph.evaluate,
+            interact=graph.interact,
         ),
         observations=definition.observations,
     )

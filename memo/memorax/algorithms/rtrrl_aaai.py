@@ -1168,6 +1168,48 @@ class RTRRL:
             update=update_reading,
         )
 
+    def interact(self, key: Any, state: RTRRLState) -> tuple[RTRRLState, StepMetrics]:
+        """One behavior-policy transition that learns nothing and costs no budget.
+
+        The stochastic policy and the recurrent sequence continue exactly where
+        training left them, so a sampled episode can be finished after the
+        training budget without the parameters, traces, rules, normalization
+        statistics, or either step counter moving.
+        """
+
+        reset_key, action_key, env_key = jax.random.split(key, 3)
+        state = self._reset(reset_key, state, update=False)
+        observation = state.timestep.obs
+
+        recurrence, action, _ = self.core.act(
+            action_key, state.core, state.timestep, deterministic=False
+        )
+        obs, env_state, environment_reward, done, terminal, info = (
+            self.environment.step(env_key, state.env_state, action)
+        )
+        obs, reward, _ = self.normalization.apply(
+            state.scales, obs, environment_reward, done, update=False
+        )
+        next_timestep = Timestep(obs=obs, action=action, reward=reward, done=done)
+        return state.replace(
+            timestep=next_timestep,
+            terminal=terminal,
+            env_state=env_state,
+            core=state.core.replace(
+                torso=state.core.torso.replace(recurrence=recurrence)
+            ),
+        ), StepMetrics(
+            interaction=self._interaction(
+                observation=observation,
+                next_observation=next_timestep.obs,
+                action=action,
+                reward=environment_reward,
+                done=next_timestep.done,
+                terminal=terminal,
+                info=info,
+            ),
+        )
+
     def evaluate_step(
         self, state: RTRRLState, key: Any
     ) -> tuple[RTRRLState, StepMetrics]:

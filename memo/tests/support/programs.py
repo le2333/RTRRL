@@ -18,6 +18,11 @@ EVAL_REWARD = jnp.array([[2.0, 0.0], [4.0, 0.0], [0.0, 0.0]])
 EVAL_DONE = jnp.array([[False, False], [True, False], [False, False]])
 EVAL_STEPS = EVAL_DONE.shape[0]
 
+# One vectorized transition, with no leading time axis, that ends both streams.
+INTERACT_REWARD = jnp.array([11.0, 13.0])
+INTERACT_DONE = jnp.array([True, True])
+INTERACT_LOSS = jnp.array([8.0, 9.0])
+
 SERIES = ("loss", "by_part.torso", "only_sometimes")
 
 
@@ -39,7 +44,7 @@ class Metrics(NamedTuple):
 
 
 def arithmetic_program():
-    """Return init/train/evaluate functions without an algorithm dependency."""
+    """Return the four program arrows without an algorithm dependency."""
 
     def init_fn(key):
         del key
@@ -74,4 +79,19 @@ def arithmetic_program():
             )
         )
 
-    return init_fn, train_fn, evaluate_fn
+    def interact_fn(key, state):
+        """One transition that learns nothing, so the step budget stays put."""
+
+        del key
+        return state, Metrics(
+            interaction=InteractionMetrics(
+                reward=INTERACT_REWARD,
+                done=INTERACT_DONE,
+                terminal=INTERACT_DONE,
+                paid=INTERACT_REWARD / 10,
+            ),
+            loss=INTERACT_LOSS,
+            by_part={"torso": INTERACT_LOSS},
+        )
+
+    return init_fn, train_fn, evaluate_fn, interact_fn

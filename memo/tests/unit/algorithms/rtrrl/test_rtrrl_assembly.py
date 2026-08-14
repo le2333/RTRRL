@@ -3,6 +3,7 @@ from types import SimpleNamespace
 
 import jax
 import memorax
+import numpy as np
 import pytest
 from entries import rtrrl as entry
 from memorax import algorithms
@@ -14,6 +15,16 @@ from memorax.observability.metrics import metric_names
 from memorax.parameters import expand
 from memorax.readings import taken
 from tests.support.environments import TinyContinuousEnv
+from tests.support.numerics import flattened
+
+
+def assert_tree_equal(actual, expected, what):
+    """Assert two trees hold the same leaves bit for bit."""
+
+    got, wanted = flattened(actual), flattened(expected)
+    assert set(got) == set(wanted), f"{what}: the trees have different leaves"
+    moved = [path for path, leaf in wanted.items() if not np.array_equal(got[path], leaf)]
+    assert not moved, f"{what}: {moved} moved"
 
 
 def parameters(backbone="lru", differentiation="exact_rtrl"):
@@ -178,6 +189,41 @@ def test_generic_assembly_closes_one_shared_torso_rtrrl_graph():
     assert int(trained.step) == 2
     assert metrics.interaction.reward.shape == (2, 1)
     assert evaluated.interaction.reward.shape == (2, 1)
+
+
+def test_program_exposes_no_learning_interaction():
+    built = assembled()
+    state = built.program.init(jax.random.key(0))
+
+    advanced, metrics = built.program.interact(jax.random.key(1), state)
+
+    assert metrics.interaction.reward.shape == (1,)
+    assert int(advanced.update_step) == int(state.update_step)
+    assert int(advanced.step) == int(state.step)
+    assert not np.array_equal(
+        np.asarray(advanced.timestep.obs), np.asarray(state.timestep.obs)
+    )
+    assert int(advanced.env_state.step_count[0]) == int(state.env_state.step_count[0]) + 1
+
+
+def test_interaction_moves_no_learned_quantity():
+    built = assembled()
+    state = built.program.init(jax.random.key(0))
+    before = state.core
+
+    advanced, _ = built.program.interact(jax.random.key(2), state)
+
+    assert_tree_equal(advanced.core.torso.params, before.torso.params, "torso params")
+    assert_tree_equal(advanced.core.torso.traces, before.torso.traces, "torso traces")
+    assert_tree_equal(
+        advanced.core.torso.slow_params, before.torso.slow_params, "torso slow params"
+    )
+    assert_tree_equal(advanced.core.actor.params, before.actor.params, "actor params")
+    assert_tree_equal(advanced.core.actor.traces, before.actor.traces, "actor traces")
+    assert_tree_equal(advanced.core.critic.params, before.critic.params, "critic params")
+    assert_tree_equal(advanced.core.critic.traces, before.critic.traces, "critic traces")
+    assert_tree_equal(advanced.core.rule, before.rule, "rule state")
+    assert_tree_equal(advanced.scales, state.scales, "normalization scales")
 
 
 def test_semantic_subgraphs_do_not_expose_the_old_generic_network_layer():
