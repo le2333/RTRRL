@@ -50,6 +50,8 @@ space:
       lru:
         feature_dim: [32]
         hidden_dim: [32]
+        differentiation:
+          kind: [exact_rtrl]
     optimizer:
       kind: [adam]
       adam:

@@ -1,4 +1,3 @@
-import math
 from abc import abstractmethod
 import jax
 import jax.numpy as jnp
@@ -8,11 +7,10 @@ from memorax.utils.axes import (
     add_feature_axis,
     broadcast_done,
     get_input_shape,
-    init,
     last,
     tail,
 )
-from memorax.utils.typing import Array, Carry, Key
+from memorax.utils.typing import Array, Carry
 
 from .sequence_model import SequenceModel
 
@@ -32,26 +30,6 @@ class MemoroidCellBase(nn.Module):
         self, key: jax.Array, input_shape: tuple[int, ...]
     ) -> Carry: ...
 
-    def local_jacobian(self, carry: Carry, z: Carry, inputs: Array, **kwargs) -> tuple[Array, dict] | None:
-        return None
-
-    def compute_phantom(self, sensitivity: dict) -> Array:
-        params = self.variables["params"]
-        phantom = 0
-        for name, S in sensitivity.items():
-            param = params
-            for key in name.split("/"):
-                param = param[key]
-            diff = param - jax.lax.stop_gradient(param)
-            phantom = phantom + jnp.sum(S * diff, axis=tuple(range(3, S.ndim)))
-        return phantom
-
-    def inject_phantom(self, carry: Carry, phantom: Array) -> Carry:
-        state, *rest = carry
-        return (jax.lax.stop_gradient(state) + phantom, *rest)
-
-    def initialize_sensitivity(self, key: Key, input_shape: tuple) -> dict | None:
-        return None
 
 
 class Memoroid(SequenceModel):
@@ -113,70 +91,3 @@ class Memoroid(SequenceModel):
 
     def initialize_carry(self, key: jax.Array, input_shape: tuple[int, ...]) -> Carry:
         return self.cell.initialize_carry(key, input_shape)
-
-    def _propagate_sensitivities(self, decay: Array, jacobians: dict, sensitivity: dict, done: Array) -> dict:
-        B, T, H = decay.shape
-        done = add_feature_axis(done)
-        next_sensitivity = {}
-
-        @jax.vmap
-        def binary_operator(a, b):
-            state_i, decay_i = a
-            state_j, decay_j = b
-            return (decay_j * state_i + state_j, decay_j * decay_i)
-
-        for name in sorted(jacobians.keys()):
-            J = jacobians[name]
-            S = sensitivity[name]
-            _, _, _, *param_shape = J.shape
-            param_size = math.prod(param_shape)
-
-            J = J.reshape(B, T, H * param_size)
-            S = S.reshape(B, 1, H * param_size)
-            a = jnp.where(done, 0, jnp.repeat(decay, param_size, axis=-1))
-
-            state = jnp.concatenate([S, J], axis=1)
-            a = jnp.concatenate([jnp.ones_like(S), a], axis=1)
-
-            state, _ = jax.lax.associative_scan(binary_operator, (state, a), axis=1)
-            next_sensitivity[name] = last(state).reshape(B, 1, H, *param_shape)
-
-        return next_sensitivity
-
-    @nn.compact
-    def local_jacobian(self, inputs: Array, done: Array, carry: Carry, sensitivity: dict | None = None, **kwargs) -> tuple[Carry, Array, dict | None]:
-        z = self.cell(inputs, **kwargs)
-
-        if sensitivity is not None:
-            phantom = self.cell.compute_phantom(sensitivity)
-            carry = self.cell.inject_phantom(carry, phantom)
-
-        h, next_carry = self.scan_fn(z, carry, done)
-        y = self.cell.read(h, inputs, **kwargs)
-
-        next_sensitivity = None
-        if sensitivity is not None:
-            prev_carry = jax.tree.map(
-                lambda initial_carry, hidden_states: jnp.concatenate(
-                    [initial_carry, init(hidden_states)], axis=1
-                ),
-                carry,
-                h,
-            )
-            reset = add_feature_axis(done)
-            prev_carry = jax.tree.map(
-                lambda c: jnp.where(broadcast_done(reset, c), 0, c),
-                prev_carry,
-            )
-            decay, jacobians = self.cell.local_jacobian(prev_carry, z, inputs)
-            if jacobians:
-                next_sensitivity = self._propagate_sensitivities(
-                    decay, jacobians, sensitivity, done
-                )
-            else:
-                next_sensitivity = sensitivity
-
-        return next_carry, y, next_sensitivity
-
-    def initialize_sensitivity(self, key: jax.Array, input_shape: tuple[int, ...]) -> dict | None:
-        return self.cell.initialize_sensitivity(key, input_shape)

@@ -6,16 +6,117 @@ LRU 是一种对角复数线性状态空间模型：隐状态按复数特征值 
 本文件还实现了 RTRL 所需的局部雅可比与敏感度初始化。
 """
 
+from contextlib import nullcontext
+from dataclasses import dataclass
 from functools import partial
+import math
+from typing import Any
 
 import jax
 import jax.numpy as jnp
 from flax import struct
 from flax.typing import Dtype
 
+from memorax.building import ComponentFamily
+from memorax.networks.differentiation import TruncatedBPTT
+from memorax.utils.axes import add_feature_axis, broadcast_done, init, last
 from memorax.utils.typing import Array, Carry, Key
 
 from .memoroid import MemoroidCellBase
+
+
+@dataclass(frozen=True)
+class LRUStructuredRTRL:
+    """The exact structured sensitivity recurrence implemented by LRU/Memoroid."""
+
+    core: Any
+
+    def initialize(self, key, input_shape):
+        return self.core.cell.initialize_sensitivity(key, input_shape)
+
+    def initialization(self):
+        return nullcontext()
+
+    def __call__(self, params, inputs, done, carry, state):
+        return self.core.apply(
+            {"params": params},
+            inputs,
+            done,
+            carry,
+            state,
+            method=_structured_rtrl,
+        )
+
+
+def _construct_differentiation(selection, builder, *, core):
+    del builder
+    if selection.kind == "exact_rtrl":
+        return LRUStructuredRTRL(core)
+    return TruncatedBPTT(core)
+
+
+LRU_DIFFERENTIATION_FAMILY = ComponentFamily(
+    branches={"exact_rtrl": (), "tbptt": ()},
+    construct=_construct_differentiation,
+)
+
+
+def _propagate_sensitivities(decay, jacobians, state, done):
+    batch, steps, hidden = decay.shape
+    done = add_feature_axis(done)
+    propagated = {}
+
+    @jax.vmap
+    def binary_operator(a, b):
+        state_i, decay_i = a
+        state_j, decay_j = b
+        return decay_j * state_i + state_j, decay_j * decay_i
+
+    for name in sorted(jacobians):
+        jacobian = jacobians[name]
+        previous = state[name]
+        param_shape = jacobian.shape[3:]
+        param_size = math.prod(param_shape)
+
+        jacobian = jacobian.reshape(batch, steps, hidden * param_size)
+        previous = previous.reshape(batch, 1, hidden * param_size)
+        decay_for_parameter = jnp.where(
+            done, 0, jnp.repeat(decay, param_size, axis=-1)
+        )
+
+        values = jnp.concatenate([previous, jacobian], axis=1)
+        decays = jnp.concatenate(
+            [jnp.ones_like(previous), decay_for_parameter], axis=1
+        )
+        values, _ = jax.lax.associative_scan(
+            binary_operator, (values, decays), axis=1
+        )
+        propagated[name] = last(values).reshape(batch, 1, hidden, *param_shape)
+    return propagated
+
+
+def _structured_rtrl(core, inputs, done, carry, state, **kwargs):
+    """Run the LRU/Memoroid forward and its diagonal sensitivity recurrence."""
+
+    z = core.cell(inputs, **kwargs)
+    phantom = core.cell.compute_phantom(state)
+    carry = core.cell.inject_phantom(carry, phantom)
+
+    hidden, next_carry = core.scan_fn(z, carry, done)
+    output = core.cell.read(hidden, inputs, **kwargs)
+    previous_carry = jax.tree.map(
+        lambda initial, history: jnp.concatenate([initial, init(history)], axis=1),
+        carry,
+        hidden,
+    )
+    reset = add_feature_axis(done)
+    previous_carry = jax.tree.map(
+        lambda value: jnp.where(broadcast_done(reset, value), 0, value),
+        previous_carry,
+    )
+    decay, jacobians = core.cell.local_jacobian(previous_carry, z, inputs)
+    next_state = _propagate_sensitivities(decay, jacobians, state, done)
+    return next_carry, output, next_state
 
 
 def _nu_init(key, shape, r_min, r_max, dtype=jnp.float32):
@@ -185,6 +286,16 @@ class LRUCell(MemoroidCellBase):
         decay = jnp.ones((*batch_dims, 1, self.config.hidden_dim), dtype=jnp.complex64)
         return LRUCarry(state=state, decay=decay)
 
+    def compute_phantom(self, sensitivity: dict) -> Array:
+        phantom = 0
+        for name, value in sensitivity.items():
+            parameter = self.variables["params"][name]
+            difference = parameter - jax.lax.stop_gradient(parameter)
+            phantom = phantom + jnp.sum(
+                value * difference, axis=tuple(range(3, value.ndim))
+            )
+        return phantom
+
     def inject_phantom(self, carry: Carry, phantom: Array) -> Carry:
         """把 phantom 注入复数状态（RTRL 用），对原状态截断梯度。"""
         return carry.replace(state=jax.lax.stop_gradient(carry.state) + phantom)
@@ -215,7 +326,9 @@ class LRUCell(MemoroidCellBase):
         """按各参数形状构造零敏感度字典（在线学习起点）。"""
         *batch_dims, _ = input_shape
         H = self.config.hidden_dim
-        z = lambda *s: jnp.zeros((*batch_dims, 1, *s), dtype=jnp.complex64)
+        def z(*shape):
+            return jnp.zeros((*batch_dims, 1, *shape), dtype=jnp.complex64)
+
         sensitivity = {
             "nu_log": z(H),
             "theta_log": z(H),

@@ -35,10 +35,11 @@ from memorax.rl import (
     ObjectiveDirections,
     environment_owns_normalization,
     make_bounded_rule,
-    make_credit,
     make_normalizer,
     make_td0,
 )
+from memorax.networks.differentiation import TruncatedBPTT
+from memorax.networks.sequence_models.rtu import RTUStructuredRTRL
 from memorax.utils import Timestep
 from memorax.utils.axes import (
     add_time_axis,
@@ -239,8 +240,9 @@ class StreamAC:
                 "are both enabled"
             )
 
-        self.actor_credit = make_credit(cfg.credit, actor_network.core)
-        self.critic_credit = make_credit(cfg.credit, critic_network.core)
+        strategy = RTUStructuredRTRL if cfg.credit == "rtrl" else TruncatedBPTT
+        self.actor_credit = strategy(actor_network.core)
+        self.critic_credit = strategy(critic_network.core)
         self.actor_rule = make_bounded_rule(bound=cfg.actor_bound, base=cfg.actor_base)
         self.critic_rule = make_bounded_rule(
             bound=cfg.critic_bound, base=cfg.critic_base
@@ -265,8 +267,8 @@ class StreamAC:
             self._input(obs, action, reward),
             done=done,
             carries=carry,
-            sensitivity=s,
-            credit=credit,
+            differentiation_state=s,
+            differentiation=credit,
         )
 
     def _actor_forward(self, params, obs, action, reward, done, carry, sensitivity):

@@ -1,10 +1,11 @@
+from importlib import import_module
 from types import SimpleNamespace
 
 import jax
-
 import memorax
-import memorax.algorithms as algorithms
+import pytest
 from entries import rtrrl as entry
+from memorax import algorithms
 from memorax.algorithms import RTRRL
 from memorax.algorithms import rtrrl_aaai as rtrrl
 from memorax.assembly import BuildRequest, EnvironmentSpec, assemble
@@ -15,13 +16,15 @@ from memorax.readings import taken
 from tests.support.environments import TinyContinuousEnv
 
 
-def parameters():
+def parameters(backbone="lru", differentiation="exact_rtrl"):
+    branch = f"torso.backbone.{backbone}"
     return expand(
         rtrrl.PARAMETERS,
         {
-            "torso.backbone.kind": "lru",
-            "torso.backbone.lru.feature_dim": 4,
-            "torso.backbone.lru.hidden_dim": 2,
+            "torso.backbone.kind": backbone,
+            f"{branch}.feature_dim": 4,
+            f"{branch}.hidden_dim": 2,
+            f"{branch}.differentiation.kind": differentiation,
             "torso.optimizer.kind": "adam",
             "torso.optimizer.adam.lr": 1e-3,
             "torso.grad_clip": 1.0,
@@ -37,10 +40,60 @@ def parameters():
     )
 
 
+def assembled(backbone="lru", differentiation="exact_rtrl"):
+    return assemble(
+        rtrrl.RTRRL,
+        BuildRequest(
+            parameters=parameters(backbone, differentiation),
+            environment=EnvironmentSpec(
+                id="tiny",
+                backend=None,
+                observed=None,
+                episode_length=8,
+            ),
+            num_envs=1,
+        ),
+        environment_factory=tiny_environment,
+    )
+
+
 def tiny_environment(identifier, **options):
     del identifier, options
     environment = TinyContinuousEnv()
     return environment, environment.default_params
+
+
+@pytest.mark.parametrize("backbone", ("lru", "rtu"))
+def test_each_recurrent_backbone_registers_its_differentiation_scope(backbone):
+    backbone_node = rtrrl.PARAMETERS["torso"]["backbone"]
+    differentiation = backbone_node[backbone]["differentiation"]
+
+    assert set(backbone_node["kind"].valid.values) == {"lru", "rtu"}
+    assert set(differentiation["kind"].valid.values) == {
+        "exact_rtrl",
+        "tbptt",
+    }
+
+
+@pytest.mark.parametrize("backbone", ("lru", "rtu"))
+@pytest.mark.parametrize("kind", ("exact_rtrl", "tbptt"))
+def test_rtrrl_builds_the_selected_kernel_scoped_differentiation(backbone, kind):
+    differentiation = import_module("memorax.networks.differentiation")
+    built = assembled(backbone, kind)
+    torso = built.program.init.__self__.core.torso
+    selected = torso._differentiation
+
+    assert isinstance(selected, differentiation.RecurrentDifferentiation)
+    if kind == "tbptt":
+        assert type(selected) is differentiation.TruncatedBPTT
+    else:
+        assert type(selected).__module__ == (
+            f"memorax.networks.sequence_models.{backbone}"
+        )
+
+    state = built.program.init(jax.random.key(0))
+    differentiation_state = state.core.torso.recurrence.differentiation_state
+    assert (differentiation_state is None) is (kind == "tbptt")
 
 
 def test_rtrrl_declares_parameters_and_observations_beside_its_graph():

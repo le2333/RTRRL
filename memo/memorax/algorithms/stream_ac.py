@@ -1,4 +1,4 @@
-"""StreamAC-RTRL: an actor and a critic with separate recurrent networks.
+"""StreamAC: an actor and a critic with independent differentiated networks.
 
     StreamAC          the order things happen in, and the scan
     Environment       where every stream is
@@ -34,11 +34,9 @@ from memorax.rl import (
     NormalizationState,
     broadcast_stream,
     make_bounded_rule,
-    make_credit,
     make_td0,
     select_ended,
 )
-from memorax.rl.credit import CREDIT_FAMILY
 from memorax.rl.normalization import (
     DISCOUNTED_NORMALIZATION_FAMILY,
     NORMALIZATION_FAMILY,
@@ -65,7 +63,6 @@ class StreamACConfig:
     critic_bound: Any = None
     critic_base: Any = None
     entropy_coefficient: float = 0.01
-    credit: str = "rtrl"
     meta_rl: bool = False
     normalization_statistics: str = "ours"
 
@@ -103,7 +100,6 @@ class StreamACParameters:
     critic: CriticParameters = group(of=CriticParameters)
     normalization: NormalizationParameters = group(of=NormalizationParameters)
     backbone: str = structure(branches=STREAM_AC_BACKBONES.branches)
-    credit: str = structure(branches=CREDIT_FAMILY.branches)
     meta_rl: bool = param(valid=[False, True], search=[False, True])
     gamma: float = param(valid=(0.5, 0.9999), search=(0.9, 0.9999))
     trace_lambda: float = param(valid=(0.0, 1.0), search=(0.0, 1.0))
@@ -119,7 +115,7 @@ class Recurrence:
     """Where the sequence is, and what it owes the past."""
 
     carry: Any
-    sensitivity: Any
+    differentiation_state: Any
 
 
 @struct.dataclass(frozen=True)
@@ -257,6 +253,7 @@ class Network:
         self,
         cfg: StreamACConfig,
         network: Any,
+        differentiation: Any,
         *,
         bound,
         base,
@@ -265,7 +262,7 @@ class Network:
         self.cfg = cfg
         self.network = network
         self.reports = reports
-        self.credit = make_credit(cfg.credit, network.core)
+        self.differentiation = differentiation
         self.rule = make_bounded_rule(bound=bound, base=base)
         self.trace_decay = cfg.gamma * cfg.trace_lambda
 
@@ -284,15 +281,17 @@ class Network:
         """One forward pass, handing back the advance rather than writing it."""
 
         obs, done, action, reward = timestep
-        (carry, sensitivity), output = self.network.walk(
+        (carry, differentiation_state), output = self.network.walk(
             params,
             self._input(obs, action, reward),
             done=done,
             carries=recurrence.carry,
-            sensitivity=recurrence.sensitivity,
-            credit=self.credit,
+            differentiation_state=recurrence.differentiation_state,
+            differentiation=self.differentiation,
         )
-        return Recurrence(carry=carry, sensitivity=sensitivity), output
+        return Recurrence(
+            carry=carry, differentiation_state=differentiation_state
+        ), output
 
     def init(self, keys, timestep: Timestep) -> NetworkState:
         """Fresh online state for this block."""
@@ -300,8 +299,10 @@ class Network:
         param_key, torso_key, dropout_key = keys
         obs, done, action, reward = timestep
         carry = self.network.initialize_carry(jax.random.key(0), self.carry_shape)
-        sensitivity = self.credit.initialize(param_key, self.carry_shape)
-        with self.credit.initialization():
+        differentiation_state = self.differentiation.initialize(
+            param_key, self.carry_shape
+        )
+        with self.differentiation.initialization():
             params = self.network.init(
                 {"params": param_key, "torso": torso_key, "dropout": dropout_key},
                 self._input(obs, action, reward),
@@ -317,7 +318,9 @@ class Network:
                 traces=traces,
                 v=self.rule.init(params=params, traces=traces),
             ),
-            recurrence=Recurrence(carry=carry, sensitivity=sensitivity),
+            recurrence=Recurrence(
+                carry=carry, differentiation_state=differentiation_state
+            ),
         )
 
     def reset(self, key, state: NetworkState) -> NetworkState:
@@ -326,7 +329,9 @@ class Network:
         return state.replace(
             recurrence=Recurrence(
                 carry=self.network.initialize_carry(key, self.carry_shape),
-                sensitivity=self.credit.initialize(key, self.carry_shape),
+                differentiation_state=self.differentiation.initialize(
+                    key, self.carry_shape
+                ),
             )
         )
 
@@ -378,13 +383,18 @@ class Actor:
     """The policy. It chooses, and it names the scalar its block ascends."""
 
     def __init__(
-        self, cfg: StreamACConfig, network: Any, reports: Reports = Reports()
+        self,
+        cfg: StreamACConfig,
+        network: Any,
+        differentiation: Any,
+        reports: Reports = Reports(),
     ) -> None:
         self.cfg = cfg
         self.reports = reports
         self.block = Network(
             cfg,
             network,
+            differentiation,
             bound=cfg.actor_bound,
             base=cfg.actor_base,
             reports=reports.actor,
@@ -473,13 +483,18 @@ class Critic:
     """The value. It reads, and it ascends its own reading."""
 
     def __init__(
-        self, cfg: StreamACConfig, network: Any, reports: Reports = Reports()
+        self,
+        cfg: StreamACConfig,
+        network: Any,
+        differentiation: Any,
+        reports: Reports = Reports(),
     ) -> None:
         self.cfg = cfg
         self.reports = reports
         self.block = Network(
             cfg,
             network,
+            differentiation,
             bound=cfg.critic_bound,
             base=cfg.critic_base,
             reports=reports.critic,
@@ -549,12 +564,14 @@ class Core:
         cfg: StreamACConfig,
         actor_network: Any,
         critic_network: Any,
+        actor_differentiation: Any,
+        critic_differentiation: Any,
         reports: Reports = Reports(),
     ) -> None:
         self.cfg = cfg
         self.reports = reports
-        self.actor = Actor(cfg, actor_network, reports)
-        self.critic = Critic(cfg, critic_network, reports)
+        self.actor = Actor(cfg, actor_network, actor_differentiation, reports)
+        self.critic = Critic(cfg, critic_network, critic_differentiation, reports)
         self.td0 = make_td0()
 
     def init(
@@ -658,6 +675,8 @@ class StreamAC:
         env_params: Any,
         actor_network: Any,
         critic_network: Any,
+        actor_differentiation: Any,
+        critic_differentiation: Any,
         *,
         observation_normalization: Any = None,
         reward_normalization: Any = None,
@@ -676,7 +695,14 @@ class StreamAC:
             reset_on_start=evaluation.reset_on_start,
             update_during_eval=evaluation.update_during_eval,
         )
-        self.core = Core(cfg, actor_network, critic_network, reports)
+        self.core = Core(
+            cfg,
+            actor_network,
+            critic_network,
+            actor_differentiation,
+            critic_differentiation,
+            reports,
+        )
         self.record = frozenset(record)
 
     @classmethod
@@ -697,7 +723,9 @@ class StreamAC:
             features += action_dim + 1
 
         def sequence(backbone, head):
-            return Sequence(components=(*backbone, Readout(module=head)))
+            return Sequence(
+                components=(*backbone.components, Readout(module=head))
+            )
 
         actor_backbone = components.build(
             STREAM_AC_BACKBONES,
@@ -728,13 +756,14 @@ class StreamAC:
                 critic_bound=components.build(BOUND_FAMILY, "critic.optimizer.bound"),
                 critic_base=components.build(BASE_FAMILY, "critic.optimizer.base"),
                 entropy_coefficient=float(parameters["entropy_coefficient"]),
-                credit=components.build(CREDIT_FAMILY, "credit"),
                 meta_rl=meta_rl,
             ),
             context.environment,
             context.environment_parameters,
             sequence(actor_backbone, actor_head),
             sequence(critic_backbone, critic_head),
+            actor_backbone.differentiation,
+            critic_backbone.differentiation,
             observation_normalization=components.build(
                 NORMALIZATION_FAMILY, "normalization.observation"
             ),

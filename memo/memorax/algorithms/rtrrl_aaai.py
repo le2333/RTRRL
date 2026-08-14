@@ -4,12 +4,12 @@
     Environment       where every stream is
     Normalization     the scales the environment's numbers are read through
     Core              a torso, two heads, and everything that couples them
-      Torso           the shared block: sequence, sensitivity, following copy
+      Torso           the shared recurrent representation and following copy
       Actor / Critic  a readout, and the objectives it names
 
-Three blocks and two rule groups: the torso is clipped alone, the two readouts
-step together. The ``lru-bp-rtrl`` path only -- an LRU credited by exact RTRL,
-everything feedforward by backpropagation -- and no gates.
+Three blocks and two rule groups: the torso is clipped alone and the two
+readouts step together. Its private recurrent subgraph selects an LRU or RTU
+and one differentiation method supported by that kernel.
 
 Rebuilt from ``../RTRRL-AAAI25/rtrrl.py``. Driven against it by
 ``tests/test_rtrrl_parity.py``; behaviour in ``tests/test_rtrrl.py``.
@@ -27,10 +27,12 @@ import optax
 from flax import struct
 
 from memorax.building import BuildContext, ComponentBuilder, ComponentFamily
-from memorax.networks.backbones import Lru, backbone
+from memorax.networks.backbones import backbone
 from memorax.networks.components import FFN, LayerNorm, Tanh
 from memorax.networks.readouts import ACTOR_HEAD_FAMILY, CRITIC_HEAD_FAMILY
 from memorax.networks.sequence import PLACES, Sequence
+from memorax.networks.sequence_models.lru import LRU_DIFFERENTIATION_FAMILY
+from memorax.networks.sequence_models.rtu import RTU_DIFFERENTIATION_FAMILY
 from memorax.observability.metrics import metric_names
 from memorax.parameters import describe_parameters, group, param, structure
 from memorax.readings import reading, readings, taken
@@ -39,7 +41,6 @@ from memorax.rl import (
     InteractionNormalization,
     NormalizationState,
     broadcast_stream,
-    make_exact_rtrl_credit,
     make_optax_rule,
     make_td0,
     select_ended,
@@ -96,17 +97,38 @@ class RTRRLConfig:
 RTRRL_OPTIMIZERS = BASE_FAMILY.restricted("adam")
 
 
-def _construct_torso(selection, builder):
-    """Build the private feature projection and exact-RTRL LRU subgraph."""
+@dataclass(frozen=True)
+class LruTorso:
+    """RTRRL's projection width and LRU-specific recurrent choices."""
 
-    del builder
+    hidden_dim: int = param(valid=(1, 4096), search=(32, 512))
+    feature_dim: int = param(valid=(1, 4096), search=(16, 256))
+    differentiation: str = structure(
+        branches=LRU_DIFFERENTIATION_FAMILY.branches
+    )
+
+
+@dataclass(frozen=True)
+class RtuTorso:
+    """RTRRL's projection width and RTU-specific recurrent choices."""
+
+    hidden_dim: int = param(valid=(1, 4096), search=(32, 512))
+    feature_dim: int = param(valid=(1, 4096), search=(16, 256))
+    differentiation: str = structure(
+        branches=RTU_DIFFERENTIATION_FAMILY.branches
+    )
+
+
+def _construct_torso(selection, builder):
+    """Build RTRRL's private projection and differentiated recurrent subgraph."""
+
     settings = selection.parameters
     recurrent = backbone(
         selection.kind,
         features=settings.feature_dim,
         hidden_dim=settings.hidden_dim,
     )
-    return Sequence(
+    network = Sequence(
         components=(
             FFN(features=settings.feature_dim),
             LayerNorm(),
@@ -114,10 +136,20 @@ def _construct_torso(selection, builder):
             *recurrent,
         )
     )
+    family = {
+        "lru": LRU_DIFFERENTIATION_FAMILY,
+        "rtu": RTU_DIFFERENTIATION_FAMILY,
+    }[selection.kind]
+    differentiation = builder.build(
+        family,
+        f"{selection.path}.differentiation",
+        core=network.core,
+    )
+    return network, differentiation
 
 
 RTRRL_TORSO_FAMILY = ComponentFamily(
-    branches={"lru": Lru},
+    branches={"lru": LruTorso, "rtu": RtuTorso},
     construct=_construct_torso,
 )
 
@@ -177,7 +209,7 @@ class Recurrence:
     """Where the sequence is, and what it owes the past."""
 
     carry: Any
-    sensitivity: Any
+    differentiation_state: Any
 
 
 @struct.dataclass(frozen=True)
@@ -415,12 +447,14 @@ def _head_gradient_norm(tree):
 
 # ------------------------------------------------------------ the shared block
 class Torso:
-    """The one block both heads read, and the only one credited by RTRL."""
+    """The recurrent representation shared by both heads."""
 
-    def __init__(self, cfg: RTRRLConfig, network: Any) -> None:
+    def __init__(
+        self, cfg: RTRRLConfig, network: Any, differentiation: Any
+    ) -> None:
         self.cfg = cfg
         self._network = network
-        self._credit = make_exact_rtrl_credit(network.core)
+        self._differentiation = differentiation
         self._decay = cfg.gamma * cfg.lambda_rnn
 
     @property
@@ -447,15 +481,17 @@ class Torso:
         """One forward pass over one sequence-shaped step."""
 
         _, done, _, _ = timestep
-        (carry, sensitivity), output = self._network.walk(
+        (carry, differentiation_state), output = self._network.walk(
             params,
             self._input(timestep),
             done=done,
             carries=recurrence.carry,
-            sensitivity=recurrence.sensitivity,
-            credit=self._credit,
+            differentiation_state=recurrence.differentiation_state,
+            differentiation=self._differentiation,
         )
-        return Recurrence(carry=carry, sensitivity=sensitivity), output
+        return Recurrence(
+            carry=carry, differentiation_state=differentiation_state
+        ), output
 
     def init(self, keys, timestep: Timestep) -> TorsoState:
         """Fresh online state for the shared block, and a copy for it to follow."""
@@ -463,8 +499,10 @@ class Torso:
         param_key, torso_key, dropout_key = keys
         _, done, _, _ = timestep
         carry = self._network.initialize_carry(jax.random.key(0), self.carry_shape)
-        sensitivity = self._credit.initialize(param_key, self.carry_shape)
-        with self._credit.initialization():
+        differentiation_state = self._differentiation.initialize(
+            param_key, self.carry_shape
+        )
+        with self._differentiation.initialization():
             variables = self._network.init(
                 {"params": param_key, "torso": torso_key, "dropout": dropout_key},
                 self._input(timestep),
@@ -476,7 +514,9 @@ class Torso:
             params=params,
             traces=_initial_traces(params, self.cfg.num_envs),
             slow_params=params,
-            recurrence=Recurrence(carry=carry, sensitivity=sensitivity),
+            recurrence=Recurrence(
+                carry=carry, differentiation_state=differentiation_state
+            ),
         )
 
     def reset(self, key, state: TorsoState) -> TorsoState:
@@ -485,7 +525,9 @@ class Torso:
         return state.replace(
             recurrence=Recurrence(
                 carry=self._network.initialize_carry(key, self.carry_shape),
-                sensitivity=self._credit.initialize(key, self.carry_shape),
+                differentiation_state=self._differentiation.initialize(
+                    key, self.carry_shape
+                ),
             )
         )
 
@@ -609,13 +651,14 @@ class Core:
         self,
         cfg: RTRRLConfig,
         torso_network: Any,
+        torso_differentiation: Any,
         actor_head: Any,
         critic_head: Any,
         reports: Reports = Reports(),
     ) -> None:
         self.cfg = cfg
         self.reports = reports
-        self.torso = Torso(cfg, torso_network)
+        self.torso = Torso(cfg, torso_network, torso_differentiation)
         self.actor = Actor(cfg, actor_head)
         self.critic = Critic(cfg, critic_head)
         self.td0 = make_td0()
@@ -921,6 +964,7 @@ class RTRRL:
         env: Any,
         env_params: Any,
         torso_network: Any,
+        torso_differentiation: Any,
         actor_head: Any,
         critic_head: Any,
         *,
@@ -941,7 +985,14 @@ class RTRRL:
             reset_on_start=evaluation.reset_on_start,
             update_during_eval=evaluation.update_during_eval,
         )
-        self.core = Core(cfg, torso_network, actor_head, critic_head, reports)
+        self.core = Core(
+            cfg,
+            torso_network,
+            torso_differentiation,
+            actor_head,
+            critic_head,
+            reports,
+        )
         self.record = frozenset(record)
 
     @classmethod
@@ -956,6 +1007,9 @@ class RTRRL:
         gamma = float(parameters["gamma"])
         torso_optimizer = components.build(RTRRL_OPTIMIZERS, "torso.optimizer")
         heads_optimizer = components.build(RTRRL_OPTIMIZERS, "heads.optimizer")
+        torso_network, torso_differentiation = components.build(
+            RTRRL_TORSO_FAMILY, "torso.backbone"
+        )
         return cls(
             RTRRLConfig(
                 num_envs=context.num_envs,
@@ -974,7 +1028,8 @@ class RTRRL:
             ),
             context.environment,
             context.environment_parameters,
-            components.build(RTRRL_TORSO_FAMILY, "torso.backbone"),
+            torso_network,
+            torso_differentiation,
             components.build(
                 ACTOR_HEAD_FAMILY,
                 "actor.head",

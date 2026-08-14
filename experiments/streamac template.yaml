@@ -104,11 +104,10 @@ space:
     kind: [rtu]
     rtu:
       hidden_dim: [32]
+      differentiation:
+        kind: [tbptt]
     # 初始化归有权重可抽的那条分支；rtu 的递推核自己抽，所以 rtu 下没有这一项。
     # 换到 mlp 时是 mlp.initialization.kind: [lecun|sparse]。
 
   # 梯度信用
-  credit:
-    kind: [tbptt]
-
   meta_rl: [false]

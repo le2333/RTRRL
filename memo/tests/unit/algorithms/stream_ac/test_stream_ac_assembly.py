@@ -22,7 +22,6 @@ def parameters():
             "normalization.observation.kind": "none",
             "normalization.reward.kind": "none",
             "backbone.kind": "mlp",
-            "credit.kind": "tbptt",
             "meta_rl": False,
         },
     )
@@ -38,6 +37,14 @@ def test_stream_ac_declarations_live_with_its_graph_and_entry_reexports_them():
     assert entry.PARAMETERS is stream_ac.PARAMETERS
     assert entry.METRICS is stream_ac.METRICS
     assert stream_ac.OBSERVATIONS.series == stream_ac.TRAINING_METRICS
+
+
+def test_only_the_recurrent_backbone_declares_differentiation():
+    backbone = stream_ac.PARAMETERS["backbone"]
+
+    assert "differentiation" in backbone["rtu"]
+    assert "differentiation" not in backbone["mlp"]
+    assert "credit" not in stream_ac.PARAMETERS
 
 
 def test_entry_only_projects_the_run_config_for_assembly():

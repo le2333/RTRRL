@@ -25,6 +25,7 @@ from memorax.networks import heads
 from memorax.networks.components import FFN, LayerNorm, Tanh
 from memorax.networks.sequence import Sequence
 from memorax.networks.sequence_models import LRUCell, LRUConfig, Memoroid
+from memorax.networks.sequence_models.lru import LRUStructuredRTRL
 from memorax.rl.updates import Adam
 from tests.support.environments import TinyContinuousEnv
 
@@ -81,6 +82,7 @@ def build(head: str = "state_std", reports=None, **overrides) -> RTRRL:
         env,
         env.default_params,
         torso,
+        LRUStructuredRTRL(torso.core),
         actor,
         heads.VNetwork(),
         reports=rtrrl.Reports() if reports is None else reports,
@@ -276,13 +278,13 @@ def test_each_decay_moves_one_block_s_trace(decay, owner, others):
 # ----------------------------------------------------- the recurrence is exact
 
 
-def test_a_sensitivity_is_carried_and_is_not_zero():
+def test_a_differentiation_state_is_carried_and_is_not_zero():
     """Truncated credit carries none, so this is what tells the two apart."""
 
     state = run(build(), 6)
-    sensitivity = state.core.torso.recurrence.sensitivity
-    assert sensitivity is not None
-    assert biggest(sensitivity) > 0
+    differentiation_state = state.core.torso.recurrence.differentiation_state
+    assert differentiation_state is not None
+    assert biggest(differentiation_state) > 0
 
 
 def test_every_recurrent_parameter_of_the_cell_learns():

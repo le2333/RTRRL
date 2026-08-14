@@ -22,7 +22,7 @@ import jax
 import jax.numpy as jnp
 import optax
 
-from memorax.rl import make_exact_rtrl_credit
+from memorax.networks.sequence_models.lru import LRUStructuredRTRL
 from memorax.utils import Timestep
 
 
@@ -57,7 +57,7 @@ def make_reference(agent, sequence):
     torso = agent.core.torso
     actor = agent.core.actor
     critic = agent.core.critic
-    credit = make_exact_rtrl_credit(sequence.core)
+    differentiation = LRUStructuredRTRL(sequence.core)
 
     def params_of(core, name):
         return core.torso.params if name == "torso" else getattr(core, name).params
@@ -91,15 +91,15 @@ def make_reference(agent, sequence):
         """The shared block, exactly as ``Torso.apply`` drives it."""
 
         _, done, _, _ = timestep
-        (carry, sensitivity), hidden = sequence.walk(
+        (carry, differentiation_state), hidden = sequence.walk(
             torso_params,
             torso._input(timestep),
             done=done,
             carries=recurrence.carry,
-            sensitivity=recurrence.sensitivity,
-            credit=credit,
+            differentiation_state=recurrence.differentiation_state,
+            differentiation=differentiation,
         )
-        return hidden, (carry, sensitivity)
+        return hidden, (carry, differentiation_state)
 
     def grads_step(torso_params, head_params, timestep, recurrence, action_key):
         """``grads_step``: one vjp, called twice; one combined traced objective."""
@@ -231,7 +231,7 @@ def make_reference(agent, sequence):
                 traces=advanced["torso"],
                 slow_params=slow,
                 recurrence=type(core.torso.recurrence)(
-                    carry=carry[0], sensitivity=carry[1]
+                    carry=carry[0], differentiation_state=carry[1]
                 ),
             ),
             actor=core.actor.replace(params=stepped["actor"], traces=advanced["actor"]),

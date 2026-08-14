@@ -45,6 +45,7 @@ from memorax.networks import heads
 from memorax.networks.components import FFN, LayerNorm, Readout, Tanh
 from memorax.networks.sequence import Sequence
 from memorax.networks.sequence_models import RNN, RTUCell, RTUConfig
+from memorax.networks.sequence_models.rtu import RTUStructuredRTRL
 from memorax.rl import NormalizationConfig
 from memorax.rl.updates import ObBound, Sgd
 from reference import stream_ac as flat
@@ -95,8 +96,7 @@ def build(module, *, normalize, evaluation):
             )
         )
 
-    return module.StreamAC(
-        module.StreamACConfig(
+    settings = dict(
             num_envs=ENVS,
             gamma=0.9,
             trace_lambda=0.8,
@@ -104,13 +104,37 @@ def build(module, *, normalize, evaluation):
             actor_base=Sgd(lr=0.1),
             critic_bound=ObBound(kappa=2.0),
             critic_base=Sgd(lr=0.1),
-            credit="rtrl",
             entropy_coefficient=0.01,
-        ),
+    )
+    actor_network = network(heads.Gaussian(action_dim=action_dim))
+    critic_network = network(heads.VNetwork())
+    if module is flat:
+        return module.StreamAC(
+            module.StreamACConfig(**settings, credit="rtrl"),
+            env,
+            env.default_params,
+            actor_network,
+            critic_network,
+            observation_normalization=(
+                NormalizationConfig(center=True, cold_start="seeded")
+                if normalize
+                else None
+            ),
+            reward_normalization=(
+                NormalizationConfig(center=False, discount=0.9, reset_on_done=True)
+                if normalize
+                else None
+            ),
+            evaluation=evaluation,
+        )
+    return module.StreamAC(
+        module.StreamACConfig(**settings),
         env,
         env.default_params,
-        network(heads.Gaussian(action_dim=action_dim)),
-        network(heads.VNetwork()),
+        actor_network,
+        critic_network,
+        RTUStructuredRTRL(actor_network.core),
+        RTUStructuredRTRL(critic_network.core),
         observation_normalization=(
             NormalizationConfig(center=True, cold_start="seeded") if normalize else None
         ),

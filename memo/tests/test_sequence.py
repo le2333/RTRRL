@@ -26,9 +26,10 @@ import pytest
 from memorax.algorithms.stream_ac import StreamAC, StreamACConfig
 from memorax.networks import heads
 from memorax.networks.components import FFN, LayerNorm, Readout, Tanh
+from memorax.networks.differentiation import TruncatedBPTT
 from memorax.networks.sequence import Sequence
 from memorax.networks.sequence_models import RNN, RTUCell, RTUConfig
-from memorax.rl import make_credit
+from memorax.networks.sequence_models.rtu import RTUStructuredRTRL
 from memorax.rl.updates import ObBound, Sgd
 from tests.support.environments import TinyContinuousEnv
 from tests.support.numerics import deviations, flattened
@@ -157,11 +158,11 @@ def test_two_recurrent_components_are_refused():
         built(recurrent(), LayerNorm(), recurrent())
 
 
-def test_the_sequence_names_its_recurrent_component_so_a_credit_can_wrap_it():
+def test_the_sequence_names_its_recurrent_component_for_differentiation():
     """The credit wraps the recurrence, not the network it sits in.
 
-    ``make_credit`` carries a sensitivity through one Jacobian; handed a whole
-    sequence there would be nothing whose Jacobian that is.
+    The RTU strategy carries its kernel's state through one Jacobian; handed a
+    whole sequence there would be no single recurrent Jacobian to address.
     """
 
     core = recurrent()
@@ -169,7 +170,7 @@ def test_the_sequence_names_its_recurrent_component_so_a_credit_can_wrap_it():
 
     assert sequence.components[sequence.recurrent] is core
     assert (
-        make_credit("rtrl", sequence.core).initialize(jax.random.key(0), SHAPE)
+        RTUStructuredRTRL(sequence.core).initialize(jax.random.key(0), SHAPE)
         is not None
     )
 
@@ -186,16 +187,16 @@ def test_walking_with_truncated_credit_is_walking_plainly():
     )
     ended = jnp.zeros((ENVS, 1), dtype=jnp.bool_)
     params = sequence.init(jax.random.key(0), x, done=ended, initial_carry=carries)
-    (walked, sensitivity), (walk_output, _) = sequence.walk(
+    (walked, differentiation_state), (walk_output, _) = sequence.walk(
         params,
         x,
         done=ended,
         carries=carries,
-        sensitivity=None,
-        credit=make_credit("tbptt", sequence.core),
+        differentiation_state=None,
+        differentiation=TruncatedBPTT(sequence.core),
     )
 
-    assert sensitivity is None
+    assert differentiation_state is None
     assert not deviations(flattened({"y": walk_output}), flattened({"y": plain}))
     assert not deviations(flattened(walked), flattened(plain_carries))
 
@@ -256,8 +257,8 @@ def test_a_component_knows_its_own_name_on_both_ways_through():
         x,
         done=ended,
         carries=carries,
-        sensitivity=None,
-        credit=make_credit("tbptt", sequence.core),
+        differentiation_state=None,
+        differentiation=TruncatedBPTT(sequence.core),
     )
 
     assert seen["call"] == ["components_0", "components_2"]
@@ -309,14 +310,17 @@ def kernel(**overrides) -> StreamAC:
         "actor_base": Sgd(lr=0.1),
         "critic_bound": ObBound(kappa=2.0),
         "critic_base": Sgd(lr=0.1),
-        "credit": "tbptt",
     }
+    actor_network = network(heads.Gaussian(action_dim=action_dim))
+    critic_network = network(heads.VNetwork())
     return StreamAC(
         StreamACConfig(**{**settings, **overrides}),
         env,
         env.default_params,
-        network(heads.Gaussian(action_dim=action_dim)),
-        network(heads.VNetwork()),
+        actor_network,
+        critic_network,
+        TruncatedBPTT(actor_network.core),
+        TruncatedBPTT(critic_network.core),
     )
 
 

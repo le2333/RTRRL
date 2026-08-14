@@ -6,9 +6,8 @@ The step is ``(carries, x) -> (carries, y)``. What a component needs beyond
 The carry is one entry per component: a stateless component hands back the entry
 it was given, a recurrent one hands back a new one.
 
-At most one component may be recurrent. Carrying an exact sensitivity through
-two would need a dense cross-layer Jacobian, which nothing here implements, so a
-second one is refused at construction.
+At most one component may be recurrent. The differentiation boundary addresses
+one recurrent component, so a second one is refused at construction.
 """
 
 from __future__ import annotations
@@ -67,16 +66,25 @@ class Sequence(nn.Module):
         return walked, x
 
     @nn.nowrap
-    def walk(self, params, x: Array, *, done, carries, sensitivity, credit):
-        """The same order, with the recurrent component driven through ``credit``."""
+    def walk(
+        self,
+        params,
+        x: Array,
+        *,
+        done,
+        carries,
+        differentiation_state,
+        differentiation,
+    ):
+        """Walk the sequence with its selected recurrent differentiation."""
 
         tree = params["params"] if "params" in params else params
         carries = self._entries(carries)
         walked = []
         for index, (name, component) in enumerate(zip(self.names, self.components)):
             if index == self.recurrent:
-                carry, x, sensitivity = credit(
-                    tree[name], x, done, carries[index], sensitivity
+                carry, x, differentiation_state = differentiation(
+                    tree[name], x, done, carries[index], differentiation_state
                 )
             else:
                 # Applied against its own slice of the tree, a component is its
@@ -90,7 +98,7 @@ class Sequence(nn.Module):
                     **self._declared(component, done),
                 )
             walked.append(carry)
-        return (walked, sensitivity), x
+        return (walked, differentiation_state), x
 
     @nn.nowrap
     def initialize_carry(self, key: Key, input_shape: tuple) -> list:

@@ -8,7 +8,6 @@ from .memoroid import Memoroid, MemoroidCellBase
 from .min_gru import MinGRUCarry, MinGRUCell, MinGRUConfig
 from .mlstm import mLSTMCarry, mLSTMCell, mLSTMConfig
 from .rnn import RNN, RNNCellBase
-from .rtrl import RTRL
 from .rtu import RTUCarry, RTUCell, RTUConfig
 from .s5 import S5Carry, S5Cell, S5Config
 from .self_attention import SelfAttention, SelfAttentionCarry, SelfAttentionConfig

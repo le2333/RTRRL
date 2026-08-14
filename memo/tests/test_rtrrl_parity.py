@@ -55,7 +55,7 @@ from test_rtrrl import build, torso_network
 
 from memorax.algorithms.rtrrl_aaai import RTRRLConfig, _advance_trace
 from memorax.networks.sequence_models import LRUCell, LRUConfig, Memoroid
-from memorax.rl import make_exact_rtrl_credit
+from memorax.networks.sequence_models.lru import LRUStructuredRTRL
 from tests.support.numerics import assert_within, deviations, flattened
 
 pytestmark = [pytest.mark.parity, pytest.mark.external]
@@ -145,7 +145,9 @@ def _carried(state):
             "torso/slow": core.torso.slow_params,
             "torso/traces": core.torso.traces,
             "torso/carry": core.torso.recurrence.carry,
-            "torso/sensitivity": core.torso.recurrence.sensitivity,
+            "torso/differentiation_state": (
+                core.torso.recurrence.differentiation_state
+            ),
             "actor/params": core.actor.params,
             "actor/traces": core.actor.traces,
             "critic/params": core.critic.params,
@@ -209,7 +211,7 @@ def _cell():
             config=LRUConfig(features=features, hidden_dim=hidden, output_dim=out)
         )
     )
-    credit = make_exact_rtrl_credit(mine)
+    differentiation = LRUStructuredRTRL(mine)
     carry = mine.initialize_carry(jax.random.key(0), (1, features))
     sensitivity = mine.initialize_sensitivity(jax.random.key(0), (1, features))
     done = jnp.zeros((1, 1), dtype=bool)
@@ -265,7 +267,8 @@ def _cell():
 
     ours = jax.grad(
         lambda p: (
-            credit(p, x[None, None], done, carry, sensitivity)[1][0, 0] * weight
+            differentiation(p, x[None, None], done, carry, sensitivity)[1][0, 0]
+            * weight
         ).sum()
     )(params)["cell"]
     return ours, theirs_grad("rtrl"), theirs_grad("bptt")

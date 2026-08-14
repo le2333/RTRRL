@@ -13,6 +13,7 @@ import flax.linen as nn
 
 from memorax.building import ComponentFamily
 from memorax.networks.components import FFN, LayerNorm, LeakyReLU
+from memorax.networks.differentiation import TruncatedBPTT
 from memorax.networks.initialization import INITIALIZER_FAMILY, initialization
 from memorax.networks.sequence_models import (
     RNN,
@@ -24,7 +25,9 @@ from memorax.networks.sequence_models import (
     RTUCell,
     RTUConfig,
 )
-from memorax.parameters import param
+from memorax.networks.sequence_models.lru import LRU_DIFFERENTIATION_FAMILY
+from memorax.networks.sequence_models.rtu import RTU_DIFFERENTIATION_FAMILY
+from memorax.parameters import param, structure
 
 RECURRENT_BACKBONES = ("lru", "rtu")
 BACKBONES = (*RECURRENT_BACKBONES, "mlp")
@@ -37,18 +40,28 @@ UPSTREAM_BACKBONES = ("lru_published", "lru_rewritten")
 @dataclass(frozen=True)
 class Rtu:
     hidden_dim: int = param(valid=(1, 4096), search=(32, 512))
+    differentiation: str = structure(branches=RTU_DIFFERENTIATION_FAMILY.branches)
 
 
 @dataclass(frozen=True)
 class Lru:
     hidden_dim: int = param(valid=(1, 4096), search=(32, 512))
     feature_dim: int = param(valid=(1, 4096), search=(16, 256))
+    differentiation: str = structure(branches=LRU_DIFFERENTIATION_FAMILY.branches)
 
 
 @dataclass(frozen=True)
 class Mlp:
     hidden_dim: int = param(valid=(1, 4096), search=(32, 512))
     initialization: str = initialization()
+
+
+@dataclass(frozen=True)
+class BuiltBackbone:
+    """The components and recurrent differentiation selected for one backbone."""
+
+    components: tuple[nn.Module, ...]
+    differentiation: object
 
 
 _LRU_CELLS = {
@@ -124,13 +137,28 @@ def _construct_backbone(
         if isinstance(selection.parameters, Mlp)
         else None
     )
-    return backbone(
+    components = backbone(
         selection.kind,
         features=features,
         hidden_dim=selection.parameters.hidden_dim,
         output_dim=output_dim,
         kernel_init=kernel_init,
     )
+    if selection.kind == "rtu":
+        differentiation = builder.build(
+            RTU_DIFFERENTIATION_FAMILY,
+            f"{selection.path}.differentiation",
+            core=components[0],
+        )
+    elif selection.kind in _LRU_CELLS:
+        differentiation = builder.build(
+            LRU_DIFFERENTIATION_FAMILY,
+            f"{selection.path}.differentiation",
+            core=components[0],
+        )
+    else:
+        differentiation = TruncatedBPTT(None)
+    return BuiltBackbone(components, differentiation)
 
 
 BACKBONE_FAMILY = ComponentFamily(

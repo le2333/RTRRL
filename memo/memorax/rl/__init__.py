@@ -4,7 +4,6 @@ Only computation lives here. How an algorithm allocates traces, routes
 objectives, or drives its own loop stays with the algorithm.
 """
 
-from .credit import CREDITS, make_credit, make_exact_rtrl_credit
 from .interaction import (
     EnvironmentStreams,
     InteractionNormalization,
@@ -35,7 +34,6 @@ from .updates import (
 )
 
 __all__ = [
-    "CREDITS",
     "EnvironmentStreams",
     "InteractionNormalization",
     "NormalizationConfig",
@@ -52,8 +50,6 @@ __all__ = [
     "broadcast_stream",
     "declared_normalizer",
     "environment_owns_normalization",
-    "make_credit",
-    "make_exact_rtrl_credit",
     "make_normalizer",
     "make_bounded_rule",
     "make_optax_rule",

@@ -68,6 +68,8 @@ from memorax.networks import (
     Tanh,
     heads,
 )
+from memorax.networks.differentiation import TruncatedBPTT
+from memorax.networks.sequence_models.rtu import RTUStructuredRTRL
 from memorax.rl import NormalizationConfig, make_bounded_rule, make_normalizer, make_td0
 from memorax.rl.updates import (
     Adam,
@@ -143,7 +145,13 @@ def bound_of(role: str, *, adaptive: bool = False, fixed: bool = False):
     return maker(kappa=kappa, beta2=SETTINGS["beta2"], eps=SETTINGS["eps"])
 
 
-def ours(*, adaptive: bool = False, fixed: bool = False, **overrides) -> StreamAC:
+def ours(
+    *,
+    adaptive: bool = False,
+    fixed: bool = False,
+    differentiation: str = "exact_rtrl",
+    **overrides,
+) -> StreamAC:
     """Our kernel, built for its methods; nothing here initialises it."""
 
     env = TinyContinuousEnv()
@@ -157,12 +165,22 @@ def ours(*, adaptive: bool = False, fixed: bool = False, **overrides) -> StreamA
         "critic_bound": bound_of("critic", adaptive=adaptive, fixed=fixed),
         "critic_base": Sgd(lr=SETTINGS["critic_lr"]),
     }
+    actor_network = network(heads.Gaussian(action_dim=2))
+    critic_network = network(heads.VNetwork())
+
+    def differentiate(sequence):
+        if differentiation == "tbptt":
+            return TruncatedBPTT(sequence.core)
+        return RTUStructuredRTRL(sequence.core)
+
     return StreamAC(
         StreamACConfig(**{**settings, **overrides}),
         env,
         env.default_params,
-        network(heads.Gaussian(action_dim=2)),
-        network(heads.VNetwork()),
+        actor_network,
+        critic_network,
+        differentiate(actor_network),
+        differentiate(critic_network),
     )
 
 
@@ -545,7 +563,7 @@ def transition(seed: int, done: str):
     """
 
     keys = jax.random.split(jax.random.key(seed), 4)
-    state = ours(credit="tbptt").init(keys[0])
+    state = ours(differentiation="tbptt").init(keys[0])
     timestep = replace(state.timestep, done=terminals(done, keys[1]))
     action = jax.random.normal(keys[2], (ENVS, 2), dtype=jnp.float32)
     return state, timestep, action, vector(keys[3])
@@ -561,9 +579,11 @@ def test_exact_credit_is_not_the_truncated_one():
     """
 
     state, timestep, action, delta = transition(0, "live")
-    exact, truncated = ours(), ours(credit="tbptt")
+    exact, truncated = ours(), ours(differentiation="tbptt")
     shape = (ENVS, None)
-    empty = exact.core.actor.block.credit.initialize(jax.random.key(0), shape)
+    empty = exact.core.actor.block.differentiation.initialize(
+        jax.random.key(0), shape
+    )
     assert empty is not None, "exact credit stopped carrying a sensitivity"
     sensitivity = jax.tree.map(
         lambda leaf: jax.random.normal(jax.random.key(1), leaf.shape, leaf.dtype),
@@ -575,7 +595,8 @@ def test_exact_credit_is_not_the_truncated_one():
             params=state.actor.params,
             rule=None,
             recurrence=Recurrence(
-                carry=state.actor.recurrence.carry, sensitivity=carrying
+                carry=state.actor.recurrence.carry,
+                differentiation_state=carrying,
             ),
         )
         return kernel.core.actor.gradient(held, timestep, action, delta)

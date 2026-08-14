@@ -1,5 +1,6 @@
+from dataclasses import dataclass
 from functools import partial
-from typing import Callable
+from typing import Any, Callable
 
 import jax
 import jax.numpy as jnp
@@ -8,9 +9,103 @@ from flax import struct
 from flax.typing import Dtype
 from jax.nn.initializers import lecun_normal
 
-from memorax.utils.typing import Array, Carry
+from memorax.building import ComponentFamily
+from memorax.networks.differentiation import TruncatedBPTT
+from memorax.utils.axes import (
+    add_feature_axis,
+    broadcast_done,
+    get_time_axis_and_input_shape,
+    reset_carry,
+)
+from memorax.utils.typing import Array
 
 from .rnn import RNNCellBase
+
+
+def _initialize_through_local_jacobian(next_fun, args, kwargs, context):
+    """Create RTU parameters through the method used by structured RTRL."""
+
+    module = context.module
+    if context.method_name == "__call__" and type(module) is RTUCell:
+        carry, inputs = args
+        state = module.initialize_sensitivity(jax.random.key(0), inputs.shape)
+        next_carry, output, _ = module.local_jacobian(carry, inputs, state)
+        return next_carry, output
+    return next_fun(*args, **kwargs)
+
+
+@dataclass(frozen=True)
+class RTUStructuredRTRL:
+    """The RTU's exact block-structured forward sensitivity recurrence."""
+
+    core: Any
+
+    def initialize(self, key, input_shape):
+        return self.core.cell.initialize_sensitivity(key, input_shape)
+
+    def initialization(self):
+        return nn.intercept_methods(_initialize_through_local_jacobian)
+
+    def __call__(self, params, inputs, done, carry, state):
+        return self.core.apply(
+            {"params": params},
+            inputs,
+            done,
+            carry,
+            state,
+            method=_structured_rtrl,
+        )
+
+
+def _construct_differentiation(selection, builder, *, core):
+    del builder
+    if selection.kind == "exact_rtrl":
+        return RTUStructuredRTRL(core)
+    return TruncatedBPTT(core)
+
+
+RTU_DIFFERENTIATION_FAMILY = ComponentFamily(
+    branches={"exact_rtrl": (), "tbptt": ()},
+    construct=_construct_differentiation,
+)
+
+
+def _structured_rtrl(core, inputs, done, carry, state, **kwargs):
+    """Run the RTU scan and its exact 2x2-block sensitivity recurrence."""
+
+    time_axis, input_shape = get_time_axis_and_input_shape(inputs)
+    initial_carry = core.cell.initialize_carry(jax.random.key(0), input_shape)
+
+    def scan_fn(cell, recurrent, x, done_t):
+        cell_carry, differentiation_state = recurrent
+        phantom = cell.compute_phantom(differentiation_state)
+        cell_carry = cell.inject_phantom(cell_carry, phantom)
+        cell_carry = reset_carry(done_t, cell_carry, initial_carry)
+        differentiation_state = jax.tree.map(
+            lambda value: jnp.where(
+                broadcast_done(add_feature_axis(done_t), value), 0, value
+            ),
+            differentiation_state,
+        )
+        next_carry, output, next_state = cell.local_jacobian(
+            cell_carry, x, differentiation_state
+        )
+        return (next_carry, next_state), output
+
+    scan = nn.transforms.scan(
+        scan_fn,
+        in_axes=time_axis,
+        out_axes=time_axis,
+        unroll=core.unroll,
+        variable_axes=core.variable_axes,
+        variable_broadcast=core.variable_broadcast,
+        variable_carry=core.variable_carry,
+        split_rngs=core.split_rngs,
+    )
+    (next_carry, next_state), outputs = scan(
+        core.cell, (carry, state), inputs, done
+    )
+    return next_carry, outputs, next_state
 
 
 def _initialize_nu_log(key, shape, r_min=0.0, r_max=1.0):
@@ -84,7 +179,6 @@ class RTUCell(RNNCellBase):
     def __call__(self, carry: RTUCarry, inputs: Array) -> tuple[RTUCarry, Array]:
         g, phi, norm, r = self._g_phi_norm()
 
-        theta = jnp.exp(self.theta_log)
         pre_real = g * carry.real - phi * carry.imaginary + norm * (inputs @ self.B_real.T)
         pre_imaginary = g * carry.imaginary + phi * carry.real + norm * (inputs @ self.B_imag.T)
         f = self.config.activation_fn

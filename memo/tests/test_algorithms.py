@@ -24,6 +24,8 @@ from memorax.networks import (
     backbone,
     heads,
 )
+from memorax.networks.differentiation import TruncatedBPTT
+from memorax.networks.sequence_models.rtu import RTUStructuredRTRL
 from memorax.rl import NormalizationConfig, make_bounded_rule, make_optax_rule
 from memorax.rl.updates import (
     AdaptiveObBound,
@@ -44,12 +46,13 @@ def stream_ac_program(
     fixed=False,
     unbounded=False,
     rate=None,
+    differentiation="exact_rtrl",
     **overrides,
 ):
     env = TinyContinuousEnv()
 
     def network(head):
-        return Sequence(
+        sequence = Sequence(
             components=(
                 FFN(features=3),
                 Tanh(),
@@ -57,6 +60,12 @@ def stream_ac_program(
                 Readout(module=head),
             )
         )
+        selected = (
+            RTUStructuredRTRL(sequence.core)
+            if chosen == "rtu" and differentiation == "exact_rtrl"
+            else TruncatedBPTT(sequence.core)
+        )
+        return sequence, selected
 
     bound = None if unbounded else ObBound(kappa=2.0)
     if adaptive:
@@ -73,12 +82,18 @@ def stream_ac_program(
         entropy_coefficient=0.02,
         **overrides,
     )
+    actor_network, actor_differentiation = network(
+        heads.Gaussian(action_dim=2)
+    )
+    critic_network, critic_differentiation = network(heads.VNetwork())
     agent = StreamAC(
         config,
         env,
         env.default_params,
-        network(heads.Gaussian(action_dim=2)),
-        network(heads.VNetwork()),
+        actor_network,
+        critic_network,
+        actor_differentiation,
+        critic_differentiation,
         observation_normalization=observation_normalization,
         reward_normalization=reward_normalization,
         record=record,
@@ -111,7 +126,7 @@ PROGRAMS = [
         id="stream_ac_adaptive_fixed",
     ),
     pytest.param(
-        lambda: stream_ac_program(credit="tbptt"),
+        lambda: stream_ac_program(differentiation="tbptt"),
         id="stream_ac_truncated",
     ),
     # ``optimizer_bound=none`` is a branch the surface offers, and the rule it

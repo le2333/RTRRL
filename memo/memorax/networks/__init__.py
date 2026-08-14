@@ -48,7 +48,6 @@ from memorax.networks.positional_embeddings import (
 from memorax.networks.sequence import Sequence
 from memorax.networks.sequence_models import (
     RNN,
-    RTRL,
     FFMCarry,
     FFMCell,
     FFMConfig,
