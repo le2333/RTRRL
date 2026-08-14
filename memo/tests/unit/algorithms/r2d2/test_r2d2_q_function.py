@@ -102,6 +102,21 @@ def test_apply_unroll_and_recurrence_trajectory_share_one_graph(backbone_kind):
     for leaf in jax.tree.leaves(post_recurrences):
         assert leaf.shape[:2] == (1, 3)
 
+    sequential_recurrence = recurrence
+    sequential_post = []
+    for index in range(3):
+        step_input = jax.tree.map(
+            lambda value: value[:, index : index + 1], inputs
+        )
+        sequential_recurrence, _ = q_function.apply(
+            params, step_input, sequential_recurrence
+        )
+        sequential_post.append(sequential_recurrence)
+    expected_post = jax.tree.map(
+        lambda *values: jnp.stack(values, axis=1), *sequential_post
+    )
+    _assert_tree_allclose(post_recurrences, expected_post)
+
 
 @pytest.mark.parametrize("backbone_kind", ["lru", "rtu"])
 def test_episode_start_resets_before_consuming_the_input(backbone_kind):
@@ -118,9 +133,19 @@ def test_episode_start_resets_before_consuming_the_input(backbone_kind):
     second = jax.tree.map(lambda value: value[:, 1:2], inputs)
     advanced, _ = q_function.apply(params, first, recurrence)
 
+    reset = q_function.reset(jax.random.key(4), advanced)
+    _assert_tree_allclose(reset, recurrence)
+    for leaf in jax.tree.leaves(reset):
+        assert leaf.shape[0] == 1
+
+    _, reset_method_q = q_function.apply(params, second, reset)
+    _, original_fresh_q = q_function.apply(params, second, recurrence)
+    np.testing.assert_allclose(
+        reset_method_q, original_fresh_q, rtol=1e-5, atol=1e-6
+    )
+
     reset_second = second.replace(episode_start=jnp.asarray([[True]]))
     _, reset_q = q_function.apply(params, reset_second, advanced)
-    fresh = q_function.reset(jax.random.key(4), advanced)
-    _, fresh_q = q_function.apply(params, reset_second, fresh)
+    _, fresh_q = q_function.apply(params, reset_second, recurrence)
 
     np.testing.assert_allclose(reset_q, fresh_q, rtol=1e-5, atol=1e-6)
