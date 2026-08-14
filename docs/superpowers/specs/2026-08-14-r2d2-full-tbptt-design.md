@@ -90,6 +90,73 @@ The Full BPTT and TBPTT update paths remain private functions or methods in
 this file for this development round. No common temporal learner or generic
 differentiation framework is introduced.
 
+### Functional decomposition and interfaces
+
+The algorithm remains in one file, like the current online algorithms, but is
+not implemented as one monolithic class. It is divided at R2D2 semantic
+boundaries:
+
+```text
+R2D2                    environment, replay, update cadence, train/eval scans
+  Core                  acting state, online/target parameters, learning
+    QFunction           recurrent input, LRU/RTU, Q readout
+```
+
+`QFunction` is the complete recurrent Q graph. Its interface is deliberately
+close to the torso/block interfaces used by the online algorithms:
+
+```python
+init(keys, timestep) -> tuple[params, recurrence]
+reset(key, recurrence) -> recurrence
+apply(params, timestep, recurrence) -> tuple[recurrence, q_values]
+unroll(params, timesteps, recurrence) -> tuple[recurrence, q_values]
+```
+
+`apply` handles one sequence-shaped acting step. `unroll` handles a replay
+sequence with the same input encoding and parameter tree; it is not a second
+network implementation.
+
+`Core` owns everything coupled by one optimizer update. Its interface mirrors
+the `init`, `reset`, `act`, and `update_parameters` vocabulary already used by
+StreamAC and RTRRL:
+
+```python
+init(keys, timestep) -> CoreState
+reset(key, state) -> CoreState
+act(key, state, timestep, *, epsilon) \
+    -> tuple[recurrence, action, ForwardMetrics]
+update_parameters(key, state, sample, *, step) \
+    -> tuple[CoreState, UpdateMetrics, priorities]
+```
+
+`act` advances only recurrent acting state and chooses an action; it does not
+learn. `update_parameters` consumes an already sampled replay sequence and
+performs exactly one learner update. Replay insertion, sampling, and priority
+mutation remain in `R2D2`, because they couple the environment interaction
+schedule to buffer readiness rather than the Q-function calculation.
+
+Within `Core`, the update is separated into named mathematical operations:
+
+```text
+burn-in carry reconstruction
+aligned online/target unroll
+Double-Q n-step targets
+masked importance-weighted loss
+Full BPTT or TBPTT gradient construction
+optimizer and target update
+sequence priority
+```
+
+These are private pure functions or focused methods with direct numerical
+tests. They are not wrapped in generic `Learner`, `GradientMethod`, or
+`Differentiation` classes. Full BPTT and TBPTT share alignment, target, loss,
+and priority code and differ only in recurrent gradient construction.
+
+This preserves the current online algorithm style while acknowledging that an
+R2D2 update consumes a sequence rather than one transition. The shared names
+express the same roles; the argument types retain the real algorithmic
+difference.
+
 ### Reused components
 
 R2D2 reuses:
@@ -249,17 +316,25 @@ epsilon is added only when storing the resulting priority.
 
 ## State and execution
 
-`R2D2State` contains:
+The state follows the same nested semantic shape as the online algorithms:
 
 ```text
-environment step and learner update counters
-current timestep and environment state
-acting recurrent carry
-online parameters
-target parameters
-optimizer state
-prioritized replay state
+R2D2State
+  step
+  timestep
+  environment state
+  replay state
+  CoreState
+    learner update step
+    acting recurrence
+    online parameters
+    target parameters
+    optimizer state
 ```
+
+The acting recurrence is part of `CoreState` but is excluded from replay
+learning except when its pre-action value is copied into a TBPTT replay record.
+Full BPTT always initializes recurrence at the episode boundary.
 
 Training interaction uses epsilon-greedy actions and writes replay. Evaluation
 starts from a fresh environment and fresh recurrent carry, uses the evaluation
@@ -270,6 +345,14 @@ The algorithm exposes the current `Program(init, train, evaluate)` contract.
 `train` returns `(state, StepMetrics)` and `evaluate` returns evaluation
 observations in the same form expected by `Runtime`. Logging remains outside
 the algorithm; the graph only returns declared observations.
+
+R2D2 follows the existing reports/readings pattern. `ForwardMetrics` describes
+the acting Q values and epsilon when selected. `UpdateMetrics` describes whether
+a learner update was applied and, when selected, its loss, TD error, chosen Q
+value, gradient norm, importance weight, and resulting priority. Training steps
+with no learner update carry `applied=False`; evaluation has no update metrics.
+This keeps update cadence explicit instead of silently repeating one learner
+measurement across every environment transition.
 
 ## Parameter structure
 
@@ -351,6 +434,7 @@ function.
 ### Component and graph tests
 
 - LRU and RTU both build under the pure recurrent forward contract;
+- one-step `QFunction.apply` equals a length-one `QFunction.unroll`;
 - linear and dueling heads produce one Q value per discrete action;
 - LRU/RTU times Full/TBPTT all initialize and complete an update;
 - recurrent parameters receive finite gradients; and
@@ -365,6 +449,10 @@ function.
 - Full BPTT samples only completed episodes, never a partially collected
   episode that merely occupies enough buffer positions;
 - target parameters update at the declared learner period;
+- `Core.act` changes recurrence but not learner parameters, replay, or optimizer
+  state;
+- `Core.update_parameters` performs one update without stepping the environment
+  or mutating replay directly;
 - evaluation leaves all training state unchanged;
 - entry declarations, catalog output, experiment overrides, assembly, runtime,
   and worker execution agree; and
