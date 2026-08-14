@@ -384,3 +384,10 @@ def test_every_backbone_and_learning_mode_updates_recurrent_parameters(
         if f"{backbone_kind.upper()}Cell" in "/".join(map(str, path))
     ]
     assert recurrent_gradients
+    assert all(
+        np.all(np.isfinite(np.asarray(gradient)))
+        for gradient in recurrent_gradients
+    )
+    assert any(
+        np.any(np.asarray(gradient) != 0.0) for gradient in recurrent_gradients
+    )
