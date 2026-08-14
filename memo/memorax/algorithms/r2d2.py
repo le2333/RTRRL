@@ -336,6 +336,330 @@ class QFunction:
         return final_recurrence, q_values
 
 
+@struct.dataclass(frozen=True)
+class CoreState:
+    update_step: Any
+    recurrence: Any
+    params: Any
+    target_params: Any
+    optimizer_state: Any
+
+
+@struct.dataclass(frozen=True)
+class ForwardMetrics:
+    selected_q: Any
+    epsilon: Any
+
+
+@struct.dataclass(frozen=True)
+class UpdateMetrics:
+    applied: Any
+    loss: Any
+    td_error: Any
+    q_value: Any
+    gradient_norm: Any
+    importance_weight: Any
+    priority: Any
+
+
+@struct.dataclass(frozen=True)
+class _UpdateReadings:
+    td_error: Any
+    q_value: Any
+    priority: Any
+    importance_weight: Any
+
+
+def _slice_time(tree: Any, start: int, stop: int | None = None) -> Any:
+    return jax.tree.map(lambda value: value[:, start:stop], tree)
+
+
+def _burn_in(
+    q_function: Any,
+    params: Any,
+    target_params: Any,
+    inputs: RecurrentInputs,
+    initial_recurrence: Any,
+    initial_target_recurrence: Any,
+    *,
+    burn_in_length: int,
+) -> tuple[Any, Any, RecurrentInputs]:
+    if burn_in_length:
+        burn_in_inputs = _slice_time(inputs, 0, burn_in_length)
+        warmed, _ = q_function.unroll(
+            params, burn_in_inputs, initial_recurrence
+        )
+        target_warmed, _ = q_function.unroll(
+            target_params, burn_in_inputs, initial_target_recurrence
+        )
+    else:
+        warmed = initial_recurrence
+        target_warmed = initial_target_recurrence
+    warmed = jax.tree.map(jax.lax.stop_gradient, warmed)
+    target_warmed = jax.tree.map(jax.lax.stop_gradient, target_warmed)
+    return warmed, target_warmed, _slice_time(inputs, burn_in_length)
+
+
+def _bootstrap_q_values(
+    q_function: Any,
+    params: Any,
+    inputs: RecurrentInputs,
+    post_input_recurrences: Any,
+) -> Array:
+    time_inputs = jax.tree.map(lambda value: jnp.swapaxes(value, 0, 1), inputs)
+    time_recurrences = jax.tree.map(
+        lambda value: jnp.swapaxes(value, 0, 1), post_input_recurrences
+    )
+
+    def apply_one(_, values):
+        timestep, recurrence = values
+        timestep = jax.tree.map(
+            lambda value: jnp.expand_dims(value, axis=1), timestep
+        )
+        _, q_values = q_function.apply(params, timestep, recurrence)
+        return None, q_values[:, 0]
+
+    _, q_values = jax.lax.scan(
+        apply_one, None, (time_inputs, time_recurrences)
+    )
+    return jnp.swapaxes(q_values, 0, 1)
+
+
+@dataclass(frozen=True)
+class Core:
+    q_function: QFunction
+    optimizer: optax.GradientTransformation
+    gamma: float
+    n_step: int
+    burn_in_length: int
+    unroll_length: int
+    importance_sampling_exponent: float
+    max_priority_weight: float
+    target_update_period: int
+    transform: Callable[[Array], Array]
+    inverse_transform: Callable[[Array], Array]
+
+    def init(self, key: Key, timestep: RecurrentInputs) -> CoreState:
+        params, recurrence = self.q_function.init(key, timestep)
+        return CoreState(
+            update_step=jnp.asarray(0, dtype=jnp.int32),
+            recurrence=recurrence,
+            params=params,
+            target_params=params,
+            optimizer_state=self.optimizer.init(params),
+        )
+
+    def reset(self, key: Key, state: CoreState) -> CoreState:
+        return state.replace(
+            recurrence=self.q_function.reset(key, state.recurrence)
+        )
+
+    def act(
+        self,
+        key: Key,
+        state: CoreState,
+        timestep: RecurrentInputs,
+        *,
+        epsilon: Array,
+    ) -> tuple[Any, Array, ForwardMetrics]:
+        random_key, epsilon_key = jax.random.split(key)
+        recurrence, q_values = self.q_function.apply(
+            state.params, timestep, state.recurrence
+        )
+        q_values = q_values[:, 0]
+        greedy_action = jnp.argmax(q_values, axis=-1)
+        random_action = jax.random.randint(
+            random_key,
+            greedy_action.shape,
+            minval=0,
+            maxval=self.q_function.action_dim,
+        )
+        action = jnp.where(
+            jax.random.uniform(epsilon_key, greedy_action.shape) < epsilon,
+            random_action,
+            greedy_action,
+        )
+        selected_q = jnp.take_along_axis(
+            q_values, action[:, None], axis=-1
+        ).squeeze(axis=-1)
+        return recurrence, action, ForwardMetrics(
+            selected_q=selected_q, epsilon=epsilon
+        )
+
+    def _aligned_unroll(
+        self,
+        params: Any,
+        target_params: Any,
+        sample: LearnerSequence,
+        recurrence: Any,
+        target_recurrence: Any,
+    ) -> tuple[Array, Array, Array, Array, Array, Array]:
+        learning_inputs = _slice_time(
+            sample.inputs,
+            self.burn_in_length,
+            self.burn_in_length + self.unroll_length + 1,
+        )
+        _, online_q, online_post = self.q_function._unroll_with_recurrences(
+            params, learning_inputs, recurrence
+        )
+        _, target_q, target_post = self.q_function._unroll_with_recurrences(
+            target_params, learning_inputs, target_recurrence
+        )
+        start = self.burn_in_length
+        stop = start + self.unroll_length
+        bootstrap_inputs = _slice_time(sample.bootstrap_inputs, start, stop)
+        online_bootstrap = _bootstrap_q_values(
+            self.q_function,
+            params,
+            bootstrap_inputs,
+            _slice_time(online_post, 0, self.unroll_length),
+        )
+        target_bootstrap = _bootstrap_q_values(
+            self.q_function,
+            target_params,
+            bootstrap_inputs,
+            _slice_time(target_post, 0, self.unroll_length),
+        )
+        dones = sample.dones[:, start:stop]
+        terminals = sample.terminals[:, start:stop]
+        truncations = dones & ~terminals
+        next_online = jnp.where(
+            truncations[..., None], online_bootstrap, online_q[:, 1:]
+        )
+        next_target = jnp.where(
+            truncations[..., None], target_bootstrap, target_q[:, 1:]
+        )
+        aligned_online = jnp.concatenate((online_q[:, :1], next_online), axis=1)
+        aligned_target = jnp.concatenate((target_q[:, :1], next_target), axis=1)
+        return (
+            online_q[:, :-1],
+            aligned_online,
+            aligned_target,
+            sample.actions[:, start:stop],
+            sample.rewards[:, start:stop],
+            sample.valid[:, start:stop],
+        )
+
+    def _tbptt_loss(
+        self,
+        params: Any,
+        target_params: Any,
+        sample: LearnerSequence,
+        importance_weights: Array,
+    ) -> tuple[Array, _UpdateReadings]:
+        recurrence, target_recurrence, _ = _burn_in(
+            self.q_function,
+            params,
+            target_params,
+            sample.inputs,
+            sample.initial_recurrence,
+            sample.initial_recurrence,
+            burn_in_length=self.burn_in_length,
+        )
+        (
+            current_online_q,
+            aligned_online,
+            aligned_target,
+            actions,
+            rewards,
+            valid,
+        ) = self._aligned_unroll(
+            params, target_params, sample, recurrence, target_recurrence
+        )
+        start = self.burn_in_length
+        stop = start + self.unroll_length
+        terminals = sample.terminals[:, start:stop]
+        targets = double_q_n_step_targets(
+            rewards,
+            terminals,
+            aligned_online,
+            aligned_target,
+            valid,
+            gamma=self.gamma,
+            n_step=self.n_step,
+            transform=self.transform,
+            inverse_transform=self.inverse_transform,
+        )
+        q_value = jnp.take_along_axis(
+            current_online_q, actions[..., None], axis=-1
+        ).squeeze(axis=-1)
+        td_error = q_value - targets
+        loss = masked_sequence_loss(td_error, valid, importance_weights)
+        priority = sequence_priorities(
+            td_error, valid, max_weight=self.max_priority_weight
+        )
+        return loss, _UpdateReadings(
+            td_error=td_error,
+            q_value=q_value,
+            priority=priority,
+            importance_weight=importance_weights,
+        )
+
+    def _apply_optimizer(
+        self, state: CoreState, grads: Any
+    ) -> tuple[Any, optax.OptState]:
+        updates, optimizer_state = self.optimizer.update(
+            grads, state.optimizer_state, state.params
+        )
+        return optax.apply_updates(state.params, updates), optimizer_state
+
+    def _update_target(
+        self, params: Any, target_params: Any, next_update_step: Array
+    ) -> Any:
+        return periodic_incremental_update(
+            params,
+            target_params,
+            next_update_step,
+            self.target_update_period,
+            1.0,
+        )
+
+    def update_parameters(
+        self,
+        key: Key,
+        state: CoreState,
+        sample: LearnerSequence,
+        *,
+        step: Array,
+    ) -> tuple[CoreState, UpdateMetrics, Array]:
+        del key, step
+        importance_weights = compute_importance_weights(
+            sample.probabilities,
+            sample.buffer_size,
+            self.importance_sampling_exponent,
+        )
+
+        def loss_fn(params):
+            return self._tbptt_loss(
+                params, state.target_params, sample, importance_weights
+            )
+
+        (loss, readings), grads = jax.value_and_grad(
+            loss_fn, has_aux=True
+        )(state.params)
+        params, optimizer_state = self._apply_optimizer(state, grads)
+        next_update_step = state.update_step + 1
+        target_params = self._update_target(
+            params, state.target_params, next_update_step
+        )
+        next_state = state.replace(
+            update_step=next_update_step,
+            params=params,
+            target_params=target_params,
+            optimizer_state=optimizer_state,
+        )
+        metrics = UpdateMetrics(
+            applied=jnp.asarray(True),
+            loss=loss,
+            td_error=jnp.mean(jnp.abs(readings.td_error)),
+            q_value=jnp.mean(readings.q_value),
+            gradient_norm=optax.tree.norm(grads),
+            importance_weight=jnp.mean(readings.importance_weight),
+            priority=jnp.mean(readings.priority),
+        )
+        return next_state, metrics, readings.priority
+
+
 def signed_hyperbolic(x: Array, epsilon: float = 1e-3) -> Array:
     return jnp.sign(x) * (jnp.sqrt(jnp.abs(x) + 1.0) - 1.0) + epsilon * x
 
