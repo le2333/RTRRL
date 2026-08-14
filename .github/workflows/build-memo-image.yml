@@ -153,8 +153,8 @@ jobs:
 
           catalog = json.loads(Path("/tmp/trainer-catalog.json").read_text())
           experiments = (
-              Path("experiments/rtrrl-hopper-aaai-fixed-50m.yaml"),
-              Path("experiments/rtrrl-hopper-hpo-3x2-20m.yaml"),
+              Path("../experiments/rtrrl-hopper-aaai-fixed-50m.yaml"),
+              Path("../experiments/rtrrl-hopper-hpo-3x2-20m.yaml"),
           )
           with tempfile.TemporaryDirectory() as directory:
               for experiment_path in experiments:
