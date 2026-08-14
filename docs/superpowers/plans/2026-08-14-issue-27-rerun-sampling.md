@@ -892,7 +892,7 @@ git commit -m "feat: project sampled trajectory requirements"
   evaluation remains at epoch boundaries, post-budget steps do not add updates,
   and an Rerun-disabled run emits no RRD.
 
-- [ ] **Step 1: Write the failing fixed-run integration test**
+- [x] **Step 1: Write the failing fixed-run integration test**
 
 Assemble the real RTRRL graph against `TinyContinuousEnv`, then use a real
 `Runtime`, `Reporter`, `MetricsSink`, and `RerunSink`. Configure the tiny
@@ -923,7 +923,7 @@ The horizon-3 fixture makes the sample at 50 require one post-budget
 transition. Read that RRD and assert its post-budget sequence is
 `(False, False, True)`.
 
-- [ ] **Step 2: Write the failing Rerun-disabled integration test**
+- [x] **Step 2: Write the failing Rerun-disabled integration test**
 
 ```python
 def test_run_without_sample_points_emits_scalars_but_no_rerun(tmp_path):
@@ -936,7 +936,7 @@ def test_run_without_sample_points_emits_scalars_but_no_rerun(tmp_path):
     assert not (tmp_path / "rerun").exists()
 ```
 
-- [ ] **Step 3: Run integration tests and verify their initial result**
+- [x] **Step 3: Run integration tests and verify their initial result**
 
 Run:
 
@@ -949,7 +949,7 @@ Expected before adding the fixture/composition: FAIL because the acceptance
 helpers and complete path do not yet exist. After implementing only the minimum
 fixture and composition code, rerun and expect PASS.
 
-- [ ] **Step 4: Run focused Runtime, observability, and entry suites**
+- [x] **Step 4: Run focused Runtime, observability, and entry suites**
 
 Run:
 
@@ -966,7 +966,7 @@ uv run --project memo pytest \
 
 Expected: PASS.
 
-- [ ] **Step 5: Run RTRRL numerical and parity suites**
+- [x] **Step 5: Run RTRRL numerical and parity suites**
 
 Run:
 
@@ -980,7 +980,7 @@ uv run --project memo pytest \
 
 Expected: PASS with no numerical tolerance changes.
 
-- [ ] **Step 6: Run static checks**
+- [x] **Step 6: Run static checks**
 
 Run:
 
@@ -991,7 +991,7 @@ uv run --project infra ruff check infra
 
 Expected: PASS.
 
-- [ ] **Step 7: Run the complete local non-external suite**
+- [x] **Step 7: Run the complete local non-external suite**
 
 Run:
 
@@ -1005,7 +1005,7 @@ uv run --project infra pytest infra/tests -q
 Expected: PASS. Record the exact test counts and pre-existing warnings in the
 task report; do not describe a timed-out or partial run as a pass.
 
-- [ ] **Step 8: Commit Task 6**
+- [x] **Step 8: Commit Task 6**
 
 ```bash
 git add memo/tests/integration/observability/test_rtrrl_sampled_runtime.py \
