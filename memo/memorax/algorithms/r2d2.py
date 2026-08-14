@@ -10,7 +10,10 @@ import optax
 from flashbax.utils import get_tree_shape_prefix
 from flax import core, struct
 
-from memorax.buffers import compute_importance_weights
+from memorax.buffers import (
+    PrioritisedEpisodeBufferSample,
+    compute_importance_weights,
+)
 from memorax.rl import periodic_incremental_update
 from memorax.utils import Timestep, Transition, utils
 from memorax.utils.axes import add_feature_axis, remove_feature_axis, remove_time_axis
@@ -52,6 +55,133 @@ class R2D2State:
     target_params: core.FrozenDict[str, Any]
     optimizer_state: optax.OptState
     buffer_state: BufferState
+
+
+@struct.dataclass(frozen=True)
+class ReplayTransition:
+    observation: Any
+    previous_action: Any
+    previous_reward: Any
+    episode_start: Any
+    action: Any
+    reward: Any
+    next_observation: Any
+    done: Any
+    terminal: Any
+    actor_recurrence: Any
+
+
+@struct.dataclass(frozen=True)
+class RecurrentInputs:
+    observation: Any
+    previous_action: Any
+    previous_reward: Any
+    episode_start: Any
+
+
+@struct.dataclass(frozen=True)
+class LearnerSequence:
+    inputs: RecurrentInputs
+    bootstrap_inputs: RecurrentInputs
+    actions: Any
+    rewards: Any
+    dones: Any
+    terminals: Any
+    valid: Any
+    initial_recurrence: Any
+    probabilities: Any
+    indices: Any
+    buffer_size: Any
+
+
+def completed_episode_starts(
+    experience: ReplayTransition, *, transition_count: int
+) -> Array:
+    ending_within_window = jnp.zeros_like(experience.done, dtype=jnp.bool_)
+    for offset in range(transition_count):
+        ending_within_window = ending_within_window | jnp.roll(
+            experience.done, -offset, axis=1
+        )
+    return experience.episode_start & ending_within_window
+
+
+def tbptt_starts(experience: ReplayTransition, *, burn_in_length: int) -> Array:
+    ending_during_burn_in = jnp.zeros_like(experience.done, dtype=jnp.bool_)
+    for offset in range(burn_in_length):
+        ending_during_burn_in = ending_during_burn_in | jnp.roll(
+            experience.done, -offset, axis=1
+        )
+    return ~ending_during_burn_in
+
+
+def learner_sequence(
+    sample: PrioritisedEpisodeBufferSample,
+    *,
+    transition_count: int,
+    full_episode: bool,
+) -> LearnerSequence:
+    experience = jax.tree.map(
+        lambda value: value[:, :transition_count],
+        sample.experience,
+    )
+
+    observation = jax.tree.map(
+        lambda current, successor: jnp.concatenate(
+            (current, successor[:, -1:]), axis=1
+        ),
+        experience.observation,
+        experience.next_observation,
+    )
+    inputs = RecurrentInputs(
+        observation=observation,
+        previous_action=jnp.concatenate(
+            (experience.previous_action, experience.action[:, -1:]), axis=1
+        ),
+        previous_reward=jnp.concatenate(
+            (experience.previous_reward, experience.reward[:, -1:]), axis=1
+        ),
+        episode_start=jnp.concatenate(
+            (
+                experience.episode_start,
+                jnp.zeros_like(experience.episode_start[:, -1:]),
+            ),
+            axis=1,
+        ),
+    )
+    bootstrap_inputs = RecurrentInputs(
+        observation=experience.next_observation,
+        previous_action=experience.action,
+        previous_reward=experience.reward,
+        episode_start=jnp.zeros_like(experience.done),
+    )
+    valid = jnp.cumprod(
+        jnp.concatenate(
+            (
+                jnp.ones_like(experience.done[:, :1], dtype=jnp.int32),
+                (~experience.done[:, :-1]).astype(jnp.int32),
+            ),
+            axis=1,
+        ),
+        axis=1,
+    ).astype(jnp.bool_)
+    initial_recurrence = (
+        None
+        if full_episode
+        else jax.tree.map(lambda value: value[:, 0], experience.actor_recurrence)
+    )
+    return LearnerSequence(
+        inputs=inputs,
+        bootstrap_inputs=bootstrap_inputs,
+        actions=experience.action,
+        rewards=experience.reward,
+        dones=experience.done,
+        terminals=experience.terminal,
+        valid=valid,
+        initial_recurrence=initial_recurrence,
+        probabilities=sample.probabilities,
+        indices=sample.indices,
+        buffer_size=sample.buffer_size,
+    )
 
 
 def signed_hyperbolic(x: Array, epsilon: float = 1e-3) -> Array:
