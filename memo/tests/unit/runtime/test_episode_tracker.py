@@ -1,5 +1,6 @@
 """Stateful episode reconstruction across bounded rollout chunks."""
 
+from dataclasses import replace
 from types import SimpleNamespace
 
 import numpy as np
@@ -120,10 +121,80 @@ def test_unfinished_episode_is_retained_without_being_reported():
 def test_sample_at_chunk_ending_boundary_is_pending_for_continuation():
     tracker = make_tracker(sample_steps=(4,))
 
-    first = tracker.consume(prefix_without_done(), start_env_steps=0)
+    first = tracker.consume(summary(0, [[0, 0], [1, 0]]), start_env_steps=0)
 
-    assert first.completed == first.sampled == ()
+    assert first.sampled == ()
     assert tracker.pending_sample_steps == (4,)
+
+    second = tracker.consume(summary(4, [[1, 0]]), start_env_steps=4)
+    assert len(second.sampled) == 1
+    assert second.sampled[0].sample_step == 4
+    assert second.sampled[0].episode.observations == ([4.0], [104.0])
+
+
+def test_every_configured_series_path_must_exist():
+    tracker = make_tracker(
+        observations=replace(OBSERVATIONS, series=("td_error", "missing_series"))
+    )
+
+    with pytest.raises(
+        ValueError,
+        match="configured series.*missing_series.*missing",
+    ):
+        tracker.consume(summary(0, [[1, 1]]), start_env_steps=0)
+
+
+def test_all_unset_trajectory_paths_are_valid_no_trajectory_mode():
+    tracker = make_tracker(
+        observations=replace(
+            OBSERVATIONS,
+            observation=None,
+            next_observation=None,
+            action=None,
+        )
+    )
+
+    result = tracker.consume(summary(0, [[1, 1]]), start_env_steps=0)
+
+    assert all(episode.observations is None for episode in result.completed)
+    assert all(episode.actions is None for episode in result.completed)
+
+
+def test_partially_configured_trajectory_schema_raises():
+    tracker = make_tracker(observations=replace(OBSERVATIONS, action=None))
+
+    with pytest.raises(
+        ValueError,
+        match="trajectory schema.*all configured or all unset",
+    ):
+        tracker.consume(summary(0, [[1, 1]]), start_env_steps=0)
+
+
+def test_missing_configured_trajectory_field_raises():
+    tracker = make_tracker()
+    chunk = summary(0, [[1, 1]])
+    del chunk.next_observation
+
+    with pytest.raises(
+        ValueError,
+        match="configured trajectory.*next_observation.*missing",
+    ):
+        tracker.consume(chunk, start_env_steps=0)
+
+
+def test_report_completed_false_still_returns_sample_and_advances_number():
+    tracker = make_tracker(sample_steps=(0,))
+
+    result = tracker.consume(
+        summary(0, [[1, 0]]),
+        start_env_steps=0,
+        report_completed=False,
+    )
+
+    assert result.completed == ()
+    assert [sample.sample_step for sample in result.sampled] == [0]
+    assert result.sampled[0].episode.observations == ([0.0], [100.0])
+    assert tracker.next_number == 2
 
 
 def test_episode_longer_than_declared_limit_fails_instead_of_truncating():

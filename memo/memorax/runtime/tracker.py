@@ -87,24 +87,32 @@ class EpisodeTracker:
             else np.asarray(terminal_values).astype(bool)
         )
         steps = dones.shape[0]
-        series = {
-            name: _streamed(found, steps, self._num_envs)
-            for name in observations.series
-            if (found := read(summary, name)) is not None
-        }
+        series = {}
+        for name in observations.series:
+            found = read(summary, name)
+            if found is None:
+                raise ValueError(f"configured series path {name!r} is missing")
+            series[name] = _streamed(found, steps, self._num_envs)
 
         trajectory_paths = (
             observations.observation,
             observations.next_observation,
             observations.action,
         )
-        trajectory_values = [
-            read(summary, path) for path in trajectory_paths if path is not None
-        ]
-        has_trajectory = len(trajectory_values) == 3 and all(
-            value is not None for value in trajectory_values
-        )
+        configured_trajectory = tuple(path is not None for path in trajectory_paths)
+        if any(configured_trajectory) and not all(configured_trajectory):
+            raise ValueError(
+                "trajectory schema paths must be all configured or all unset"
+            )
+
+        has_trajectory = all(configured_trajectory)
         if has_trajectory:
+            trajectory_values = []
+            for path in trajectory_paths:
+                found = read(summary, path)
+                if found is None:
+                    raise ValueError(f"configured trajectory path {path!r} is missing")
+                trajectory_values.append(found)
             before, after, actions = (np.asarray(value) for value in trajectory_values)
 
         completed: list[Episode] = []
