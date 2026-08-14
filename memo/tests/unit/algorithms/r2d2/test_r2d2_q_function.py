@@ -133,7 +133,7 @@ def test_episode_start_resets_before_consuming_the_input(backbone_kind):
     second = jax.tree.map(lambda value: value[:, 1:2], inputs)
     advanced, _ = q_function.apply(params, first, recurrence)
 
-    reset = q_function.reset(jax.random.key(4), advanced)
+    reset = q_function.reset(jax.random.key(4), batch_size=1)
     _assert_tree_allclose(reset, recurrence)
     for leaf in jax.tree.leaves(reset):
         assert leaf.shape[0] == 1

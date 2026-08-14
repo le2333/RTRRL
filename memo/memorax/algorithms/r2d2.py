@@ -294,8 +294,7 @@ class QFunction:
         )
         return params, recurrence
 
-    def reset(self, key: Key, recurrence: Any) -> Any:
-        batch_size = jax.tree.leaves(recurrence)[0].shape[0]
+    def reset(self, key: Key, batch_size: int) -> Any:
         return self.network.initialize_carry(key, (batch_size, self.feature_dim))
 
     def apply(
@@ -439,6 +438,7 @@ class Core:
     target_update_period: int
     transform: Callable[[Array], Array]
     inverse_transform: Callable[[Array], Array]
+    learning_kind: str = "tbptt"
 
     def init(self, key: Key, timestep: RecurrentInputs) -> CoreState:
         params, recurrence = self.q_function.init(key, timestep)
@@ -451,8 +451,9 @@ class Core:
         )
 
     def reset(self, key: Key, state: CoreState) -> CoreState:
+        batch_size = jax.tree.leaves(state.recurrence)[0].shape[0]
         return state.replace(
-            recurrence=self.q_function.reset(key, state.recurrence)
+            recurrence=self.q_function.reset(key, batch_size)
         )
 
     def act(
@@ -540,25 +541,18 @@ class Core:
             sample.valid[:, start:stop],
         )
 
-    def _tbptt_loss(
+    def _loss_from_unroll(
         self,
         params: Any,
         target_params: Any,
         sample: LearnerSequence,
         importance_weights: Array,
+        learning_inputs: RecurrentInputs,
+        recurrence: Any,
+        target_recurrence: Any,
+        *,
+        transition_start: int,
     ) -> tuple[Array, _UpdateReadings]:
-        recurrence, target_recurrence, learning_inputs = _burn_in(
-            self.q_function,
-            params,
-            target_params,
-            sample.inputs,
-            sample.initial_recurrence,
-            sample.initial_recurrence,
-            burn_in_length=self.burn_in_length,
-        )
-        learning_inputs = _slice_time(
-            learning_inputs, 0, self.unroll_length + 1
-        )
         (
             current_online_q,
             aligned_online,
@@ -573,10 +567,11 @@ class Core:
             learning_inputs,
             recurrence,
             target_recurrence,
-            transition_start=self.burn_in_length,
+            transition_start=transition_start,
         )
-        start = self.burn_in_length
-        stop = start + self.unroll_length
+        transition_count = jax.tree.leaves(learning_inputs)[0].shape[1] - 1
+        start = transition_start
+        stop = start + transition_count
         terminals = sample.terminals[:, start:stop]
         targets = double_q_n_step_targets(
             rewards,
@@ -603,6 +598,58 @@ class Core:
             valid=valid,
             priority=priority,
             importance_weight=importance_weights,
+        )
+
+    def _tbptt_loss(
+        self,
+        params: Any,
+        target_params: Any,
+        sample: LearnerSequence,
+        importance_weights: Array,
+    ) -> tuple[Array, _UpdateReadings]:
+        recurrence, target_recurrence, learning_inputs = _burn_in(
+            self.q_function,
+            params,
+            target_params,
+            sample.inputs,
+            sample.initial_recurrence,
+            sample.initial_recurrence,
+            burn_in_length=self.burn_in_length,
+        )
+        learning_inputs = _slice_time(
+            learning_inputs, 0, self.unroll_length + 1
+        )
+        return self._loss_from_unroll(
+            params,
+            target_params,
+            sample,
+            importance_weights,
+            learning_inputs,
+            recurrence,
+            target_recurrence,
+            transition_start=self.burn_in_length,
+        )
+
+    def _full_bptt_loss(
+        self,
+        params: Any,
+        target_params: Any,
+        sample: LearnerSequence,
+        importance_weights: Array,
+    ) -> tuple[Array, _UpdateReadings]:
+        batch_size = jax.tree.leaves(sample.inputs)[0].shape[0]
+        reset_key = jax.random.key(0)
+        recurrence = self.q_function.reset(reset_key, batch_size)
+        target_recurrence = self.q_function.reset(reset_key, batch_size)
+        return self._loss_from_unroll(
+            params,
+            target_params,
+            sample,
+            importance_weights,
+            sample.inputs,
+            recurrence,
+            target_recurrence,
+            transition_start=0,
         )
 
     def _apply_optimizer(
@@ -639,8 +686,13 @@ class Core:
             self.importance_sampling_exponent,
         )
 
+        loss_method = {
+            "full_bptt": self._full_bptt_loss,
+            "tbptt": self._tbptt_loss,
+        }[self.learning_kind]
+
         def loss_fn(params):
-            return self._tbptt_loss(
+            return loss_method(
                 params, state.target_params, sample, importance_weights
             )
 
