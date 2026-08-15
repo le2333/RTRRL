@@ -15,8 +15,6 @@ on:
       - memo/worker/contract.py
       - memo/memorax/parameters.py
       - experiments/**
-      - rtrrl/infra/control-plane/**
-      - rtrrl/infra/mock-trainer/**
   workflow_dispatch:
 
 permissions:
@@ -30,16 +28,8 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          # The control plane this branch develops. The two below are the paper
-          # project's own, one generation older, and still its own thing.
           - name: infra
             project: infra
-            target: ""
-          - name: control-plane
-            project: rtrrl/infra/control-plane
-            target: ""
-          - name: mock-trainer
-            project: rtrrl/infra/mock-trainer
             target: ""
     steps:
       - uses: actions/checkout@v4

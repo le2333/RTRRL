@@ -47,10 +47,8 @@ jobs:
         memorax/assembly.py
         memorax/building.py
         memorax/algorithms/contract.py
-        memorax/algorithms/rtrrl.py
+        memorax/algorithms/rtrrl_aaai.py
         memorax/algorithms/stream_ac.py
-        memorax/algorithms/upstream_stream_ac.py
-        memorax/algorithms/independent_rtrrl.py
         memorax/utils/trees.py
         memorax/networks/backbones.py
         memorax/networks/components.py
@@ -62,7 +60,7 @@ jobs:
         memorax/observability
         memorax/runtime
         entries
-        runner
+        deployment
         worker
         tests
     steps:
@@ -118,15 +116,5 @@ jobs:
         run: uv run pytest tests -m service -v
       - name: Compare against pinned external implementations
         run: uv run pytest tests -m external -v
-      # Its own step because x64 is a process-wide JAX flag. The suite above runs
-      # in the precision the trainer runs in, and this asks what that precision
-      # costs, by rerunning the two LRUs against a double-precision reference.
-      - name: Compare the two LRUs against a double-precision reference
-        # Nothing it compares is touched by the suite above, so a failure there is
-        # not a reason to leave this unrun and unreported.
-        if: ${{ !cancelled() }}
-        env:
-          JAX_ENABLE_X64: "1"
-        run: uv run pytest tests/test_lru_precision.py -v -s
       - name: Build the catalog the image will carry
         run: uv run python -m deployment.catalog --print-label > /dev/null

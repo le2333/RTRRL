@@ -35,9 +35,7 @@ def test_recurrent_differentiation_has_one_public_structural_contract():
 
     state = implementation.initialize("key", (2, 3))
     with implementation.initialization():
-        next_carry, output, next_state = implementation(
-            {}, 2, False, 5, state
-        )
+        next_carry, output, next_state = implementation({}, 2, False, 5, state)
 
     assert (next_carry, output) == (7, 2)
     assert next_state == {"previous": state}

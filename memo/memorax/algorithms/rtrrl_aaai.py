@@ -103,9 +103,7 @@ class LruTorso:
 
     hidden_dim: int = param(valid=(1, 4096), search=(32, 512))
     feature_dim: int = param(valid=(1, 4096), search=(16, 256))
-    differentiation: str = structure(
-        branches=LRU_DIFFERENTIATION_FAMILY.branches
-    )
+    differentiation: str = structure(branches=LRU_DIFFERENTIATION_FAMILY.branches)
 
 
 @dataclass(frozen=True)
@@ -114,9 +112,7 @@ class RtuTorso:
 
     hidden_dim: int = param(valid=(1, 4096), search=(32, 512))
     feature_dim: int = param(valid=(1, 4096), search=(16, 256))
-    differentiation: str = structure(
-        branches=RTU_DIFFERENTIATION_FAMILY.branches
-    )
+    differentiation: str = structure(branches=RTU_DIFFERENTIATION_FAMILY.branches)
 
 
 def _construct_torso(selection, builder):
@@ -448,9 +444,7 @@ def _head_gradient_norm(tree):
 class Torso:
     """The recurrent representation shared by both heads."""
 
-    def __init__(
-        self, cfg: RTRRLConfig, network: Any, differentiation: Any
-    ) -> None:
+    def __init__(self, cfg: RTRRLConfig, network: Any, differentiation: Any) -> None:
         self.cfg = cfg
         self._network = network
         self._differentiation = differentiation
@@ -488,9 +482,10 @@ class Torso:
             differentiation_state=recurrence.differentiation_state,
             differentiation=self._differentiation,
         )
-        return Recurrence(
-            carry=carry, differentiation_state=differentiation_state
-        ), output
+        return (
+            Recurrence(carry=carry, differentiation_state=differentiation_state),
+            output,
+        )
 
     def init(self, keys, timestep: Timestep) -> TorsoState:
         """Fresh online state for the shared block, and a copy for it to follow."""

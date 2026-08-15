@@ -97,14 +97,14 @@ def build(module, *, normalize, evaluation):
         )
 
     settings = dict(
-            num_envs=ENVS,
-            gamma=0.9,
-            trace_lambda=0.8,
-            actor_bound=ObBound(kappa=2.0),
-            actor_base=Sgd(lr=0.1),
-            critic_bound=ObBound(kappa=2.0),
-            critic_base=Sgd(lr=0.1),
-            entropy_coefficient=0.01,
+        num_envs=ENVS,
+        gamma=0.9,
+        trace_lambda=0.8,
+        actor_bound=ObBound(kappa=2.0),
+        actor_base=Sgd(lr=0.1),
+        critic_bound=ObBound(kappa=2.0),
+        critic_base=Sgd(lr=0.1),
+        entropy_coefficient=0.01,
     )
     actor_network = network(heads.Gaussian(action_dim=action_dim))
     critic_network = network(heads.VNetwork())
