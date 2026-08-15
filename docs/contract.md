@@ -69,6 +69,8 @@ logging:
 
 运行配置不包含 `score`。评分策略由 Infra 持有，也不包含 `score.s3` 或 `logging.rerun_s3`。Worker 只需要一个 `artifacts.root`。
 
+`environment.backend` 在该命名空间只有一种实现可选时为 `null`：brax 要选物理后端，gymnax 没有可选的。`observed` 同理，`null` 表示不裁剪观测。两者表达的都是"不适用"，与字段缺失不是一回事。
+
 ## 接收方边界
 
 - Worker 的 v8 投影定义在 `memo/worker/envelope.py`，只解释 `contract`、`identity`、`entry` 和 `artifacts`；`algorithm`、`runtime`、`logging` 保持为交给子进程的 JSON。

@@ -54,6 +54,20 @@ def test_run_contains_one_artifact_root_and_no_score_policy() -> None:
     assert "s3" not in payload["logging"]["rerun"]
 
 
+def test_an_environment_with_one_implementation_names_no_backend() -> None:
+    """Brax chooses a physics backend; Gymnax has none to choose.
+
+    The field stays required reading for the namespaces that mean it, so this
+    is null rather than absent from the document.
+    """
+
+    payload = read_json("run.json")
+    payload["algorithm"]["environment"] |= {"id": "gymnax::CartPole-v1"}
+    payload["algorithm"]["environment"]["backend"] = None
+
+    assert RunSpec.model_validate(payload).algorithm.environment.backend is None
+
+
 def test_entry_owns_schedule_and_graph_width_validation() -> None:
     payload = read_json("run.json")
     payload["algorithm"]["num_envs"] = 3

@@ -27,8 +27,15 @@ class Artifacts(_Frozen):
 
 
 class EnvironmentSpec(_Frozen):
+    """What a run says about the environment its graph is built against.
+
+    ``backend`` is null wherever the namespace has only one implementation to
+    choose between. Brax names a physics backend; Gymnax has none, and saying
+    so is not the same as omitting a field that means something.
+    """
+
     id: str
-    backend: str
+    backend: str | None = None
     observed: tuple[int, ...] | None = None
     episode_length: int = 1000
 
