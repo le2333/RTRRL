@@ -1,6 +1,6 @@
 """Which head, as a structure per role with a branch per parameterisation.
 
-Three exist and they differ in where the scale comes from:
+Three measure an action and differ in where the scale comes from:
 
 - ``global_std`` is memorax's: one ``Dense`` for the mean and a learnable
   ``log_std`` that no observation reaches.
@@ -8,6 +8,11 @@ Three exist and they differ in where the scale comes from:
   through ``softplus``.
 - ``bounded`` is the one this repository added: loc and log-scale both squashed
   into an interval before ``softplus``.
+
+The fourth, ``categorical``, names an action instead of measuring one, so it is
+the one a ``Discrete`` environment can be read through and the only one such an
+environment can be read through. The distinction is a fact about the
+environment rather than a preference, so selecting across it is refused.
 
 The critic has one today. It is declared anyway: a role with one choice and a
 role with none are different things, and this is where a second one goes.
@@ -31,6 +36,7 @@ from memorax.networks import heads
 from memorax.networks.readouts import (
     ACTOR_HEAD_BRANCHES,
     CRITIC_HEAD_BRANCHES,
+    DISCRETE_ACTOR_HEADS,
     actor_head,
 )
 from memorax.parameters import KIND
@@ -39,6 +45,12 @@ from tests.support.builders import assemble_stream_ac
 ACTIONS = 3
 WIDTH = 6
 BRANCHES = tuple(ACTOR_HEAD_BRANCHES)
+CONTINUOUS_BRANCHES = tuple(
+    name for name in ACTOR_HEAD_BRANCHES if name not in DISCRETE_ACTOR_HEADS
+)
+DISCRETE_BRANCHES = tuple(
+    name for name in ACTOR_HEAD_BRANCHES if name in DISCRETE_ACTOR_HEADS
+)
 
 
 def scales(name: str) -> tuple[jax.Array, jax.Array]:
@@ -51,8 +63,8 @@ def scales(name: str) -> tuple[jax.Array, jax.Array]:
     return tuple(head.apply(params, x)[0].scale_diag for x in (left, right))
 
 
-@pytest.mark.parametrize("name", BRANCHES)
-def test_every_branch_builds_and_answers_with_a_distribution(name):
+@pytest.mark.parametrize("name", CONTINUOUS_BRANCHES)
+def test_every_continuous_branch_builds_and_answers_with_a_distribution(name):
     head = actor_head(name, action_dim=ACTIONS)
     x = jnp.zeros((1, WIDTH), dtype=jnp.float32)
     params = head.init(jax.random.key(0), x)
@@ -60,6 +72,36 @@ def test_every_branch_builds_and_answers_with_a_distribution(name):
 
     assert distribution.loc.shape == (1, ACTIONS)
     assert jnp.all(distribution.scale_diag > 0.0)
+
+
+@pytest.mark.parametrize("name", DISCRETE_BRANCHES)
+def test_every_discrete_branch_answers_with_one_scalar_per_step(name):
+    """The shape difference the two kinds are: a feature axis, or none."""
+
+    head = actor_head(name, action_dim=ACTIONS)
+    x = jnp.zeros((1, WIDTH), dtype=jnp.float32)
+    params = head.init(jax.random.key(0), x)
+    distribution, _ = head.apply(params, x)
+
+    assert distribution.logits.shape == (1, ACTIONS)
+    # A sample is one integer, and log_prob and entropy are the same shape a
+    # MultivariateNormalDiag's are -- one scalar per step, which is what lets
+    # both algorithms' distribution algebra stay as it is.
+    sample = distribution.sample(seed=jax.random.key(1))
+    assert sample.shape == (1,)
+    assert distribution.log_prob(sample).shape == (1,)
+    assert distribution.entropy().shape == (1,)
+
+
+@pytest.mark.parametrize("name", BRANCHES)
+def test_a_head_is_refused_by_the_action_space_it_cannot_read(name):
+    discrete = name in DISCRETE_ACTOR_HEADS
+
+    built = actor_head(name, action_dim=ACTIONS, discrete=discrete)
+    assert built is not None
+
+    with pytest.raises(ValueError, match="cannot be built against"):
+        actor_head(name, action_dim=ACTIONS, discrete=not discrete)
 
 
 def test_the_global_scale_is_the_same_whatever_was_observed():

@@ -32,7 +32,10 @@ from memorax.rl import (
     EnvironmentStreams,
     InteractionNormalization,
     NormalizationState,
+    action_classes,
+    action_dim,
     broadcast_stream,
+    encode_feedback,
     make_bounded_rule,
     make_td0,
     select_ended,
@@ -64,6 +67,10 @@ class StreamACConfig:
     critic_base: Any = None
     entropy_coefficient: float = 0.01
     meta_rl: bool = False
+    # How many actions the environment names, or None when it measures them.
+    # Only the meta-RL feedback input reads it, and only to widen an integer
+    # action into something a concatenation can carry.
+    action_classes: int | None = None
     normalization_statistics: str = "ours"
 
 
@@ -274,6 +281,7 @@ class Network:
 
         if not self.cfg.meta_rl:
             return obs
+        action = encode_feedback(action, classes=self.cfg.action_classes)
         return jnp.concatenate([obs, action, reward], axis=-1)
 
     def apply(self, params, timestep, recurrence: Recurrence):
@@ -721,10 +729,13 @@ class StreamAC:
         gamma = float(parameters["gamma"])
         meta_rl = bool(parameters["meta_rl"])
         observation_dim = int(context.observation_space.shape[0])
-        action_dim = int(context.action_space.shape[0])
+        classes = action_classes(context.action_space)
+        # One width answers both roles: a Box action is as wide as it is, and a
+        # discrete one is as wide as its one-hot.
+        width = action_dim(context.action_space)
         features = observation_dim
         if meta_rl:
-            features += action_dim + 1
+            features += width + 1
 
         def sequence(backbone, head):
             return Sequence(components=(*backbone.components, Readout(module=head)))
@@ -744,7 +755,8 @@ class StreamAC:
         actor_head = components.build(
             ACTOR_HEAD_FAMILY,
             "actor.head",
-            action_dim=action_dim,
+            action_dim=width,
+            discrete=classes is not None,
         )
         critic_head = components.build(CRITIC_HEAD_FAMILY, "critic.head")
 
@@ -759,6 +771,7 @@ class StreamAC:
                 critic_base=components.build(BASE_FAMILY, "critic.optimizer.base"),
                 entropy_coefficient=float(parameters["entropy_coefficient"]),
                 meta_rl=meta_rl,
+                action_classes=classes,
             ),
             context.environment,
             context.environment_parameters,

@@ -40,7 +40,10 @@ from memorax.rl import (
     EnvironmentStreams,
     InteractionNormalization,
     NormalizationState,
+    action_classes,
+    action_dim,
     broadcast_stream,
+    encode_feedback,
     make_optax_rule,
     make_td0,
     select_ended,
@@ -92,6 +95,10 @@ class RTRRLConfig:
     torso_follow: float = 1.0
 
     meta_rl: bool = True
+    # How many actions the environment names, or None when it measures them.
+    # Only the meta-RL feedback input reads it, and only to widen an integer
+    # action into something a concatenation can carry.
+    action_classes: int | None = None
 
 
 RTRRL_OPTIMIZERS = BASE_FAMILY.restricted("adam")
@@ -460,6 +467,9 @@ class Torso:
         obs, done, action, reward = timestep
         if not self.cfg.meta_rl:
             return obs
+        # Widened first, so what an ended stream carries is the zero vector
+        # rather than the one-hot of whichever action happens to be numbered 0.
+        action = encode_feedback(action, classes=self.cfg.action_classes)
         ended = add_feature_axis(done)
         return jnp.concatenate(
             [
@@ -1001,6 +1011,7 @@ class RTRRL:
         """Declare the shared torso, two readouts, and their two rule groups."""
 
         gamma = float(parameters["gamma"])
+        classes = action_classes(context.action_space)
         torso_optimizer = components.build(RTRRL_OPTIMIZERS, "torso.optimizer")
         heads_optimizer = components.build(RTRRL_OPTIMIZERS, "heads.optimizer")
         torso_network, torso_differentiation = components.build(
@@ -1019,6 +1030,7 @@ class RTRRL:
                 torso_grad_clip=float(parameters["torso.grad_clip"]),
                 torso_follow=float(parameters["torso.follow"]),
                 meta_rl=bool(parameters["meta_rl"]),
+                action_classes=classes,
                 torso_optimizer=torso_optimizer,
                 heads_optimizer=heads_optimizer,
             ),
@@ -1029,7 +1041,8 @@ class RTRRL:
             components.build(
                 ACTOR_HEAD_FAMILY,
                 "actor.head",
-                action_dim=int(context.action_space.shape[0]),
+                action_dim=action_dim(context.action_space),
+                discrete=classes is not None,
             ),
             components.build(CRITIC_HEAD_FAMILY, "critic.head"),
             observation_normalization=components.build(
