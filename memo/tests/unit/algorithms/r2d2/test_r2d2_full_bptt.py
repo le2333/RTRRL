@@ -278,8 +278,8 @@ def test_full_bptt_equals_zero_burn_in_tbptt_over_a_complete_episode():
             has_aux=True,
         )(params)
 
-    ((full_loss, full_readings), full_gradient) = evaluate(core._full_bptt_loss)
-    ((tbptt_loss, tbptt_readings), tbptt_gradient) = evaluate(core._tbptt_loss)
+    (full_loss, full_readings), full_gradient = evaluate(core._full_bptt_loss)
+    (tbptt_loss, tbptt_readings), tbptt_gradient = evaluate(core._tbptt_loss)
 
     np.testing.assert_allclose(full_loss, tbptt_loss, rtol=1e-6, atol=1e-7)
     np.testing.assert_allclose(
@@ -385,9 +385,6 @@ def test_every_backbone_and_learning_mode_updates_recurrent_parameters(
     ]
     assert recurrent_gradients
     assert all(
-        np.all(np.isfinite(np.asarray(gradient)))
-        for gradient in recurrent_gradients
+        np.all(np.isfinite(np.asarray(gradient))) for gradient in recurrent_gradients
     )
-    assert any(
-        np.any(np.asarray(gradient) != 0.0) for gradient in recurrent_gradients
-    )
+    assert any(np.any(np.asarray(gradient) != 0.0) for gradient in recurrent_gradients)

@@ -43,8 +43,7 @@ def test_encoder_orders_observation_action_reward_and_episode_start():
 
     np.testing.assert_array_equal(
         encoded,
-        [[[1.0, 2.0, 1.0, 0.0, 0.5, 1.0],
-          [3.0, 4.0, 0.0, 1.0, -1.0, 0.0]]],
+        [[[1.0, 2.0, 1.0, 0.0, 0.5, 1.0], [3.0, 4.0, 0.0, 1.0, -1.0, 0.0]]],
     )
     assert jnp.issubdtype(encoded.dtype, jnp.floating)
 
@@ -60,9 +59,7 @@ def test_linear_and_dueling_heads_produce_one_q_per_action():
     dueling_q = dueling.apply(dueling_variables, hidden)
     params = dueling_variables["params"]
     value = hidden @ params["value"]["kernel"] + params["value"]["bias"]
-    advantage = (
-        hidden @ params["advantage"]["kernel"] + params["advantage"]["bias"]
-    )
+    advantage = hidden @ params["advantage"]["kernel"] + params["advantage"]["bias"]
 
     assert linear_q.shape == (2, 3, 3)
     assert dueling_q.shape == (2, 3, 3)
@@ -86,11 +83,9 @@ def test_apply_unroll_and_recurrence_trajectory_share_one_graph(backbone_kind):
     one_step = jax.tree.map(lambda value: value[:, :1], inputs)
 
     applied_recurrence, applied_q = q_function.apply(params, one_step, recurrence)
-    unrolled_recurrence, unrolled_q = q_function.unroll(
-        params, one_step, recurrence
-    )
-    final_recurrence, full_q, post_recurrences = (
-        q_function._unroll_with_recurrences(params, inputs, recurrence)
+    unrolled_recurrence, unrolled_q = q_function.unroll(params, one_step, recurrence)
+    final_recurrence, full_q, post_recurrences = q_function._unroll_with_recurrences(
+        params, inputs, recurrence
     )
     direct_final, direct_q = q_function.unroll(params, inputs, recurrence)
 
@@ -105,9 +100,7 @@ def test_apply_unroll_and_recurrence_trajectory_share_one_graph(backbone_kind):
     sequential_recurrence = recurrence
     sequential_post = []
     for index in range(3):
-        step_input = jax.tree.map(
-            lambda value: value[:, index : index + 1], inputs
-        )
+        step_input = jax.tree.map(lambda value: value[:, index : index + 1], inputs)
         sequential_recurrence, _ = q_function.apply(
             params, step_input, sequential_recurrence
         )
@@ -140,9 +133,7 @@ def test_episode_start_resets_before_consuming_the_input(backbone_kind):
 
     _, reset_method_q = q_function.apply(params, second, reset)
     _, original_fresh_q = q_function.apply(params, second, recurrence)
-    np.testing.assert_allclose(
-        reset_method_q, original_fresh_q, rtol=1e-5, atol=1e-6
-    )
+    np.testing.assert_allclose(reset_method_q, original_fresh_q, rtol=1e-5, atol=1e-6)
 
     reset_second = second.replace(episode_start=jnp.asarray([[True]]))
     _, reset_q = q_function.apply(params, reset_second, advanced)

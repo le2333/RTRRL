@@ -31,6 +31,7 @@ def test_component_family_owns_branch_routing_and_leaf_construction():
         observation_space="observation-space",
         action_space="action-space",
         num_envs=1,
+        episode_length=8,
     )
     components = ComponentBuilder(
         {
@@ -58,7 +59,7 @@ def test_repeated_build_requests_create_repeated_component_instances():
     family = ComponentFamily(branches={"left": Left}, construct=construct)
     components = ComponentBuilder(
         {"node.kind": "left", "node.left.width": 2},
-        BuildContext(object(), None, 3, 2, 1),
+        BuildContext(object(), None, 3, 2, 1, 8),
     )
 
     first = components.build(family, "node")

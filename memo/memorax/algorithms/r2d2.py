@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from collections.abc import Iterable
 from dataclasses import dataclass
+from functools import partial
 from typing import Any, Callable
 
 import flax.linen as nn
@@ -13,12 +14,16 @@ from flax import struct
 from memorax.buffers import (
     PrioritisedEpisodeBufferSample,
     compute_importance_weights,
+    make_prioritised_episode_buffer,
 )
+from memorax.building import BuildContext, ComponentBuilder, ComponentFamily
 from memorax.networks import FFN, LayerNorm, Sequence, Tanh, backbone
 from memorax.networks.heads import DiscreteQNetwork
 from memorax.observability.metrics import metric_names
+from memorax.parameters import describe_parameters, group, param, structure
 from memorax.readings import reading, taken
 from memorax.rl import EnvironmentStreams, periodic_incremental_update, select_ended
+from memorax.rl.updates import BASE_FAMILY, base_transform
 from memorax.runtime import ObservationSchema
 from memorax.utils import Timestep
 from memorax.utils.typing import (
@@ -40,6 +45,171 @@ class R2D2Config:
     epsilon_end: float
     epsilon_decay_steps: int
     evaluation_epsilon: float
+
+
+# ------------------------------------------------------------- parameter space
+@dataclass(frozen=True)
+class RecurrentParameters:
+    """What either recurrent backbone needs to be built, and nothing else.
+
+    R2D2 declares its own rather than reusing the shared backbone family's,
+    which also declares a recurrent differentiation. That is a choice about how
+    an online step takes its gradient and has nothing to say about a replay
+    sequence, which is differentiated by ordinary reverse mode either way.
+    """
+
+    feature_dim: int = param(valid=(1, 4096), search=(16, 256))
+    hidden_dim: int = param(valid=(1, 4096), search=(32, 512))
+
+
+@dataclass(frozen=True)
+class TbpttParameters:
+    burn_in_length: int = param(valid=(0, 4096), search=(0, 80))
+    unroll_length: int = param(valid=(1, 4096), search=(8, 160))
+
+
+@dataclass(frozen=True)
+class ReplayParameters:
+    capacity: int = param(valid=(1, 10_000_000), search=(1024, 1_000_000), log=True)
+    minimum_size: int = param(valid=(1, 10_000_000), search=(32, 100_000), log=True)
+    batch_size: int = param(valid=(1, 4096), search=(4, 256), log=True)
+    priority_exponent: float = param(valid=(0.0, 1.0), search=(0.0, 1.0))
+    importance_sampling_exponent: float = param(valid=(0.0, 1.0), search=(0.0, 1.0))
+    max_priority_weight: float = param(valid=(0.0, 1.0), search=(0.0, 1.0))
+
+
+@dataclass(frozen=True)
+class TargetParameters:
+    # In learner updates, not environment transitions.
+    update_period: int = param(valid=(1, 1_000_000), search=(4, 10_000), log=True)
+
+
+@dataclass(frozen=True)
+class ExplorationParameters:
+    epsilon_start: float = param(valid=(0.0, 1.0), search=(0.05, 1.0))
+    epsilon_end: float = param(valid=(0.0, 1.0), search=(0.0, 0.2))
+    epsilon_decay_steps: int = param(
+        valid=(1, 1_000_000_000), search=(1000, 10_000_000), log=True
+    )
+    evaluation_epsilon: float = param(valid=(0.0, 1.0), search=(0.0, 0.1))
+
+
+R2D2_BACKBONE_BRANCHES = {"lru": RecurrentParameters, "rtu": RecurrentParameters}
+Q_HEAD_BRANCHES = {"dueling": (), "linear": ()}
+LEARNING_BRANCHES = {"tbptt": TbpttParameters, "full_bptt": ()}
+VALUE_TRANSFORM_BRANCHES = {"signed_hyperbolic": (), "identity": ()}
+# Adam alone: the published learner is written over it, and no bounded stream
+# rule applies to a replayed sequence.
+R2D2_OPTIMIZERS = BASE_FAMILY.restricted("adam")
+
+
+@dataclass(frozen=True)
+class ReturnParameters:
+    n_step: int = param(valid=(1, 1000), search=(1, 10))
+    value_transform: str = structure(branches=VALUE_TRANSFORM_BRANCHES)
+
+
+@dataclass(frozen=True)
+class R2D2Parameters:
+    backbone: str = structure(branches=R2D2_BACKBONE_BRANCHES)
+    head: str = structure(branches=Q_HEAD_BRANCHES)
+    learning: str = structure(branches=LEARNING_BRANCHES)
+    optimizer: str = structure(branches=R2D2_OPTIMIZERS.branches)
+    replay: ReplayParameters = group(of=ReplayParameters)
+    target: TargetParameters = group(of=TargetParameters)
+    returns: ReturnParameters = group(of=ReturnParameters)
+    exploration: ExplorationParameters = group(of=ExplorationParameters)
+    gamma: float = param(valid=(0.0, 1.0), search=(0.9, 0.9999))
+
+
+PARAMETERS = describe_parameters(R2D2Parameters)
+
+
+@dataclass(frozen=True)
+class SelectedBackbone:
+    kind: str
+    feature_dim: int
+    hidden_dim: int
+
+
+@dataclass(frozen=True)
+class SelectedLearning:
+    """Which gradient the update constructs, and the replay window it reads.
+
+    Full BPTT has no burn-in or unroll horizon of its own -- the episode is the
+    horizon -- so both lengths are zero there and its loss never reads them.
+    """
+
+    kind: str
+    burn_in_length: int
+    unroll_length: int
+
+    def window(self, episode_length: int) -> int:
+        """Executed transitions per replay item, one fewer than its inputs."""
+
+        if self.kind == "full_bptt":
+            return episode_length
+        return self.burn_in_length + self.unroll_length
+
+    def start_flags(self, episode_length: int) -> Callable[[Any], Array]:
+        """Which stored positions this branch is allowed to sample from."""
+
+        if self.kind == "full_bptt":
+            return partial(completed_episode_starts, transition_count=episode_length)
+        return partial(tbptt_starts, burn_in_length=self.burn_in_length)
+
+
+def _identity(values: Array) -> Array:
+    return values
+
+
+def _select_backbone(selection, builder) -> SelectedBackbone:
+    del builder
+    return SelectedBackbone(
+        kind=selection.kind,
+        feature_dim=int(selection.parameters.feature_dim),
+        hidden_dim=int(selection.parameters.hidden_dim),
+    )
+
+
+def _select_kind(selection, builder) -> str:
+    del builder
+    return selection.kind
+
+
+def _select_learning(selection, builder) -> SelectedLearning:
+    del builder
+    if selection.kind == "full_bptt":
+        return SelectedLearning(kind=selection.kind, burn_in_length=0, unroll_length=0)
+    return SelectedLearning(
+        kind=selection.kind,
+        burn_in_length=int(selection.parameters.burn_in_length),
+        unroll_length=int(selection.parameters.unroll_length),
+    )
+
+
+def _select_value_transform(
+    selection, builder
+) -> tuple[Callable[[Array], Array], Callable[[Array], Array]]:
+    del builder
+    if selection.kind == "signed_hyperbolic":
+        return signed_hyperbolic, signed_parabolic
+    return _identity, _identity
+
+
+R2D2_BACKBONES = ComponentFamily(
+    branches=R2D2_BACKBONE_BRANCHES,
+    construct=_select_backbone,
+)
+Q_HEAD_FAMILY = ComponentFamily(branches=Q_HEAD_BRANCHES, construct=_select_kind)
+LEARNING_FAMILY = ComponentFamily(
+    branches=LEARNING_BRANCHES,
+    construct=_select_learning,
+)
+VALUE_TRANSFORM_FAMILY = ComponentFamily(
+    branches=VALUE_TRANSFORM_BRANCHES,
+    construct=_select_value_transform,
+)
 
 
 @struct.dataclass(frozen=True)
@@ -187,12 +357,12 @@ def encode_recurrent_inputs(inputs: RecurrentInputs, *, action_dim: int) -> Arra
     previous_action = jax.nn.one_hot(
         inputs.previous_action, action_dim, dtype=observation.dtype
     )
-    previous_reward = jnp.asarray(
-        inputs.previous_reward, dtype=observation.dtype
-    )[..., None]
-    episode_start = jnp.asarray(
-        inputs.episode_start, dtype=observation.dtype
-    )[..., None]
+    previous_reward = jnp.asarray(inputs.previous_reward, dtype=observation.dtype)[
+        ..., None
+    ]
+    episode_start = jnp.asarray(inputs.episode_start, dtype=observation.dtype)[
+        ..., None
+    ]
     return jnp.concatenate(
         (observation, previous_action, previous_reward, episode_start), axis=-1
     )
@@ -295,9 +465,7 @@ class QFunction:
         self, params: Any, timestep: RecurrentInputs, recurrence: Any
     ) -> tuple[Any, Array]:
         encoded = encode_recurrent_inputs(timestep, action_dim=self.action_dim)
-        return self.network.apply(
-            params, encoded, timestep.episode_start, recurrence
-        )
+        return self.network.apply(params, encoded, timestep.episode_start, recurrence)
 
     def _unroll_with_recurrences(
         self, params: Any, timesteps: RecurrentInputs, recurrence: Any
@@ -408,9 +576,7 @@ def _burn_in(
 ) -> tuple[Any, Any, RecurrentInputs]:
     if burn_in_length:
         burn_in_inputs = _slice_time(inputs, 0, burn_in_length)
-        warmed, _ = q_function.unroll(
-            params, burn_in_inputs, initial_recurrence
-        )
+        warmed, _ = q_function.unroll(params, burn_in_inputs, initial_recurrence)
         target_warmed, _ = q_function.unroll(
             target_params, burn_in_inputs, initial_target_recurrence
         )
@@ -435,15 +601,11 @@ def _bootstrap_q_values(
 
     def apply_one(_, values):
         timestep, recurrence = values
-        timestep = jax.tree.map(
-            lambda value: jnp.expand_dims(value, axis=1), timestep
-        )
+        timestep = jax.tree.map(lambda value: jnp.expand_dims(value, axis=1), timestep)
         _, q_values = q_function.apply(params, timestep, recurrence)
         return None, q_values[:, 0]
 
-    _, q_values = jax.lax.scan(
-        apply_one, None, (time_inputs, time_recurrences)
-    )
+    _, q_values = jax.lax.scan(apply_one, None, (time_inputs, time_recurrences))
     return jnp.swapaxes(q_values, 0, 1)
 
 
@@ -474,9 +636,7 @@ class Core:
 
     def reset(self, key: Key, state: CoreState) -> CoreState:
         batch_size = jax.tree.leaves(state.recurrence)[0].shape[0]
-        return state.replace(
-            recurrence=self.q_function.reset(key, batch_size)
-        )
+        return state.replace(recurrence=self.q_function.reset(key, batch_size))
 
     def act(
         self,
@@ -503,11 +663,13 @@ class Core:
             random_action,
             greedy_action,
         )
-        selected_q = jnp.take_along_axis(
-            q_values, action[:, None], axis=-1
-        ).squeeze(axis=-1)
-        return recurrence, action, ForwardMetrics(
-            selected_q=selected_q, epsilon=epsilon
+        selected_q = jnp.take_along_axis(q_values, action[:, None], axis=-1).squeeze(
+            axis=-1
+        )
+        return (
+            recurrence,
+            action,
+            ForwardMetrics(selected_q=selected_q, epsilon=epsilon),
         )
 
     def _aligned_unroll(
@@ -638,9 +800,7 @@ class Core:
             sample.initial_recurrence,
             burn_in_length=self.burn_in_length,
         )
-        learning_inputs = _slice_time(
-            learning_inputs, 0, self.unroll_length + 1
-        )
+        learning_inputs = _slice_time(learning_inputs, 0, self.unroll_length + 1)
         return self._loss_from_unroll(
             params,
             target_params,
@@ -714,13 +874,11 @@ class Core:
         }[self.learning_kind]
 
         def loss_fn(params):
-            return loss_method(
-                params, state.target_params, sample, importance_weights
-            )
+            return loss_method(params, state.target_params, sample, importance_weights)
 
-        (loss, readings), grads = jax.value_and_grad(
-            loss_fn, has_aux=True
-        )(state.params)
+        (loss, readings), grads = jax.value_and_grad(loss_fn, has_aux=True)(
+            state.params
+        )
         params, optimizer_state = self._apply_optimizer(state, grads)
         next_update_step = state.update_step + 1
         target_params = self._update_target(
@@ -737,9 +895,7 @@ class Core:
         metrics = UpdateMetrics(
             applied=jnp.asarray(True),
             loss=loss,
-            td_error=jnp.sum(
-                jnp.abs(readings.td_error) * metric_mask
-            ) / metric_count,
+            td_error=jnp.sum(jnp.abs(readings.td_error) * metric_mask) / metric_count,
             q_value=jnp.sum(readings.q_value * metric_mask) / metric_count,
             gradient_norm=optax.tree.norm(grads),
             importance_weight=jnp.mean(readings.importance_weight),
@@ -836,9 +992,7 @@ def sequence_priorities(td_error: Array, valid: Array, *, max_weight: float) -> 
     mask = valid.astype(jnp.bool_)
     absolute_error = jnp.abs(td_error)
     maximum = jnp.max(jnp.where(mask, absolute_error, 0.0), axis=1)
-    mean = jnp.sum(jnp.where(mask, absolute_error, 0.0), axis=1) / jnp.sum(
-        mask, axis=1
-    )
+    mean = jnp.sum(jnp.where(mask, absolute_error, 0.0), axis=1) / jnp.sum(mask, axis=1)
     return max_weight * maximum + (1.0 - max_weight) * mean
 
 
@@ -851,6 +1005,75 @@ class R2D2:
     buffer: Buffer
     reports: Reports = Reports()
     record: Iterable[str] = ()
+
+    observations = OBSERVATIONS
+
+    @classmethod
+    def graph(
+        cls,
+        parameters: dict[str, Any],
+        components: ComponentBuilder,
+        context: BuildContext,
+        *,
+        record: Iterable[str] = (),
+    ) -> R2D2:
+        """Declare R2D2's instances and connections using shared builders."""
+
+        selected_backbone = components.build(R2D2_BACKBONES, "backbone")
+        learning = components.build(LEARNING_FAMILY, "learning")
+        transform, inverse_transform = components.build(
+            VALUE_TRANSFORM_FAMILY, "returns.value_transform"
+        )
+
+        return cls(
+            cfg=R2D2Config(
+                num_envs=context.num_envs,
+                epsilon_start=float(parameters["exploration.epsilon_start"]),
+                epsilon_end=float(parameters["exploration.epsilon_end"]),
+                epsilon_decay_steps=int(parameters["exploration.epsilon_decay_steps"]),
+                evaluation_epsilon=float(parameters["exploration.evaluation_epsilon"]),
+            ),
+            env=context.environment,
+            env_params=context.environment_parameters,
+            core=Core(
+                q_function=QFunction(
+                    # One Q value per action: a finite discrete action space is
+                    # a precondition of this graph rather than a runtime check.
+                    action_dim=int(context.action_space.n),
+                    feature_dim=selected_backbone.feature_dim,
+                    hidden_dim=selected_backbone.hidden_dim,
+                    backbone_kind=selected_backbone.kind,
+                    head_kind=components.build(Q_HEAD_FAMILY, "head"),
+                ),
+                optimizer=base_transform(
+                    components.build(R2D2_OPTIMIZERS, "optimizer")
+                ),
+                gamma=float(parameters["gamma"]),
+                n_step=int(parameters["returns.n_step"]),
+                burn_in_length=learning.burn_in_length,
+                unroll_length=learning.unroll_length,
+                importance_sampling_exponent=float(
+                    parameters["replay.importance_sampling_exponent"]
+                ),
+                max_priority_weight=float(parameters["replay.max_priority_weight"]),
+                target_update_period=int(parameters["target.update_period"]),
+                transform=transform,
+                inverse_transform=inverse_transform,
+                learning_kind=learning.kind,
+            ),
+            buffer=make_prioritised_episode_buffer(
+                max_length=int(parameters["replay.capacity"]),
+                min_length=int(parameters["replay.minimum_size"]),
+                sample_batch_size=int(parameters["replay.batch_size"]),
+                sample_sequence_length=learning.window(context.episode_length),
+                get_start_flags=learning.start_flags(context.episode_length),
+                add_sequences=False,
+                add_batch_size=context.num_envs,
+                priority_exponent=float(parameters["replay.priority_exponent"]),
+            ),
+            reports=REPORTS,
+            record=record,
+        )
 
     def __post_init__(self) -> None:
         object.__setattr__(
@@ -942,9 +1165,7 @@ class R2D2:
                 metrics.gradient_norm if self.reports.gradient_norm else None
             ),
             importance_weight=(
-                metrics.importance_weight
-                if self.reports.importance_weight
-                else None
+                metrics.importance_weight if self.reports.importance_weight else None
             ),
             priority=metrics.priority if self.reports.priority else None,
         )
@@ -991,9 +1212,7 @@ class R2D2:
         obs, env_state = self.environment.init(env_key)
         timestep = self.environment.blank_timestep(obs)
         episode_start = jnp.ones((self.cfg.num_envs,), dtype=jnp.bool_)
-        core_state = self.core.init(
-            core_key, self._inputs(timestep, episode_start)
-        )
+        core_state = self.core.init(core_key, self._inputs(timestep, episode_start))
         transition = ReplayTransition(
             observation=timestep.obs,
             previous_action=timestep.action,
@@ -1019,9 +1238,7 @@ class R2D2:
             core=core_state,
         )
 
-    def train_step(
-        self, state: R2D2State, key: Key
-    ) -> tuple[R2D2State, StepMetrics]:
+    def train_step(self, state: R2D2State, key: Key) -> tuple[R2D2State, StepMetrics]:
         reset_key, action_key, env_key, update_key = jax.random.split(key, 4)
         state = self._reset(reset_key, state)
         observation = state.timestep.obs
@@ -1079,6 +1296,46 @@ class R2D2:
             ),
             forward=self._forward_metrics(forward),
             update=self._update_metrics(update),
+        )
+
+    def interact(self, key: Key, state: R2D2State) -> tuple[R2D2State, StepMetrics]:
+        """One behavior-policy transition that learns nothing and costs no budget.
+
+        Runtime schedules this only to finish a sampled episode the training
+        budget cut short. The epsilon-greedy policy and the actor's recurrence
+        continue exactly where training left them, so neither the step counter,
+        the parameters, the optimizer state nor replay moves.
+        """
+
+        reset_key, action_key, env_key = jax.random.split(key, 3)
+        state = self._reset(reset_key, state)
+        observation = state.timestep.obs
+        recurrence, action, _ = self.core.act(
+            action_key,
+            state.core,
+            self._inputs(state.timestep, state.episode_start),
+            epsilon=self._epsilon(state.step),
+        )
+        next_obs, env_state, reward, done, terminal, info = self.environment.step(
+            env_key, state.env_state, action
+        )
+        return state.replace(
+            timestep=self.environment.persisted(
+                Timestep(obs=next_obs, action=action, reward=reward, done=done)
+            ),
+            episode_start=done,
+            env_state=env_state,
+            core=state.core.replace(recurrence=recurrence),
+        ), StepMetrics(
+            interaction=self._interaction(
+                observation=observation,
+                next_observation=next_obs,
+                action=action,
+                reward=reward,
+                done=done,
+                terminal=terminal,
+                info=info,
+            ),
         )
 
     def _evaluation_state(self, key: Key, state: R2D2State) -> R2D2State:
@@ -1139,9 +1396,7 @@ class R2D2:
         keys = jax.random.split(key, scan_steps)
         return jax.lax.scan(self.train_step, state, keys)
 
-    def evaluate(
-        self, key: Key, state: R2D2State, num_steps: int
-    ) -> StepMetrics:
+    def evaluate(self, key: Key, state: R2D2State, num_steps: int) -> StepMetrics:
         reset_key, rollout_key = jax.random.split(key)
         eval_state = self._evaluation_state(reset_key, state)
         scan_steps = self._num_scan_steps(num_steps, self.cfg.num_envs)

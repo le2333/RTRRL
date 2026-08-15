@@ -57,6 +57,7 @@ def assemble(
         observation_space=environment.observation_space(environment_parameters),
         action_space=environment.action_space(environment_parameters),
         num_envs=request.num_envs,
+        episode_length=specification.episode_length,
     )
     components = ComponentBuilder(request.parameters, context)
     graph = definition.graph(

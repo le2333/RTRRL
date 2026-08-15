@@ -11,11 +11,20 @@ from memorax.parameters import read_branch
 
 @dataclass(frozen=True)
 class BuildContext:
+    """The static facts about a run that a graph reads but does not choose.
+
+    ``episode_length`` is the run document's declared horizon rather than
+    whatever the environment's own parameters happen to call it: a graph whose
+    shape depends on it -- a full-episode replay window -- needs it before any
+    environment has stepped, and each adapter spells its own field differently.
+    """
+
     environment: Any
     environment_parameters: Any
     observation_space: Any
     action_space: Any
     num_envs: int
+    episode_length: int
 
 
 @dataclass(frozen=True)

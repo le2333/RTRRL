@@ -97,9 +97,7 @@ class IdentifiableQFunction:
         return recurrence, jnp.stack((value, -value), axis=-1)[:, None]
 
     def _unroll_with_recurrences(self, params, inputs, recurrence):
-        time_inputs = jax.tree.map(
-            lambda value: jnp.swapaxes(value, 0, 1), inputs
-        )
+        time_inputs = jax.tree.map(lambda value: jnp.swapaxes(value, 0, 1), inputs)
 
         def step(carry, timestep):
             timestep = jax.tree.map(
@@ -118,9 +116,7 @@ class IdentifiableQFunction:
         )
 
     def unroll(self, params, inputs, recurrence):
-        final, q_values, _ = self._unroll_with_recurrences(
-            params, inputs, recurrence
-        )
+        final, q_values, _ = self._unroll_with_recurrences(params, inputs, recurrence)
         return final, q_values
 
 
@@ -150,21 +146,15 @@ def _learner_sample(observations, rewards, dones, terminals):
     return LearnerSequence(
         inputs=RecurrentInputs(
             observation=observations[..., None],
-            previous_action=jnp.zeros(
-                observations.shape, dtype=jnp.int32
-            ),
+            previous_action=jnp.zeros(observations.shape, dtype=jnp.int32),
             previous_reward=jnp.zeros(observations.shape),
             episode_start=jnp.zeros(observations.shape, dtype=jnp.bool_),
         ),
         bootstrap_inputs=RecurrentInputs(
             observation=jnp.full((batch, transition_count, 1), 9.0),
-            previous_action=jnp.zeros(
-                (batch, transition_count), dtype=jnp.int32
-            ),
+            previous_action=jnp.zeros((batch, transition_count), dtype=jnp.int32),
             previous_reward=rewards,
-            episode_start=jnp.zeros(
-                (batch, transition_count), dtype=jnp.bool_
-            ),
+            episode_start=jnp.zeros((batch, transition_count), dtype=jnp.bool_),
         ),
         actions=jnp.zeros((batch, transition_count), dtype=jnp.int32),
         rewards=rewards,
@@ -187,9 +177,7 @@ def test_alignment_uses_shifted_q_and_history_preserving_truncation_bootstrap():
         terminals=jnp.asarray([[False, True]]),
     )
     sample = sample.replace(
-        inputs=sample.inputs.replace(
-            episode_start=jnp.asarray([[True, True, False]])
-        )
+        inputs=sample.inputs.replace(episode_start=jnp.asarray([[True, True, False]]))
     )
 
     current, online_next, target_next, *_ = core._aligned_unroll(
@@ -202,27 +190,13 @@ def test_alignment_uses_shifted_q_and_history_preserving_truncation_bootstrap():
         transition_start=0,
     )
 
-    np.testing.assert_array_equal(
-        current, jnp.asarray([[[1.0, -1.0], [-9.0, 9.0]]])
-    )
-    np.testing.assert_array_equal(
-        online_next[:, 0], jnp.asarray([[1.0, -1.0]])
-    )
-    np.testing.assert_array_equal(
-        target_next[:, 0], jnp.asarray([[101.0, -101.0]])
-    )
-    np.testing.assert_array_equal(
-        online_next[:, 1], jnp.asarray([[10.0, -10.0]])
-    )
-    np.testing.assert_array_equal(
-        target_next[:, 1], jnp.asarray([[110.0, -110.0]])
-    )
-    np.testing.assert_array_equal(
-        online_next[:, 2], jnp.asarray([[-6.0, 6.0]])
-    )
-    np.testing.assert_array_equal(
-        target_next[:, 2], jnp.asarray([[94.0, -94.0]])
-    )
+    np.testing.assert_array_equal(current, jnp.asarray([[[1.0, -1.0], [-9.0, 9.0]]]))
+    np.testing.assert_array_equal(online_next[:, 0], jnp.asarray([[1.0, -1.0]]))
+    np.testing.assert_array_equal(target_next[:, 0], jnp.asarray([[101.0, -101.0]]))
+    np.testing.assert_array_equal(online_next[:, 1], jnp.asarray([[10.0, -10.0]]))
+    np.testing.assert_array_equal(target_next[:, 1], jnp.asarray([[110.0, -110.0]]))
+    np.testing.assert_array_equal(online_next[:, 2], jnp.asarray([[-6.0, 6.0]]))
+    np.testing.assert_array_equal(target_next[:, 2], jnp.asarray([[94.0, -94.0]]))
     assert float(online_next[0, 1, 0]) not in (9.0, -9.0)
 
 

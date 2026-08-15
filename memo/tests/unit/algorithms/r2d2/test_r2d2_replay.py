@@ -34,9 +34,7 @@ def _transition(*, done, terminal=None, episode_start=None):
         done=jnp.asarray([done]),
         terminal=jnp.asarray([terminal]),
         actor_recurrence={
-            "hidden": jnp.arange(transition_count * 3).reshape(
-                1, transition_count, 3
-            )
+            "hidden": jnp.arange(transition_count * 3).reshape(1, transition_count, 3)
         },
     )
 
@@ -103,21 +101,19 @@ def test_time_limit_keeps_pre_reset_bootstrap_input():
         terminal=[False, False, False, False],
         episode_start=[True, False, True, False],
     ).replace(
-        observation=_transition(done=[False] * 4).observation.at[:, 2].set(
-            jnp.asarray([-9, -9])
-        ),
-        next_observation=_transition(done=[False] * 4).next_observation.at[:, 1].set(
-            jnp.asarray([9, 9])
-        ),
+        observation=_transition(done=[False] * 4)
+        .observation.at[:, 2]
+        .set(jnp.asarray([-9, -9])),
+        next_observation=_transition(done=[False] * 4)
+        .next_observation.at[:, 1]
+        .set(jnp.asarray([9, 9])),
     )
     sequence = learner_sequence(
         _sample(experience), transition_count=4, full_episode=False
     )
 
     np.testing.assert_array_equal(sequence.inputs.observation[:, 2], [[-9, -9]])
-    np.testing.assert_array_equal(
-        sequence.bootstrap_inputs.observation[:, 1], [[9, 9]]
-    )
+    np.testing.assert_array_equal(sequence.bootstrap_inputs.observation[:, 1], [[9, 9]])
     np.testing.assert_array_equal(
         sequence.bootstrap_inputs.episode_start[:, 1], [False]
     )

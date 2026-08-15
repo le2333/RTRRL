@@ -10,14 +10,14 @@ from flashbax.buffers import sum_tree
 from memorax.algorithms.r2d2 import (
     METRICS,
     OBSERVATIONS,
+    R2D2,
     REPORTS,
     TRAINING_METRICS,
     Core,
-    R2D2,
-    R2D2Config,
-    Reports,
     QFunction,
+    R2D2Config,
     RecurrentInputs,
+    Reports,
     signed_hyperbolic,
     signed_parabolic,
     tbptt_starts,
@@ -38,13 +38,17 @@ def _tree_allclose(left, right):
 @dataclass(frozen=True)
 class TruncatingTinyDiscreteEnv(TinyDiscreteEnv):
     def step(self, key, state, action, params):
-        observation, state, reward, _, info = super().step(
-            key, state, action, params
+        observation, state, reward, _, info = super().step(key, state, action, params)
+        return (
+            observation,
+            state,
+            reward,
+            jnp.asarray(True),
+            {
+                **info,
+                "terminal": jnp.asarray(False),
+            },
         )
-        return observation, state, reward, jnp.asarray(True), {
-            **info,
-            "terminal": jnp.asarray(False),
-        }
 
 
 def _algorithm(
@@ -128,9 +132,7 @@ def test_update_runs_once_at_the_first_sampleable_step_and_writes_priority():
     algorithm = _algorithm(minimum_size=2)
     initial = algorithm.init(jax.random.key(2))
 
-    collecting, collecting_metrics = algorithm.train_step(
-        initial, jax.random.key(3)
-    )
+    collecting, collecting_metrics = algorithm.train_step(initial, jax.random.key(3))
 
     assert not bool(algorithm.buffer.can_sample(collecting.buffer_state))
     assert not bool(collecting_metrics.update.applied)
@@ -138,17 +140,11 @@ def test_update_runs_once_at_the_first_sampleable_step_and_writes_priority():
         if item.name != "applied":
             assert float(getattr(collecting_metrics.update, item.name)) == 0.0
     assert _tree_allclose(collecting.core.params, initial.core.params)
-    assert _tree_allclose(
-        collecting.core.target_params, initial.core.target_params
-    )
-    assert _tree_allclose(
-        collecting.core.optimizer_state, initial.core.optimizer_state
-    )
+    assert _tree_allclose(collecting.core.target_params, initial.core.target_params)
+    assert _tree_allclose(collecting.core.optimizer_state, initial.core.optimizer_state)
     assert int(collecting.core.update_step) == 0
 
-    updated, update_metrics = algorithm.train_step(
-        collecting, jax.random.key(4)
-    )
+    updated, update_metrics = algorithm.train_step(collecting, jax.random.key(4))
 
     assert bool(update_metrics.update.applied)
     assert int(updated.core.update_step) == 1
@@ -190,9 +186,7 @@ def test_episode_end_clears_feedback_and_resets_before_the_reset_observation():
 
     restarted, metrics = algorithm.train_step(state, step_key)
 
-    stored = jax.tree.map(
-        lambda value: value[:, 3], restarted.buffer_state.experience
-    )
+    stored = jax.tree.map(lambda value: value[:, 3], restarted.buffer_state.experience)
     np.testing.assert_allclose(metrics.interaction.observation, [[-0.25, 0.5]])
     np.testing.assert_array_equal(stored.previous_action, [0])
     np.testing.assert_array_equal(stored.previous_reward, [0.0])
@@ -230,9 +224,7 @@ def test_evaluation_uses_fresh_interaction_state_and_leaves_training_unchanged()
     }
     altered = state.replace(
         core=state.core.replace(
-            recurrence=jax.tree.map(
-                lambda value: value + 100.0, state.core.recurrence
-            )
+            recurrence=jax.tree.map(lambda value: value + 100.0, state.core.recurrence)
         )
     )
 
@@ -242,9 +234,7 @@ def test_evaluation_uses_fresh_interaction_state_and_leaves_training_unchanged()
 
     assert metrics.update is None
     np.testing.assert_allclose(metrics.forward.epsilon, [0.375, 0.375])
-    np.testing.assert_allclose(
-        metrics.interaction.observation[0], [[-0.25, 0.5]]
-    )
+    np.testing.assert_allclose(metrics.interaction.observation[0], [[-0.25, 0.5]])
     np.testing.assert_allclose(
         metrics.forward.selected_q, altered_metrics.forward.selected_q
     )
@@ -253,9 +243,7 @@ def test_evaluation_uses_fresh_interaction_state_and_leaves_training_unchanged()
     )
     assert _tree_allclose(state.core.params, snapshot["params"])
     assert _tree_allclose(state.core.target_params, snapshot["target_params"])
-    assert _tree_allclose(
-        state.core.optimizer_state, snapshot["optimizer_state"]
-    )
+    assert _tree_allclose(state.core.optimizer_state, snapshot["optimizer_state"])
     assert _tree_allclose(state.buffer_state, snapshot["buffer_state"])
     np.testing.assert_array_equal(state.step, snapshot["step"])
     np.testing.assert_array_equal(state.core.update_step, snapshot["update_step"])
@@ -311,12 +299,8 @@ def test_readings_declare_and_gate_optional_training_series():
         record=frozenset(),
     )
     state = algorithm.init(jax.random.key(17))
-    collecting, collecting_metrics = algorithm.train_step(
-        state, jax.random.key(18)
-    )
-    _, update_metrics = algorithm.train_step(
-        collecting, jax.random.key(19)
-    )
+    collecting, collecting_metrics = algorithm.train_step(state, jax.random.key(18))
+    _, update_metrics = algorithm.train_step(collecting, jax.random.key(19))
 
     assert collecting_metrics.interaction.observation is None
     assert collecting_metrics.forward.selected_q is None

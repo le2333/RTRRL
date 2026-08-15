@@ -5,9 +5,9 @@ import optax
 import pytest
 
 from memorax.algorithms.r2d2 import (
+    R2D2,
     Core,
     QFunction,
-    R2D2,
     R2D2Config,
     signed_hyperbolic,
     signed_parabolic,
@@ -78,9 +78,7 @@ def test_r2d2_train_and_evaluate_follow_program_scan_shape(
     trained, train_metrics = algorithm.train(
         jax.random.key(1), state, num_steps=train_steps
     )
-    eval_metrics = algorithm.evaluate(
-        jax.random.key(2), trained, num_steps=eval_steps
-    )
+    eval_metrics = algorithm.evaluate(jax.random.key(2), trained, num_steps=eval_steps)
 
     assert int(trained.step) == train_steps
     assert train_metrics.interaction.reward.shape == train_shape
