@@ -24,11 +24,11 @@ from trainer_infra.adapter import resolve_parameter_ranges
 from trainer_infra.experiment import ExperimentRunner
 from trainer_infra.hpo import sample_parameters
 
+from deployment.catalog import build_catalog
+from deployment.contract import CONTRACT_VERSION
 from entries import stream_ac
 from entries._contract import RunSpec
 from memorax.parameters import KIND, expand, flatten
-from deployment.catalog import build_catalog
-from deployment.contract import CONTRACT_VERSION
 from tests.support.builders import assemble_stream_ac
 
 optuna = pytest.importorskip("optuna")
@@ -140,7 +140,7 @@ def test_the_resolved_manifest_assembles_and_steps(configurations):
         # faster.
         num_envs=STREAMS,
     )
-    state = program.init(jax.random.key(config.runtime.seed))
+    state = program.init(jax.random.key(config.training.seed))
     _, metrics = program.train(jax.random.key(1), state, 2 * STREAMS)
 
     assert metrics.interaction.reward.shape == (2, STREAMS)

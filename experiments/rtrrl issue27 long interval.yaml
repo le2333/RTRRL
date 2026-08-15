@@ -1,0 +1,115 @@
+# Issue 27 acceptance: a reporting interval much longer than an episode
+# completes without the run growing to the size of the interval.
+#
+# chunk_steps is the whole subject. It is what one training call may hold, and
+# it is now independent of everything else: the evaluation interval is ten
+# times larger and the environment's episode limit plays no part in it. Before
+# the fix a call was a whole evaluation interval, so memory grew with it.
+#
+#   chunk_steps            1000 environment steps
+#   evaluation every_steps 10000
+#   training calls         10 per interval, each holding at most 1000 steps
+#
+# Aim gets evaluation only -- no `training` block under it -- and there is no
+# `rerun` block, so no RRD is written. That covers the search half of the
+# acceptance as well: a run that asks for neither produces neither.
+#
+# Expected:
+#   - the run reaches its budget without an out-of-memory condition
+#   - five eval/episode/return records in metrics.jsonl, at 10000 to 50000
+#   - no artifacts/rerun directory at all
+#   - metrics.jsonl still holds every training episode
+
+experiment: rtrrl-issue27
+name: rtrrl-issue27-long-interval
+description: "Issue 27: a long reporting interval, bounded train calls, no Rerun"
+
+image: 007122174918.dkr.ecr.eu-north-1.amazonaws.com/rtrrl@sha256:7ca201c304dc6a38dc45d8142cfc05d1ec4deb3046e9e8e3594b4ff635cfd32d
+entry: rtrrl
+storage: s3://rtrrl-artifacts-007122174918/trainer
+
+environment:
+  id: brax::hopper
+  backend: spring
+  observed: [0, 2, 4, 6, 8, 10]
+  seed: 0
+  episode_length: 1000
+
+training:
+  num_envs: 1
+  total_steps: 50000
+  chunk_steps: 1000
+
+evaluation:
+  every_steps: 10000
+  rollout_steps: 1000
+
+logging:
+  aim:
+    url: aim://172.31.62.192:53801
+    training:
+      log_every_steps: 10000
+
+score:
+  metric: eval/episode/return_per_step
+  window_steps: [0, 50000]
+  reduce: last
+  non_finite: worst
+  direction: maximize
+
+compute:
+  instance_type: c7a.large
+  timeout_minutes: 120
+
+hpo:
+  rounds: 1
+  trials_per_round: 1
+  parallel_jobs: 1
+  startup_trials: 1
+  seed: 0
+
+space:
+  torso:
+    backbone:
+      kind: [lru]
+      lru:
+        feature_dim: [64]
+        hidden_dim: [64]
+        differentiation:
+          kind: [exact_rtrl]
+    optimizer:
+      kind: [adam]
+      adam:
+        lr: [0.0001]
+    grad_clip: [1.0]
+    follow: [1.0]
+  heads:
+    optimizer:
+      kind: [adam]
+      adam:
+        lr: [0.0001]
+  actor:
+    head:
+      kind: [state_std]
+      state_std:
+        initialization:
+          kind: [lecun]
+  critic:
+    head:
+      kind: [value]
+      value:
+        initialization:
+          kind: [lecun]
+  normalization:
+    observation:
+      kind: [none]
+    reward:
+      kind: [none]
+  gamma: [0.99]
+  lambda_pi: [0.9]
+  lambda_v: [0.9]
+  lambda_rnn: [0.9]
+  eta_pi: [1.0]
+  eta_f: [1.0]
+  entropy_rate: [0.00001]
+  meta_rl: [true]

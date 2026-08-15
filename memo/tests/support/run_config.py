@@ -1,4 +1,4 @@
-"""Version-8 run documents shared by deployment tests."""
+"""Current-contract run documents shared by deployment tests."""
 
 from __future__ import annotations
 
@@ -28,12 +28,12 @@ def make_run_config(**logging: object) -> RunSpec:
                 "num_envs": 1,
                 "parameters": {"learning_rate": 0.0003},
             },
-            "runtime": {
+            "training": {
                 "seed": 0,
                 "total_steps": 100,
-                "epoch_steps": 100,
-                "evaluation_steps": 0,
+                "chunk_steps": 100,
             },
+            "evaluation": {"every_steps": 100, "rollout_steps": 0},
             "logging": {"aim": {"url": "aim://127.0.0.1:1"}, **logging},
         }
     )

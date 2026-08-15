@@ -581,9 +581,7 @@ def test_exact_credit_is_not_the_truncated_one():
     state, timestep, action, delta = transition(0, "live")
     exact, truncated = ours(), ours(differentiation="tbptt")
     shape = (ENVS, None)
-    empty = exact.core.actor.block.differentiation.initialize(
-        jax.random.key(0), shape
-    )
+    empty = exact.core.actor.block.differentiation.initialize(jax.random.key(0), shape)
     assert empty is not None, "exact credit stopped carrying a sensitivity"
     sensitivity = jax.tree.map(
         lambda leaf: jax.random.normal(jax.random.key(1), leaf.shape, leaf.dtype),

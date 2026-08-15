@@ -21,9 +21,7 @@ def test_the_two_settings_do_not_build_the_same_state():
     key = jax.random.key(0)
     shapes = {
         name: jax.tree.structure(
-            ours(differentiation=name)
-            .init(key)
-            .actor.recurrence.differentiation_state
+            ours(differentiation=name).init(key).actor.recurrence.differentiation_state
         )
         for name in KINDS
     }
@@ -36,8 +34,7 @@ def test_the_two_settings_do_not_initialise_through_the_same_method():
 
     contexts = {
         name: type(
-            ours(differentiation=name)
-            .core.actor.block.differentiation.initialization()
+            ours(differentiation=name).core.actor.block.differentiation.initialization()
         ).__name__
         for name in KINDS
     }

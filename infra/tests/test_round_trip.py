@@ -1,4 +1,4 @@
-"""Infra emits the same serialized v8 shape the image-side fixture specifies."""
+"""Infra emits the same serialized shape the image-side fixture specifies."""
 
 from __future__ import annotations
 
@@ -11,7 +11,7 @@ import yaml
 
 from trainer_infra.experiment import ExperimentError, ExperimentRunner, _absent
 
-CONTRACT = Path(__file__).resolve().parents[2] / "tests" / "contracts" / "v8"
+CONTRACT = Path(__file__).resolve().parents[2] / "tests" / "contracts" / "v9"
 TEMPLATE = Path(__file__).resolve().parents[2] / "experiments" / "streamac template.yaml"
 
 
@@ -20,7 +20,7 @@ def read_json(name: str) -> dict[str, Any]:
 
 
 def test_catalog_fixture_is_the_contract_infra_emits(catalog: Any) -> None:
-    assert catalog["contract"] == read_json("catalog.json")["contract"] == 8
+    assert catalog["contract"] == read_json("catalog.json")["contract"] == 9
 
 
 def test_a_round_emits_the_serialized_run_spec_shape(
@@ -36,7 +36,7 @@ def test_a_round_emits_the_serialized_run_spec_shape(
     expected = read_json("run.json")
     for run in runs:
         assert set(run) == set(expected)
-        for block in ("identity", "artifacts", "algorithm", "runtime", "logging"):
+        for block in ("identity", "artifacts", "algorithm", "training", "evaluation", "logging"):
             assert set(run[block]) == set(expected[block])
         assert set(run["algorithm"]["environment"]) == set(expected["algorithm"]["environment"])
         assert json.loads(json.dumps(run)) == run

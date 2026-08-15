@@ -57,36 +57,76 @@ class AlgorithmSpec(_Frozen):
         return self
 
 
-class RuntimeSpec(_Frozen):
+class TrainingSpec(_Frozen):
+    """The budget and the shape of the run, and nothing about reporting.
+
+    ``chunk_steps`` is how much one training call may hold, which is the
+    memory a run costs. It is deliberately unrelated to the environment's
+    episode limit: how long an episode runs is decided while the run is going
+    and changes as the policy improves, so sizing a buffer from it would tie a
+    memory budget to a number that has nothing to do with memory.
+    """
+
     seed: int
     total_steps: int
-    epoch_steps: int
-    evaluation_steps: int
+    chunk_steps: int
 
     @model_validator(mode="after")
-    def _whole_epochs(self) -> "RuntimeSpec":
+    def _usable(self) -> "TrainingSpec":
         if self.seed < 0:
             raise ValueError("seed must not be negative")
-        if self.total_steps < 1 or self.epoch_steps < 1:
+        if self.total_steps < 1 or self.chunk_steps < 1:
             raise ValueError("training step budgets must be positive")
-        if self.evaluation_steps < 0:
-            raise ValueError("evaluation_steps must not be negative")
-        if self.total_steps % self.epoch_steps:
-            raise ValueError("total_steps must consist of whole epochs")
+        return self
+
+
+class EvaluationSpec(_Frozen):
+    """How often the policy is measured, and for how long each time."""
+
+    every_steps: int
+    rollout_steps: int
+
+    @model_validator(mode="after")
+    def _usable(self) -> "EvaluationSpec":
+        if self.every_steps < 1:
+            raise ValueError("evaluation every_steps must be positive")
+        if self.rollout_steps < 0:
+            raise ValueError("rollout_steps must not be negative")
+        return self
+
+
+class AimTrainingSpec(_Frozen):
+    """Present when training metrics are wanted on the dashboard at all."""
+
+    log_every_steps: int
+
+    @model_validator(mode="after")
+    def _usable(self) -> "AimTrainingSpec":
+        if self.log_every_steps < 1:
+            raise ValueError("aim training log_every_steps must be positive")
         return self
 
 
 class AimSpec(_Frozen):
+    """Evaluation always reaches Aim; training reaches it only if asked.
+
+    A run ends one episode every few dozen steps before its policy is any
+    good, so recording every one of them is tens of millions of points nobody
+    can read. The complete record is the metrics artifact, which is not
+    optional and not configurable.
+    """
+
     url: str
+    training: AimTrainingSpec | None = None
 
 
 class RerunSpec(_Frozen):
-    every_steps: int
+    log_every_steps: int
 
     @model_validator(mode="after")
     def _usable(self) -> "RerunSpec":
-        if self.every_steps < 1:
-            raise ValueError("rerun every_steps must be positive")
+        if self.log_every_steps < 1:
+            raise ValueError("rerun log_every_steps must be positive")
         return self
 
 
@@ -101,11 +141,19 @@ class RunSpec(_Frozen):
     entry: str
     artifacts: Artifacts
     algorithm: AlgorithmSpec
-    runtime: RuntimeSpec
+    training: TrainingSpec
+    evaluation: EvaluationSpec
     logging: LoggingSpec
 
     @model_validator(mode="after")
     def _graph_width_matches_schedule(self) -> "RunSpec":
-        if self.runtime.epoch_steps % self.algorithm.num_envs:
-            raise ValueError("epoch_steps must contain whole environment steps")
+        streams = self.algorithm.num_envs
+        if self.training.chunk_steps % streams:
+            raise ValueError("chunk_steps must contain whole environment steps")
+        if self.evaluation.every_steps % streams:
+            raise ValueError(
+                "evaluation every_steps must contain whole environment steps"
+            )
+        if self.training.total_steps % self.evaluation.every_steps:
+            raise ValueError("total_steps must consist of whole evaluation intervals")
         return self

@@ -65,7 +65,7 @@ def test_rtrrl_template_resolves_and_runs(tmp_path: Path) -> None:
             num_envs=config.algorithm.num_envs,
         ),
     )
-    state = built.program.init(jax.random.key(config.runtime.seed))
+    state = built.program.init(jax.random.key(config.training.seed))
     _, observations = built.program.train(jax.random.key(1), state, 2)
 
     assert observations.interaction.reward.shape == (2, 1)

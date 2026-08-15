@@ -35,8 +35,8 @@ REQUIRED: Mapping[str, tuple[str, ...]] = {
         "score",
     ),
     "environment": ("id", "backend", "seed", "episode_length"),
-    "training": ("num_envs", "total_steps", "epoch_steps"),
-    "evaluation": ("steps",),
+    "training": ("num_envs", "total_steps", "chunk_steps"),
+    "evaluation": ("every_steps", "rollout_steps"),
     "logging": ("aim",),
     "score": ("metric", "window_steps", "reduce", "non_finite", "direction"),
     "hpo": ("rounds", "trials_per_round", "startup_trials", "seed"),
@@ -151,9 +151,16 @@ class ExperimentRunner:
         environment = dict(experiment["environment"])
         seed = environment.pop("seed")
         training = experiment["training"]
-        logging = {"aim": {"url": experiment["logging"]["aim"]}}
-        if experiment["logging"].get("enable_rerun"):
-            logging["rerun"] = {"every_steps": experiment["logging"]["rerun_every_steps"]}
+        evaluation = experiment["evaluation"]
+        # A block that is present is a destination that is on. There is no
+        # separate switch beside a value for it to disagree with.
+        declared = experiment["logging"]
+        aim: dict[str, Any] = {"url": declared["aim"]["url"]}
+        if "training" in declared["aim"]:
+            aim["training"] = dict(declared["aim"]["training"])
+        logging: dict[str, Any] = {"aim": aim}
+        if "rerun" in declared:
+            logging["rerun"] = dict(declared["rerun"])
 
         return {
             "contract": self.contract,
@@ -171,11 +178,14 @@ class ExperimentRunner:
                 "num_envs": training["num_envs"],
                 "parameters": dict(trial.parameters),
             },
-            "runtime": {
+            "training": {
                 "seed": seed,
                 "total_steps": training["total_steps"],
-                "epoch_steps": training["epoch_steps"],
-                "evaluation_steps": experiment["evaluation"]["steps"],
+                "chunk_steps": training["chunk_steps"],
+            },
+            "evaluation": {
+                "every_steps": evaluation["every_steps"],
+                "rollout_steps": evaluation["rollout_steps"],
             },
             "logging": logging,
         }

@@ -1,7 +1,7 @@
 """The surface every algorithm presents to whatever drives it.
 
 An algorithm owns its own loop. What it agrees to is narrow: hand back a
-program that can be initialised, trained for an epoch, and evaluated, plus
+program that can be initialised, trained for a bounded call, and evaluated, plus
 pytrees with a fixed shape so a caller can read results without knowing which
 algorithm produced them.
 

@@ -5,12 +5,14 @@ from __future__ import annotations
 import sys
 
 from memorax.algorithms.stream_ac import METRICS as METRICS
+from memorax.algorithms.stream_ac import OBSERVATIONS
 from memorax.algorithms.stream_ac import PARAMETERS as PARAMETERS
 from memorax.algorithms.stream_ac import StreamAC
 from memorax.assembly import BuildRequest, EnvironmentSpec, assemble
 from memorax.runtime import Runtime, RuntimeConfig
 
 from ._observability import build_reporter, load_run
+from ._schedule import trajectory_at_steps, trajectory_record
 
 
 def build_request(config) -> BuildRequest:
@@ -27,19 +29,23 @@ def build_request(config) -> BuildRequest:
             episode_length=environment.episode_length,
         ),
         num_envs=algorithm.num_envs,
+        record=trajectory_record(config, OBSERVATIONS),
     )
 
 
 def runtime_config(config) -> RuntimeConfig:
     """Project the deployment run document onto Runtime's input."""
 
-    runtime = config.runtime
+    training = config.training
     return RuntimeConfig(
-        total_steps=runtime.total_steps,
-        epoch_steps=runtime.epoch_steps,
-        eval_steps=runtime.evaluation_steps,
+        total_steps=training.total_steps,
+        chunk_steps=training.chunk_steps,
+        max_episode_steps=config.algorithm.environment.episode_length,
+        evaluate_every_steps=config.evaluation.every_steps,
+        rollout_steps=config.evaluation.rollout_steps,
         num_envs=config.algorithm.num_envs,
-        seed=runtime.seed,
+        seed=training.seed,
+        trajectory_at_steps=trajectory_at_steps(config),
     )
 
 

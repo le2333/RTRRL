@@ -103,9 +103,7 @@ class LruTorso:
 
     hidden_dim: int = param(valid=(1, 4096), search=(32, 512))
     feature_dim: int = param(valid=(1, 4096), search=(16, 256))
-    differentiation: str = structure(
-        branches=LRU_DIFFERENTIATION_FAMILY.branches
-    )
+    differentiation: str = structure(branches=LRU_DIFFERENTIATION_FAMILY.branches)
 
 
 @dataclass(frozen=True)
@@ -114,9 +112,7 @@ class RtuTorso:
 
     hidden_dim: int = param(valid=(1, 4096), search=(32, 512))
     feature_dim: int = param(valid=(1, 4096), search=(16, 256))
-    differentiation: str = structure(
-        branches=RTU_DIFFERENTIATION_FAMILY.branches
-    )
+    differentiation: str = structure(branches=RTU_DIFFERENTIATION_FAMILY.branches)
 
 
 def _construct_torso(selection, builder):
@@ -300,7 +296,6 @@ OBSERVATIONS = ObservationSchema(
     action="interaction.action",
     series=TRAINING_METRICS,
 )
-RECORD = OBSERVATIONS.required_fields
 
 
 @struct.dataclass(frozen=True)
@@ -449,9 +444,7 @@ def _head_gradient_norm(tree):
 class Torso:
     """The recurrent representation shared by both heads."""
 
-    def __init__(
-        self, cfg: RTRRLConfig, network: Any, differentiation: Any
-    ) -> None:
+    def __init__(self, cfg: RTRRLConfig, network: Any, differentiation: Any) -> None:
         self.cfg = cfg
         self._network = network
         self._differentiation = differentiation
@@ -489,9 +482,10 @@ class Torso:
             differentiation_state=recurrence.differentiation_state,
             differentiation=self._differentiation,
         )
-        return Recurrence(
-            carry=carry, differentiation_state=differentiation_state
-        ), output
+        return (
+            Recurrence(carry=carry, differentiation_state=differentiation_state),
+            output,
+        )
 
     def init(self, keys, timestep: Timestep) -> TorsoState:
         """Fresh online state for the shared block, and a copy for it to follow."""
@@ -1001,6 +995,8 @@ class RTRRL:
         parameters: dict[str, Any],
         components: ComponentBuilder,
         context: BuildContext,
+        *,
+        record: Iterable[str] = (),
     ) -> RTRRL:
         """Declare the shared torso, two readouts, and their two rule groups."""
 
@@ -1044,7 +1040,7 @@ class RTRRL:
                 "normalization.reward",
                 discount=gamma,
             ),
-            record=RECORD,
+            record=record,
             reports=REPORTS,
         )
 
@@ -1166,6 +1162,48 @@ class RTRRL:
             ),
             forward=forward_reading,
             update=update_reading,
+        )
+
+    def interact(self, key: Any, state: RTRRLState) -> tuple[RTRRLState, StepMetrics]:
+        """One behavior-policy transition that learns nothing and costs no budget.
+
+        The stochastic policy and the recurrent sequence continue exactly where
+        training left them, so a sampled episode can be finished after the
+        training budget without the parameters, traces, rules, normalization
+        statistics, or either step counter moving.
+        """
+
+        reset_key, action_key, env_key = jax.random.split(key, 3)
+        state = self._reset(reset_key, state, update=False)
+        observation = state.timestep.obs
+
+        recurrence, action, _ = self.core.act(
+            action_key, state.core, state.timestep, deterministic=False
+        )
+        obs, env_state, environment_reward, done, terminal, info = (
+            self.environment.step(env_key, state.env_state, action)
+        )
+        obs, reward, _ = self.normalization.apply(
+            state.scales, obs, environment_reward, done, update=False
+        )
+        next_timestep = Timestep(obs=obs, action=action, reward=reward, done=done)
+        return state.replace(
+            timestep=next_timestep,
+            terminal=terminal,
+            env_state=env_state,
+            core=state.core.replace(
+                torso=state.core.torso.replace(recurrence=recurrence)
+            ),
+        ), StepMetrics(
+            interaction=self._interaction(
+                observation=observation,
+                next_observation=next_timestep.obs,
+                action=action,
+                reward=environment_reward,
+                done=next_timestep.done,
+                terminal=terminal,
+                info=info,
+            ),
         )
 
     def evaluate_step(

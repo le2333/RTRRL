@@ -31,5 +31,6 @@ class WorkerEnvelope(_Frozen):
     entry: str
     artifacts: Artifacts
     algorithm: dict[str, Any]
-    runtime: dict[str, Any]
+    training: dict[str, Any]
+    evaluation: dict[str, Any]
     logging: dict[str, Any]

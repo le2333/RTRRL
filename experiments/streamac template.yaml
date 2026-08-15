@@ -29,16 +29,20 @@ environment:
 training:
   num_envs: 16
   total_steps: 2000000
-  epoch_steps: 10000
+  chunk_steps: 10000
 
 # [透传] 流数不在这里：评估复用训练时那张图的宽度
 evaluation:
-  steps: 1000
+  every_steps: 10000
+  rollout_steps: 1000
 
 logging:
-  aim: aim://172.31.62.192:53801
-  enable_rerun: true
-  rerun_every_steps: 20000
+  aim:
+    url: aim://172.31.62.192:53801
+    training:
+      log_every_steps: 100000
+  rerun:
+    log_every_steps: 100000
 
 # [自用] 评分由 Infra 对 Worker 上传的 metrics.jsonl 执行
 score:
