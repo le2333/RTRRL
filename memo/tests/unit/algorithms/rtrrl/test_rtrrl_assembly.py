@@ -2,8 +2,9 @@ from importlib import import_module
 from types import SimpleNamespace
 
 import jax
-import memorax
 import pytest
+
+import memorax
 from entries import rtrrl as entry
 from memorax import algorithms
 from memorax.algorithms import RTRRL

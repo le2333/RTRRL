@@ -16,6 +16,8 @@ from typing import Any
 import pytest
 
 import entries
+from deployment.catalog import build_catalog, discover
+from deployment.contract import Catalog
 from entries import stream_ac
 from memorax.observability import check_names, statistics
 from memorax.runtime import (
@@ -26,7 +28,6 @@ from memorax.runtime import (
     RuntimeConfig,
     whole_epochs,
 )
-from deployment.catalog import build_catalog, discover
 from tests.support.fakes import EpisodeRecorder as Recorder
 from tests.support.programs import (
     EPOCH_STEPS,
@@ -36,7 +37,6 @@ from tests.support.programs import (
     TOTAL_STEPS,
     arithmetic_program,
 )
-from deployment.contract import Catalog
 
 
 def run_arithmetic(recorder, **overrides):

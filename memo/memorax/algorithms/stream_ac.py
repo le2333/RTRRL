@@ -289,9 +289,10 @@ class Network:
             differentiation_state=recurrence.differentiation_state,
             differentiation=self.differentiation,
         )
-        return Recurrence(
-            carry=carry, differentiation_state=differentiation_state
-        ), output
+        return (
+            Recurrence(carry=carry, differentiation_state=differentiation_state),
+            output,
+        )
 
     def init(self, keys, timestep: Timestep) -> NetworkState:
         """Fresh online state for this block."""
@@ -443,7 +444,9 @@ class Actor:
             dist.log_prob(add_time_axis(action))
         ) + self.cfg.entropy_coefficient * jnp.sign(
             jax.lax.stop_gradient(delta)
-        ) * remove_time_axis(dist.entropy())
+        ) * remove_time_axis(
+            dist.entropy()
+        )
 
     def gradient(self, state: NetworkState, timestep: Timestep, action, delta):
         """This head's ascent, one stream at a time."""
@@ -723,9 +726,7 @@ class StreamAC:
             features += action_dim + 1
 
         def sequence(backbone, head):
-            return Sequence(
-                components=(*backbone.components, Readout(module=head))
-            )
+            return Sequence(components=(*backbone.components, Readout(module=head)))
 
         actor_backbone = components.build(
             STREAM_AC_BACKBONES,

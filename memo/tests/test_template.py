@@ -68,9 +68,9 @@ def test_every_choice_of_component_is_pinned_to_exactly_one_branch(pins, declare
     for name, pinned in pins.items():
         if not name.endswith(f".{KIND}"):
             continue
-        assert isinstance(pinned, list) and len(pinned) == 1, (
-            f"{name} chooses a component and is not searched; pin it to one"
-        )
+        assert (
+            isinstance(pinned, list) and len(pinned) == 1
+        ), f"{name} chooses a component and is not searched; pin it to one"
         assert pinned[0] in declared[name].valid.values, (
             f"{name} names {pinned[0]!r}, not one of "
             f"{', '.join(sorted(map(str, declared[name].valid.values)))}"

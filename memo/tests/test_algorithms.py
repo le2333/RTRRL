@@ -82,9 +82,7 @@ def stream_ac_program(
         entropy_coefficient=0.02,
         **overrides,
     )
-    actor_network, actor_differentiation = network(
-        heads.Gaussian(action_dim=2)
-    )
+    actor_network, actor_differentiation = network(heads.Gaussian(action_dim=2))
     critic_network, critic_differentiation = network(heads.VNetwork())
     agent = StreamAC(
         config,
