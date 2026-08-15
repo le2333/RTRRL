@@ -2,19 +2,23 @@
 
 from __future__ import annotations
 
+import codecs
 import json
-import tempfile
 import time
+from collections.abc import Iterator
 from dataclasses import dataclass
-from pathlib import Path
 from typing import Any
 from urllib.parse import urlparse
 
-from trainer_infra.scoring import ScoreSpec, compute_score
+from trainer_infra.scoring import ScoreSpec, score_lines
 
 REGION = "eu-north-1"
 JOB_LOG_GROUP = "/trainer/jobs"
 TERMINAL = {"SUCCEEDED", "FAILED"}
+# How much of a metrics object is in memory at once. Large enough that a
+# multi-gigabyte body is read in thousands of calls rather than millions,
+# small enough that the control plane never notices.
+CHUNK_BYTES = 1 << 20
 
 _PROFILES = {
     "c7a.medium": ("c7am", "run-cpu-c7am-queue", "dev-cpu-c7am-queue"),
@@ -108,7 +112,7 @@ class BatchRoundExecutor:
             )
             job_ids.append(response["jobId"])
         self._wait(job_ids)
-        return self._score(configurations, score)
+        return self.score(configurations, score)
 
     def _publish_configuration(self, configuration: dict[str, Any], round_index: int) -> str:
         trial = int(configuration["identity"]["trial"])
@@ -151,26 +155,46 @@ class BatchRoundExecutor:
             if pending:
                 time.sleep(self.poll_seconds)
 
-    def _score(
+    def score(
         self,
         configurations: tuple[dict[str, Any], ...],
         score: ScoreSpec,
     ) -> tuple[dict[str, int | float], ...]:
+        """Score what the workers of these configurations have already uploaded.
+
+        Submitting nothing is the point: a round that finished remotely can be
+        scored again -- after the controller died, say -- without paying for
+        the training a second time.
+        """
+
         values = []
-        with tempfile.TemporaryDirectory(prefix="trainer-score-") as directory:
-            root = Path(directory)
-            for configuration in configurations:
-                trial = int(configuration["identity"]["trial"])
-                artifacts = str(configuration["artifacts"]["root"]).rstrip("/")
-                result = json.loads(self._get(f"{artifacts}/result.json"))
-                if result["success"] is not True or int(result["identity"]["trial"]) != trial:
-                    raise BatchExecutionError(f"artifact result does not complete trial {trial}")
-                if "metrics.jsonl" not in result["artifacts"]:
-                    raise BatchExecutionError(f"trial {trial} result declares no metrics.jsonl")
-                metrics = root / f"trial-{trial:06d}-metrics.jsonl"
-                metrics.write_bytes(self._get(f"{artifacts}/metrics.jsonl"))
-                values.append({"trial": trial, "value": compute_score(metrics, score)})
+        for configuration in configurations:
+            trial = int(configuration["identity"]["trial"])
+            artifacts = str(configuration["artifacts"]["root"]).rstrip("/")
+            result = json.loads(self._get(f"{artifacts}/result.json"))
+            if result["success"] is not True or int(result["identity"]["trial"]) != trial:
+                raise BatchExecutionError(f"artifact result does not complete trial {trial}")
+            if "metrics.jsonl" not in result["artifacts"]:
+                raise BatchExecutionError(f"trial {trial} result declares no metrics.jsonl")
+            value = self._score_metrics(f"{artifacts}/metrics.jsonl", score)
+            values.append({"trial": trial, "value": value})
         return tuple(values)
+
+    def _score_metrics(self, uri: str, score: ScoreSpec) -> float:
+        """Reduce a metrics object as it arrives, keeping neither it nor a copy.
+
+        The objects this reads are gigabytes -- larger than the control
+        plane's memory, and larger than the disk a temporary copy would land
+        on. What the score needs from them is a handful of numbers, so the
+        body is decoded a chunk at a time and nothing else is retained.
+        """
+
+        bucket, key = split_s3(uri)
+        body = self.s3.get_object(Bucket=bucket, Key=key)["Body"]
+        try:
+            return score_lines(_lines(body), score)
+        finally:
+            body.close()
 
     def _put(self, uri: str, payload: bytes) -> None:
         bucket, key = split_s3(uri)
@@ -179,6 +203,28 @@ class BatchRoundExecutor:
     def _get(self, uri: str) -> bytes:
         bucket, key = split_s3(uri)
         return self.s3.get_object(Bucket=bucket, Key=key)["Body"].read()
+
+
+def _lines(body: Any, chunk_bytes: int = CHUNK_BYTES) -> Iterator[str]:
+    """Cut a byte stream into text lines, holding one chunk of it at a time.
+
+    ``codecs`` and ``io`` both offer a reader for this, and both ask the
+    stream for a line at a time, which over an S3 body is a call per line.
+    Cutting up whole chunks here is the same work in three orders of magnitude
+    fewer reads.
+    """
+
+    decoder = codecs.getincrementaldecoder("utf-8")()
+    remainder = ""
+    while True:
+        chunk = body.read(chunk_bytes)
+        if not chunk:
+            break
+        *complete, remainder = (remainder + decoder.decode(chunk)).split("\n")
+        yield from complete
+    remainder += decoder.decode(b"", final=True)
+    if remainder:
+        yield remainder
 
 
 def _groups(values: tuple[str, ...], count: int) -> tuple[tuple[str, ...], ...]:

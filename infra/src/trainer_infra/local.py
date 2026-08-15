@@ -86,10 +86,23 @@ class LocalRoundExecutor:
                 f"local Worker exited with code {process.returncode}\n{output}"
             )
 
-        return tuple(self._score(configuration, score) for configuration in configurations)
+        return self.score(configurations, score)
 
     def log_path(self, round_index: int) -> Path:
         return self.exchange / f"round-{round_index:03d}" / "worker.log"
+
+    def score(
+        self,
+        configurations: tuple[dict[str, Any], ...],
+        score: ScoreSpec,
+    ) -> tuple[dict[str, int | float], ...]:
+        """Score what these configurations' runs have already written.
+
+        Starting no worker is the point: it is how a trial whose run finished
+        is settled without running it again.
+        """
+
+        return tuple(self._score(configuration, score) for configuration in configurations)
 
     def _score(
         self,

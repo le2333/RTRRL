@@ -77,6 +77,29 @@ def test_run_hpo_records_each_round_before_starting_the_next(tmp_path: Path) -> 
     assert study.user_attrs == {"experiment": "baseline"}
 
 
+def test_running_names_the_trials_the_study_never_heard_back_about(tmp_path: Path) -> None:
+    """A new controller has to find the open trials in the database, not in itself."""
+
+    database = tmp_path / "study.db"
+    config = {
+        "name": "streamac",
+        "database": database,
+        "direction": "maximize",
+        "rounds": 1,
+        "trials_per_round": 2,
+        "startup_trials": 2,
+        "seed": 7,
+        "parameters": {"gamma": {"type": "choice", "values": [0.9, 0.95]}},
+    }
+    asked = HPO(**config).ask()
+    HPO(**config).tell(asked[:1], (1.0,))
+
+    still_open = HPO(**config).running()
+
+    assert [trial.number for trial in still_open] == [1]
+    assert still_open[0].parameters == asked[1].parameters
+
+
 def test_run_continues_an_existing_study(tmp_path: Path) -> None:
     database = tmp_path / "study.db"
     config = {

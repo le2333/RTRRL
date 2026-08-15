@@ -1,10 +1,17 @@
 import json
 import math
+import tracemalloc
 from pathlib import Path
 
 import pytest
 
-from trainer_infra.scoring import WORST_MAGNITUDE, ScoreError, ScoreSpec, compute_score
+from trainer_infra.scoring import (
+    WORST_MAGNITUDE,
+    ScoreError,
+    ScoreSpec,
+    compute_score,
+    score_lines,
+)
 
 
 def write_metrics(path: Path, rows: list[tuple[int, float]]) -> None:
@@ -184,6 +191,102 @@ def test_mixed_window_explicit_non_finite_substitute(tmp_path: Path) -> None:
     path = tmp_path / "metrics.jsonl"
     write_metrics(path, [(10, 10.0), (15, 20.0), (20, math.inf)])
     assert compute_score(path, spec(reduce="median", non_finite=-7.5)) == -7.5
+
+
+def test_last_takes_the_greatest_value_reported_at_the_greatest_step(tmp_path: Path) -> None:
+    path = tmp_path / "metrics.jsonl"
+    write_metrics(path, [(10, 1.0), (20, 5.0), (20, 2.0)])
+    assert compute_score(path, spec(reduce="last")) == 5.0
+
+
+def test_blank_lines_and_a_trailing_newline_are_not_rows(tmp_path: Path) -> None:
+    path = tmp_path / "metrics.jsonl"
+    write_metrics(path, [(10, 1.0), (20, 3.0)])
+    path.write_text(path.read_text(encoding="utf-8") + "\n\n   \n", encoding="utf-8")
+    assert compute_score(path, spec(reduce="mean")) == 2.0
+
+
+def test_a_stream_of_rows_scores_the_same_as_a_file(tmp_path: Path) -> None:
+    rows = [(10, 1.0), (15, 2.0), (20, 3.0)]
+    path = tmp_path / "metrics.jsonl"
+    write_metrics(path, rows)
+    streamed = (
+        json.dumps({"step": step, "metrics": {"episode_return": value}}) for step, value in rows
+    )
+
+    assert score_lines(streamed, spec()) == compute_score(path, spec())
+
+
+def write_long_metrics(path: Path, rows: int) -> int:
+    """A file the size a real run leaves: many rows, most of them not the score."""
+
+    padding = "y" * 200
+    with path.open("w", encoding="utf-8") as handle:
+        for step in range(rows):
+            row = {"step": step, "metrics": {"episode_return": float(step), "note": padding}}
+            handle.write(json.dumps(row) + "\n")
+    return path.stat().st_size
+
+
+LONG_ROWS = 60_000
+
+
+@pytest.mark.parametrize(
+    ("reduce", "expected"),
+    [
+        ("mean", (LONG_ROWS - 1) / 2),
+        ("min", 0.0),
+        ("max", LONG_ROWS - 1.0),
+        ("last", LONG_ROWS - 1.0),
+    ],
+)
+def test_scoring_costs_the_same_whatever_the_file_weighs(
+    tmp_path: Path, reduce: str, expected: float
+) -> None:
+    """The file is what killed the controller, so nothing may hold it.
+
+    Every reduction but ``median`` is a fixed number of registers, and the
+    parsing above them is one row deep, so the peak has nothing to do with how
+    many rows there were.
+    """
+
+    path = tmp_path / "metrics.jsonl"
+    size = write_long_metrics(path, LONG_ROWS)
+    window = spec(reduce=reduce, window_steps=[0, LONG_ROWS])
+
+    tracemalloc.start()
+    try:
+        value = compute_score(path, window)
+        _, peak = tracemalloc.get_traced_memory()
+    finally:
+        tracemalloc.stop()
+
+    assert value == expected
+    assert size > 8_000_000
+    assert peak < size // 16
+
+
+def test_median_costs_the_values_rather_than_the_rows(tmp_path: Path) -> None:
+    """``median`` is the reduction that cannot forget what it has seen.
+
+    It keeps a double per admitted row instead of the row, which is what makes
+    the one mode with unavoidable growth survivable; the sort at the end is
+    where those doubles briefly become Python floats.
+    """
+
+    path = tmp_path / "metrics.jsonl"
+    size = write_long_metrics(path, LONG_ROWS)
+    window = spec(reduce="median", window_steps=[0, LONG_ROWS])
+
+    tracemalloc.start()
+    try:
+        value = compute_score(path, window)
+        _, peak = tracemalloc.get_traced_memory()
+    finally:
+        tracemalloc.stop()
+
+    assert value == (LONG_ROWS - 1) / 2
+    assert peak < size // 4
 
 
 def test_json_mixed_window_non_finite_tokens_substitute_worst(tmp_path: Path) -> None:
