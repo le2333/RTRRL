@@ -381,7 +381,6 @@ OBSERVATIONS = ObservationSchema(
     action="interaction.action",
     series=TRAINING_METRICS,
 )
-RECORD = OBSERVATIONS.required_fields
 
 
 @struct.dataclass(frozen=True)

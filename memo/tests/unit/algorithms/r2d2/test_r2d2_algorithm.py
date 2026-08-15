@@ -10,7 +10,6 @@ from flashbax.buffers import sum_tree
 from memorax.algorithms.r2d2 import (
     METRICS,
     OBSERVATIONS,
-    RECORD,
     REPORTS,
     TRAINING_METRICS,
     Core,
@@ -55,7 +54,7 @@ def _algorithm(
     evaluation_epsilon=0.0,
     env=None,
     reports=REPORTS,
-    record=RECORD | {"interaction.observation"},
+    record=OBSERVATIONS.trajectory_fields,
 ):
     env = env or TinyDiscreteEnv()
     buffer = make_prioritised_episode_buffer(
@@ -278,7 +277,21 @@ def test_readings_declare_and_gate_optional_training_series():
     assert OBSERVATIONS.done == "interaction.done"
     assert OBSERVATIONS.terminal == "interaction.terminal"
     assert OBSERVATIONS.series == expected_series
-    assert RECORD == OBSERVATIONS.required_fields
+    assert OBSERVATIONS.episode_fields == frozenset(
+        (
+            OBSERVATIONS.reward,
+            OBSERVATIONS.done,
+            OBSERVATIONS.terminal,
+            *OBSERVATIONS.series,
+        )
+    )
+    assert OBSERVATIONS.trajectory_fields == frozenset(
+        (
+            OBSERVATIONS.observation,
+            OBSERVATIONS.next_observation,
+            OBSERVATIONS.action,
+        )
+    )
     assert "train/episode/selected_q" not in METRICS
     assert "train/episode/forward.selected_q" in METRICS
 
@@ -295,7 +308,7 @@ def test_readings_declare_and_gate_optional_training_series():
     algorithm = _algorithm(
         minimum_size=2,
         reports=reports,
-        record=RECORD,
+        record=frozenset(),
     )
     state = algorithm.init(jax.random.key(17))
     collecting, collecting_metrics = algorithm.train_step(
