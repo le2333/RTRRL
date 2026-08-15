@@ -641,7 +641,7 @@ Assert the flattened tree contains no `differentiation` path. Assert it contains
 
 - [ ] **Step 2: Test the entry is composition-only**
 
-Copy the narrow shape of `entries/rtrrl.py`: re-export `PARAMETERS` and `METRICS`, implement only `build_request`, `runtime_config`, `run`, and `main`, and assert it contains no Q, replay, target, loss, or gradient symbol.
+Copy the narrow shape of `entries/rtrrl.py`: re-export `PARAMETERS` and `METRICS`, implement `build_request`, `runtime_config`, `run`, and `main`. Test the observable boundary: `build_request` projects only algorithm parameters, environment specification, and stream count; `runtime_config` projects only scheduling values; and `run` gives the assembled R2D2 graph plus that schedule to `Runtime`. Source-symbol absence is enforced by task review rather than a change-detector test.
 
 - [ ] **Step 3: Test and align the Gymnax deployment adapter**
 

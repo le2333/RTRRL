@@ -1,0 +1,125 @@
+# 一个实验。infra 读这个文件，产出若干份运行配置交给 worker。
+#
+# 三类字段，按去向分：
+#   [透传] 原样成为运行配置的同名块
+#   [消费] infra 读它，产出运行配置里的另一个字段
+#   [自用] infra 内部用，不过河
+#
+# infra 自己生成、这里没有的：contract、run_id、launch_id、trial。
+
+experiment: r2d2-test # [透传] aim 里的实验名
+name: template # [自用] optuna study 名
+description: "" # [自用]
+
+image: 007122174918.dkr.ecr.eu-north-1.amazonaws.com/rtrrl@sha256:b33d69821d4dd8e601fea78b3dde331bacfd2797bda256da1dbdfeb5b1ce12a5
+entry: r2d2 # [透传] 镜像 catalog 里的入口名
+storage: s3://rtrrl-artifacts-007122174918/trainer # [消费] → 每个 run 的 artifact root
+
+# ── 以下整块透传 ──────────────────────────────────────────
+
+# [透传] 组装计算图要的：由它得到 action_dim 和观测宽度。
+# episode_length 还多一个去处：full_bptt 的回放窗口就是它。
+environment:
+  id: gymnax::CartPole-v1
+  backend: null # gymnax 每个环境只有一种实现，没有后端可选
+  observed: null
+  seed: 0 # 这个不进图，是 runtime 的随机源
+  episode_length: 32
+
+# [透传] num_envs 进图（每个 carry 和每次回放写入的第一维），另两个是预算
+training:
+  num_envs: 1
+  total_steps: 128
+  chunk_steps: 64
+
+# [透传] 流数不在这里：评估复用训练时那张图的宽度
+evaluation:
+  every_steps: 64
+  rollout_steps: 32
+
+logging:
+  aim:
+    url: aim://172.31.62.192:53801
+    training:
+      log_every_steps: 64
+  rerun:
+    log_every_steps: 64
+
+# [自用] 评分由 Infra 对 Worker 上传的 metrics.jsonl 执行
+#
+# 不用 return_per_step：CartPole 每步奖励恒为 1.0，杆倒下那一步也给，所以该指标
+# 对任何策略都恒等于 1.0 —— 撑满 32 步和 9 步就倒的得分一样。信号全在时长里。
+score:
+  metric: eval/episode/return
+  window_steps: [0, 128] # 取值范围
+  reduce: last # 值序列如何生成分数
+  non_finite: worst # nan/inf 处理策略
+  direction: maximize
+
+# ── 以下 infra 自用，不过河 ────────────────────────────────
+
+compute:
+  instance_type: c7a.large
+  timeout_minutes: 30
+
+hpo:
+  rounds: 1
+  trials_per_round: 1
+  parallel_jobs: 1 # 每轮 Batch job 数；每个 job 内的 trial 串行运行
+  startup_trials: 1
+  seed: 0
+
+# 对 catalog 搜索域的覆盖。采样后成为运行配置的 params。
+#
+# 形状与 catalog 相同：每层之内平铺，缩进即分组。选组件的那一项叫 kind，
+# 它和它的分支住在同一层，所以 backbone.kind 选，backbone.lru.* 属于被选中的那个。
+space:
+  # 网络。两个递归核声明同样的两个宽度，各在自己的分支里。
+  backbone:
+    kind: [lru]
+    lru:
+      feature_dim: [32]
+      hidden_dim: [32]
+
+  # Q 读出头
+  head:
+    kind: [dueling]
+
+  # 序列梯度。tbptt 的回放窗口是 burn_in + unroll 个 transition；
+  # 换成 full_bptt 时这一支没有子参数，窗口由 environment.episode_length 定。
+  learning:
+    kind: [tbptt]
+    tbptt:
+      burn_in_length: [4]
+      unroll_length: [8]
+
+  # 优化器：只有 adam，回放序列上没有 bounded stream rule 可用
+  optimizer:
+    kind: [adam]
+    adam:
+      lr: [0.001]
+
+  replay:
+    capacity: [1024]
+    minimum_size: [32]
+    batch_size: [4]
+    priority_exponent: [0.9]
+    importance_sampling_exponent: [0.6]
+    max_priority_weight: [0.9]
+
+  # 按 learner update 数计，不是环境步数
+  target:
+    update_period: [4]
+
+  returns:
+    n_step: [3]
+    value_transform:
+      kind: [identity]
+
+  exploration:
+    epsilon_start: [0.2]
+    epsilon_end: [0.05]
+    epsilon_decay_steps: [128]
+    evaluation_epsilon: [0.0]
+
+  gamma: [0.99]

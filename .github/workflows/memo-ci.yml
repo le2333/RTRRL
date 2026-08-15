@@ -47,6 +47,7 @@ jobs:
         memorax/assembly.py
         memorax/building.py
         memorax/algorithms/contract.py
+        memorax/algorithms/r2d2.py
         memorax/algorithms/rtrrl_aaai.py
         memorax/algorithms/stream_ac.py
         memorax/utils/trees.py

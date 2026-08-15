@@ -54,7 +54,7 @@ class PrioritisedEpisodeBufferSample(
         probabilities: Sampling probabilities of the sampled sequences (for importance weights).
     """
 
-    pass
+    buffer_size: Array
 
 
 def compute_importance_weights(
@@ -183,36 +183,18 @@ def prioritised_episode_sample(
 
     flat_priorities = masked_priorities.flatten()
     total_priority = jnp.sum(flat_priorities)
+    probabilities = flat_priorities / total_priority
 
-    def _sample_with_priorities(key: Key) -> tuple[Array, Array, Array, Array]:
-        probs = flat_priorities / jnp.maximum(total_priority, 1e-10)
-
-        flat_indices = jax.random.choice(
-            key,
-            a=add_batch_size * max_length_time_axis,
-            shape=(sample_batch_size,),
-            p=probs,
-            replace=True,
-        )
-
-        rows = flat_indices // max_length_time_axis
-        starts = flat_indices % max_length_time_axis
-
-        selected_probs = probs[flat_indices]
-
-        return rows, starts, flat_indices, selected_probs
-
-    def _fallback_uniform(key: Key) -> tuple[Array, Array, Array, Array]:
-        rows = jax.random.randint(key, (sample_batch_size,), 0, add_batch_size)
-        starts = jnp.zeros((sample_batch_size,), dtype=jnp.int32)
-        flat_indices = rows * max_length_time_axis + starts
-        uniform_prob = 1.0 / (add_batch_size * max_length_time_axis)
-        selected_probs = jnp.full((sample_batch_size,), uniform_prob)
-        return rows, starts, flat_indices, selected_probs
-
-    rows, starts, flat_indices, selected_probs = jax.lax.cond(
-        total_priority > 0, _sample_with_priorities, _fallback_uniform, rng_key
+    flat_indices = jax.random.choice(
+        rng_key,
+        a=add_batch_size * max_length_time_axis,
+        shape=(sample_batch_size,),
+        p=probabilities,
+        replace=True,
     )
+    rows = flat_indices // max_length_time_axis
+    starts = flat_indices % max_length_time_axis
+    selected_probs = probabilities[flat_indices]
 
     time_idx = (
         starts[:, None] + jnp.arange(sample_sequence_length)
@@ -222,10 +204,17 @@ def prioritised_episode_sample(
 
     item_indices = flat_indices
 
+    buffer_size = jnp.where(
+        state.is_full,
+        add_batch_size * max_length_time_axis,
+        state.current_index * add_batch_size,
+    )
+
     return PrioritisedEpisodeBufferSample(
         experience=experience,
         indices=item_indices,
         probabilities=selected_probs,
+        buffer_size=buffer_size,
     )
 
 
@@ -268,19 +257,29 @@ def prioritised_episode_add(
         batch,
     )
 
+    new_current_index = state.current_index + add_sequence_length
+    new_running_index = state.running_index + add_sequence_length
+    new_is_full = state.is_full | (new_current_index >= max_length_time_axis)
+    new_current_index = new_current_index % max_length_time_axis
+
     new_item_time_indices = (
         jnp.arange(add_sequence_length) + state.current_index
     ) % max_length_time_axis
 
     row_offsets = jnp.arange(add_batch_size)[:, None] * max_length_time_axis
-    newly_valid_items = (new_item_time_indices[None, :] + row_offsets).flatten()
+    newly_valid_time_indices = (
+        new_item_time_indices - (sample_sequence_length - 1) + max_length_time_axis
+    ) % max_length_time_axis
+    newly_valid_items = (
+        newly_valid_time_indices[None, :] + row_offsets
+    ).flatten()
 
     new_priorities = jnp.full(
         newly_valid_items.shape, state.sum_tree_state.max_recorded_priority
     )
 
     invalid_time_start = (
-        state.current_index - (sample_sequence_length - 1) + max_length_time_axis
+        new_current_index - (sample_sequence_length - 1) + max_length_time_axis
     ) % max_length_time_axis
 
     invalid_time_indices = (
@@ -292,19 +291,12 @@ def prioritised_episode_add(
 
     new_sum_tree_state = SET_BATCH_FN[device](
         state.sum_tree_state,
-        newly_invalid_items,
-        invalid_priorities,
-    )
-    new_sum_tree_state = SET_BATCH_FN[device](
-        new_sum_tree_state,
         newly_valid_items,
         new_priorities,
     )
-
-    new_current_index = state.current_index + add_sequence_length
-    new_running_index = state.running_index + add_sequence_length
-    new_is_full = state.is_full | (new_current_index >= max_length_time_axis)
-    new_current_index = new_current_index % max_length_time_axis
+    new_sum_tree_state = SET_BATCH_FN[device](
+        new_sum_tree_state, newly_invalid_items, invalid_priorities
+    )
 
     return state.replace(
         experience=new_experience,
@@ -420,9 +412,19 @@ def make_prioritised_episode_buffer(
         get_start_flags=get_start_flags,
     )
 
-    can_sample_fn = functools.partial(
-        can_sample, min_length_time_axis=min_length_time_axis
-    )
+    def can_sample_fn(state: PrioritisedTrajectoryBufferState[Experience]) -> Array:
+        length_ready = can_sample(
+            state, min_length_time_axis=min_length_time_axis
+        )
+        start_flags = get_start_flags(state.experience)
+        positions = _valid_start_mask(state, sample_sequence_length)[None, :]
+        priorities = _get_priorities_for_positions(
+            state.sum_tree_state,
+            add_batch_size,
+            max_length_time_axis,
+        )
+        eligible = start_flags & positions & (priorities > 0)
+        return length_ready & jnp.any(eligible)
 
     set_priorities_fn = functools.partial(
         set_priorities, priority_exponent=priority_exponent, device=device
