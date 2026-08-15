@@ -1,0 +1,111 @@
+# Issue 27 acceptance: a fixed run emits exactly the trajectories it was asked
+# for, and one evaluation per reporting boundary.
+#
+# Scaled to the reference implementation's own scan length: RTRRL-AAAI25 runs
+# 1000 steps between logging points (rtrrl.py `steps: int = 1000`) on episodes
+# capped at 1000 (`max_ep_length=1000`). Five reporting epochs of that length
+# is the 50M/10M acceptance shape at 1/10000 the cost.
+#
+# Expected, and what the run is read for:
+#   - five .rrd files under artifacts/rerun, named train-sample-<step>.rrd for
+#     1000, 2000, 3000, 4000 and 5000
+#   - five eval/episode/return records in metrics.jsonl at those same steps
+#   - the sample at 5000 lands on the training budget, so its trajectory
+#     carries post_budget marks on the transitions taken after it
+
+experiment: rtrrl-issue27
+name: rtrrl-issue27-fixed-sample
+description: "Issue 27: bounded sampled-episode reporting, fixed reference run"
+
+image: 007122174918.dkr.ecr.eu-north-1.amazonaws.com/rtrrl@sha256:7ca201c304dc6a38dc45d8142cfc05d1ec4deb3046e9e8e3594b4ff635cfd32d
+entry: rtrrl
+storage: s3://rtrrl-artifacts-007122174918/trainer
+
+# Masked Hopper: six of the eleven readings, velocities withheld. Partial
+# observation is what the recurrent torso is there for.
+environment:
+  id: brax::hopper
+  backend: spring
+  observed: [0, 2, 4, 6, 8, 10]
+  seed: 0
+  episode_length: 1000
+
+# One stream, as the reference runs it (batch_size=1). With episode_length
+# 1000 that also makes a train call at most 1000 steps, so a 10000-step
+# reporting epoch is ten bounded calls rather than one allocation.
+training:
+  num_envs: 1
+  total_steps: 5000
+  epoch_steps: 1000
+
+evaluation:
+  steps: 1000
+
+logging:
+  aim: aim://172.31.62.192:53801
+  enable_rerun: true
+  rerun_every_steps: 1000
+
+score:
+  metric: eval/episode/return_per_step
+  window_steps: [0, 5000]
+  reduce: last
+  non_finite: worst
+  direction: maximize
+
+compute:
+  instance_type: c7a.large
+  timeout_minutes: 60
+
+hpo:
+  rounds: 1
+  trials_per_round: 1
+  parallel_jobs: 1
+  startup_trials: 1
+  seed: 0
+
+space:
+  torso:
+    backbone:
+      kind: [lru]
+      lru:
+        feature_dim: [64]
+        hidden_dim: [64]
+        differentiation:
+          kind: [exact_rtrl]
+    optimizer:
+      kind: [adam]
+      adam:
+        lr: [0.0001]
+    grad_clip: [1.0]
+    follow: [1.0]
+  heads:
+    optimizer:
+      kind: [adam]
+      adam:
+        lr: [0.0001]
+  actor:
+    head:
+      kind: [state_std]
+      state_std:
+        initialization:
+          kind: [lecun]
+  critic:
+    head:
+      kind: [value]
+      value:
+        initialization:
+          kind: [lecun]
+  normalization:
+    observation:
+      kind: [none]
+    reward:
+      kind: [none]
+  gamma: [0.99]
+  lambda_pi: [0.9]
+  lambda_v: [0.9]
+  lambda_rnn: [0.9]
+  eta_pi: [1.0]
+  eta_f: [1.0]
+  entropy_rate: [0.00001]
+  meta_rl: [true]

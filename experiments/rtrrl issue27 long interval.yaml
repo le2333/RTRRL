@@ -1,0 +1,118 @@
+# Issue 27 acceptance: a reporting interval much longer than an episode
+# completes without the run growing to the size of the interval.
+#
+# This is the OOM case from the issue, and the only thing it varies from the
+# fixed run beside Rerun is epoch_steps. The bug was that one train call was
+# one reporting epoch, so peak memory grew with epoch_steps; the fix bounds a
+# call at max_episode_steps * num_envs and consumes the epoch in pieces.
+#
+# The arithmetic this run is here to check, at num_envs 1 and episode_length
+# 1000:
+#   chunk bound   = 1000 * 1 = 1000 environment steps
+#   epoch_steps   = 10000
+#   train calls   = 10 per epoch, each holding at most 1000 steps of readings
+#
+# Before the fix that was one call holding 10000 steps of observations, next
+# observations, actions and roughly fifteen diagnostic series, plus a 10000
+# entry PRNG key array. The ratio, not the absolute size, is the subject: on
+# this run the fix has to keep peak memory flat while epoch_steps rises tenfold
+# over the episode length.
+#
+# Rerun is off. Nothing here needs a trajectory, and leaving it off also shows
+# that a run without logging.rerun writes no RRD -- the HPO half of criterion 6.
+#
+# Expected:
+#   - the run reaches its budget without an out-of-memory condition
+#   - five eval/episode/return records in metrics.jsonl, at 10000 through 50000
+#   - no artifacts/rerun directory at all
+
+experiment: rtrrl-issue27
+name: rtrrl-issue27-long-interval
+description: "Issue 27: a long reporting interval, bounded train calls, no Rerun"
+
+image: 007122174918.dkr.ecr.eu-north-1.amazonaws.com/rtrrl@sha256:7ca201c304dc6a38dc45d8142cfc05d1ec4deb3046e9e8e3594b4ff635cfd32d
+entry: rtrrl
+storage: s3://rtrrl-artifacts-007122174918/trainer
+
+environment:
+  id: brax::hopper
+  backend: spring
+  observed: [0, 2, 4, 6, 8, 10]
+  seed: 0
+  episode_length: 1000
+
+training:
+  num_envs: 1
+  total_steps: 50000
+  epoch_steps: 10000
+
+evaluation:
+  steps: 1000
+
+logging:
+  aim: aim://172.31.62.192:53801
+  enable_rerun: false
+
+score:
+  metric: eval/episode/return_per_step
+  window_steps: [0, 50000]
+  reduce: last
+  non_finite: worst
+  direction: maximize
+
+compute:
+  instance_type: c7a.large
+  timeout_minutes: 120
+
+hpo:
+  rounds: 1
+  trials_per_round: 1
+  parallel_jobs: 1
+  startup_trials: 1
+  seed: 0
+
+space:
+  torso:
+    backbone:
+      kind: [lru]
+      lru:
+        feature_dim: [64]
+        hidden_dim: [64]
+        differentiation:
+          kind: [exact_rtrl]
+    optimizer:
+      kind: [adam]
+      adam:
+        lr: [0.0001]
+    grad_clip: [1.0]
+    follow: [1.0]
+  heads:
+    optimizer:
+      kind: [adam]
+      adam:
+        lr: [0.0001]
+  actor:
+    head:
+      kind: [state_std]
+      state_std:
+        initialization:
+          kind: [lecun]
+  critic:
+    head:
+      kind: [value]
+      value:
+        initialization:
+          kind: [lecun]
+  normalization:
+    observation:
+      kind: [none]
+    reward:
+      kind: [none]
+  gamma: [0.99]
+  lambda_pi: [0.9]
+  lambda_v: [0.9]
+  lambda_rnn: [0.9]
+  eta_pi: [1.0]
+  eta_f: [1.0]
+  entropy_rate: [0.00001]
+  meta_rl: [true]
