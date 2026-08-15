@@ -200,7 +200,7 @@ def theirs(module, optimiser: str, scale: float, ends: list | None = None):
 def mine(rule_name: str, scale: float):
     """Drive our rule over the same gradients, TD errors and episode boundaries.
 
-    The trace comes from our kernel's ``_trace`` rather than from a decay
+    The trace comes from our kernel's own trace block rather than from a decay
     respelled here. That is the point of routing it through: their trace lives
     inside the optimiser, ours is a separate block, and a test that rebuilds ours
     in two lines of its own compares their recurrence against those two lines
@@ -212,9 +212,13 @@ def mine(rule_name: str, scale: float):
     the previous step's flag, and the first step inherits nothing.
     """
 
-    kernel = ours_kernel()
-    assert kernel.trace_decay == DECAY, (
-        f"our kernel decays the trace by {kernel.trace_decay} where the "
+    # The trace is the parameter block's, not the kernel's: both heads own one
+    # and they decay it identically, so either answers for the recurrence. Only
+    # the recurrence is taken from it -- the rule below is built from this
+    # file's own settings, so which head this is cannot reach the comparison.
+    block = ours_kernel().core.actor.block
+    assert block.trace_decay == DECAY, (
+        f"our kernel decays the trace by {block.trace_decay} where the "
         f"published optimiser below is built with {DECAY}"
     )
 
@@ -232,14 +236,15 @@ def mine(rule_name: str, scale: float):
     for index, (gradient, delta, reset_before) in enumerate(
         zip(grads(scale), surprises(), ended), start=1
     ):
-        stepped = kernel._trace(
+        # StreamAC resets before it acts, so the trace it carries away and the
+        # one it steps with are one tree rather than two.
+        trace = block.trace(
             trace,
             {name: leaf[None, ...] for name, leaf in gradient.items()},
             reset_before=jnp.asarray([reset_before]),
         )
-        trace = stepped.carried
         output = rule.apply(
-            stepped.update,
+            trace,
             None,
             moment,
             delta=jnp.asarray([delta], dtype=jnp.float32),
@@ -410,6 +415,36 @@ def their_agent(module, *, done: bool, reward: float, seed: int = 0):
     }
 
 
+def our_directions(theirs):
+    """Our two ascent directions, driven by the numbers their agent produced.
+
+    Each objective takes a head's output rather than the readings inside it --
+    the actor's a distribution, the critic's a value with its time and feature
+    axes still on -- because that is the shape a head hands its own block. So
+    the distribution below answers with their log-probability and their entropy
+    and nothing else, which is what makes this a comparison of the arithmetic
+    wrapped around the two readings rather than of two networks.
+    """
+
+    class Answers:
+        def log_prob(self, action):
+            del action
+            return jnp.float32([[theirs["log_prob"]]])
+
+        def entropy(self):
+            return jnp.float32([[theirs["entropy"]]])
+
+    core = ours_kernel().core
+    return {
+        "actor": core.actor.objective(
+            (Answers(), {}),
+            jnp.zeros((1, 1), dtype=jnp.float32),
+            jnp.float32([theirs["delta"]]),
+        ),
+        "critic": core.critic.objective((jnp.float32([[[theirs["value"]]]]), {})),
+    }
+
+
 @pytest.mark.parametrize("done", [False, True], ids=["live", "terminal"])
 def test_the_td_error_is_the_published_td_error(published_agent, done):
     """Block: TD(0), against the line their agent actually steps with.
@@ -463,16 +498,11 @@ def test_the_actor_and_critic_directions_are_the_published_ones(
     """
 
     theirs = their_agent(published_agent, done=False, reward=REWARDS[surprise])
-    directions = ours_kernel()._objective(
-        log_prob=jnp.float32([theirs["log_prob"]]),
-        value=jnp.float32([theirs["value"]]),
-        entropy=jnp.float32([theirs["entropy"]]),
-        delta=jnp.float32([theirs["delta"]]),
-    )
+    directions = our_directions(theirs)
     assert_within(
         {
-            "actor": np.asarray(directions.traced_by_domain["actor"][0]),
-            "critic": np.asarray(directions.traced_by_domain["critic"][0]),
+            "actor": np.asarray(directions["actor"][0]),
+            "critic": np.asarray(directions["critic"][0]),
         },
         {"actor": np.float32(theirs["actor"]), "critic": np.float32(theirs["critic"])},
         f"directions td={surprise}",
@@ -524,21 +554,16 @@ def test_the_direction_is_the_published_one_at_a_surprise_of_exactly_zero(
         "rather than exactly zero, so this is not the zero case"
     )
 
-    directions = ours_kernel()._objective(
-        log_prob=jnp.float32([theirs["log_prob"]]),
-        value=jnp.float32([theirs["value"]]),
-        entropy=jnp.float32([theirs["entropy"]]),
-        delta=jnp.float32([theirs["delta"]]),
-    )
+    directions = our_directions(theirs)
     assert_within(
-        {"actor": np.asarray(directions.traced_by_domain["actor"][0])},
+        {"actor": np.asarray(directions["actor"][0])},
         {"actor": np.float32(theirs["actor"])},
         "actor direction at a TD error of exactly zero",
         allowed=FRAMEWORKS,
     )
     # And the entropy term really did drop out, so this is the branch it claims.
     assert_within(
-        {"actor": np.asarray(directions.traced_by_domain["actor"][0])},
+        {"actor": np.asarray(directions["actor"][0])},
         {"actor": np.float32(theirs["log_prob"])},
         "the entropy term at a TD error of zero",
         allowed=FRAMEWORKS,
