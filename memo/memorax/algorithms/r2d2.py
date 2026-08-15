@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from collections.abc import Iterable
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from functools import partial
 from typing import Any, Callable
 
@@ -1005,6 +1005,9 @@ class R2D2:
     buffer: PrioritisedBuffer
     reports: Reports = Reports()
     record: Iterable[str] = ()
+    # Derived in __post_init__ from cfg and the environment, so a caller never
+    # passes it and never has to keep the two consistent.
+    environment: EnvironmentStreams = field(init=False)
 
     observations = OBSERVATIONS
 
