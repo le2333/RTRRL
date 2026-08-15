@@ -9,7 +9,6 @@ import pytest
 from memorax.runtime import ObservationSchema
 from memorax.runtime.tracker import EpisodeTracker
 
-
 OBSERVATIONS = ObservationSchema(
     reward="reward",
     done="done",

@@ -2,9 +2,10 @@ from importlib import import_module
 from types import SimpleNamespace
 
 import jax
-import memorax
 import numpy as np
 import pytest
+
+import memorax
 from entries import rtrrl as entry
 from memorax import algorithms
 from memorax.algorithms import RTRRL
@@ -23,7 +24,9 @@ def assert_tree_equal(actual, expected, what):
 
     got, wanted = flattened(actual), flattened(expected)
     assert set(got) == set(wanted), f"{what}: the trees have different leaves"
-    moved = [path for path, leaf in wanted.items() if not np.array_equal(got[path], leaf)]
+    moved = [
+        path for path, leaf in wanted.items() if not np.array_equal(got[path], leaf)
+    ]
     assert not moved, f"{what}: {moved} moved"
 
 
@@ -63,9 +66,7 @@ def assembled(backbone="lru", differentiation="exact_rtrl", record=None):
                 episode_length=8,
             ),
             num_envs=1,
-            record=(
-                rtrrl.OBSERVATIONS.trajectory_fields if record is None else record
-            ),
+            record=(rtrrl.OBSERVATIONS.trajectory_fields if record is None else record),
         ),
         environment_factory=tiny_environment,
     )
@@ -255,7 +256,9 @@ def test_program_exposes_no_learning_interaction():
     assert not np.array_equal(
         np.asarray(advanced.timestep.obs), np.asarray(state.timestep.obs)
     )
-    assert int(advanced.env_state.step_count[0]) == int(state.env_state.step_count[0]) + 1
+    assert (
+        int(advanced.env_state.step_count[0]) == int(state.env_state.step_count[0]) + 1
+    )
 
 
 def test_interaction_moves_no_learned_quantity():
@@ -272,8 +275,12 @@ def test_interaction_moves_no_learned_quantity():
     )
     assert_tree_equal(advanced.core.actor.params, before.actor.params, "actor params")
     assert_tree_equal(advanced.core.actor.traces, before.actor.traces, "actor traces")
-    assert_tree_equal(advanced.core.critic.params, before.critic.params, "critic params")
-    assert_tree_equal(advanced.core.critic.traces, before.critic.traces, "critic traces")
+    assert_tree_equal(
+        advanced.core.critic.params, before.critic.params, "critic params"
+    )
+    assert_tree_equal(
+        advanced.core.critic.traces, before.critic.traces, "critic traces"
+    )
     assert_tree_equal(advanced.core.rule, before.rule, "rule state")
     assert_tree_equal(advanced.scales, state.scales, "normalization scales")
 

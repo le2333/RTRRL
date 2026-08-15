@@ -16,7 +16,9 @@ def assert_tree_equal(actual, expected, what):
 
     got, wanted = flattened(actual), flattened(expected)
     assert set(got) == set(wanted), f"{what}: the trees have different leaves"
-    moved = [path for path, leaf in wanted.items() if not np.array_equal(got[path], leaf)]
+    moved = [
+        path for path, leaf in wanted.items() if not np.array_equal(got[path], leaf)
+    ]
     assert not moved, f"{what}: {moved} moved"
 
 
@@ -167,7 +169,9 @@ def test_program_exposes_no_learning_interaction():
     assert not np.array_equal(
         np.asarray(advanced.timestep.obs), np.asarray(state.timestep.obs)
     )
-    assert int(advanced.env_state.step_count[0]) == int(state.env_state.step_count[0]) + 1
+    assert (
+        int(advanced.env_state.step_count[0]) == int(state.env_state.step_count[0]) + 1
+    )
 
 
 def test_interaction_moves_no_learned_quantity():

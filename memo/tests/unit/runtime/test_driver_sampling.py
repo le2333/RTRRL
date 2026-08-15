@@ -170,9 +170,7 @@ def sliced_train(key, state, num_steps):
         return jax.lax.dynamic_slice_in_dim(table, start, rows, axis=0)
 
     return state + num_steps, Metrics(
-        interaction=Interaction(
-            reward=cut(REWARD), done=cut(DONE), terminal=cut(DONE)
-        ),
+        interaction=Interaction(reward=cut(REWARD), done=cut(DONE), terminal=cut(DONE)),
         td_error=cut(TD_ERROR),
     )
 
@@ -293,9 +291,7 @@ def test_the_final_sample_is_finished_without_another_update():
     recorder = run_runtime(
         train=train,
         interact=interact,
-        initial_state=Counters(
-            jnp.asarray(0, jnp.int32), jnp.asarray(0, jnp.int32)
-        ),
+        initial_state=Counters(jnp.asarray(0, jnp.int32), jnp.asarray(0, jnp.int32)),
         total_steps=8,
         epoch_steps=8,
         max_episode_steps=4,
@@ -321,9 +317,7 @@ def test_a_post_budget_transition_reports_no_update_reading():
     recorder = run_runtime(
         train=train,
         interact=interact,
-        initial_state=Counters(
-            jnp.asarray(0, jnp.int32), jnp.asarray(0, jnp.int32)
-        ),
+        initial_state=Counters(jnp.asarray(0, jnp.int32), jnp.asarray(0, jnp.int32)),
         total_steps=8,
         epoch_steps=8,
         max_episode_steps=4,
@@ -341,9 +335,7 @@ def test_no_continuation_runs_when_nothing_was_sampled():
     recorder = run_runtime(
         train=train,
         interact=interact,
-        initial_state=Counters(
-            jnp.asarray(0, jnp.int32), jnp.asarray(0, jnp.int32)
-        ),
+        initial_state=Counters(jnp.asarray(0, jnp.int32), jnp.asarray(0, jnp.int32)),
         total_steps=8,
         epoch_steps=8,
         max_episode_steps=4,

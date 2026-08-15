@@ -71,10 +71,10 @@ class ObservationSchema:
         if wanted <= record:
             return self
         if record & wanted:
-            raise ValueError("trajectory fields must be requested together or not at all")
-        return replace(
-            self, observation=None, next_observation=None, action=None
-        )
+            raise ValueError(
+                "trajectory fields must be requested together or not at all"
+            )
+        return replace(self, observation=None, next_observation=None, action=None)
 
 
 @dataclass(frozen=True)

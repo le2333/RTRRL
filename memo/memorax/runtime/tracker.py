@@ -17,6 +17,15 @@ class TrackingResult:
     sampled: tuple[SampledTrajectory, ...]
 
 
+@dataclass(frozen=True)
+class _Walk:
+    """One chunk's per-step trajectory, present only when a schema names it."""
+
+    before: np.ndarray
+    after: np.ndarray
+    actions: np.ndarray
+
+
 @dataclass
 class _OpenEpisode:
     start_env_steps: int
@@ -100,26 +109,7 @@ class EpisodeTracker:
                 continue
             series[name] = _streamed(found, steps, self._num_envs)
 
-        trajectory_paths = (
-            observations.observation,
-            observations.next_observation,
-            observations.action,
-        )
-        configured_trajectory = tuple(path is not None for path in trajectory_paths)
-        if any(configured_trajectory) and not all(configured_trajectory):
-            raise ValueError(
-                "trajectory schema paths must be all configured or all unset"
-            )
-
-        has_trajectory = all(configured_trajectory)
-        if has_trajectory:
-            trajectory_values = []
-            for path in trajectory_paths:
-                found = read(summary, path)
-                if found is None:
-                    raise ValueError(f"configured trajectory path {path!r} is missing")
-                trajectory_values.append(found)
-            before, after, actions = (np.asarray(value) for value in trajectory_values)
+        walk = self._walk(summary, observations)
 
         completed: list[Episode] = []
         sampled: list[SampledTrajectory] = []
@@ -135,9 +125,9 @@ class EpisodeTracker:
                         f"of {self._max_episode_steps} transitions"
                     )
 
-                if has_trajectory:
-                    slot.observations.append(before[row, stream].tolist())
-                    slot.actions.append(actions[row, stream].tolist())
+                if walk is not None:
+                    slot.observations.append(walk.before[row, stream].tolist())
+                    slot.actions.append(walk.actions[row, stream].tolist())
                 slot.rewards.append(float(rewards[row, stream]))
                 terminal = bool(terminals[row, stream])
                 done = bool(dones[row, stream])
@@ -150,16 +140,16 @@ class EpisodeTracker:
                 if not done:
                     continue
 
-                if has_trajectory:
-                    slot.observations.append(after[row, stream].tolist())
+                if walk is not None:
+                    slot.observations.append(walk.after[row, stream].tolist())
                 episode = Episode(
                     number=self._next_number,
                     phase="train",
                     stream=stream,
                     start_env_steps=slot.start_env_steps,
                     end_env_steps=position + self._num_envs,
-                    observations=slot.observations if has_trajectory else None,
-                    actions=slot.actions if has_trajectory else None,
+                    observations=slot.observations if walk is not None else None,
+                    actions=slot.actions if walk is not None else None,
                     rewards=slot.rewards,
                     terminals=slot.terminals,
                     truncations=slot.truncations,
@@ -181,6 +171,33 @@ class EpisodeTracker:
         ending_boundary = start_env_steps + steps * self._num_envs
         self._attach_samples(ending_boundary, 0, series)
         return TrackingResult(tuple(completed), tuple(sampled))
+
+    def _walk(self, summary: object, observations: ObservationSchema) -> _Walk | None:
+        """This chunk's trajectory, or nothing if the schema names none."""
+
+        before = observations.observation
+        after = observations.next_observation
+        action = observations.action
+        if before is None or after is None or action is None:
+            if not (before is None and after is None and action is None):
+                raise ValueError(
+                    "trajectory schema paths must be all configured or all unset"
+                )
+            return None
+        return _Walk(
+            before=self._required(summary, before),
+            after=self._required(summary, after),
+            actions=self._required(summary, action),
+        )
+
+    @staticmethod
+    def _required(summary: object, path: str) -> np.ndarray:
+        """A trajectory field the schema promised the graph would fill."""
+
+        found = read(summary, path)
+        if found is None:
+            raise ValueError(f"configured trajectory path {path!r} is missing")
+        return np.asarray(found)
 
     def _slot(
         self,
