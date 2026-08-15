@@ -140,7 +140,7 @@ def test_the_resolved_manifest_assembles_and_steps(configurations):
         # faster.
         num_envs=STREAMS,
     )
-    state = program.init(jax.random.key(config.runtime.seed))
+    state = program.init(jax.random.key(config.training.seed))
     _, metrics = program.train(jax.random.key(1), state, 2 * STREAMS)
 
     assert metrics.interaction.reward.shape == (2, STREAMS)

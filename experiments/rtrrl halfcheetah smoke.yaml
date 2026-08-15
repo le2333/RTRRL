@@ -16,14 +16,15 @@ environment:
 training:
   num_envs: 1
   total_steps: 256
-  epoch_steps: 256
+  chunk_steps: 256
 
 evaluation:
-  steps: 64
+  every_steps: 256
+  rollout_steps: 64
 
 logging:
-  aim: aim://172.31.62.192:53801
-  enable_rerun: false
+  aim:
+    url: aim://172.31.62.192:53801
 
 score:
   metric: eval/episode/return_per_step

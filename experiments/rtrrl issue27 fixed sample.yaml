@@ -36,15 +36,19 @@ environment:
 training:
   num_envs: 1
   total_steps: 5000
-  epoch_steps: 1000
+  chunk_steps: 1000
 
 evaluation:
-  steps: 1000
+  every_steps: 1000
+  rollout_steps: 1000
 
 logging:
-  aim: aim://172.31.62.192:53801
-  enable_rerun: true
-  rerun_every_steps: 1000
+  aim:
+    url: aim://172.31.62.192:53801
+    training:
+      log_every_steps: 1000
+  rerun:
+    log_every_steps: 1000
 
 score:
   metric: eval/episode/return_per_step

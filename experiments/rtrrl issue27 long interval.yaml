@@ -1,30 +1,24 @@
 # Issue 27 acceptance: a reporting interval much longer than an episode
 # completes without the run growing to the size of the interval.
 #
-# This is the OOM case from the issue, and the only thing it varies from the
-# fixed run beside Rerun is epoch_steps. The bug was that one train call was
-# one reporting epoch, so peak memory grew with epoch_steps; the fix bounds a
-# call at max_episode_steps * num_envs and consumes the epoch in pieces.
+# chunk_steps is the whole subject. It is what one training call may hold, and
+# it is now independent of everything else: the evaluation interval is ten
+# times larger and the environment's episode limit plays no part in it. Before
+# the fix a call was a whole evaluation interval, so memory grew with it.
 #
-# The arithmetic this run is here to check, at num_envs 1 and episode_length
-# 1000:
-#   chunk bound   = 1000 * 1 = 1000 environment steps
-#   epoch_steps   = 10000
-#   train calls   = 10 per epoch, each holding at most 1000 steps of readings
+#   chunk_steps            1000 environment steps
+#   evaluation every_steps 10000
+#   training calls         10 per interval, each holding at most 1000 steps
 #
-# Before the fix that was one call holding 10000 steps of observations, next
-# observations, actions and roughly fifteen diagnostic series, plus a 10000
-# entry PRNG key array. The ratio, not the absolute size, is the subject: on
-# this run the fix has to keep peak memory flat while epoch_steps rises tenfold
-# over the episode length.
-#
-# Rerun is off. Nothing here needs a trajectory, and leaving it off also shows
-# that a run without logging.rerun writes no RRD -- the HPO half of criterion 6.
+# Aim gets evaluation only -- no `training` block under it -- and there is no
+# `rerun` block, so no RRD is written. That covers the search half of the
+# acceptance as well: a run that asks for neither produces neither.
 #
 # Expected:
 #   - the run reaches its budget without an out-of-memory condition
-#   - five eval/episode/return records in metrics.jsonl, at 10000 through 50000
+#   - five eval/episode/return records in metrics.jsonl, at 10000 to 50000
 #   - no artifacts/rerun directory at all
+#   - metrics.jsonl still holds every training episode
 
 experiment: rtrrl-issue27
 name: rtrrl-issue27-long-interval
@@ -44,14 +38,17 @@ environment:
 training:
   num_envs: 1
   total_steps: 50000
-  epoch_steps: 10000
+  chunk_steps: 1000
 
 evaluation:
-  steps: 1000
+  every_steps: 10000
+  rollout_steps: 1000
 
 logging:
-  aim: aim://172.31.62.192:53801
-  enable_rerun: false
+  aim:
+    url: aim://172.31.62.192:53801
+    training:
+      log_every_steps: 10000
 
 score:
   metric: eval/episode/return_per_step

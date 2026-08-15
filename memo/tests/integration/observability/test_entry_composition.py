@@ -16,7 +16,10 @@ def config_with_local_aim(tmp_path, *, rerun=None):
     Repo.from_path(endpoint, init=True)
     config = make_run_config()
     payload = config.model_dump(mode="json")
-    payload["logging"] = {"aim": {"url": endpoint}, "rerun": rerun}
+    payload["logging"] = {
+        "aim": {"url": endpoint, "training": {"log_every_steps": 1}},
+        "rerun": rerun,
+    }
     return type(config).model_validate(payload)
 
 
@@ -38,7 +41,7 @@ def test_entry_composes_mandatory_scalars_and_optional_local_episodes(tmp_path):
     scratch = tmp_path / "scratch"
     config = config_with_local_aim(
         tmp_path,
-        rerun={"every_steps": 1},
+        rerun={"log_every_steps": 1},
     )
 
     with build_reporter(config, scratch) as reporter:

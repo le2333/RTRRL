@@ -38,7 +38,7 @@ for config_uri in manifest["runs"]:
 
 def configuration(root: Path, trial: int) -> dict:
     return {
-        "contract": 8,
+        "contract": 9,
         "identity": {
             "run_id": f"run-t{trial}",
             "experiment": "test",

@@ -1,6 +1,6 @@
 """Runtime scheduling and the closed algorithm contract it executes."""
 
-from .driver import Destination, Runtime, RuntimeConfig, whole_epochs
+from .driver import Destination, Runtime, RuntimeConfig, evaluation_boundaries
 from .episode import SampledTrajectory
 from .program import BuiltAlgorithm, ObservationSchema, Program
 from .tracker import EpisodeTracker, TrackingResult
@@ -15,5 +15,5 @@ __all__ = [
     "RuntimeConfig",
     "SampledTrajectory",
     "TrackingResult",
-    "whole_epochs",
+    "evaluation_boundaries",
 ]

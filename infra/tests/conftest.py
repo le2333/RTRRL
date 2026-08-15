@@ -18,7 +18,7 @@ IMAGE = f"registry.example/trainer@{DIGEST}"
 @pytest.fixture
 def catalog() -> dict[str, Any]:
     return {
-        "contract": 8,
+        "contract": 9,
         "entries": {
             "stream_ac": {
                 "command": ["python", "-m", "entries.stream_ac"],
@@ -67,12 +67,11 @@ EXPERIMENT: dict[str, Any] = {
         "episode_length": 1000,
         "observed": [0, 2, 4],
     },
-    "training": {"num_envs": 4, "total_steps": 200, "epoch_steps": 100},
-    "evaluation": {"steps": 16},
+    "training": {"num_envs": 4, "total_steps": 200, "chunk_steps": 100},
+    "evaluation": {"every_steps": 100, "rollout_steps": 16},
     "logging": {
-        "aim": "aim://aim:53800",
-        "enable_rerun": True,
-        "rerun_every_steps": 100,
+        "aim": {"url": "aim://aim:53800", "training": {"log_every_steps": 100}},
+        "rerun": {"log_every_steps": 100},
     },
     "score": {
         "metric": "eval/episode/return_per_step",
@@ -103,15 +102,19 @@ environment:
 training:
   num_envs: 4
   total_steps: 200
-  epoch_steps: 100
+  chunk_steps: 100
 
 evaluation:
-  steps: 16
+  every_steps: 100
+  rollout_steps: 16
 
 logging:
-  aim: aim://aim:53800
-  enable_rerun: true
-  rerun_every_steps: 100
+  aim:
+    url: aim://aim:53800
+    training:
+      log_every_steps: 100
+  rerun:
+    log_every_steps: 100
 
 score:
   metric: eval/episode/return_per_step

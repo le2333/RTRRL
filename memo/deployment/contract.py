@@ -6,7 +6,7 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, model_validator
 
-CONTRACT_VERSION = 8
+CONTRACT_VERSION = 9
 
 
 class _Frozen(BaseModel):

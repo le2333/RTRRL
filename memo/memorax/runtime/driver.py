@@ -21,35 +21,48 @@ class Destination(Protocol):
     def log_trajectory(self, trajectory: SampledTrajectory) -> None: ...
 
 
-def whole_epochs(*, total_steps: int, epoch_steps: int, num_envs: int) -> range:
-    """Return every epoch boundary, refusing a budget that is ragged."""
+def evaluation_boundaries(
+    *, total_steps: int, every_steps: int, num_envs: int
+) -> range:
+    """Return every step count at which the policy is measured.
 
-    if epoch_steps % num_envs:
-        raise ValueError(f"epoch_steps {epoch_steps} is not {num_envs} streams' worth")
-    if total_steps % epoch_steps:
+    A boundary has to fall between two vectorized rows and the budget has to
+    end on one, or the last interval would be a different length from the rest
+    and the evaluations would no longer be comparable.
+    """
+
+    if every_steps % num_envs:
+        raise ValueError(f"every_steps {every_steps} is not {num_envs} streams' worth")
+    if total_steps % every_steps:
         raise ValueError(
-            f"total_steps {total_steps} is not whole epochs of {epoch_steps}"
+            f"total_steps {total_steps} is not whole intervals of {every_steps}"
         )
-    return range(epoch_steps, total_steps + 1, epoch_steps)
+    return range(every_steps, total_steps + 1, every_steps)
 
 
 @dataclass(frozen=True)
 class RuntimeConfig:
     """Only the scheduling values Runtime consumes.
 
-    ``epoch_steps`` is when to evaluate and report, not how much to ask for at
-    once: a train call is bounded by ``max_episode_steps`` so what a chunk costs
-    stays the same however long a reporting interval is.  ``sample_steps`` names
-    the environment steps whose training episode is to be kept whole.
+    Three schedules that used to be one. ``chunk_steps`` is how much a single
+    training call may hold, which is what a run costs in memory.
+    ``evaluate_every_steps`` is when the policy is measured. Neither derives
+    from the other, and neither derives from ``max_episode_steps``, which is
+    the environment's own limit and only a guard: an episode longer than that
+    is refused rather than reported.
+
+    ``trajectory_at_steps`` names the environment steps whose training episode
+    is to be kept whole.
     """
 
     total_steps: int
-    epoch_steps: int
-    eval_steps: int
+    chunk_steps: int
+    max_episode_steps: int
+    evaluate_every_steps: int
+    rollout_steps: int
     num_envs: int
     seed: int
-    max_episode_steps: int
-    sample_steps: tuple[int, ...] = ()
+    trajectory_at_steps: tuple[int, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -63,9 +76,9 @@ class Runtime:
         """Run the algorithm to its budget, reporting every complete episode."""
 
         config = self.config
-        epochs = whole_epochs(
+        boundaries = evaluation_boundaries(
             total_steps=config.total_steps,
-            epoch_steps=config.epoch_steps,
+            every_steps=config.evaluate_every_steps,
             num_envs=config.num_envs,
         )
 
@@ -82,34 +95,32 @@ class Runtime:
             observations=self.algorithm.observations,
             num_envs=config.num_envs,
             max_episode_steps=config.max_episode_steps,
-            sample_steps=tuple(config.sample_steps),
+            sample_steps=tuple(config.trajectory_at_steps),
         )
-        # One chunk holds at most one episode's worth of every stream, so what a
-        # train call allocates is a property of the environment rather than of
-        # how often the run was asked to report.
-        chunk_limit = config.max_episode_steps * config.num_envs
         trained_steps = 0
         eval_number = 1
 
-        for epoch_end in epochs:
-            while trained_steps < epoch_end:
-                chunk_steps = min(chunk_limit, epoch_end - trained_steps)
+        for boundary in boundaries:
+            while trained_steps < boundary:
+                # The last call before a boundary is short if the interval is
+                # not a whole number of chunks. Nothing else varies its size.
+                steps = min(config.chunk_steps, boundary - trained_steps)
                 key, chunk_key = jax.random.split(key)
-                state, chunk = train(chunk_key, state, chunk_steps)
+                state, chunk = train(chunk_key, state, steps)
                 self._publish(
                     reporter, tracker.consume(chunk, start_env_steps=trained_steps)
                 )
-                trained_steps += chunk_steps
+                trained_steps += steps
 
-            if not config.eval_steps:
+            if not config.rollout_steps:
                 continue
             key, eval_key = jax.random.split(key)
-            observations = evaluate(eval_key, state, config.eval_steps)
+            observations = evaluate(eval_key, state, config.rollout_steps)
             eval_number = self._report(
                 reporter,
                 observations,
                 phase="eval",
-                start_env_steps=epoch_end,
+                start_env_steps=boundary,
                 stride=0,
                 first_number=eval_number,
             )

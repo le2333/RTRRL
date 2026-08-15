@@ -144,13 +144,14 @@ def test_worker_runs_algorithm_and_publishes_trace_norms(
                 "num_envs": 1,
                 "parameters": parameters(),
             },
-            "runtime": {
-                "seed": 0,
-                "total_steps": 4,
-                "epoch_steps": 4,
-                "evaluation_steps": 0,
+            "training": {"seed": 0, "total_steps": 4, "chunk_steps": 4},
+            "evaluation": {"every_steps": 4, "rollout_steps": 0},
+            "logging": {
+                "aim": {
+                    "url": str(aim_path),
+                    "training": {"log_every_steps": 1},
+                }
             },
-            "logging": {"aim": {"url": str(aim_path)}},
         }
     )
     config_uri = f"{s3_base}/{entry}/config.json"

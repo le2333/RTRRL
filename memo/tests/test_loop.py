@@ -26,7 +26,7 @@ from memorax.runtime import (
     Program,
     Runtime,
     RuntimeConfig,
-    whole_epochs,
+    evaluation_boundaries,
 )
 from tests.support.fakes import EpisodeRecorder as Recorder
 from tests.support.programs import (
@@ -43,12 +43,13 @@ def run_arithmetic(recorder, **overrides):
     init_fn, train_fn, evaluate_fn, interact_fn = arithmetic_program()
     settings: dict[str, Any] = {
         "total_steps": TOTAL_STEPS,
-        "epoch_steps": EPOCH_STEPS,
-        "eval_steps": EVAL_STEPS,
+        "chunk_steps": EPOCH_STEPS,
+        "evaluate_every_steps": EPOCH_STEPS,
+        "rollout_steps": EVAL_STEPS,
         "num_envs": NUM_ENVS,
         "seed": 0,
         # Four transitions is what the arithmetic's longest episode runs to, so
-        # one train call is one whole epoch and the chunking is not the subject.
+        # one train call is one whole interval and the chunking is not the subject.
         "max_episode_steps": 4,
     }
     reward = overrides.pop("reward", "interaction.reward")
@@ -79,8 +80,8 @@ def test_a_completed_episode_is_the_only_reporting_occasion():
     recorder = Recorder()
     run_arithmetic(recorder)
 
-    # Two endings per training epoch and one per evaluation, twice. An epoch
-    # boundary is not an ending, so the second pair began in the first epoch.
+    # Two endings per evaluation interval and one per evaluation, twice. A
+    # boundary is not an ending, so the second pair began in the first.
     assert len(recorder.of("train")) == 4
     assert len(recorder.of("eval")) == 2
     assert [episode.number for episode in recorder.of("train")] == [1, 2, 3, 4]
@@ -111,9 +112,9 @@ def test_an_episode_carries_what_it_was_paid_and_where_it_ended():
 def test_two_streams_are_two_series_and_not_one_average():
     """Each episode belongs to one stream, so per-env comes for free.
 
-    A single number per epoch is what averaging the stream axis produces, and
+    A single number per interval is what averaging the stream axis produces, and
     the two streams here disagree about both when their episode ended and what
-    it was worth. Asserting one scalar per epoch is asserting the arrangement
+    it was worth. Asserting one scalar per interval is asserting the arrangement
     this replaces.
     """
 
@@ -139,8 +140,8 @@ def test_an_episode_the_budget_cut_off_emits_nothing():
 def test_an_episode_that_outlives_a_train_call_is_reported_once_and_whole():
     """A call boundary is a transport size, so it ends nothing.
 
-    The third and fourth episodes each begin in the first epoch and end in the
-    second; cutting per call would report each of them as two shorter ones.
+    The third and fourth episodes each begin in the first interval and end in
+    the second; cutting per call would report each of them as two shorter ones.
     """
 
     recorder = Recorder()
@@ -175,9 +176,9 @@ def test_a_diagnostic_the_configuration_declared_reaches_every_episode():
 def test_an_evaluation_episode_is_dated_by_the_training_it_measures():
     """Evaluation steps are not training steps, so they do not move the axis.
 
-    A rollout run at the epoch boundary measures the policy as it stood there.
+    A rollout run at the boundary measures the policy as it stood there.
     Spreading its episodes along the axis as though they were training would
-    put them in the epoch that has not happened yet.
+    put them in the interval that has not happened yet.
     """
 
     recorder = Recorder()
@@ -199,7 +200,7 @@ def test_an_evaluation_episode_carries_the_trajectory_it_walked():
 
 def test_evaluation_can_be_switched_off_entirely():
     recorder = Recorder()
-    run_arithmetic(recorder, eval_steps=0)
+    run_arithmetic(recorder, rollout_steps=0)
 
     assert not recorder.of("eval")
     assert len(recorder.of("train")) == 4
@@ -227,18 +228,20 @@ def test_an_episode_is_worth_what_was_paid_not_what_the_algorithm_was_shown():
 @pytest.mark.parametrize(
     "budget, complaint",
     [
-        ({"epoch_steps": 3}, "epoch_steps"),
+        ({"every_steps": 3}, "every_steps"),
         ({"total_steps": 9}, "total_steps"),
     ],
 )
 def test_a_ragged_budget_is_refused_rather_than_rounded(budget, complaint):
     with pytest.raises(ValueError, match=complaint):
-        whole_epochs(**({"total_steps": 8, "epoch_steps": 4, "num_envs": 2} | budget))
+        evaluation_boundaries(
+            **({"total_steps": 8, "every_steps": 4, "num_envs": 2} | budget)
+        )
 
 
 def test_a_budget_that_divides_lands_on_the_last_step():
-    epochs = whole_epochs(total_steps=8, epoch_steps=4, num_envs=2)
-    assert list(epochs) == [4, 8]
+    boundaries = evaluation_boundaries(total_steps=8, every_steps=4, num_envs=2)
+    assert list(boundaries) == [4, 8]
 
 
 def test_the_names_an_entry_declares_are_names_a_sink_will_accept():

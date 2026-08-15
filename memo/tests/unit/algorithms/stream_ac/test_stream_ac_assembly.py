@@ -67,7 +67,9 @@ def assembled(record=None):
 
 
 def run_document(*, every_steps=None, total_steps=50, episode_length=7):
-    rerun = None if every_steps is None else SimpleNamespace(every_steps=every_steps)
+    rerun = (
+        None if every_steps is None else SimpleNamespace(log_every_steps=every_steps)
+    )
     return SimpleNamespace(
         algorithm=SimpleNamespace(
             parameters={"gamma": 0.9},
@@ -79,13 +81,13 @@ def run_document(*, every_steps=None, total_steps=50, episode_length=7):
             ),
             num_envs=2,
         ),
-        runtime=SimpleNamespace(
+        training=SimpleNamespace(
             seed=7,
             total_steps=total_steps,
-            epoch_steps=10,
-            evaluation_steps=4,
+            chunk_steps=10,
         ),
-        logging=SimpleNamespace(rerun=rerun),
+        evaluation=SimpleNamespace(every_steps=10, rollout_steps=4),
+        logging=SimpleNamespace(aim=SimpleNamespace(training=None), rerun=rerun),
     )
 
 
@@ -120,11 +122,11 @@ def test_entry_projects_only_the_runtime_schedule():
     schedule = entry.runtime_config(config)
 
     assert schedule.total_steps == 50
-    assert schedule.epoch_steps == 10
-    assert schedule.eval_steps == 4
+    assert schedule.chunk_steps == 10
+    assert schedule.rollout_steps == 4
     assert schedule.num_envs == 2
     assert schedule.seed == 7
-    assert schedule.sample_steps == (10, 20, 30, 40, 50)
+    assert schedule.trajectory_at_steps == (10, 20, 30, 40, 50)
     assert schedule.max_episode_steps == 7
 
 
@@ -132,7 +134,7 @@ def test_a_run_without_rerun_asks_for_no_sample_and_keeps_no_walk():
     config = run_document(every_steps=None)
 
     assert entry.build_request(config).record == frozenset()
-    assert entry.runtime_config(config).sample_steps == ()
+    assert entry.runtime_config(config).trajectory_at_steps == ()
 
 
 def test_a_graph_keeps_the_walk_only_when_the_build_asked_for_it():

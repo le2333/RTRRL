@@ -31,7 +31,7 @@ def test_real_worker_completes_a_local_hpo_round(tmp_path: Path) -> None:
     entry = tmp_path / "entry.py"
     entry.write_text(ENTRY, encoding="utf-8")
     catalog = {
-        "contract": 8,
+        "contract": 9,
         "entries": {
             "e": {
                 "command": [sys.executable, str(entry)],
@@ -54,8 +54,8 @@ def test_real_worker_completes_a_local_hpo_round(tmp_path: Path) -> None:
             "seed": 0,
             "episode_length": 10,
         },
-        "training": {"num_envs": 1, "total_steps": 10, "epoch_steps": 10},
-        "evaluation": {"steps": 0},
+        "training": {"num_envs": 1, "total_steps": 10, "chunk_steps": 10},
+        "evaluation": {"every_steps": 10, "rollout_steps": 0},
         "logging": {"aim": "unused"},
         "score": {
             "metric": "objective",

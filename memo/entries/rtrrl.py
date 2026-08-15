@@ -12,7 +12,7 @@ from memorax.assembly import BuildRequest, EnvironmentSpec, assemble
 from memorax.runtime import Runtime, RuntimeConfig
 
 from ._observability import build_reporter, load_run
-from ._schedule import sample_steps, trajectory_record
+from ._schedule import trajectory_at_steps, trajectory_record
 
 
 def build_request(config) -> BuildRequest:
@@ -36,15 +36,16 @@ def build_request(config) -> BuildRequest:
 def runtime_config(config) -> RuntimeConfig:
     """Project the deployment run document onto Runtime's input."""
 
-    runtime = config.runtime
+    training = config.training
     return RuntimeConfig(
-        total_steps=runtime.total_steps,
-        epoch_steps=runtime.epoch_steps,
-        eval_steps=runtime.evaluation_steps,
-        num_envs=config.algorithm.num_envs,
-        seed=runtime.seed,
+        total_steps=training.total_steps,
+        chunk_steps=training.chunk_steps,
         max_episode_steps=config.algorithm.environment.episode_length,
-        sample_steps=sample_steps(config),
+        evaluate_every_steps=config.evaluation.every_steps,
+        rollout_steps=config.evaluation.rollout_steps,
+        num_envs=config.algorithm.num_envs,
+        seed=training.seed,
+        trajectory_at_steps=trajectory_at_steps(config),
     )
 
 

@@ -31,10 +31,11 @@ def test_a_configuration_is_partitioned_by_its_consumers(
         "entry",
         "artifacts",
         "algorithm",
-        "runtime",
+        "training",
+        "evaluation",
         "logging",
     }
-    assert first["contract"] == 8
+    assert first["contract"] == 9
     assert first["identity"]["experiment"] == "streamac-test"
     assert first["entry"] == "stream_ac"
     assert first["identity"]["digest"] == DIGEST
@@ -52,11 +53,14 @@ def test_experiment_fields_are_projected_to_their_consumers(
     del environment["seed"]
     assert configuration["algorithm"]["environment"] == environment
     assert configuration["algorithm"]["num_envs"] == experiment["training"]["num_envs"]
-    assert configuration["runtime"] == {
+    assert configuration["training"] == {
         "seed": experiment["environment"]["seed"],
         "total_steps": experiment["training"]["total_steps"],
-        "epoch_steps": experiment["training"]["epoch_steps"],
-        "evaluation_steps": experiment["evaluation"]["steps"],
+        "chunk_steps": experiment["training"]["chunk_steps"],
+    }
+    assert configuration["evaluation"] == {
+        "every_steps": experiment["evaluation"]["every_steps"],
+        "rollout_steps": experiment["evaluation"]["rollout_steps"],
     }
 
 
@@ -69,7 +73,7 @@ def test_each_run_has_one_artifact_root(experiment: Any, catalog: Any, tmp_path:
     assert first["artifacts"]["root"] == f"{root}/stream-ac-test-{LAUNCH}-t0"
     assert second["artifacts"]["root"] == f"{root}/stream-ac-test-{LAUNCH}-t1"
     assert "score" not in first
-    assert first["logging"]["rerun"] == {"every_steps": 100}
+    assert first["logging"]["rerun"] == {"log_every_steps": 100}
 
 
 def test_rerun_gets_no_destination_when_it_is_off(
@@ -81,7 +85,7 @@ def test_rerun_gets_no_destination_when_it_is_off(
     names a Rerun destination or it does not.
     """
 
-    experiment["logging"]["enable_rerun"] = False
+    del experiment["logging"]["rerun"]
 
     configurations = runner(experiment, catalog, tmp_path).next_round()
 
@@ -104,14 +108,14 @@ def test_the_sampled_parameters_honour_what_the_experiment_pinned(
 def test_a_file_missing_a_field_the_worker_needs_starts_nothing(
     experiment: Any, catalog: Any, tmp_path: Path
 ) -> None:
-    del experiment["training"]["epoch_steps"]
+    del experiment["training"]["chunk_steps"]
     del experiment["storage"]
 
     with pytest.raises(ExperimentError) as raised:
         runner(experiment, catalog, tmp_path)
 
     assert "storage" in str(raised.value)
-    assert "training.epoch_steps" in str(raised.value)
+    assert "training.chunk_steps" in str(raised.value)
 
 
 def test_a_pin_the_image_declares_no_parameter_for_starts_nothing(

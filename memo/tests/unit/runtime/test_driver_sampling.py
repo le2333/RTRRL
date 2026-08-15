@@ -51,8 +51,8 @@ def run_runtime(
     train,
     interact=None,
     recorder=None,
-    sample_steps=(),
-    eval_steps=0,
+    trajectory_at_steps=(),
+    rollout_steps=0,
     initial_state=jnp.asarray(0, jnp.int32),
     **schedule,
 ) -> EpisodeRecorder:
@@ -68,10 +68,10 @@ def run_runtime(
             observations=OBSERVATIONS,
         ),
         config=RuntimeConfig(
-            eval_steps=eval_steps,
+            rollout_steps=rollout_steps,
             num_envs=NUM_ENVS,
             seed=0,
-            sample_steps=sample_steps,
+            trajectory_at_steps=trajectory_at_steps,
             **schedule,
         ),
     ).run(recorder)
@@ -79,8 +79,8 @@ def run_runtime(
 
 
 # ------------------------------------------------- what a train call may cost
-def test_a_long_epoch_is_executed_as_bounded_train_calls():
-    """A reporting interval is a schedule, not one allocation."""
+def test_a_long_interval_is_executed_as_bounded_train_calls():
+    """An evaluation interval is a schedule, not one allocation."""
 
     requested: list[int] = []
 
@@ -100,14 +100,15 @@ def test_a_long_epoch_is_executed_as_bounded_train_calls():
     run_runtime(
         train=train,
         total_steps=80,
-        epoch_steps=40,
+        evaluate_every_steps=40,
+        chunk_steps=8,
         max_episode_steps=4,
     )
 
     assert requested == [8] * 10
 
 
-def test_a_short_epoch_is_never_asked_for_more_than_it_has():
+def test_a_short_interval_is_never_asked_for_more_than_it_has():
     requested: list[int] = []
 
     def train(key, state, num_steps):
@@ -125,11 +126,12 @@ def test_a_short_epoch_is_never_asked_for_more_than_it_has():
     run_runtime(
         train=train,
         total_steps=20,
-        epoch_steps=10,
+        evaluate_every_steps=10,
+        chunk_steps=8,
         max_episode_steps=4,
     )
 
-    # The bound is eight, and an epoch of ten is two calls rather than one.
+    # The bound is eight, and an interval of ten is two calls rather than one.
     assert requested == [8, 2, 8, 2]
 
 
@@ -179,9 +181,10 @@ def test_a_sampled_episode_is_whole_across_the_train_calls_it_crosses():
     recorder = run_runtime(
         train=sliced_train,
         total_steps=24,
-        epoch_steps=12,
+        evaluate_every_steps=12,
+        chunk_steps=6,
         max_episode_steps=3,
-        sample_steps=(6, 10),
+        trajectory_at_steps=(6, 10),
     )
 
     assert [one.sample_step for one in recorder.trajectories] == [6, 10]
@@ -206,7 +209,8 @@ def test_a_chunk_boundary_ends_no_episode_that_the_environment_did_not_end():
     recorder = run_runtime(
         train=sliced_train,
         total_steps=24,
-        epoch_steps=12,
+        evaluate_every_steps=12,
+        chunk_steps=6,
         max_episode_steps=3,
     )
 
@@ -293,9 +297,10 @@ def test_the_final_sample_is_finished_without_another_update():
         interact=interact,
         initial_state=Counters(jnp.asarray(0, jnp.int32), jnp.asarray(0, jnp.int32)),
         total_steps=8,
-        epoch_steps=8,
+        evaluate_every_steps=8,
+        chunk_steps=8,
         max_episode_steps=4,
-        sample_steps=(8,),
+        trajectory_at_steps=(8,),
     )
 
     # One train call for the whole budget, and nothing asked for after it.
@@ -319,9 +324,10 @@ def test_a_post_budget_transition_reports_no_update_reading():
         interact=interact,
         initial_state=Counters(jnp.asarray(0, jnp.int32), jnp.asarray(0, jnp.int32)),
         total_steps=8,
-        epoch_steps=8,
+        evaluate_every_steps=8,
+        chunk_steps=8,
         max_episode_steps=4,
-        sample_steps=(8,),
+        trajectory_at_steps=(8,),
     )
 
     measured = recorder.trajectories[0].episode.series["td_error"]
@@ -337,7 +343,8 @@ def test_no_continuation_runs_when_nothing_was_sampled():
         interact=interact,
         initial_state=Counters(jnp.asarray(0, jnp.int32), jnp.asarray(0, jnp.int32)),
         total_steps=8,
-        epoch_steps=8,
+        evaluate_every_steps=8,
+        chunk_steps=8,
         max_episode_steps=4,
     )
 
@@ -370,13 +377,14 @@ def test_a_sample_that_cannot_end_within_the_declared_limit_is_an_error():
             train=train,
             interact=interact,
             total_steps=4,
-            epoch_steps=4,
+            evaluate_every_steps=4,
+            chunk_steps=6,
             max_episode_steps=3,
-            sample_steps=(4,),
+            trajectory_at_steps=(4,),
         )
 
 
-def test_evaluation_still_reports_at_the_epoch_boundary_it_measured():
+def test_evaluation_still_reports_at_the_boundary_it_measured():
     ending = jnp.asarray([[False, False], [True, True]])
 
     def train(key, state, num_steps):
@@ -411,10 +419,11 @@ def test_evaluation_still_reports_at_the_epoch_boundary_it_measured():
         ),
         config=RuntimeConfig(
             total_steps=8,
-            epoch_steps=4,
-            eval_steps=4,
+            evaluate_every_steps=4,
+            rollout_steps=4,
             num_envs=NUM_ENVS,
             seed=0,
+            chunk_steps=4,
             max_episode_steps=2,
         ),
     ).run(recorder)

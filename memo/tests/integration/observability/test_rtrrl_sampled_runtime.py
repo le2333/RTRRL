@@ -23,7 +23,7 @@ pytestmark = [pytest.mark.integration, pytest.mark.service]
 
 HORIZON = 3
 TOTAL_STEPS = 50
-EPOCH_STEPS = 10
+EVALUATE_EVERY = 10
 SAMPLE_STEPS = (10, 20, 30, 40, 50)
 
 
@@ -56,8 +56,10 @@ def tiny_environment(identifier, **options):
     return environment, environment.default_params
 
 
-def sampled_runtime(*, sample_steps):
-    record = rtrrl.OBSERVATIONS.trajectory_fields if sample_steps else frozenset()
+def sampled_runtime(*, trajectory_at_steps):
+    record = (
+        rtrrl.OBSERVATIONS.trajectory_fields if trajectory_at_steps else frozenset()
+    )
     algorithm = assemble(
         rtrrl.RTRRL,
         BuildRequest(
@@ -74,12 +76,13 @@ def sampled_runtime(*, sample_steps):
         algorithm=algorithm,
         config=RuntimeConfig(
             total_steps=TOTAL_STEPS,
-            epoch_steps=EPOCH_STEPS,
-            eval_steps=HORIZON,
+            chunk_steps=HORIZON,
+            max_episode_steps=HORIZON,
+            evaluate_every_steps=EVALUATE_EVERY,
+            rollout_steps=HORIZON,
             num_envs=1,
             seed=0,
-            max_episode_steps=HORIZON,
-            sample_steps=sample_steps,
+            trajectory_at_steps=trajectory_at_steps,
         ),
     )
 
@@ -107,7 +110,7 @@ def read_metrics(path):
 
 def test_a_fixed_run_writes_one_walk_and_one_evaluation_per_sample(tmp_path):
     with reporter_for(tmp_path, rerun=True) as reporter:
-        sampled_runtime(sample_steps=SAMPLE_STEPS).run(reporter)
+        sampled_runtime(trajectory_at_steps=SAMPLE_STEPS).run(reporter)
 
     written = sorted(path.name for path in (tmp_path / "rerun").glob("*.rrd"))
     assert written == [f"train-sample-{step:012d}.rrd" for step in SAMPLE_STEPS]
@@ -121,7 +124,7 @@ def test_a_fixed_run_writes_one_walk_and_one_evaluation_per_sample(tmp_path):
 
 def test_the_last_sample_is_carried_past_the_budget_to_its_ending(tmp_path):
     with reporter_for(tmp_path, rerun=True) as reporter:
-        sampled_runtime(sample_steps=SAMPLE_STEPS).run(reporter)
+        sampled_runtime(trajectory_at_steps=SAMPLE_STEPS).run(reporter)
 
     # The episode holding step 50 has two transitions inside the budget, so
     # exactly one of its three was taken after it.
@@ -154,7 +157,7 @@ def budget_side(path) -> list[float]:
 
 def test_a_run_without_sample_points_reports_scalars_and_writes_no_walk(tmp_path):
     with reporter_for(tmp_path, rerun=False) as reporter:
-        sampled_runtime(sample_steps=()).run(reporter)
+        sampled_runtime(trajectory_at_steps=()).run(reporter)
 
     records = read_metrics(tmp_path / METRICS_FILENAME)
     assert any("eval/episode/return" in record["metrics"] for record in records)

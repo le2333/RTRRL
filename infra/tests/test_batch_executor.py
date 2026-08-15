@@ -62,7 +62,7 @@ class FakeBatch:
                 ).encode()
                 result = json.dumps(
                     {
-                        "contract": 8,
+                        "contract": 9,
                         "identity": config["identity"],
                         "success": True,
                         "artifacts": ["metrics.jsonl"],
@@ -100,7 +100,7 @@ class FakeLogs:
 
 def configuration(trial: int) -> dict[str, Any]:
     return {
-        "contract": 8,
+        "contract": 9,
         "identity": {
             "run_id": f"run-t{trial}",
             "experiment": "test",
