@@ -1,0 +1,115 @@
+# R2D2 acceptance, extension branch: one gradient across the whole episode.
+#
+# Paired with "r2d2 tbptt acceptance.yaml". The two files differ in the
+# `learning` block and nothing else, so a difference in the result is a
+# difference in the gradient construction rather than in the run.
+#
+# Full BPTT is this platform's extension to R2D2, not part of the published
+# schedule. Its replay window is environment.episode_length, so replay must
+# hold whole finished episodes: minimum_size has to clear that window.
+#
+# What the run is read for:
+#   - the worker exits 0 and publishes result.json and metrics.jsonl
+#   - four eval/episode/return records, at 5000, 10000, 15000 and 20000
+#   - every train/episode and eval/episode value is finite
+#   - train/episode/update.loss and update.priority appear once replay is
+#     sampleable, which is at step 256
+
+experiment: r2d2-acceptance
+name: r2d2-acceptance-full-bptt
+description: "R2D2 platform acceptance: full-episode BPTT extension"
+
+# Replace with the digest of the image built from the commit under acceptance.
+image: 007122174918.dkr.ecr.eu-north-1.amazonaws.com/rtrrl@sha256:REPLACE_WITH_PUSHED_DIGEST
+entry: r2d2
+storage: s3://rtrrl-artifacts-007122174918/trainer
+
+# CartPole is fully observed and discrete. The recurrent core is not being
+# asked to remember anything here: this run answers whether the platform path
+# holds, not whether the memory helps.
+environment:
+  id: gymnax::CartPole-v1
+  backend: null # gymnax ships one implementation per environment
+  observed: null
+  seed: 0
+  episode_length: 32
+
+training:
+  num_envs: 1
+  total_steps: 20000
+  chunk_steps: 5000
+
+evaluation:
+  every_steps: 5000
+  rollout_steps: 1000
+
+logging:
+  aim:
+    url: aim://172.31.62.192:53801
+    training:
+      log_every_steps: 5000
+  rerun:
+    log_every_steps: 10000
+
+score:
+  metric: eval/episode/return_per_step
+  window_steps: [0, 20000]
+  reduce: last
+  non_finite: worst
+  direction: maximize
+
+compute:
+  instance_type: c7a.large
+  timeout_minutes: 60
+
+hpo:
+  rounds: 1
+  trials_per_round: 1
+  parallel_jobs: 1
+  startup_trials: 1
+  seed: 0
+
+space:
+  backbone:
+    kind: [lru]
+    lru:
+      feature_dim: [64]
+      hidden_dim: [64]
+
+  head:
+    kind: [dueling]
+
+  # The one block that differs from the TBPTT acceptance. This branch has no
+  # burn-in or unroll horizon of its own: the window is the episode, and the
+  # carry starts fresh at its boundary.
+  learning:
+    kind: [full_bptt]
+
+  optimizer:
+    kind: [adam]
+    adam:
+      lr: [0.0005]
+
+  replay:
+    capacity: [8192]
+    minimum_size: [256]
+    batch_size: [8]
+    priority_exponent: [0.9]
+    importance_sampling_exponent: [0.6]
+    max_priority_weight: [0.9]
+
+  target:
+    update_period: [100]
+
+  returns:
+    n_step: [3]
+    value_transform:
+      kind: [signed_hyperbolic]
+
+  exploration:
+    epsilon_start: [1.0]
+    epsilon_end: [0.05]
+    epsilon_decay_steps: [10000]
+    evaluation_epsilon: [0.0]
+
+  gamma: [0.99]
