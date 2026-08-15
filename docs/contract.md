@@ -1,6 +1,6 @@
-# 训练部署契约 v8
+# 训练部署契约 v9
 
-Infra、训练镜像中的 Worker 和 Entry 不共享 Python 类型。跨环境接口是版本化 JSON，当前版本为 `8`。同一份序列化 fixture 位于 `tests/contracts/v8/`，各接收方只解析自己消费的投影。
+Infra、训练镜像中的 Worker 和 Entry 不共享 Python 类型。跨环境接口是版本化 JSON，当前版本为 `9`。同一份序列化 fixture 位于 `tests/contracts/v9/`，各接收方只解析自己消费的投影。
 
 ## Catalog
 
@@ -14,7 +14,7 @@ python -m deployment.catalog --print-label
 
 ```json
 {
-  "contract": 8,
+  "contract": 9,
   "entries": {
     "stream_ac": {
       "command": ["python", "-m", "entries.stream_ac"],
@@ -23,6 +23,11 @@ python -m deployment.catalog --print-label
     },
     "rtrrl": {
       "command": ["python", "-m", "entries.rtrrl"],
+      "parameters": {},
+      "metrics": []
+    },
+    "r2d2": {
+      "command": ["python", "-m", "entries.r2d2"],
       "parameters": {},
       "metrics": []
     }
@@ -37,7 +42,7 @@ Infra 从镜像产物读取 Catalog，不导入训练代码。
 实验 YAML 属于 Infra，包含镜像、计算资源、HPO、搜索空间和评分策略。Infra 根据 Catalog 验证并采样，然后为每个 trial 生成嵌套运行配置：
 
 ```yaml
-contract: 8
+contract: 9
 identity:
   run_id: stream-ac-launch-t0
   experiment: stream-ac
@@ -73,7 +78,7 @@ logging:
 
 ## 接收方边界
 
-- Worker 的 v8 投影定义在 `memo/worker/envelope.py`，只解释 `contract`、`identity`、`entry` 和 `artifacts`；`algorithm`、`runtime`、`logging` 保持为交给子进程的 JSON。
+- Worker 的 v9 投影定义在 `memo/worker/envelope.py`，只解释 `contract`、`identity`、`entry` 和 `artifacts`；`algorithm`、`runtime`、`logging` 保持为交给子进程的 JSON。
 - Entry 使用 `memo/entries/_contract.py` 验证完整运行配置，再分别投影到算法 assembly、Runtime 和 observability。
 - Catalog 类型及版本位于 `memo/deployment/contract.py`，不属于 Worker。
 

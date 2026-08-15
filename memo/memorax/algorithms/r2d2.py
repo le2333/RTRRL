@@ -28,11 +28,11 @@ from memorax.runtime import ObservationSchema
 from memorax.utils import Timestep
 from memorax.utils.typing import (
     Array,
-    Buffer,
     BufferState,
     Environment,
     EnvParams,
     Key,
+    PrioritisedBuffer,
 )
 
 from .contract import ActionDecision, InteractionMetrics, StepMetrics
@@ -1002,7 +1002,7 @@ class R2D2:
     env: Environment
     env_params: EnvParams
     core: Core
-    buffer: Buffer
+    buffer: PrioritisedBuffer
     reports: Reports = Reports()
     record: Iterable[str] = ()
 

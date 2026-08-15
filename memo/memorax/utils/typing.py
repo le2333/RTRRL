@@ -9,6 +9,11 @@ Array: TypeAlias = jax.Array
 
 Buffer: TypeAlias = fbx.trajectory_buffer.TrajectoryBuffer
 BufferState: TypeAlias = fbx.trajectory_buffer.TrajectoryBufferState
+# Only this one carries set_priorities, which an algorithm that writes replay
+# priorities back has to reach.
+PrioritisedBuffer: TypeAlias = (
+    fbx.prioritised_trajectory_buffer.PrioritisedTrajectoryBuffer
+)
 Environment: TypeAlias = gymnax.environments.environment.Environment
 EnvParams: TypeAlias = gymnax.EnvParams
 EnvState: TypeAlias = gymnax.EnvState
