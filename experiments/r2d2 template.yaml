@@ -46,8 +46,11 @@ logging:
     log_every_steps: 64
 
 # [自用] 评分由 Infra 对 Worker 上传的 metrics.jsonl 执行
+#
+# 不用 return_per_step：CartPole 每步奖励恒为 1.0，杆倒下那一步也给，所以该指标
+# 对任何策略都恒等于 1.0 —— 撑满 32 步和 9 步就倒的得分一样。信号全在时长里。
 score:
-  metric: eval/episode/return_per_step
+  metric: eval/episode/return
   window_steps: [0, 128] # 取值范围
   reduce: last # 值序列如何生成分数
   non_finite: worst # nan/inf 处理策略

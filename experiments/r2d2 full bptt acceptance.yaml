@@ -19,8 +19,9 @@ experiment: r2d2-acceptance
 name: r2d2-acceptance-full-bptt
 description: "R2D2 platform acceptance: full-episode BPTT extension"
 
-# Replace with the digest of the image built from the commit under acceptance.
-image: 007122174918.dkr.ecr.eu-north-1.amazonaws.com/rtrrl@sha256:REPLACE_WITH_PUSHED_DIGEST
+# The image this acceptance ran on, 2026-08-15. Catalog label SHA-256
+# 83782310b82bdb5871e62ab48fabeb98cca915f12151be87493113e2eb32bb06.
+image: 007122174918.dkr.ecr.eu-north-1.amazonaws.com/rtrrl@sha256:f5cf32acc3e61cbb38f8fa34c265add29c250a4ff9d30613c8f161dbe4f021da
 entry: r2d2
 storage: s3://rtrrl-artifacts-007122174918/trainer
 
@@ -51,8 +52,12 @@ logging:
   rerun:
     log_every_steps: 10000
 
+# Not return_per_step: CartPole pays exactly 1.0 every step including the one
+# it ends on, so that metric is identically 1.0 for every policy -- a run that
+# balances for 32 steps and one that drops the pole in 9 score the same. The
+# signal is entirely in how long the episode lasted.
 score:
-  metric: eval/episode/return_per_step
+  metric: eval/episode/return
   window_steps: [0, 20000]
   reduce: last
   non_finite: worst
