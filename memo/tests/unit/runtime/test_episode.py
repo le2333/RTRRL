@@ -30,6 +30,23 @@ def test_series_must_span_the_completed_episode():
         make_episode(series={"td_error": [1.0]})
 
 
+def test_a_long_run_may_end_more_episodes_than_a_six_digit_name_held():
+    """How many episodes a run ends is the environment's business.
+
+    A masked Hopper ends one every thirty-odd steps before it learns to stand,
+    so a fifty million step run ends over a million of them. The number used to
+    stop at 999999 because it named a recording; recordings are named after the
+    sample that asked for them now.
+    """
+
+    assert make_episode(number=1_380_000).number == 1_380_000
+
+
+def test_an_episode_number_still_starts_at_one():
+    with pytest.raises(ValueError, match="positive"):
+        make_episode(number=0)
+
+
 def test_trajectory_must_have_one_more_observation_than_actions():
     with pytest.raises(ValueError, match="observations"):
         make_episode(observations=[[0.0], [1.0]], actions=[[0.0], [0.0]])

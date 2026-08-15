@@ -25,8 +25,14 @@ class Episode:
     def __post_init__(self) -> None:
         if type(self.number) is not int:
             raise TypeError("episode number must be an integer")
-        if not 1 <= self.number <= 999_999:
-            raise ValueError("episode number must be between 1 and 999999")
+        # There used to be an upper bound of 999999 here, because an episode
+        # numbered a recording after itself and the name held six digits. A
+        # recording is named after the sample that asked for it now, and how
+        # many episodes a run ends is the environment's business: a masked
+        # Hopper ends one every 36 steps before it learns to stand, which is
+        # over a million of them in a 50M step run.
+        if self.number < 1:
+            raise ValueError("episode number must be positive")
         for field_name in ("rewards", "terminals", "truncations"):
             object.__setattr__(self, field_name, tuple(getattr(self, field_name)))
         for field_name in ("observations", "actions", "environment_states"):
