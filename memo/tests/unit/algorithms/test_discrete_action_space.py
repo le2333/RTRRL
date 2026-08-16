@@ -146,6 +146,17 @@ def test_a_discrete_action_is_one_integer_per_stream_and_a_legal_one(name):
     assert actions.min() >= 0 and actions.max() < ACTIONS
 
 
+def graph_of(built):
+    """The algorithm object the program's three arrows are bound to.
+
+    Through ``getattr`` because ``Program`` declares plain callables, and a
+    type checker reading the declaration rather than what assembly puts there
+    has no reason to believe they are bound methods.
+    """
+
+    return getattr(built.program.init, "__self__")
+
+
 def feedback_input(name, graph, timestep):
     """The one vector the sequence sees, however its owner spells the call."""
 
@@ -165,7 +176,7 @@ def test_the_feedback_input_carries_the_one_hot_and_not_the_integer(name):
     """
 
     built = assembled(name, meta_rl=True, num_envs=2)
-    graph = built.program.init.__self__
+    graph = graph_of(built)
     state = built.program.init(jax.random.key(0))
     timestep = state.timestep.replace(
         action=jnp.array([0, 1], dtype=jnp.int32),
@@ -190,7 +201,7 @@ def test_rtrrl_carries_no_action_at_all_across_an_episode_boundary():
     """
 
     built = assembled("rtrrl", meta_rl=True, num_envs=2)
-    graph = built.program.init.__self__
+    graph = graph_of(built)
     state = built.program.init(jax.random.key(0))
     timestep = state.timestep.replace(
         action=jnp.array([0, 0], dtype=jnp.int32),
