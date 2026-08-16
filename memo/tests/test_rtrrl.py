@@ -15,6 +15,8 @@ algorithm working rather than a leak -- which is itself checked.
 
 from __future__ import annotations
 
+from typing import Any
+
 import jax
 import jax.numpy as jnp
 import pytest
@@ -266,7 +268,10 @@ def test_a_dial_stops_being_its_own_group_s_a_few_steps_later(overrides, crosses
 def test_each_decay_moves_one_block_s_trace(decay, owner, others):
     """Three blocks, three rates. StreamAC has one, which proves nothing."""
 
-    low, high = run(build(**{decay: 0.1}), 2), run(build(**{decay: 0.9}), 2)
+    # Which decay is overridden is the parameter, so the name is only known here.
+    slow: dict[str, Any] = {decay: 0.1}
+    fast: dict[str, Any] = {decay: 0.9}
+    low, high = run(build(**slow), 2), run(build(**fast), 2)
     assert apart(getattr(low.core, owner).traces, getattr(high.core, owner).traces) > 0
     for name in others:
         assert (
@@ -412,7 +417,7 @@ def test_declaring_less_compiles_to_less():
             .compile()
         )
 
-    everything = lowered(rtrrl.Reports())
+    everything = lowered(rtrrl.Reports()).as_text()
     nothing = lowered(
         rtrrl.Reports(
             log_prob=False,
@@ -426,5 +431,7 @@ def test_declaring_less_compiles_to_less():
             torso_step=rtrrl.GroupReports(False),
             heads_step=rtrrl.GroupReports(False),
         )
-    )
-    assert len(nothing.as_text().splitlines()) < len(everything.as_text().splitlines())
+    ).as_text()
+
+    assert everything is not None and nothing is not None
+    assert len(nothing.splitlines()) < len(everything.splitlines())

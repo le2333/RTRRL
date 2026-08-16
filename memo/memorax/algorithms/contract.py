@@ -24,8 +24,7 @@ from flax import struct
 from memorax.rl.interaction import terminal_of as terminal_of
 
 
-@struct.dataclass
-class ActionDecision:
+class ActionDecision(struct.PyTreeNode):
     """All action representations chosen during one acting forward pass."""
 
     sampled_action: Any = None
@@ -35,8 +34,7 @@ class ActionDecision:
     persisted_feedback_action: Any = None
 
 
-@struct.dataclass
-class InteractionMetrics:
+class InteractionMetrics(struct.PyTreeNode):
     """One transition, as the environment and its preprocessing produced it.
 
     The transition is spelled out rather than left inside ``info`` because a
@@ -59,8 +57,7 @@ class InteractionMetrics:
     info: Any = None
 
 
-@struct.dataclass
-class StepMetrics:
+class StepMetrics(struct.PyTreeNode):
     """Everything one step observed, by whose doing it was.
 
     ``forward`` and ``update`` are each algorithm's own: what a network answers

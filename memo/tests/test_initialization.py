@@ -33,7 +33,8 @@ from memorax.networks.initialization import (
     Sparse,
     declared_initializer,
 )
-from memorax.parameters import KIND, expand, flatten
+from memorax.parameters import expand, flatten
+from tests.support.parameters import branch, kinds
 
 SHAPE = (16, 8)
 
@@ -43,13 +44,12 @@ def drawn(component) -> jax.Array:
 
 
 def test_the_branch_with_layers_declares_it_and_the_branch_without_does_not():
-    backbone = stream_ac.PARAMETERS["backbone"]
-    mlp = backbone["mlp"]["initialization"]
+    declared = kinds(stream_ac.PARAMETERS, "backbone.mlp.initialization")
 
-    assert set(mlp[KIND].valid.values) == set(INITIALIZATION_BRANCHES)
+    assert set(declared) == set(INITIALIZATION_BRANCHES)
     # ``rtu`` is the cell and a head; the cell draws its own and memorax fixes
     # how, so there is nothing here for a branch to choose between.
-    assert "initialization" not in backbone["rtu"]
+    assert "initialization" not in branch(stream_ac.PARAMETERS, "backbone.rtu")
     assert "initialization" not in stream_ac.PARAMETERS
 
 
@@ -123,6 +123,6 @@ def test_a_component_takes_the_initialiser_it_was_given():
     layer = FFN(features=4, kernel_init=declared_initializer(Sparse(sparsity=0.9)))
     x = jnp.ones((2, 1, 16), dtype=jnp.float32)
     params = layer.init(jax.random.key(0), x)
-    kernel = params["params"]["Dense_0"]["kernel"]
+    kernel = jnp.asarray(params["params"]["Dense_0"]["kernel"])
 
     assert jnp.all((kernel != 0.0).sum(axis=0) == kept(0.9, 16))

@@ -299,16 +299,20 @@ def test_the_published_cell_disagrees_with_its_own_backpropagation():
     where the carry is unbatched, so that is the path it takes.
     """
 
+    # The three leaves the broadcast above reaches, and the ones this expects
+    # to disagree. Named once so the assertion and its message cannot drift.
+    reached: tuple[str, ...] = ("B_real", "B_imag", "gamma_log")
+
     _, rtrl, bptt = _cell()
     apart = [
         name
-        for name in ("B_real", "B_imag", "gamma_log")
+        for name in reached
         if float(jnp.max(jnp.abs(rtrl[name] - bptt[name])))
         > 1e-6 * float(jnp.max(jnp.abs(bptt[name])))
     ]
-    assert apart == ["B_real", "B_imag", "gamma_log"], (
+    assert apart == list(reached), (
         "the published RTRL gradient now agrees with its own BPTT on "
-        f"{sorted(set(('B_real', 'B_imag', 'gamma_log')) - set(apart))}; if the "
+        f"{[name for name in reached if name not in apart]}; if the "
         "checkout was fixed, this file's account of it is out of date"
     )
 

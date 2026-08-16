@@ -1,3 +1,5 @@
+from typing import Any
+
 import jax
 import jax.numpy as jnp
 import numpy as np
@@ -165,8 +167,11 @@ def test_double_q_n_step_targets_stop_at_terminals_but_not_truncations():
 
     np.testing.assert_allclose(terminal_targets, [[2.0, 2.0, 6.5]])
     np.testing.assert_allclose(truncation_targets, [[3.25, 5.25, 6.5]])
+    # ``done`` is not a parameter, and that it is not is what this asserts. The
+    # call goes through an untyped name so that saying so is not itself an error.
+    misuse: Any = double_q_n_step_targets
     with pytest.raises(TypeError):
-        double_q_n_step_targets(
+        misuse(
             rewards,
             terminals=jnp.asarray([[False, False, False]]),
             online_q=online_q,

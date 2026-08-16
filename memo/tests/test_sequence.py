@@ -168,6 +168,7 @@ def test_the_sequence_names_its_recurrent_component_for_differentiation():
     core = recurrent()
     sequence = built(*stateless(), core, Readout(module=heads.VNetwork()))
 
+    assert sequence.recurrent is not None
     assert sequence.components[sequence.recurrent] is core
     assert (
         RTUStructuredRTRL(sequence.core).initialize(jax.random.key(0), SHAPE)

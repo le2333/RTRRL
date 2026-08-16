@@ -14,8 +14,7 @@ from memorax.utils import Timestep
 from .normalization import environment_owns_normalization, make_normalizer
 
 
-@struct.dataclass(frozen=True)
-class NormalizationState:
+class NormalizationState(struct.PyTreeNode):
     """The state of the observation and reward estimators."""
 
     observation: Any = None

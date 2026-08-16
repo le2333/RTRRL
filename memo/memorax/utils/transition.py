@@ -8,8 +8,7 @@ from memorax.utils.timestep import Timestep
 from memorax.utils.typing import PyTree
 
 
-@struct.dataclass(frozen=True)
-class Transition:
+class Transition(struct.PyTreeNode):
     first: Timestep | None = None
     second: Timestep | None = None
     carry: PyTree | None = None

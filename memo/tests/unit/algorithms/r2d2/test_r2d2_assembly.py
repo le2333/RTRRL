@@ -12,8 +12,10 @@ import pytest
 from entries import r2d2 as entry
 from memorax.algorithms import r2d2
 from memorax.assembly import BuildRequest, EnvironmentSpec, assemble
+from memorax.parameters import Choice
 from memorax.parameters import expand as expand_parameters
 from memorax.parameters import flatten
+from tests.support.builders import graph_of
 from tests.support.environments import TinyDiscreteEnv
 
 EPISODE_LENGTH = 8
@@ -113,7 +115,9 @@ def test_the_tree_declares_both_of_every_choice_and_no_online_differentiation():
         ("learning.kind", ("tbptt", "full_bptt")),
         ("returns.value_transform.kind", ("signed_hyperbolic", "identity")),
     ):
-        assert set(declared[chooser].valid.values) == set(choices)
+        valid = declared[chooser].valid
+        assert isinstance(valid, Choice), f"{chooser} is not a choice"
+        assert set(valid.values) == set(choices)
 
 
 def test_the_entry_composes_and_calculates_nothing():
@@ -186,7 +190,7 @@ def test_the_graph_builds_the_branches_the_manifest_selected(backbone, head):
         }
     )
 
-    graph = built.program.init.__self__
+    graph = graph_of(built)
     q_function = graph.core.q_function
 
     assert q_function.backbone_kind == backbone
@@ -209,7 +213,7 @@ def sampled_window(graph) -> int:
 def test_tbptt_reads_the_window_its_horizons_name():
     """Burn-in plus unroll transitions, which is one fewer than its inputs."""
 
-    graph = assembled().program.init.__self__
+    graph = graph_of(assembled())
 
     assert graph.core.learning_kind == "tbptt"
     assert graph.core.burn_in_length == 1
@@ -219,9 +223,11 @@ def test_tbptt_reads_the_window_its_horizons_name():
 
 
 def test_full_bptt_reads_the_configured_episode_and_declares_no_horizon():
-    graph = assembled(
-        **{"learning.kind": "full_bptt", "replay.minimum_size": EPISODE_LENGTH}
-    ).program.init.__self__
+    graph = graph_of(
+        assembled(
+            **{"learning.kind": "full_bptt", "replay.minimum_size": EPISODE_LENGTH}
+        )
+    )
 
     assert graph.core.learning_kind == "full_bptt"
     assert graph.core.burn_in_length == 0
@@ -233,10 +239,10 @@ def test_full_bptt_reads_the_configured_episode_and_declares_no_horizon():
 
 
 def test_the_value_transform_the_manifest_names_is_the_one_the_core_holds():
-    identity = assembled().program.init.__self__
-    transformed = assembled(
-        **{"returns.value_transform.kind": "signed_hyperbolic"}
-    ).program.init.__self__
+    identity = graph_of(assembled())
+    transformed = graph_of(
+        assembled(**{"returns.value_transform.kind": "signed_hyperbolic"})
+    )
 
     assert identity.core.transform(3.0) == 3.0
     assert transformed.core.transform is r2d2.signed_hyperbolic
