@@ -19,10 +19,11 @@ packages = ["src/trainer_infra"]
 
 [tool.pytest.ini_options]
 pythonpath = ["src"]
-addopts = "-m 'not service'"
+addopts = "-m 'not service and not stress'"
 markers = [
     "integration: crosses two or more production ownership boundaries",
     "service: starts a real external process or service",
+    "stress: works at the size the production artifacts really are",
 ]
 
 [tool.ruff]

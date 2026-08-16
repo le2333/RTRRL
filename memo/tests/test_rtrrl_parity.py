@@ -213,7 +213,10 @@ def _cell():
     )
     differentiation = LRUStructuredRTRL(mine)
     carry = mine.initialize_carry(jax.random.key(0), (1, features))
-    sensitivity = mine.initialize_sensitivity(jax.random.key(0), (1, features))
+    # The sensitivity belongs to the differentiation rule rather than to the cell
+    # it differentiates, so it is asked for through the rule. Reaching past it to
+    # the cell is what this file used to do, and is what stopped resolving.
+    sensitivity = differentiation.initialize(jax.random.key(0), (1, features))
     done = jnp.zeros((1, 1), dtype=bool)
     params = mine.init(jax.random.key(2), jnp.zeros((1, 1, features)), done, carry)[
         "params"
