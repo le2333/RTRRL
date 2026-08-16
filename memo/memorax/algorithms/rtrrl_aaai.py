@@ -28,7 +28,7 @@ from flax import struct
 
 from memorax.building import BuildContext, ComponentBuilder, ComponentFamily
 from memorax.networks.backbones import backbone
-from memorax.networks.components import FFN, LayerNorm, Tanh
+from memorax.networks.components import LayerNorm
 from memorax.networks.readouts import ACTOR_HEAD_FAMILY, CRITIC_HEAD_FAMILY
 from memorax.networks.sequence import PLACES, Sequence
 from memorax.networks.sequence_models.lru import LRU_DIFFERENTIATION_FAMILY
@@ -115,29 +115,46 @@ class LruTorso:
 
 @dataclass(frozen=True)
 class RtuTorso:
-    """RTRRL's projection width and RTU-specific recurrent choices."""
+    """RTRRL's RTU-specific recurrent choices.
+
+    No readout width, because the RTU has none to set: its output is its two
+    carries concatenated, so ``hidden_dim`` fixes it.
+    """
 
     hidden_dim: int = param(valid=(1, 4096), search=(32, 512))
-    feature_dim: int = param(valid=(1, 4096), search=(16, 256))
     differentiation: str = structure(branches=RTU_DIFFERENTIATION_FAMILY.branches)
 
 
-def _construct_torso(selection, builder):
-    """Build RTRRL's private projection and differentiated recurrent subgraph."""
+def _construct_torso(selection, builder, *, features: int):
+    """Build RTRRL's differentiated recurrent subgraph, and nothing before it.
+
+    The cell reads the observation, and it reads it directly. There used to be
+    a ``FFN -> LayerNorm -> Tanh`` in front, which existed only because
+    ``LRUConfig.features`` was being used as both the input width and the
+    readout width: the cell was configured to emit ``feature_dim``, so
+    something had to widen the observation to ``feature_dim`` first. Setting
+    ``output_dim`` separates the two, which is what it was added for, and the
+    projection has nothing left to do.
+
+    That projection was never the published algorithm's. Its cell takes the
+    observation as it arrives and normalises afterwards, and the parity suite
+    could not have said so -- it re-hosts the published *wiring* on these same
+    networks precisely so a mismatch cannot come from the networks, which
+    leaves what is in front of the cell unexamined by construction.
+    """
 
     settings = selection.parameters
     recurrent = backbone(
         selection.kind,
-        features=settings.feature_dim,
+        features=features,
         hidden_dim=settings.hidden_dim,
+        # Only the LRU has a readout to size; see RtuTorso.
+        output_dim=getattr(settings, "feature_dim", None),
     )
+    # After the cell, and affine-free, which is where and what the published
+    # implementation's is.
     network = Sequence(
-        components=(
-            FFN(features=settings.feature_dim),
-            LayerNorm(),
-            Tanh(),
-            *recurrent,
-        )
+        components=(*recurrent, LayerNorm(use_scale=False, use_bias=False))
     )
     family = {
         "lru": LRU_DIFFERENTIATION_FAMILY,
@@ -1011,11 +1028,17 @@ class RTRRL:
         """Declare the shared torso, two readouts, and their two rule groups."""
 
         gamma = float(parameters["gamma"])
+        meta_rl = bool(parameters["meta_rl"])
         classes = action_classes(context.action_space)
+        # What the cell reads, now that nothing widens it first: the observation,
+        # and under meta-RL the previous action and reward beside it.
+        features = int(context.observation_space.shape[0])
+        if meta_rl:
+            features += action_dim(context.action_space) + 1
         torso_optimizer = components.build(RTRRL_OPTIMIZERS, "torso.optimizer")
         heads_optimizer = components.build(RTRRL_OPTIMIZERS, "heads.optimizer")
         torso_network, torso_differentiation = components.build(
-            RTRRL_TORSO_FAMILY, "torso.backbone"
+            RTRRL_TORSO_FAMILY, "torso.backbone", features=features
         )
         return cls(
             RTRRLConfig(
@@ -1029,7 +1052,7 @@ class RTRRL:
                 entropy_rate=float(parameters["entropy_rate"]),
                 torso_grad_clip=float(parameters["torso.grad_clip"]),
                 torso_follow=float(parameters["torso.follow"]),
-                meta_rl=bool(parameters["meta_rl"]),
+                meta_rl=meta_rl,
                 action_classes=classes,
                 torso_optimizer=torso_optimizer,
                 heads_optimizer=heads_optimizer,

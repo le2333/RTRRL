@@ -43,9 +43,23 @@ class FFN(Stateless):
 
 
 class LayerNorm(Stateless):
+    """Normalise the feature axis, learning the scale and shift or not.
+
+    Both default to on, which is Flax's default and what every sequence that
+    already held one was getting. RTRRL turns both off: the published cell
+    normalises its output through ``nn.LayerNorm(use_bias=False,
+    use_scale=False)``, and a learnable affine there would be parameters the
+    algorithm it is a rebuild of does not have -- each of which RTRRL would
+    then carry an eligibility trace for.
+    """
+
+    use_scale: bool = True
+    use_bias: bool = True
+
     @nn.compact
     def __call__(self, x: Array, initial_carry: Carry = None):
-        return initial_carry, nn.LayerNorm()(x)
+        normalized = nn.LayerNorm(use_scale=self.use_scale, use_bias=self.use_bias)(x)
+        return initial_carry, normalized
 
 
 class Tanh(Stateless):
