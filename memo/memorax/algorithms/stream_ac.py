@@ -117,24 +117,21 @@ PARAMETERS = describe_parameters(StreamACParameters)
 
 
 # ----------------------------------------------------------------------- state
-@struct.dataclass(frozen=True)
-class Recurrence:
+class Recurrence(struct.PyTreeNode):
     """Where the sequence is, and what it owes the past."""
 
     carry: Any
     differentiation_state: Any
 
 
-@struct.dataclass(frozen=True)
-class RuleState:
+class RuleState(struct.PyTreeNode):
     """What the update carries between steps, which a forward pass never sees."""
 
     traces: Any
     v: Any
 
 
-@struct.dataclass(frozen=True)
-class NetworkState:
+class NetworkState(struct.PyTreeNode):
     """Independent online state for one recurrent actor or critic network."""
 
     params: Any
@@ -182,32 +179,28 @@ OBSERVATIONS = ObservationSchema(
 )
 
 
-@struct.dataclass(frozen=True)
-class ActorForward:
+class ActorForward(struct.PyTreeNode):
     """What the policy answered on the pass that chose."""
 
     log_prob: Any = None
     entropy: Any = None
 
 
-@struct.dataclass(frozen=True)
-class CriticForward:
+class CriticForward(struct.PyTreeNode):
     """Both of the critic's readings, which is what a TD error is made of."""
 
     value: Any = None
     next_value: Any = None
 
 
-@struct.dataclass(frozen=True)
-class ForwardMetrics:
+class ForwardMetrics(struct.PyTreeNode):
     """One field per head, so a declared name is a path through the components."""
 
     actor: ActorForward = ActorForward()
     critic: CriticForward = CriticForward()
 
 
-@struct.dataclass(frozen=True)
-class BlockUpdate:
+class BlockUpdate(struct.PyTreeNode):
     """What one block's step cost, and how big what went into it was."""
 
     step_size: Any = None
@@ -215,8 +208,7 @@ class BlockUpdate:
     trace_norm: Any = None
 
 
-@struct.dataclass(frozen=True)
-class UpdateMetrics:
+class UpdateMetrics(struct.PyTreeNode):
     """One field per block, plus the TD error, which neither role owns."""
 
     td_error: Any = None
@@ -224,8 +216,7 @@ class UpdateMetrics:
     critic: BlockUpdate = BlockUpdate()
 
 
-@struct.dataclass(frozen=True)
-class StreamACState:
+class StreamACState(struct.PyTreeNode):
     """Everything the kernel carries, one field per component that owns one."""
 
     step: Any

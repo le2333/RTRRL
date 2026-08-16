@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from pathlib import Path
+from typing import Any
 
 import jax
 import pytest
@@ -23,8 +24,8 @@ TEMPLATE = (
 )
 
 
-def dotted(section: Mapping, prefix: str = "") -> dict[str, object]:
-    found: dict[str, object] = {}
+def dotted(section: Mapping, prefix: str = "") -> dict[str, Any]:
+    found: dict[str, Any] = {}
     for name, node in section.items():
         key = f"{prefix}{name}"
         if isinstance(node, Mapping):

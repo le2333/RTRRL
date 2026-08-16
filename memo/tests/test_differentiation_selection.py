@@ -12,7 +12,7 @@ import jax
 from test_blocks import ours
 
 from entries import stream_ac
-from memorax.parameters import KIND
+from tests.support.parameters import kinds
 
 KINDS = ("exact_rtrl", "tbptt")
 
@@ -43,6 +43,6 @@ def test_the_two_settings_do_not_initialise_through_the_same_method():
 
 
 def test_differentiation_is_declared_inside_the_rtu_structure():
-    node = stream_ac.PARAMETERS["backbone"]["rtu"]["differentiation"]
+    declared = kinds(stream_ac.PARAMETERS, "backbone.rtu.differentiation")
 
-    assert set(node[KIND].valid.values) == set(KINDS)
+    assert set(declared) == set(KINDS)

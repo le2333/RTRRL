@@ -2,11 +2,9 @@
 
 from __future__ import annotations
 
-from typing import Literal
-
 from pydantic import BaseModel, ConfigDict, model_validator
 
-from deployment.contract import CONTRACT_VERSION
+from deployment.contract import ContractVersion
 from memorax.parameters import Scalar
 
 
@@ -143,7 +141,7 @@ class LoggingSpec(_Frozen):
 
 
 class RunSpec(_Frozen):
-    contract: Literal[CONTRACT_VERSION]
+    contract: ContractVersion
     identity: RunIdentity
     entry: str
     artifacts: Artifacts

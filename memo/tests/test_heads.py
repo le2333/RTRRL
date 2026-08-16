@@ -39,8 +39,8 @@ from memorax.networks.readouts import (
     DISCRETE_ACTOR_HEADS,
     actor_head,
 )
-from memorax.parameters import KIND
 from tests.support.builders import assemble_stream_ac
+from tests.support.parameters import branch, kinds
 
 ACTIONS = 3
 WIDTH = 6
@@ -138,15 +138,11 @@ def test_the_head_a_parameterisation_is_its_own_component():
 
 
 def test_the_actor_head_is_declared_as_a_structure():
-    node = stream_ac.PARAMETERS["actor"]["head"]
-
-    assert set(node[KIND].valid.values) == set(ACTOR_HEAD_BRANCHES)
+    assert set(kinds(stream_ac.PARAMETERS, "actor.head")) == set(ACTOR_HEAD_BRANCHES)
 
 
 def test_the_critic_head_is_declared_too():
-    node = stream_ac.PARAMETERS["critic"]["head"]
-
-    assert set(node[KIND].valid.values) == set(CRITIC_HEAD_BRANCHES)
+    assert set(kinds(stream_ac.PARAMETERS, "critic.head")) == set(CRITIC_HEAD_BRANCHES)
 
 
 @pytest.mark.parametrize(
@@ -154,10 +150,9 @@ def test_the_critic_head_is_declared_too():
     (("actor", ACTOR_HEAD_BRANCHES), ("critic", CRITIC_HEAD_BRANCHES)),
 )
 def test_every_head_declares_how_its_kernels_are_drawn(role, branches):
-    declared = stream_ac.PARAMETERS[role]["head"]
-
     for name in branches:
-        assert "initialization" in declared[name], f"{role}.{name} declares none"
+        declared = branch(stream_ac.PARAMETERS, f"{role}.head.{name}")
+        assert "initialization" in declared, f"{role}.{name} declares none"
 
 
 def test_a_head_is_drawn_the_way_its_own_branch_says():

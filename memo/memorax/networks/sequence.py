@@ -12,6 +12,8 @@ one recurrent component, so a second one is refused at construction.
 
 from __future__ import annotations
 
+from typing import Any, cast
+
 import flax.linen as nn
 
 from memorax.utils.typing import Array, Key
@@ -91,11 +93,17 @@ class Sequence(nn.Module):
                 # own root and has no name. The name is this sequence's to give
                 # either way, so give it: a component that can say which
                 # position it is on one traversal can say it on both.
-                carry, x = component.clone(name=name).apply(
-                    {"params": tree.get(name, {})},
-                    x,
-                    initial_carry=carries[index],
-                    **self._declared(component, done),
+                # ``apply`` also has the shape that returns mutated variables,
+                # which nothing here asks for; a component answers with its
+                # carry and its output.
+                carry, x = cast(
+                    "tuple[Any, Array]",
+                    component.clone(name=name).apply(
+                        {"params": tree.get(name, {})},
+                        x,
+                        initial_carry=carries[index],
+                        **self._declared(component, done),
+                    ),
                 )
             walked.append(carry)
         return (walked, differentiation_state), x

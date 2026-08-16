@@ -1,3 +1,5 @@
+from typing import cast
+
 import jax
 import jax.numpy as jnp
 import numpy as np
@@ -7,6 +9,7 @@ from memorax.algorithms.r2d2 import (
     Core,
     CoreState,
     LearnerSequence,
+    QFunction,
     RecurrentInputs,
     _burn_in,
 )
@@ -126,7 +129,9 @@ def _identity(value):
 
 def _identifiable_core(*, gamma=0.5, beta=0.4):
     return Core(
-        q_function=IdentifiableQFunction(),
+        # A stand-in for the unroll path these tests drive, and only that path:
+        # it answers the three calls made here and none of the rest.
+        q_function=cast("QFunction", IdentifiableQFunction()),
         optimizer=optax.sgd(0.1),
         gamma=gamma,
         n_step=1,

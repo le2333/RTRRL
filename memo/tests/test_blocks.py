@@ -591,7 +591,7 @@ def test_exact_credit_is_not_the_truncated_one():
     def ascent(kernel, carrying):
         held = NetworkState(
             params=state.actor.params,
-            rule=None,
+            rule=state.actor.rule,
             recurrence=Recurrence(
                 carry=state.actor.recurrence.carry,
                 differentiation_state=carrying,

@@ -183,6 +183,111 @@ def test_two_rounds_score_out_of_order_metric_artifacts_before_asking_next(
     assert [trial.value for trial in study.trials] == [0.0, 1.0, 2.0, 3.0]
 
 
+def score_written_artifacts(
+    tmp_path: Path, seen: list[dict[str, Any]]
+) -> Any:
+    """A scorer that reads what a finished worker would have left behind."""
+
+    def score_round(
+        configurations: tuple[dict[str, Any], ...], score: ScoreSpec
+    ) -> tuple[dict[str, Any], ...]:
+        results = []
+        for configuration in configurations:
+            seen.append(configuration)
+            trial = configuration["identity"]["trial"]
+            metrics = tmp_path / f"metrics-{trial}.jsonl"
+            metrics.write_text(
+                f'{{"step": 200, "metrics": {{"eval/episode/return_per_step": {trial}.0}}}}\n'
+            )
+            results.append({"trial": trial, "value": compute_score(metrics, score)})
+        return tuple(results)
+
+    return score_round
+
+
+def test_settling_reads_the_trials_a_stopped_controller_left_running(
+    experiment: Any, catalog: Any, tmp_path: Path
+) -> None:
+    """A killed controller loses the reading, not the run.
+
+    The trials it asked for are still RUNNING and their artifacts are already
+    uploaded, so settling addresses them by the launch id they ran under and
+    scores exactly the configurations that were submitted.
+    """
+
+    asked = runner(experiment, catalog, tmp_path).next_round()
+    seen: list[dict[str, Any]] = []
+
+    settlements = runner(experiment, catalog, tmp_path).settle(
+        score_written_artifacts(tmp_path, seen)
+    )
+
+    assert seen == list(asked)
+    assert [(settlement.trial, settlement.value) for settlement in settlements] == [
+        (0, 0.0),
+        (1, 1.0),
+    ]
+    persisted = optuna.load_study(
+        study_name=experiment["name"],
+        storage=f"sqlite:///{tmp_path / 'study.db'}",
+    )
+    assert [trial.state.name for trial in persisted.trials] == ["COMPLETE", "COMPLETE"]
+    assert [trial.value for trial in persisted.trials] == [0.0, 1.0]
+
+
+def test_a_trial_whose_work_is_not_there_yet_stays_running(
+    experiment: Any, catalog: Any, tmp_path: Path
+) -> None:
+    """Reading one trial must not decide the outcome of the others.
+
+    A trial with nothing to read has not been shown to have failed; it may
+    still be training. It is reported and left alone.
+    """
+
+    runner(experiment, catalog, tmp_path).next_round()
+    seen: list[dict[str, Any]] = []
+    scored = score_written_artifacts(tmp_path, seen)
+
+    def score_first_only(
+        configurations: tuple[dict[str, Any], ...], score: ScoreSpec
+    ) -> tuple[dict[str, Any], ...]:
+        if configurations[0]["identity"]["trial"] != 0:
+            raise FileNotFoundError("result.json")
+        return scored(configurations, score)
+
+    settlements = runner(experiment, catalog, tmp_path).settle(score_first_only)
+
+    assert [(settlement.trial, settlement.value) for settlement in settlements] == [
+        (0, 0.0),
+        (1, None),
+    ]
+    assert settlements[1].reason is not None
+    assert "FileNotFoundError" in settlements[1].reason
+    persisted = optuna.load_study(
+        study_name=experiment["name"],
+        storage=f"sqlite:///{tmp_path / 'study.db'}",
+    )
+    assert [trial.state.name for trial in persisted.trials] == ["COMPLETE", "RUNNING"]
+
+
+def test_a_settled_study_carries_its_scores_into_the_next_round(
+    experiment: Any, catalog: Any, tmp_path: Path
+) -> None:
+    """What settling is for: the next round is sampled, not the last one rerun."""
+
+    experiment["hpo"]["rounds"] = 1
+    runner(experiment, catalog, tmp_path).next_round()
+    seen: list[dict[str, Any]] = []
+    scored = score_written_artifacts(tmp_path, seen)
+    runner(experiment, catalog, tmp_path).settle(scored)
+
+    study = runner(experiment, catalog, tmp_path).run(scored)
+
+    assert [configuration["identity"]["trial"] for configuration in seen] == [0, 1, 2, 3]
+    assert [trial.state.name for trial in study.trials] == ["COMPLETE"] * 4
+    assert [trial.value for trial in study.trials] == [0.0, 1.0, 2.0, 3.0]
+
+
 def test_an_incomplete_round_result_fails_every_asked_trial(
     experiment: Any, catalog: Any, tmp_path: Path
 ) -> None:

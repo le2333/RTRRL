@@ -53,7 +53,9 @@ def run_runtime(
     recorder=None,
     trajectory_at_steps=(),
     rollout_steps=0,
-    initial_state=jnp.asarray(0, jnp.int32),
+    # Whatever the program's ``init`` hands back: an array here, a tuple of
+    # counters where a test wants to see two of them move independently.
+    initial_state: Any = jnp.asarray(0, jnp.int32),
     **schedule,
 ) -> EpisodeRecorder:
     recorder = EpisodeRecorder() if recorder is None else recorder
@@ -251,7 +253,7 @@ FINAL_REWARD = jnp.asarray(
 def final_sample_program():
     """A four-row budget whose stream-zero episode is unfinished when it ends."""
 
-    trained: list[int] = []
+    trained: list[tuple[int, int]] = []
     interactions: list[tuple[int, int]] = []
 
     def train(key, state, num_steps):

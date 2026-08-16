@@ -9,14 +9,12 @@ from flax import struct
 from gymnax.environments import spaces
 
 
-@struct.dataclass
-class TinyEnvState:
+class TinyEnvState(struct.PyTreeNode):
     step_count: jnp.ndarray
     observation: jnp.ndarray
 
 
-@struct.dataclass
-class TinyEnvParams:
+class TinyEnvParams(struct.PyTreeNode):
     horizon: int = struct.field(pytree_node=False, default=3)
 
 

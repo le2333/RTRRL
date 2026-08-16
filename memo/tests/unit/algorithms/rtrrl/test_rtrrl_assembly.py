@@ -15,8 +15,10 @@ from memorax.networks.sequence import PLACES
 from memorax.observability.metrics import metric_names
 from memorax.parameters import expand
 from memorax.readings import taken
+from tests.support.builders import graph_of
 from tests.support.environments import TinyContinuousEnv
 from tests.support.numerics import flattened
+from tests.support.parameters import kinds
 
 
 def assert_tree_equal(actual, expected, what):
@@ -105,14 +107,10 @@ def tiny_environment(identifier, **options):
 
 @pytest.mark.parametrize("backbone", ("lru", "rtu"))
 def test_each_recurrent_backbone_registers_its_differentiation_scope(backbone):
-    backbone_node = rtrrl.PARAMETERS["torso"]["backbone"]
-    differentiation = backbone_node[backbone]["differentiation"]
-
-    assert set(backbone_node["kind"].valid.values) == {"lru", "rtu"}
-    assert set(differentiation["kind"].valid.values) == {
-        "exact_rtrl",
-        "tbptt",
-    }
+    assert set(kinds(rtrrl.PARAMETERS, "torso.backbone")) == {"lru", "rtu"}
+    assert set(
+        kinds(rtrrl.PARAMETERS, f"torso.backbone.{backbone}.differentiation")
+    ) == {"exact_rtrl", "tbptt"}
 
 
 @pytest.mark.parametrize("backbone", ("lru", "rtu"))
@@ -120,7 +118,7 @@ def test_each_recurrent_backbone_registers_its_differentiation_scope(backbone):
 def test_rtrrl_builds_the_selected_kernel_scoped_differentiation(backbone, kind):
     differentiation = import_module("memorax.networks.differentiation")
     built = assembled(backbone, kind)
-    torso = built.program.init.__self__.core.torso
+    torso = graph_of(built).core.torso
     selected = torso._differentiation
 
     assert isinstance(selected, differentiation.RecurrentDifferentiation)
@@ -230,7 +228,7 @@ def test_a_graph_keeps_the_walk_only_when_the_build_asked_for_it():
 def test_generic_assembly_closes_one_shared_torso_rtrrl_graph():
     built = assembled()
 
-    graph = built.program.init.__self__
+    graph = graph_of(built)
     assert isinstance(graph.core.torso, rtrrl.Torso)
     assert graph.core.actor is not graph.core.critic
     assert graph.cfg.torso_optimizer.lr == 1e-3
@@ -290,7 +288,7 @@ def test_interaction_moves_no_learned_quantity():
 def test_semantic_subgraphs_do_not_expose_the_old_generic_network_layer():
     assert not hasattr(rtrrl, "Network")
 
-    graph = assembled().program.init.__self__
+    graph = graph_of(assembled())
 
     for subgraph in (graph.core.torso, graph.core.actor, graph.core.critic):
         assert not hasattr(subgraph, "block")

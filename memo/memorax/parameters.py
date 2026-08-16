@@ -89,7 +89,6 @@ class Parameter:
     search: Range
 
     def __post_init__(self) -> None:
-        _bounded(self.search)
         _within(self.valid, self.search)
 
 
@@ -97,13 +96,18 @@ ParameterNode: TypeAlias = "Parameter | Mapping[str, ParameterNode]"
 ParameterTree: TypeAlias = Mapping[str, ParameterNode]
 
 
-def _bounded(search: Range) -> None:
-    if isinstance(search, Choice):
-        return
+def _ends(search: FloatRange | IntRange) -> tuple[float, float] | tuple[int, int]:
+    """The two values a search domain runs between, which it must have.
+
+    A sampler cannot draw from an open interval, so asking for the ends is the
+    same act as checking that they are there.
+    """
+
     if search.low is None or search.high is None:
         raise ValueError("a search domain must be closed on both sides")
     if search.log and search.low <= 0:
         raise ValueError("a log search domain must start above zero")
+    return search.low, search.high
 
 
 def _within(valid: Range, search: Range) -> None:
@@ -113,8 +117,9 @@ def _within(valid: Range, search: Range) -> None:
         for value in search.values:
             _accepts(valid, value)
         return
-    _accepts(valid, search.low)
-    _accepts(valid, search.high)
+    low, high = _ends(search)
+    _accepts(valid, low)
+    _accepts(valid, high)
 
 
 def _accepts(valid: Range, value: Scalar) -> None:
@@ -124,7 +129,8 @@ def _accepts(valid: Range, value: Scalar) -> None:
         return
     if isinstance(valid, IntRange) and type(value) is not int:
         raise ValueError(f"{value!r} is not an int")
-    if type(value) not in (int, float):
+    # ``bool`` is an ``int`` to ``isinstance`` and is not a number here.
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
         raise ValueError(f"{value!r} is not numeric")
     if valid.low is not None and value < valid.low:
         raise ValueError(f"{value!r} is below the valid low {valid.low}")
@@ -398,7 +404,8 @@ def _single(node: Parameter) -> Scalar:
 
     if isinstance(node.search, Choice):
         return node.search.values[0]
-    return node.search.low
+    low, _ = _ends(node.search)
+    return low
 
 
 def walk(

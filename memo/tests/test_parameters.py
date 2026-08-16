@@ -45,49 +45,64 @@ class Agent:
 
 
 def test_dataclass_metadata_exports_a_parameter_tree() -> None:
-    tree = describe_parameters(Agent)
+    leaves = flatten(describe_parameters(Agent))
 
-    assert tree["learning_rate"].search.low == 1e-4
-    assert tree["learning_rate"].search.log is True
-    assert isinstance(tree["hidden_dim"].valid, IntRange)
-    assert tree["optimizer_base"]["adam"]["b1"].search.low == 0.5
+    learning_rate = leaves["learning_rate"].search
+    assert isinstance(learning_rate, FloatRange)
+    assert learning_rate.low == 1e-4
+    assert learning_rate.log is True
+    assert isinstance(leaves["hidden_dim"].valid, IntRange)
+    b1 = leaves["optimizer_base.adam.b1"].search
+    assert isinstance(b1, FloatRange)
+    assert b1.low == 0.5
 
 
 def test_a_choice_of_component_is_a_parameter_and_not_another_kind_of_node() -> None:
     """Which is why nothing downstream branches on what a node is."""
 
     group = describe_parameters(Agent)["optimizer_base"]
+    assert not isinstance(group, Parameter)
 
-    assert isinstance(group[KIND], Parameter)
-    assert set(group[KIND].valid.values) == {"sgd", "adam"}
+    kind = group[KIND]
+    assert isinstance(kind, Parameter)
+    assert isinstance(kind.valid, Choice)
+    assert set(kind.valid.values) == {"sgd", "adam"}
 
 
 def test_a_branch_declaring_nothing_takes_no_room_in_the_tree() -> None:
     group = describe_parameters(Agent)["optimizer_base"]
+    assert not isinstance(group, Parameter)
 
+    kind = group[KIND]
+    assert isinstance(kind, Parameter)
+    assert isinstance(kind.valid, Choice)
     assert "sgd" not in group
-    assert "sgd" in group[KIND].valid.values
+    assert "sgd" in kind.valid.values
 
 
 def test_a_single_point_search_is_how_a_parameter_stays_out_of_a_sweep() -> None:
-    tree = describe_parameters(Agent)
+    leaves = flatten(describe_parameters(Agent))
 
-    assert tree["reward_trace_reset_on_done"].search.values == (True,)
+    search = leaves["reward_trace_reset_on_done"].search
+    assert isinstance(search, Choice)
+    assert search.values == (True,)
 
 
 def test_a_valid_domain_may_be_open_on_one_side() -> None:
-    tree = describe_parameters(Agent)
+    leaves = flatten(describe_parameters(Agent))
 
-    assert isinstance(tree["eta_pi"].valid, FloatRange)
-    assert tree["eta_pi"].valid.low == 0.0
-    assert tree["eta_pi"].valid.high is None
+    eta_pi = leaves["eta_pi"].valid
+    assert isinstance(eta_pi, FloatRange)
+    assert eta_pi.low == 0.0
+    assert eta_pi.high is None
 
 
 def test_a_list_valid_domain_becomes_a_choice() -> None:
-    tree = describe_parameters(Agent)
+    leaves = flatten(describe_parameters(Agent))
 
-    assert isinstance(tree["reward_trace_reset_on_done"].valid, Choice)
-    assert tree["reward_trace_reset_on_done"].valid.values == (False, True)
+    valid = leaves["reward_trace_reset_on_done"].valid
+    assert isinstance(valid, Choice)
+    assert valid.values == (False, True)
 
 
 def test_search_must_lie_inside_valid() -> None:
@@ -209,11 +224,14 @@ class Pair:
 def test_a_group_is_a_level_without_a_choice() -> None:
     """Because there is no second actor to choose between."""
 
-    tree = describe_parameters(Pair)
+    actor = describe_parameters(Pair)["actor"]
+    assert not isinstance(actor, Parameter)
+    optimizer_base = actor["optimizer_base"]
+    assert not isinstance(optimizer_base, Parameter)
 
-    assert KIND not in tree["actor"]
-    assert set(tree["actor"]) == {"optimizer_base"}
-    assert KIND in tree["actor"]["optimizer_base"]
+    assert KIND not in actor
+    assert set(actor) == {"optimizer_base"}
+    assert KIND in optimizer_base
 
 
 def test_the_same_declaration_at_two_sites_is_two_sets_of_names() -> None:

@@ -69,16 +69,14 @@ class NormalizationConfig:
     reset_on_done: bool = True
 
 
-@struct.dataclass
-class Statistics:
+class Statistics(struct.PyTreeNode):
     mean: Any
     M2: Any
     count: Any
     trace: Any = None
 
 
-@struct.dataclass
-class NormalizationMetrics:
+class NormalizationMetrics(struct.PyTreeNode):
     mean: Any = None
     std: Any = None
 

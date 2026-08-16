@@ -24,8 +24,7 @@ from memorax.building import ComponentFamily
 from memorax.parameters import param
 
 
-@struct.dataclass
-class ObjectiveDirections:
+class ObjectiveDirections(struct.PyTreeNode):
     """What an objective asks for, split by how the ascent reaches a parameter.
 
     Traced directions are accumulated into an eligibility trace and later
@@ -39,8 +38,7 @@ class ObjectiveDirections:
     metrics: Any
 
 
-@struct.dataclass
-class RuleOutput:
+class RuleOutput(struct.PyTreeNode):
     """Parameter updates, the rule's carried state, and its diagnostics."""
 
     updates: Any
