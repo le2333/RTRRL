@@ -128,6 +128,22 @@ class HPO:
             for trial in trials
         )
 
+    def running(self) -> tuple[SampledTrial, ...]:
+        """The trials this study asked for and never heard an answer to.
+
+        A trial stays RUNNING until something tells the study otherwise, so
+        after a controller dies these are exactly the trials whose work may
+        already be finished and unread. Optuna recorded their parameters when
+        they were drawn, which is what makes them addressable again.
+        """
+
+        study = self._open()
+        return tuple(
+            SampledTrial(number=trial.number, parameters=dict(trial.params))
+            for trial in study.get_trials(deepcopy=False)
+            if trial.state == optuna.trial.TrialState.RUNNING
+        )
+
     def tell(
         self,
         trials: Sequence[SampledTrial],

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Callable, Iterator, Mapping, Sequence
+from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -45,6 +46,15 @@ REQUIRED: Mapping[str, tuple[str, ...]] = {
 
 class ExperimentError(ValueError):
     """An experiment file this side cannot turn into run configurations."""
+
+
+@dataclass(frozen=True)
+class Settlement:
+    """What became of one trial that a stopped controller left open."""
+
+    trial: int
+    value: float | None = None
+    reason: str | None = None
 
 
 def _absent(experiment: Mapping[str, Any]) -> Iterator[str]:
@@ -133,6 +143,35 @@ class ExperimentRunner:
             return tuple(float(values[trial.number]) for trial in trials)
 
         return self.hpo.run(run_round)
+
+    def settle(self, score_round: RoundExecutor) -> tuple[Settlement, ...]:
+        """Read the results of trials the study is still waiting on.
+
+        A controller killed between a worker's last upload and ``study.tell``
+        leaves the trial RUNNING with its result already in storage: the
+        training is finished and paid for, and only the reading is missing.
+        Settling asks the same executor for a score without submitting
+        anything, which is what makes re-running the worker unnecessary.
+
+        The launch id must be the one the trials ran under, since it is what
+        names their artifacts. Each trial is read on its own, so a trial whose
+        work has genuinely not finished is reported and left running rather
+        than deciding the outcome for the others.
+        """
+
+        settlements = []
+        for trial in self.hpo.running():
+            configuration = self._configuration(trial)
+            try:
+                results = score_round((configuration,), self.score)
+            except Exception as error:  # noqa: BLE001 - one trial's read decides only it
+                reason = f"{type(error).__name__}: {error}"
+                settlements.append(Settlement(trial=trial.number, reason=reason))
+                continue
+            value = float(next(iter(results))["value"])
+            self.hpo.tell((trial,), (value,))
+            settlements.append(Settlement(trial=trial.number, value=value))
+        return tuple(settlements)
 
     def _configurations(self, trials: Any) -> tuple[dict[str, Any], ...]:
         return tuple(self._configuration(trial) for trial in trials)
