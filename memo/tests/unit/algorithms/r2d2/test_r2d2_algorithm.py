@@ -1,5 +1,4 @@
 from dataclasses import dataclass, fields
-from functools import partial
 
 import jax
 import jax.numpy as jnp
@@ -24,6 +23,7 @@ from memorax.algorithms.r2d2 import (
 )
 from memorax.buffers import make_prioritised_episode_buffer
 from tests.support.environments import TinyDiscreteEnv
+from tests.support.replay import start_flags
 
 
 def _tree_allclose(left, right):
@@ -66,7 +66,7 @@ def _algorithm(
         min_length=minimum_size,
         sample_batch_size=1,
         sample_sequence_length=2,
-        get_start_flags=partial(tbptt_starts, burn_in_length=0),
+        get_start_flags=start_flags(tbptt_starts, burn_in_length=0),
         add_sequences=False,
         add_batch_size=num_envs,
     )

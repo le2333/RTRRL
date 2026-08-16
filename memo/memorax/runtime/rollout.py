@@ -75,9 +75,11 @@ def complete_episodes(
         observations.action,
     )
     walked = [read(summary, path) for path in trajectory_paths if path is not None]
-    trajectory = len(walked) == 3 and all(one is not None for one in walked)
-    if trajectory:
-        before, after, actions = (np.asarray(one) for one in walked)
+    trajectory = (
+        tuple(np.asarray(one) for one in walked)
+        if len(walked) == 3 and all(one is not None for one in walked)
+        else None
+    )
 
     number = first_number
     for env in range(num_envs):
@@ -85,7 +87,8 @@ def complete_episodes(
         for end in (step for step in range(steps) if dones[step, env]):
             span = range(start, end + 1)
             walk = {}
-            if trajectory:
+            if trajectory is not None:
+                before, after, actions = trajectory
                 walk = {
                     "observations": [before[step, env].tolist() for step in span]
                     + [after[end, env].tolist()],

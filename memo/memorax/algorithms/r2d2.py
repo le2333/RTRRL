@@ -3,7 +3,7 @@ from __future__ import annotations
 from collections.abc import Iterable
 from dataclasses import dataclass, field
 from functools import partial
-from typing import Any, Callable
+from typing import Any, Callable, cast
 
 import flax.linen as nn
 import jax
@@ -29,8 +29,6 @@ from memorax.utils import Timestep
 from memorax.utils.typing import (
     Array,
     BufferState,
-    Environment,
-    EnvParams,
     Key,
     PrioritisedBuffer,
 )
@@ -38,8 +36,7 @@ from memorax.utils.typing import (
 from .contract import ActionDecision, InteractionMetrics, StepMetrics
 
 
-@struct.dataclass(frozen=True)
-class R2D2Config:
+class R2D2Config(struct.PyTreeNode):
     num_envs: int
     epsilon_start: float
     epsilon_end: float
@@ -212,8 +209,7 @@ VALUE_TRANSFORM_FAMILY = ComponentFamily(
 )
 
 
-@struct.dataclass(frozen=True)
-class R2D2State:
+class R2D2State(struct.PyTreeNode):
     step: Any
     timestep: Timestep
     episode_start: Any
@@ -222,8 +218,7 @@ class R2D2State:
     core: CoreState
 
 
-@struct.dataclass(frozen=True)
-class ReplayTransition:
+class ReplayTransition(struct.PyTreeNode):
     observation: Any
     previous_action: Any
     previous_reward: Any
@@ -236,16 +231,14 @@ class ReplayTransition:
     actor_recurrence: Any
 
 
-@struct.dataclass(frozen=True)
-class RecurrentInputs:
+class RecurrentInputs(struct.PyTreeNode):
     observation: Any
     previous_action: Any
     previous_reward: Any
     episode_start: Any
 
 
-@struct.dataclass(frozen=True)
-class LearnerSequence:
+class LearnerSequence(struct.PyTreeNode):
     inputs: RecurrentInputs
     bootstrap_inputs: RecurrentInputs
     actions: Any
@@ -465,7 +458,12 @@ class QFunction:
         self, params: Any, timestep: RecurrentInputs, recurrence: Any
     ) -> tuple[Any, Array]:
         encoded = encode_recurrent_inputs(timestep, action_dim=self.action_dim)
-        return self.network.apply(params, encoded, timestep.episode_start, recurrence)
+        # ``apply`` also has the shape that returns mutated variables, which
+        # nothing here asks for; the network answers with recurrence and value.
+        return cast(
+            "tuple[Any, Array]",
+            self.network.apply(params, encoded, timestep.episode_start, recurrence),
+        )
 
     def _unroll_with_recurrences(
         self, params: Any, timesteps: RecurrentInputs, recurrence: Any
@@ -497,8 +495,7 @@ class QFunction:
         return final_recurrence, q_values
 
 
-@struct.dataclass(frozen=True)
-class CoreState:
+class CoreState(struct.PyTreeNode):
     update_step: Any
     recurrence: Any
     params: Any
@@ -506,14 +503,12 @@ class CoreState:
     optimizer_state: Any
 
 
-@struct.dataclass(frozen=True)
-class ForwardMetrics:
+class ForwardMetrics(struct.PyTreeNode):
     selected_q: Any
     epsilon: Any
 
 
-@struct.dataclass(frozen=True)
-class UpdateMetrics:
+class UpdateMetrics(struct.PyTreeNode):
     applied: Any
     loss: Any
     td_error: Any
@@ -551,8 +546,7 @@ OBSERVATIONS = ObservationSchema(
 )
 
 
-@struct.dataclass(frozen=True)
-class _UpdateReadings:
+class _UpdateReadings(struct.PyTreeNode):
     td_error: Any
     q_value: Any
     valid: Any
@@ -999,8 +993,12 @@ def sequence_priorities(td_error: Array, valid: Array, *, max_weight: float) -> 
 @dataclass(frozen=True)
 class R2D2:
     cfg: R2D2Config
-    env: Environment
-    env_params: EnvParams
+    # A gymnax-shaped environment, which is not the same as one that inherits
+    # from gymnax's base class. Nothing below here asks for more than the shape
+    # -- ``EnvironmentStreams`` takes it untyped, and ``StreamAC`` says the same
+    # -- so naming the base class here only excluded environments that work.
+    env: Any
+    env_params: Any
     core: Core
     buffer: PrioritisedBuffer
     reports: Reports = Reports()

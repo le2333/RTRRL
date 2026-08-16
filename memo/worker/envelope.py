@@ -2,11 +2,11 @@
 
 from __future__ import annotations
 
-from typing import Any, Literal
+from typing import Any
 
 from pydantic import BaseModel, ConfigDict
 
-from deployment.contract import CONTRACT_VERSION
+from deployment.contract import ContractVersion
 
 
 class _Frozen(BaseModel):
@@ -26,7 +26,7 @@ class Artifacts(_Frozen):
 
 
 class WorkerEnvelope(_Frozen):
-    contract: Literal[CONTRACT_VERSION]
+    contract: ContractVersion
     identity: RunIdentity
     entry: str
     artifacts: Artifacts

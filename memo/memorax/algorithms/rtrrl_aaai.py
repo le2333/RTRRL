@@ -200,24 +200,21 @@ PARAMETERS = describe_parameters(RTRRLParameters)
 
 
 # ----------------------------------------------------------------------- state
-@struct.dataclass(frozen=True)
-class Recurrence:
+class Recurrence(struct.PyTreeNode):
     """Where the sequence is, and what it owes the past."""
 
     carry: Any
     differentiation_state: Any
 
 
-@struct.dataclass(frozen=True)
-class BlockState:
+class BlockState(struct.PyTreeNode):
     """A readout's parameters and the trace that decides how far they move."""
 
     params: Any
     traces: Any
 
 
-@struct.dataclass(frozen=True)
-class TorsoState:
+class TorsoState(struct.PyTreeNode):
     """The shared block: the same two things, plus what only sharing needs."""
 
     params: Any
@@ -226,8 +223,7 @@ class TorsoState:
     recurrence: Recurrence
 
 
-@struct.dataclass(frozen=True)
-class CoreState:
+class CoreState(struct.PyTreeNode):
     """What the algorithm carries, one field per thing that owns one."""
 
     torso: TorsoState
@@ -298,46 +294,40 @@ OBSERVATIONS = ObservationSchema(
 )
 
 
-@struct.dataclass(frozen=True)
-class ActorForward:
+class ActorForward(struct.PyTreeNode):
     """What the policy answered on the pass that chose."""
 
     log_prob: Any = None
     entropy: Any = None
 
 
-@struct.dataclass(frozen=True)
-class CriticForward:
+class CriticForward(struct.PyTreeNode):
     """What the critic answered."""
 
     value: Any = None
 
 
-@struct.dataclass(frozen=True)
-class ForwardMetrics:
+class ForwardMetrics(struct.PyTreeNode):
     """One field per head."""
 
     actor: ActorForward = ActorForward()
     critic: CriticForward = CriticForward()
 
 
-@struct.dataclass(frozen=True)
-class BlockUpdate:
+class BlockUpdate(struct.PyTreeNode):
     """How big what went into one block's step was."""
 
     grad_norm: Any = None
     trace_norm: Any = None
 
 
-@struct.dataclass(frozen=True)
-class GroupUpdate:
+class GroupUpdate(struct.PyTreeNode):
     """What one rule group's step did."""
 
     step_size: Any = None
 
 
-@struct.dataclass(frozen=True)
-class UpdateMetrics:
+class UpdateMetrics(struct.PyTreeNode):
     """Three blocks, two groups, and two quantities belonging to neither."""
 
     td_error: Any = None
@@ -349,8 +339,7 @@ class UpdateMetrics:
     heads_step: GroupUpdate = GroupUpdate()
 
 
-@struct.dataclass(frozen=True)
-class RTRRLState:
+class RTRRLState(struct.PyTreeNode):
     """Everything the kernel carries, one field per layer that writes one."""
 
     step: Any

@@ -1,5 +1,3 @@
-from functools import partial
-
 import jax
 import jax.numpy as jnp
 import numpy as np
@@ -14,6 +12,7 @@ from memorax.buffers.prioritised_episode_buffer import (
     PrioritisedEpisodeBufferSample,
     make_prioritised_episode_buffer,
 )
+from tests.support.replay import start_flags
 
 
 def _transition(*, done, terminal=None, episode_start=None):
@@ -165,7 +164,7 @@ def _fill_streaming_replay(experience):
         min_length=transition_count,
         sample_batch_size=1,
         sample_sequence_length=transition_count,
-        get_start_flags=partial(
+        get_start_flags=start_flags(
             completed_episode_starts, transition_count=transition_count
         ),
         add_sequences=False,

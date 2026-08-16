@@ -56,10 +56,13 @@ def test_linear_and_dueling_heads_produce_one_q_per_action():
 
     dueling = DuelingQHead(action_dim=3)
     dueling_variables = dueling.init(jax.random.key(1), hidden)
-    dueling_q = dueling.apply(dueling_variables, hidden)
-    params = dueling_variables["params"]
-    value = hidden @ params["value"]["kernel"] + params["value"]["bias"]
-    advantage = hidden @ params["advantage"]["kernel"] + params["advantage"]["bias"]
+    dueling_q = jnp.asarray(dueling.apply(dueling_variables, hidden))
+
+    def weight(stream: str, name: str):
+        return jnp.asarray(dueling_variables["params"][stream][name])
+
+    value = hidden @ weight("value", "kernel") + weight("value", "bias")
+    advantage = hidden @ weight("advantage", "kernel") + weight("advantage", "bias")
 
     assert linear_q.shape == (2, 3, 3)
     assert dueling_q.shape == (2, 3, 3)

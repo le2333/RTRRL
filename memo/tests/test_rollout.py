@@ -54,13 +54,18 @@ def cut(summary, *, observations=OBSERVATIONS, **overrides):
 
 def test_a_partial_episode_at_either_end_is_left_out():
     #                   env 0: done at 1 and 4     env 1: never done
-    episodes = cut(chunk([[0, 0], [1, 0], [0, 0], [0, 0], [1, 0]]))
+    first, second = cut(chunk([[0, 0], [1, 0], [0, 0], [0, 0], [1, 0]]))
+
+    # ``OBSERVATIONS`` names all three trajectory paths, so every episode this
+    # cuts carries the walk.
+    assert first.observations is not None
+    assert first.actions is not None and second.actions is not None
 
     # Steps 2 and 3 of env 0 run past the end without terminating, and env 1
     # never terminates at all; neither is a return anyone can report.
-    assert [len(episode.actions) for episode in episodes] == [2, 3]
-    assert [episode.number for episode in episodes] == [1, 2]
-    assert episodes[0].observations[-1] == [102.0]
+    assert [len(first.actions), len(second.actions)] == [2, 3]
+    assert [first.number, second.number] == [1, 2]
+    assert first.observations[-1] == [102.0]
 
 
 def test_each_stream_is_cut_on_its_own_boundaries():

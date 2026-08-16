@@ -2,11 +2,15 @@
 
 from __future__ import annotations
 
-from typing import Any, Literal
+from typing import Any, Literal, TypeAlias, get_args
 
 from pydantic import BaseModel, ConfigDict, model_validator
 
-CONTRACT_VERSION = 9
+# The version is written once, as the type. ``Literal`` will not take a name,
+# so the constant is read back out of it rather than spelled a second time
+# where the two could drift apart.
+ContractVersion: TypeAlias = Literal[9]
+CONTRACT_VERSION: ContractVersion = get_args(ContractVersion)[0]
 
 
 class _Frozen(BaseModel):
@@ -28,5 +32,5 @@ class EntryDescriptor(_Frozen):
 
 
 class Catalog(_Frozen):
-    contract: Literal[CONTRACT_VERSION]
+    contract: ContractVersion
     entries: dict[str, EntryDescriptor]

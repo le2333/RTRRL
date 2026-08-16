@@ -1,8 +1,17 @@
+from typing import Any
+
 import jax
 import jax.numpy as jnp
 import numpy as np
 
 from memorax.buffers.prioritised_episode_buffer import make_prioritised_episode_buffer
+from memorax.utils.typing import Array
+
+
+def _declared_starts(experience: Any) -> Array:
+    """These buffers store the flag rather than deriving it from ``done``."""
+
+    return experience["episode_start"]
 
 
 def _buffer(*, sample_batch_size=2, sample_sequence_length=4):
@@ -11,7 +20,7 @@ def _buffer(*, sample_batch_size=2, sample_sequence_length=4):
         min_length=sample_sequence_length,
         sample_batch_size=sample_batch_size,
         sample_sequence_length=sample_sequence_length,
-        get_start_flags=lambda experience: experience["episode_start"],
+        get_start_flags=_declared_starts,
         add_sequences=True,
         add_batch_size=1,
     )
@@ -68,7 +77,7 @@ def _streaming_buffer(*, max_length, sample_batch_size, sample_sequence_length):
         min_length=sample_sequence_length,
         sample_batch_size=sample_batch_size,
         sample_sequence_length=sample_sequence_length,
-        get_start_flags=lambda experience: experience["episode_start"],
+        get_start_flags=_declared_starts,
         add_sequences=False,
         add_batch_size=1,
     )

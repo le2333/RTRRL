@@ -7,8 +7,10 @@ from entries import stream_ac as entry
 from memorax.algorithms import stream_ac
 from memorax.assembly import BuildRequest, EnvironmentSpec, assemble
 from memorax.parameters import expand
+from tests.support.builders import graph_of
 from tests.support.environments import TinyContinuousEnv
 from tests.support.numerics import flattened
+from tests.support.parameters import branch
 
 
 def assert_tree_equal(actual, expected, what):
@@ -98,10 +100,8 @@ def test_stream_ac_declarations_live_with_its_graph_and_entry_reexports_them():
 
 
 def test_only_the_recurrent_backbone_declares_differentiation():
-    backbone = stream_ac.PARAMETERS["backbone"]
-
-    assert "differentiation" in backbone["rtu"]
-    assert "differentiation" not in backbone["mlp"]
+    assert "differentiation" in branch(stream_ac.PARAMETERS, "backbone.rtu")
+    assert "differentiation" not in branch(stream_ac.PARAMETERS, "backbone.mlp")
     assert "credit" not in stream_ac.PARAMETERS
 
 
@@ -195,7 +195,7 @@ def test_interaction_moves_no_learned_quantity():
 def test_generic_assembly_closes_stream_ac_over_the_runtime_program():
     built = assembled()
 
-    graph = built.program.init.__self__
+    graph = graph_of(built)
     assert graph.core.actor.block.network is not graph.core.critic.block.network
     assert built.observations is stream_ac.OBSERVATIONS
 
