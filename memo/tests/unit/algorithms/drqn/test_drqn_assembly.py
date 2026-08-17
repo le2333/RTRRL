@@ -86,7 +86,7 @@ def run_document(*, every_steps=None, total_steps=50, episode_length=7):
             num_envs=2,
         ),
         training=SimpleNamespace(seed=7, total_steps=total_steps, chunk_steps=10),
-        evaluation=SimpleNamespace(every_steps=10, rollout_steps=4),
+        evaluation=SimpleNamespace(every_steps=10, episodes=3, chunk_steps=4, seed=11),
         logging=SimpleNamespace(aim=SimpleNamespace(training=None), rerun=rerun),
     )
 
@@ -156,6 +156,12 @@ def test_entry_projects_only_the_runtime_schedule():
     assert schedule.chunk_steps == 10
     assert schedule.num_envs == 2
     assert schedule.seed == 7
+    # Episodes, not steps: a checkpoint is scored on exactly this many, and the
+    # evaluation opens a key stream of its own so a measurement cannot move the
+    # training one.
+    assert schedule.evaluation_episodes == 3
+    assert schedule.evaluation_chunk_steps == 4
+    assert schedule.evaluation_seed == 11
     assert schedule.trajectory_at_steps == (10, 20, 30, 40, 50)
     assert schedule.max_episode_steps == 7
 
@@ -251,13 +257,51 @@ def test_generic_assembly_closes_drqn_over_the_runtime_program():
 
     state = built.program.init(jax.random.key(0))
     trained, metrics = built.program.train(jax.random.key(1), state, 20)
-    evaluated = built.program.evaluate(jax.random.key(2), trained, 2)
+    opened = built.program.open_evaluation(jax.random.key(2), trained)
+    _, evaluated = built.program.evaluate(jax.random.key(3), opened, 2)
 
     assert int(trained.step) == 20
     assert int(trained.core.update_step) > 0
     assert metrics.interaction.reward.shape == (20, 1)
     assert evaluated.interaction.reward.shape == (2, 1)
     assert np.isfinite(np.asarray(metrics.update.loss)).all()
+
+
+def test_measuring_the_policy_moves_nothing_it_measures():
+    """A scored checkpoint is a read of the training state, never a write.
+
+    The rollout the two evaluation arrows pass between them is the
+    evaluation's own, so replay, the optimizer, the target copy and the
+    learner's own step counter all have to come back where they were.
+    """
+
+    built = assembled()
+    state = built.program.init(jax.random.key(0))
+    trained, _ = built.program.train(jax.random.key(1), state, 20)
+
+    opened = built.program.open_evaluation(jax.random.key(2), trained)
+    advanced, metrics = built.program.evaluate(jax.random.key(3), opened, 4)
+
+    assert metrics.update is None
+    for what, left, right in (
+        ("params", advanced.core.params, trained.core.params),
+        ("target params", advanced.core.target_params, trained.core.target_params),
+        (
+            "optimizer state",
+            advanced.core.optimizer_state,
+            trained.core.optimizer_state,
+        ),
+        ("replay", advanced.buffer_state, trained.buffer_state),
+    ):
+        moved = [
+            index
+            for index, (got, wanted) in enumerate(
+                zip(jax.tree.leaves(left), jax.tree.leaves(right))
+            )
+            if not np.array_equal(np.asarray(got), np.asarray(wanted))
+        ]
+        assert not moved, f"{what}: leaves {moved} moved"
+    assert int(advanced.core.update_step) == int(trained.core.update_step)
 
 
 def test_program_exposes_no_learning_interaction():

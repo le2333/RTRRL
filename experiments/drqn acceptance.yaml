@@ -1,0 +1,135 @@
+# DRQN platform acceptance, at the paper's truncation.
+#
+# This file answers whether the `drqn` entry runs on the platform, not whether
+# DRQN is good at anything. CartPole is fully observed, so the recurrent core is
+# not being asked to remember: a number from this run is not an R1 number, and
+# the environments R1 actually reports on are named in the issue rather than
+# here.
+#
+# Truncation 10 is the paper's own, which is what makes this the reproduction
+# acceptance arm rather than an arbitrary window. Everything else is the
+# published learner with nothing added -- the parameter tree has no priority
+# exponent, no n-step, no value transform, no burn-in and no dueling head to
+# set, so this space is the whole of what DRQN declares.
+#
+# What the run is read for:
+#   - the worker exits 0 and publishes result.json and metrics.jsonl
+#   - four evaluation checkpoints at 5000, 10000, 15000 and 20000, each of
+#     exactly ten eval/episode/return records
+#   - every train/episode and eval/episode value finite
+#   - train/episode/update.loss appears once replay is sampleable, at step 256
+#   - no update.priority and no update.importance_weight anywhere: this learner
+#     does not report them because it does not compute them
+
+experiment: drqn-acceptance
+name: drqn-acceptance-truncation-10
+description: "DRQN platform acceptance: uniform replay, one-step targets, truncation 10"
+
+# TODO: the contract-10 rebuild that carries the `drqn` entry. No existing image
+# has it -- the entry is new -- so this cannot be launched until the rebuild,
+# and the digest goes here when it exists.
+image: TBD
+entry: drqn
+storage: s3://rtrrl-artifacts-007122174918/trainer
+
+environment:
+  id: gymnax::CartPole-v1
+  backend: null # gymnax ships one implementation per environment
+  observed: null
+  seeds: [0]
+  episode_length: 32
+
+training:
+  num_envs: 1
+  total_steps: 20000
+  chunk_steps: 5000
+
+evaluation:
+  every_steps: 5000
+  # The protocol's discrete count. Ten whole episodes of a variable-length task
+  # is not any number of steps, which is why this is not a rollout budget.
+  episodes: 10
+  # Ten episodes cannot exceed ten times the environment's own limit, so one
+  # call holds the rollout even in the worst case.
+  chunk_steps: 320
+  seed: 1000
+
+logging:
+  aim:
+    url: aim://172.31.62.192:53801
+    training:
+      window:
+        every_steps: 5000
+  rerun:
+    log_every_steps: 10000
+
+# Not return_per_step: CartPole pays exactly 1.0 every step including the one it
+# ends on, so that metric is identically 1.0 for every policy. The signal is
+# entirely in how long the episode lasted.
+#
+# AUC rather than the acceptance file's `last`, because AUC is what the protocol
+# scores R1 on and this run is also where the scorer's exactness check gets
+# exercised on this entry.
+score:
+  metric: eval/episode/return
+  window_steps: [0, 20000]
+  reduce: auc
+  episodes_per_checkpoint: 10
+  non_finite: worst
+  direction: maximize
+
+compute:
+  instance_type: c7a.large
+  timeout_minutes: 60
+
+# No search. This run checks a path, and every leaf below is pinned.
+hpo:
+  rounds: 1
+  trials_per_round: 1
+  parallel_jobs: 1
+  startup_trials: 1
+  seed: 0
+
+space:
+  # The recurrent core is the online arm's, at the online arm's widths, because
+  # the point of the arm is that the representation is not what differs. See
+  # memo/docs/drqn-reproduction.md and memo/docs/exact-recurrent-sensitivity.md.
+  core:
+    kind: [lru]
+    lru:
+      hidden_dim: [64]
+      feature_dim: [64]
+
+  # The paper's truncation. The gradient reaches back exactly this far, and the
+  # hidden state at the window's first input is zero, so there is no burn-in
+  # length to declare.
+  learning:
+    kind: [truncated]
+    truncated:
+      length: [10]
+
+  # The published learner is written over RMSProp, which this repository's
+  # shared step family does not offer. Recorded as a deviation in
+  # memo/docs/drqn-reproduction.md rather than hidden here.
+  optimizer:
+    kind: [adam]
+    adam:
+      lr: [0.0005]
+
+  # Uniform replay: no priority exponent and no importance-sampling exponent,
+  # because there is no priority to raise or correct for.
+  replay:
+    capacity: [8192]
+    minimum_size: [256]
+    batch_size: [8]
+
+  target:
+    update_period: [100]
+
+  exploration:
+    epsilon_start: [1.0]
+    epsilon_end: [0.05]
+    epsilon_decay_steps: [10000]
+    evaluation_epsilon: [0.0]
+
+  gamma: [0.99]
