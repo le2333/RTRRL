@@ -9,6 +9,9 @@ if TYPE_CHECKING:
     from .dqn import DQN as DQN
     from .dqn import DQNConfig as DQNConfig
     from .dqn import DQNState as DQNState
+    from .drqn import DRQN as DRQN
+    from .drqn import DRQNConfig as DRQNConfig
+    from .drqn import DRQNState as DRQNState
     from .gradient_ppo import GradientPPO as GradientPPO
     from .gradient_ppo import GradientPPOConfig as GradientPPOConfig
     from .gradient_ppo import GradientPPOState as GradientPPOState
@@ -41,6 +44,9 @@ _EXPORTS = {
     "DQN": (".dqn", "DQN"),
     "DQNConfig": (".dqn", "DQNConfig"),
     "DQNState": (".dqn", "DQNState"),
+    "DRQN": (".drqn", "DRQN"),
+    "DRQNConfig": (".drqn", "DRQNConfig"),
+    "DRQNState": (".drqn", "DRQNState"),
     "GradientPPO": (".gradient_ppo", "GradientPPO"),
     "GradientPPOConfig": (".gradient_ppo", "GradientPPOConfig"),
     "GradientPPOState": (".gradient_ppo", "GradientPPOState"),
@@ -69,6 +75,7 @@ _EXPORTS = {
 
 __all__ = [
     "DQN",
+    "DRQN",
     "MAPPO",
     "PPO",
     "PQN",
@@ -78,6 +85,8 @@ __all__ = [
     "ActionDecision",
     "DQNConfig",
     "DQNState",
+    "DRQNConfig",
+    "DRQNState",
     "EvaluationConfig",
     "GradientPPO",
     "GradientPPOConfig",
