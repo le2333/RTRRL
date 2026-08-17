@@ -1,27 +1,26 @@
-# Issue 37 D-RTRRL: the unit-trace update rule, on the shape issue 27 already runs.
+# Issue 37 R3.2 smoke: the fixed-step saturated-limit arm, on the shape issue 27
+# already runs. This is a local shape check, not the formal protocol -- the
+# 5-seed x 1M configuration, its metrics and its choice of C are owned by the
+# experiment side.
 #
-# The step no longer carries the TD error's magnitude. Each block's trace is
-# exported as a unit vector and the TD error is reduced to its sign, so one
-# step moves that block by exactly `eta` and by that much whether the step was
-# a surprise or not.
+# u_fixed = C * sign(delta) * z / (||z|| + eps). Both magnitudes are gone: the
+# trace is exported as a unit vector and the TD error is reduced to its sign,
+# so every step moves a block by exactly C. That is the original clip with the
+# clip always active, which is what "saturated limit" means.
 #
 # Read, at the reporting boundaries:
-#   - train/.../update.torso_step.step_size and update.heads_step.step_size
-#     constant at the two etas
 #   - update.torso.trace_norm and the two head trace norms finite throughout
-#   - eval/episode/return finite throughout -- the version this replaces
-#     (`magnitude: td_error`) is what went non-finite here, and it is kept as a
-#     named arm in `rtrrl issue37 td-out control.yaml` rather than deleted, so
-#     the reason for this arm's default is a recorded run and not a claim
+#   - eval/episode/return finite throughout
+#   - the TD-out arm in `rtrrl issue37 td-out control.yaml` is the control for
+#     the claim that removing |delta| is what buys that
 #
-# `eta_f` is present and inert: `sign(eta_f * delta) == sign(delta)`. The
-# torso-to-heads step ratio is the ratio of the two `eta` values below and
-# nothing else. Left at 1.0 so a diff against the issue-27 run shows only the
-# optimizer.
+# `eta_f` is present and inert here: `sign(eta_f * delta) == sign(delta)`, so
+# it cannot set the torso-to-heads ratio. Left at 1.0 so a diff against the
+# issue-27 run shows only the optimizer.
 
 experiment: rtrrl-issue37
 name: rtrrl-issue37-d-rtrrl
-description: "Issue 37 D-RTRRL: unit-trace update, sign(delta), fixed step length"
+description: "Issue 37 R3.2 smoke: fixed-step saturated limit, C * sign(delta) * z_hat"
 
 image: 007122174918.dkr.ecr.eu-north-1.amazonaws.com/rtrrl@sha256:7ca201c304dc6a38dc45d8142cfc05d1ec4deb3046e9e8e3594b4ff635cfd32d
 entry: rtrrl
@@ -64,14 +63,12 @@ compute:
   instance_type: c7a.large
   timeout_minutes: 60
 
-# Two group step scales are searched, so there has to be a search. Small
-# because this is the acceptance shape rather than the tuned run: enough trials
-# for the two etas to separate, not enough to claim one is optimal.
+# No search. C is the original clip's threshold, not a tuned quantity.
 hpo:
-  rounds: 2
-  trials_per_round: 8
-  parallel_jobs: 4
-  startup_trials: 4
+  rounds: 1
+  trials_per_round: 1
+  parallel_jobs: 1
+  startup_trials: 1
   seed: 0
 
 space:
@@ -86,12 +83,12 @@ space:
     optimizer:
       kind: [d_rtrrl]
       d_rtrrl:
-        # The group step scale, searched rather than pinned. The torso-to-heads
-        # ratio is not frozen at whatever the Adam arm's two learning rates
-        # happened to be, because it cannot be: `eta_f` is inert under `sign`,
-        # so these two etas are the only place that ratio can live and HPO has
-        # to be the thing that finds it.
-        eta: {type: float, low: 0.0001, high: 0.1, log: true}
+        # `c` is the original clip's threshold, not a learning rate, and it is
+        # pinned rather than searched: this arm is only the saturated limit of
+        # that clip while it is written over the same number. The value here is
+        # a placeholder equal to `grad_clip` below -- the formal arms take the
+        # threshold selected in R2.
+        c: [1.0]
         magnitude: [sign]
         scope: [block]
         # The preregistered denominator, z / (||z|| + eps). `clamped` is
@@ -99,16 +96,18 @@ space:
         # different spelling of this one.
         denominator: [shifted]
         eps: [0.00000001]
-    # Kept on. The traced part of this rule is `eta` long by construction, so
-    # the clip cannot reach it; the entropy direction does not pass through the
-    # trace and is the one term here with no length of its own.
+    # Note this is the *outer* clip, on the finished group update, and setting
+    # it equal to C is not neutral: the traced part is already C long, so it
+    # binds on nearly every step. Kept at 1.0 here only so this smoke run
+    # differs from the issue-27 one in the optimizer alone. Which of the two
+    # clips an arm is written against is the experiment side's to declare.
     grad_clip: [1.0]
     follow: [1.0]
   heads:
     optimizer:
       kind: [d_rtrrl]
       d_rtrrl:
-        eta: {type: float, low: 0.0001, high: 0.1, log: true}
+        c: [1.0]
         magnitude: [sign]
         scope: [block]
         denominator: [shifted]

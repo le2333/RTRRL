@@ -160,28 +160,41 @@ def base_transform(base):
 
 @dataclass(frozen=True)
 class DRTRRL:
-    """A step whose length is the learning rate, not the surprise.
+    """The two update-scale arms written against the original clip's threshold.
 
-    The trace and the TD error say which way to go; ``eta`` says how far. The
-    trace is exported as a unit vector, so one step moves a normalization unit
-    by exactly ``eta`` and by that much whatever the TD error happens to be.
+    ``c`` is that threshold, and it is not a learning rate. The original rule
+    bounds an update by ``c``; these two arms are what is left of it when one
+    of the two magnitudes feeding that bound is taken away, so they are only a
+    control for it while they are written over the same number. Selecting ``c``
+    independently would make them a different optimizer being compared against
+    the original rather than a decomposition of it.
 
-    ``magnitude`` is which part of the TD error survives into the length.
+    ``magnitude`` is which arm:
 
     ``sign``
-        ``eta * sign(delta) * z_hat``. The published default, and the only
-        setting that has been run without diverging.
-    ``td_error``
-        ``eta * delta * z_hat``, so the step is ``eta * |delta|`` long.
-        **Unsafe ablation, and it needs TD clipping to be anything else.**
-        With the step length proportional to the raw TD error the critic
-        closes a positive feedback loop -- an overshoot grows the next
-        ``|delta|``, which grows the next step -- and goes non-finite. Adam's
-        second moment was what held that loop down, and a rule written to
-        replace Adam does not have it. Kept because the ablation is worth
-        being able to run, defaulted away from because it does not survive.
+        ``c * sign(delta) * z / (||z|| + eps)`` -- the fixed-step saturated
+        limit. Both magnitudes are gone: the trace is exported as a unit
+        vector and the TD error is reduced to its sign, so the step is ``c``
+        long on every step. This is the original clip with the clip always
+        active, which is what "saturated limit" means, and it is the default.
+    ``td_out``
+        ``delta * z * min(1, c / ||z||)`` -- the trace's magnitude is bounded
+        by ``c`` and the TD error's is left in. Note this is a *clip*, not a
+        normalization: a trace already shorter than ``c`` passes through
+        untouched, where ``sign`` would have stretched it to ``c``.
 
-    ``scope`` is what gets normalized to one:
+        **Unsafe by construction.** With the step still proportional to the
+        raw TD error the critic closes a positive feedback loop -- an
+        overshoot grows the next ``|delta|``, which grows the next step. It is
+        a control arm, run under a safety horizon, and its divergence is the
+        result rather than a failure.
+
+    Between them the two arms are a decomposition: the original clips the
+    product ``delta * z``, ``sign`` removes both magnitudes, and ``td_out``
+    removes only the trace's. What is not offered is the fourth cell, a
+    normalized trace with ``|delta|`` left in, because no arm names it.
+
+    ``scope`` is what gets normalized or clipped as one unit:
 
     ``block``
         Each top-level entry of the tree handed in, separately. Which entries
@@ -207,12 +220,14 @@ class DRTRRL:
     and they agree only once ``||z||`` clears ``eps`` by enough for the shift
     not to matter. So a run answers to one of them and substituting the other
     is a change of algorithm.
+
+    ``denominator`` reaches ``sign`` only. ``td_out`` divides by nothing --
+    it scales by ``min(1, c / ||z||)`` -- so there is no denominator for
+    ``eps`` to sit in and the setting is inert there.
     """
 
-    eta: float = param(valid=(1e-9, 10.0), search=(1e-4, 1.0), log=True)
-    magnitude: str = param(
-        valid=["sign", "td_error"], search=["sign"], default="sign"
-    )
+    c: float = param(valid=(1e-9, 100.0), search=(1e-4, 10.0), log=True)
+    magnitude: str = param(valid=["sign", "td_out"], search=["sign"], default="sign")
     scope: str = param(valid=["block", "group"], search=["block"], default="block")
     denominator: str = param(
         valid=["shifted", "clamped"], search=["shifted"], default="shifted"
@@ -404,28 +419,35 @@ def _units(tree, *, by_block):
 
 
 def make_d_rtrrl_rule(step, *, clip=0.0) -> UpdateRule:
-    """Step ``eta`` along the trace, in the direction the TD error points.
+    """Take the original clip's threshold and remove a magnitude from it.
 
-    The trace and the TD error carry the direction and nothing else: the trace
-    is divided by its own norm and the TD error is reduced to its sign, so the
-    traced part of the step is ``eta`` long per unit per stream and says nothing
-    about how surprised the step was. That split -- trace times TD error for the
-    direction, learning rate for the length -- is the whole rule.
+    Both arms are written over ``c``, the threshold the original rule clips an
+    update to. ``sign`` removes the trace's magnitude and the TD error's, and
+    takes a step of exactly ``c``; ``td_out`` removes only the trace's, and
+    takes a step of ``c * |delta|`` whenever the trace is long enough for the
+    clip to bite. See :class:`DRTRRL` for what each arm is a control for.
 
-    The trace itself is untouched. It accumulates at full magnitude, the RNN
-    torso's direction is synthesized from the raw upstream vectors, and the
-    division by ``||z||`` happens here, on the way out, on a value nothing
-    carries forward.
+    The trace itself is untouched by either. It accumulates at full magnitude
+    and the torso's direction is synthesized from the raw upstream vectors;
+    the normalizing or the clipping happens here, on the way out, on a value
+    nothing carries forward.
 
-    ``clip`` bounds the finished update by global norm, and is worth setting
-    even though the traced part is already bounded by construction: the direct
-    directions do not pass through the trace, are not normalized, and are the
-    only part of this rule that can be any length at all.
+    ``clip`` is a different clip: the original bound on the *finished* group
+    update, which RTRRL declares as ``torso.grad_clip``. It is worth keeping
+    even under ``sign``, where the traced part is bounded by construction,
+    because the direct directions do not pass through the trace and are the
+    only part of either arm that can be any length at all.
+
+    Setting it equal to ``c`` is a coherent thing to ask for and not the same
+    experiment: under ``sign`` the traced part is already ``c`` long, so the
+    outer bound binds on essentially every step and the arm stops being the
+    saturated limit of anything. Nothing here refuses that -- which of the two
+    clips an arm is written against is the experiment's to declare.
     """
 
-    eta = step.eta
+    c = step.c
     eps = step.eps
-    signed = step.magnitude == "sign"
+    saturated = step.magnitude == "sign"
     by_block = step.scope == "block"
     shifted = step.denominator == "shifted"
     bound = None
@@ -434,15 +456,19 @@ def make_d_rtrrl_rule(step, *, clip=0.0) -> UpdateRule:
 
         bound = optax.clip_by_global_norm(clip)
 
-    def unit(tree):
-        """One subtree divided by its own per-stream norm."""
+    def factor(tree):
+        """What one unit's trace is multiplied by on the way out, per stream."""
 
-        norm = _stream_norm(tree)
-        length = norm + eps if shifted else jnp.maximum(norm, eps)
-        return jax.tree.map(
-            lambda leaf: leaf / _broadcast_env(length, leaf),
-            tree,
-        )
+        length = _stream_norm(tree)
+        if saturated:
+            # A unit vector times the threshold: every step is `c` long.
+            return c / (length + eps if shifted else jnp.maximum(length, eps))
+        # A clip, not a normalization. A trace shorter than `c` is passed
+        # through untouched rather than stretched up to it, which is the whole
+        # difference between this arm and the one above. `maximum` guards the
+        # division only; at a trace of zero the ratio is huge, the minimum
+        # picks one, and one times zero is zero.
+        return jnp.minimum(1.0, c / jnp.maximum(length, eps))
 
     def init(*, params, traces):
         del params, traces
@@ -450,36 +476,42 @@ def make_d_rtrrl_rule(step, *, clip=0.0) -> UpdateRule:
 
     def apply(traced, direct, state, *, delta, step, params):
         del step, params
-        # Only the sign survives by default. `jnp.sign` takes a TD error of
-        # exactly zero to a step of exactly zero, which is what a rule that
-        # moves a fixed distance every step otherwise would not do.
-        surprise = jnp.sign(delta) if signed else delta
+        # `jnp.sign` takes a TD error of exactly zero to a step of exactly
+        # zero, which is what a rule that moves a fixed distance every step
+        # otherwise would not do.
+        surprise = jnp.sign(delta) if saturated else delta
 
         units, rebuild = _units(traced, by_block=by_block)
         ascent = rebuild(
             {
                 name: jax.tree.map(
-                    lambda leaf: eta * _broadcast_env(surprise, leaf) * leaf,
-                    unit(part),
+                    lambda leaf, scale=factor(part): (
+                        _broadcast_env(surprise * scale, leaf) * leaf
+                    ),
+                    part,
                 )
                 for name, part in units.items()
             }
         )
+        # The direct directions are added as they arrive, in both arms and as
+        # the original adds them. They carry their own coefficient already --
+        # RTRRL's `entropy_rate` -- and putting `c` on top of it would make
+        # the entropy term mean something different in each arm, which is the
+        # one thing a control comparison cannot afford.
         if direct is not None:
-            ascent = jax.tree.map(
-                lambda leaf, immediate: leaf + eta * immediate, ascent, direct
-            )
+            ascent = jax.tree.map(lambda leaf, immediate: leaf + immediate, ascent, direct)
         updates = jax.tree.map(lambda leaf: jnp.mean(leaf, axis=0), ascent)
         if bound is not None:
             updates, _ = bound.update(updates, ())
-        # The rate, as every other rule reports it, rather than the distance
-        # this step happened to move: one name means the same thing whichever
-        # rule is in the way. What the step actually moved is `eta` times
-        # `|surprise|`, and under the default that is `eta` or it is zero.
+        # The threshold, under the name every rule reports its step scale by,
+        # rather than the distance this step happened to move: one name means
+        # the same thing whichever rule is in the way. Under `sign` the traced
+        # part moved exactly this, or zero. Under `td_out` it moved this times
+        # `|delta|`, or less when the trace was too short to clip.
         return RuleOutput(
             updates=updates,
             state=state,
-            metrics={"step_size": jnp.full_like(delta, eta)},
+            metrics={"step_size": jnp.full_like(delta, c)},
         )
 
     return UpdateRule(init=init, apply=apply)

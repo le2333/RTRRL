@@ -1,4 +1,4 @@
-"""The D-RTRRL rule: the trace says where, the learning rate says how far.
+"""The D-RTRRL rule: the two arms written over the original clip's threshold.
 
 There is no upstream implementation to drive this against, so nothing here
 compares two copies of a guess. Every assertion is a property the rule is
@@ -13,8 +13,8 @@ give bit-identical updates pins the inertness where a reader of the diff would
 have to re-derive it.
 
 Streams are the env axis, axis 0 of every trace leaf. Most cases use one stream,
-where ``||dtheta|| == eta`` holds exactly; the multi-stream case is separate
-because averaging unit vectors is deliberately not a unit vector.
+where ``||dtheta|| == C`` holds exactly under ``sign``; the multi-stream case
+is separate because averaging unit vectors is deliberately not a unit vector.
 """
 
 from __future__ import annotations
@@ -26,7 +26,7 @@ import pytest
 
 from memorax.rl.updates import DRTRRL, make_d_rtrrl_rule
 
-ETA = 0.01
+C = 1.0
 EPS = 1e-8
 
 
@@ -46,7 +46,7 @@ def blocks(key, *, streams=1, actor_scale=1.0):
 def stepped(traces, delta, *, direct=None, clip=0.0, **settings):
     """One application of the rule, with the defaults the surface declares."""
 
-    rule = make_d_rtrrl_rule(DRTRRL(eta=ETA, **settings), clip=clip)
+    rule = make_d_rtrrl_rule(DRTRRL(c=C, **settings), clip=clip)
     return rule.apply(
         traces,
         direct,
@@ -81,14 +81,14 @@ def scaled_to(tree, length):
 @pytest.mark.parametrize("denominator", ["shifted", "clamped"])
 @pytest.mark.parametrize("surprise", [0.5, -0.5, 7.0, -300.0], ids=str)
 @pytest.mark.parametrize("scale", [1e-3, 1.0, 1e3], ids=["tiny", "unit", "huge"])
-def test_the_traced_step_is_eta_long_whatever_the_surprise_or_the_trace(
+def test_the_traced_step_is_c_long_whatever_the_surprise_or_the_trace(
     denominator, surprise, scale
 ):
-    """The defining property: length is the learning rate and nothing else.
+    """``sign``'s defining property: the step is the threshold and nothing else.
 
     Neither the size of the TD error nor the size of the trace reaches the
-    distance moved. This is the whole reason the rule exists -- it is what
-    ``eta * delta * z_hat`` did not do, and what took that version non-finite.
+    distance moved. That is what makes this the saturated limit of the original
+    clip rather than an optimizer with a learning rate in it.
 
     The claim is about the *traced* part, which is why ``direct`` is absent
     here: the entropy direction does not pass through the trace and is not
@@ -96,7 +96,7 @@ def test_the_traced_step_is_eta_long_whatever_the_surprise_or_the_trace(
     decomposed on its own further down rather than left to blur this one.
 
     Both denominators are checked because both are offered. Neither is exactly
-    ``eta`` -- ``shifted`` is short by ``eps/(||z||+eps)`` and ``clamped`` is
+    ``C`` -- ``shifted`` is short by ``eps/(||z||+eps)`` and ``clamped`` is
     exact only once ``||z|| >= eps`` -- and at these trace scales the gap is
     far below the tolerance. Where it is not below the tolerance is the
     separate concern of the two tests that follow.
@@ -108,7 +108,7 @@ def test_the_traced_step_is_eta_long_whatever_the_surprise_or_the_trace(
     output = stepped(traces, [surprise], denominator=denominator)
 
     for name, block in output.updates.items():
-        np.testing.assert_allclose(norm(block), ETA, rtol=1e-5, err_msg=name)
+        np.testing.assert_allclose(norm(block), C, rtol=1e-5, err_msg=name)
 
 
 def test_where_eps_sits_is_which_denominator_it_is():
@@ -194,11 +194,14 @@ def test_the_traced_and_direct_contributions_are_separable_and_only_one_is_fixed
     """The fixed-step property belongs to the trace, and entropy is not in it.
 
     The direct directions do not pass through the trace and are not
-    normalized, so a step taken with entropy on is not ``eta`` long. Reporting
+    normalized, so a step taken with entropy on is not ``C`` long. Reporting
     the two contributions apart is what keeps that from quietly falsifying the
-    property the rule is chosen for: the traced part is ``eta``, the direct
-    part is whatever the entropy gradient happens to be times ``eta``, and the
-    step is their sum.
+    property the arm is chosen for: the traced part is ``C``, the direct part
+    is the entropy direction as it arrives, and the step is their sum.
+
+    The direct term carries no factor of ``C``. It has its own coefficient --
+    RTRRL's ``entropy_rate`` -- and it enters both arms and the original rule
+    the same way, which is what lets the three be compared at all.
     """
 
     traces = blocks(jax.random.key(11))
@@ -211,27 +214,27 @@ def test_the_traced_and_direct_contributions_are_separable_and_only_one_is_fixed
 
     for name in traces:
         # The traced contribution, alone, is the length the rule promises.
-        np.testing.assert_allclose(norm(traced_only.updates[name]), ETA, rtol=1e-5)
+        np.testing.assert_allclose(norm(traced_only.updates[name]), C, rtol=1e-5)
 
-        # The direct contribution is exactly `eta * d`, recoverable by
-        # difference -- so it is additive and identifiable rather than folded
-        # into the normalization.
+        # The direct contribution is exactly `d`, recoverable by difference --
+        # so it is additive and identifiable rather than folded into the
+        # normalization, and it is not rescaled by the threshold.
         for path, leaf in leaves(both.updates[name]).items():
             recovered = leaf - leaves(traced_only.updates[name])[path]
             np.testing.assert_allclose(
                 recovered,
-                ETA * leaves(entropy[name])[path][0],
+                leaves(entropy[name])[path][0],
                 rtol=1e-5,
                 err_msg=f"{name}/{path}",
             )
 
-        # And the total is therefore not eta, which is the thing that must not
-        # be claimed by accident. It is not bounded above by eta either -- the
+        # And the total is therefore not C, which is the thing that must not
+        # be claimed by accident. It is not bounded above by C either -- the
         # direct term can point with the trace or against it, so the sum can
         # land on either side. All that is asserted is that it stops being the
         # promised length.
-        assert not np.isclose(norm(both.updates[name]), ETA, rtol=1e-3), (
-            f"{name}: entropy left the step exactly eta long by coincidence; "
+        assert not np.isclose(norm(both.updates[name]), C, rtol=1e-3), (
+            f"{name}: entropy left the step exactly C long by coincidence; "
             "pick a direct term that actually moves it"
         )
 
@@ -243,7 +246,7 @@ def test_the_td_error_scale_cannot_change_a_signed_step():
     the rule reads ``sign(eta_f * delta)``, which for any positive ``eta_f`` is
     ``sign(delta)`` -- so the knob that used to set the torso-to-heads step
     ratio no longer sets anything, and that ratio has to be carried by the two
-    ``eta`` values instead. Asserting bit-equality here is what stops the knob
+    ``C`` values instead. Asserting bit-equality here is what stops the knob
     from being quietly tuned against a step it cannot move.
     """
 
@@ -260,23 +263,98 @@ def test_the_td_error_scale_cannot_change_a_signed_step():
             )
 
 
-def test_the_td_error_scale_does_reach_the_unsafe_ablation():
-    """The same knob is live under ``td_error``, which is why it is a branch.
+def test_the_td_error_scale_does_reach_td_out():
+    """The same knob is live under ``td_out``, which is why it is a branch.
 
-    If both settings ignored the scale there would be one rule with a spare
-    name. This is the difference the ablation exists to measure.
+    If both arms ignored the TD error's magnitude there would be one rule with
+    a spare name, and no control for the claim that removing that magnitude is
+    what buys stability. This is the difference the arm exists to measure.
     """
 
     traces = blocks(jax.random.key(3), streams=3)
     delta = [0.7, -1.9, 4.0]
 
-    plain = stepped(traces, delta, magnitude="td_error")
-    scaled = stepped(traces, [100.0 * value for value in delta], magnitude="td_error")
+    plain = stepped(traces, delta, magnitude="td_out")
+    scaled = stepped(traces, [100.0 * value for value in delta], magnitude="td_out")
 
     assert not np.allclose(
         leaves(plain.updates["critic"])["kernel"],
         leaves(scaled.updates["critic"])["kernel"],
     )
+
+
+def test_td_out_clips_a_long_trace_and_leaves_a_short_one_alone():
+    """``td_out`` clips the trace. It does not normalize it.
+
+    This is the whole difference between the two arms' handling of ``z``, and
+    the easiest thing to get wrong by reaching for the normalization that is
+    already written a few lines up. A trace longer than ``C`` comes out at
+    exactly ``C``; a trace shorter than ``C`` comes out untouched, where
+    ``sign`` would have stretched it up to ``C``.
+    """
+
+    long_trace = {
+        name: scaled_to(block, 50.0 * C)
+        for name, block in blocks(jax.random.key(13)).items()
+    }
+    short_trace = {
+        name: scaled_to(block, C / 50.0)
+        for name, block in blocks(jax.random.key(13)).items()
+    }
+
+    clipped = stepped(long_trace, [1.0], magnitude="td_out")
+    for name in long_trace:
+        np.testing.assert_allclose(norm(clipped.updates[name]), C, rtol=1e-5)
+
+    passed = stepped(short_trace, [1.0], magnitude="td_out")
+    for name, block in short_trace.items():
+        # Untouched: delta times the trace itself, with no rescaling at all.
+        for path, leaf in leaves(passed.updates[name]).items():
+            np.testing.assert_allclose(
+                leaf, leaves(block)[path][0], rtol=1e-6, err_msg=f"{name}/{path}"
+            )
+        # And this is where the arms visibly part: `sign` stretches it.
+        stretched = stepped(short_trace, [1.0], magnitude="sign")
+        np.testing.assert_allclose(norm(stretched.updates[name]), C, rtol=1e-5)
+
+
+def test_td_out_carries_the_td_error_into_the_length():
+    """``||dtheta|| == C * |delta|`` once the trace is long enough to clip.
+
+    The unsafe property, asserted rather than assumed: this is the arm where
+    an overshoot can grow the next step, and a version of it that had quietly
+    lost ``|delta|`` would be a second copy of ``sign`` under another name and
+    would control for nothing.
+    """
+
+    traces = {
+        name: scaled_to(block, 50.0 * C)
+        for name, block in blocks(jax.random.key(17)).items()
+    }
+    for surprise in (0.25, 3.0, -12.0):
+        output = stepped(traces, [surprise], magnitude="td_out")
+        for name in traces:
+            np.testing.assert_allclose(
+                norm(output.updates[name]), C * abs(surprise), rtol=1e-5, err_msg=name
+            )
+
+
+def test_the_denominator_does_not_reach_td_out():
+    """``td_out`` divides by nothing, so where ``eps`` sits cannot matter.
+
+    Declared inertness, asserted for the same reason ``eta_f``'s is: a setting
+    that is offered on a branch it does not reach is a knob someone will tune.
+    """
+
+    traces = blocks(jax.random.key(19))
+    shifted = stepped(traces, [2.0], magnitude="td_out", denominator="shifted")
+    clamped = stepped(traces, [2.0], magnitude="td_out", denominator="clamped")
+
+    for name in traces:
+        for path, leaf in leaves(shifted.updates[name]).items():
+            assert np.array_equal(leaf, leaves(clamped.updates[name])[path]), (
+                f"the denominator reached td_out through {name}/{path}"
+            )
 
 
 def test_one_blocks_trace_cannot_spend_anothers_step():
@@ -311,7 +389,7 @@ def test_one_blocks_trace_cannot_spend_anothers_step():
 def test_streams_that_disagree_take_a_shorter_step_than_streams_that_agree():
     """Averaging unit vectors is not a unit vector, and that is the point.
 
-    ``||dtheta|| == eta`` is a per-stream statement. Across streams the rule
+    ``||dtheta|| == C`` is a per-stream statement. Across streams the rule
     averages, so streams pointing different ways shorten the step on their own.
     """
 
@@ -323,9 +401,9 @@ def test_streams_that_disagree_take_a_shorter_step_than_streams_that_agree():
 
     surprise = [1.0] * 4
     np.testing.assert_allclose(
-        norm(stepped(agreeing, surprise).updates["critic"]), ETA, rtol=1e-5
+        norm(stepped(agreeing, surprise).updates["critic"]), C, rtol=1e-5
     )
-    assert norm(stepped(disagreeing, surprise).updates["critic"]) < ETA
+    assert norm(stepped(disagreeing, surprise).updates["critic"]) < C
 
 
 def test_the_direct_directions_are_the_only_part_a_clip_can_reach():
@@ -349,4 +427,4 @@ def test_the_rate_is_reported_under_the_name_every_rule_reports_it_under():
     """One reading means one thing whichever rule is in the way."""
 
     output = stepped(blocks(jax.random.key(8)), [1.0, -1.0, 0.0])
-    np.testing.assert_allclose(output.metrics["step_size"], ETA)
+    np.testing.assert_allclose(output.metrics["step_size"], C)

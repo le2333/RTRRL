@@ -32,7 +32,7 @@ def assert_tree_equal(actual, expected, what):
     assert not moved, f"{what}: {moved} moved"
 
 
-ETA = 0.01
+C = 1.0
 
 # `expand` fills anything unset from the low end of its search domain, which
 # leaves `eta_f`, `eta_pi` and every `lambda` at zero. That is harmless for the
@@ -52,12 +52,12 @@ LIVE = {
 D_RTRRL = {
     **LIVE,
     "torso.optimizer.kind": "d_rtrrl",
-    "torso.optimizer.d_rtrrl.eta": ETA,
+    "torso.optimizer.d_rtrrl.c": C,
     "torso.optimizer.d_rtrrl.magnitude": "sign",
     "torso.optimizer.d_rtrrl.scope": "block",
     "torso.optimizer.d_rtrrl.eps": 1e-8,
     "heads.optimizer.kind": "d_rtrrl",
-    "heads.optimizer.d_rtrrl.eta": ETA,
+    "heads.optimizer.d_rtrrl.c": C,
     "heads.optimizer.d_rtrrl.magnitude": "sign",
     "heads.optimizer.d_rtrrl.scope": "block",
     "heads.optimizer.d_rtrrl.eps": 1e-8,
@@ -188,8 +188,8 @@ def test_the_d_rtrrl_optimizer_is_reachable_from_a_run_configuration():
         assert np.all(np.isfinite(leaf)), f"{path} went non-finite"
     assert np.all(np.isfinite(metrics.update.td_error))
     # The rate every rule reports under one name, and here a constant one.
-    np.testing.assert_allclose(metrics.update.torso_step.step_size, ETA)
-    np.testing.assert_allclose(metrics.update.heads_step.step_size, ETA)
+    np.testing.assert_allclose(metrics.update.torso_step.step_size, C)
+    np.testing.assert_allclose(metrics.update.heads_step.step_size, C)
 
     # Every block took a step. Without this the assertions above are satisfied
     # by a run that never moved: a TD error of zero reaching `sign` leaves the
@@ -201,6 +201,70 @@ def test_the_d_rtrrl_optimizer_is_reachable_from_a_run_configuration():
         assert any(
             not np.array_equal(leaf, after[path]) for path, leaf in before.items()
         ), f"{block} never moved"
+
+
+def test_the_two_arms_differ_in_exactly_the_magnitude_they_keep():
+    """The R3 comparison in miniature: same C, same everything, one difference.
+
+    This is the property the formal arms are read for, asserted here on a tiny
+    environment so it is checkable without a cluster. Over a run of real
+    transitions:
+
+    ``sign``
+        every step moves the torso the same distance, whatever that step's TD
+        error was. The realized update norm is flat.
+    ``td_out``
+        every step moves it a distance proportional to ``|delta|``. The
+        realized update norm divided by ``|delta|`` is what is flat instead.
+
+    The outer clip is off here. At ``grad_clip == C`` it binds on nearly every
+    step and would flatten ``td_out`` too, which is the interaction worth
+    knowing about and not the thing being measured.
+    """
+
+    def realized(magnitude):
+        built = assembled(
+            optimizer={
+                **D_RTRRL,
+                "torso.optimizer.d_rtrrl.magnitude": magnitude,
+                "heads.optimizer.d_rtrrl.magnitude": magnitude,
+                "torso.grad_clip": 0.0,
+            }
+        )
+        state = built.program.init(jax.random.key(0))
+        moves, surprises = [], []
+        for step in range(8):
+            before = flattened(state.core.critic.params)
+            state, metrics = built.program.train(jax.random.key(step + 1), state, 1)
+            after = flattened(state.core.critic.params)
+            moves.append(
+                float(
+                    np.sqrt(
+                        sum(
+                            np.sum(np.square(np.asarray(after[k]) - np.asarray(leaf)))
+                            for k, leaf in before.items()
+                        )
+                    )
+                )
+            )
+            surprises.append(abs(float(np.asarray(metrics.update.td_error).ravel()[0])))
+        # The first step steps with the initial trace, which is zero.
+        return np.array(moves[1:]), np.array(surprises[1:])
+
+    flat, flat_delta = realized("sign")
+    scaled, scaled_delta = realized("td_out")
+
+    # The TD errors are not all equal, or neither claim below means anything.
+    assert flat_delta.std() > 0.05 * flat_delta.mean(), "no spread in |delta| to see"
+
+    # `sign`: the distance is C and says nothing about the surprise.
+    np.testing.assert_allclose(flat, C, rtol=1e-4)
+
+    # `td_out`: the distance is proportional to the surprise instead. The trace
+    # is long enough to be clipped throughout, which is what makes the ratio
+    # exactly C rather than merely increasing.
+    np.testing.assert_allclose(scaled / scaled_delta, C, rtol=1e-4)
+    assert scaled.std() > 0.05 * scaled.mean(), "td_out did not vary with |delta|"
 
 
 def test_the_shared_recurrent_direction_is_formed_before_it_is_normalized():
@@ -267,8 +331,9 @@ def test_a_signed_step_does_not_read_the_torso_td_scaling():
     # The control, without which the assertion above would also pass if `eta_f`
     # never reached the torso rule at all. Under the ablation the same knob has
     # to move the same parameters, or this test is measuring the wiring being
-    # absent rather than the sign discarding it.
-    ablated = (trained("td_error", 1.0), trained("td_error", 100.0))
+    # absent rather than the sign discarding it. `td_out` keeps |delta|, so it
+    # is the arm where the same knob must still be live.
+    ablated = (trained("td_out", 1.0), trained("td_out", 100.0))
     moved = [
         path
         for path, leaf in flattened(ablated[0].core.torso.params).items()
