@@ -767,7 +767,9 @@ class DRQN:
                     feature_dim=selected_core.feature_dim,
                     core_kind=selected_core.kind,
                 ),
-                optimizer=base_transform(components.build(DRQN_OPTIMIZERS, "optimizer")),
+                optimizer=base_transform(
+                    components.build(DRQN_OPTIMIZERS, "optimizer")
+                ),
                 gamma=float(parameters["gamma"]),
                 target_update_period=int(parameters["target.update_period"]),
             ),

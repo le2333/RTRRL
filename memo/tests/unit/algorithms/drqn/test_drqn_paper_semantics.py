@@ -11,6 +11,7 @@ import jax.numpy as jnp
 import numpy as np
 import optax
 import pytest
+from flax.traverse_util import flatten_dict, unflatten_dict
 
 from memorax.algorithms import drqn
 from memorax.algorithms.drqn import Core, LearnerSequence, QFunction, RecurrentInputs
@@ -140,7 +141,9 @@ def test_nothing_the_learner_reads_carries_the_actors_recurrence():
         "done",
         "terminal",
     }
-    assert not [name for name in drqn.LearnerSequence.__dataclass_fields__ if "recur" in name]
+    assert not [
+        name for name in drqn.LearnerSequence.__dataclass_fields__ if "recur" in name
+    ]
 
 
 def test_a_window_starts_from_a_zero_hidden_state():
@@ -188,16 +191,14 @@ def test_the_target_is_one_step_and_greedy_under_the_target_network(dones, termi
 
     start = learner.core.q_function.reset(drqn.ZERO_MEMORY, 1)
     _, online_q, _ = learner.core.q_function.unroll(params, drawn.inputs, start)
-    _, target_q, _ = learner.core.q_function.unroll(
-        target_params, drawn.inputs, start
-    )
+    _, target_q, _ = learner.core.q_function.unroll(target_params, drawn.inputs, start)
     q_value = jnp.take_along_axis(
         online_q[:, :-1], drawn.actions[..., None], axis=-1
     ).squeeze(axis=-1)
     successor = jnp.max(target_q[:, 1:], axis=-1)
-    expected_target = drawn.rewards + 0.5 * (
-        1.0 - drawn.terminals.astype(jnp.float32)
-    ) * successor
+    expected_target = (
+        drawn.rewards + 0.5 * (1.0 - drawn.terminals.astype(jnp.float32)) * successor
+    )
 
     np.testing.assert_allclose(
         np.asarray(readings.q_value), np.asarray(q_value), rtol=1e-6
@@ -208,6 +209,23 @@ def test_the_target_is_one_step_and_greedy_under_the_target_network(dones, termi
         rtol=1e-5,
         atol=1e-6,
     )
+
+
+def ranked_differently(params):
+    """The same network with its two Q outputs exchanged.
+
+    Double Q-learning and plain Q-learning are only two numbers where the two
+    networks disagree about which action is best, so the arrangement is built
+    rather than hoped for: initialisation and a few small steps leave both
+    networks preferring the same action, and then no assertion could tell the
+    two rules apart.
+    """
+
+    flat = dict(flatten_dict(params))
+    head = ("params", "DiscreteQNetwork_0", "Dense_0")
+    flat[(*head, "kernel")] = flat[(*head, "kernel")][:, ::-1]
+    flat[(*head, "bias")] = flat[(*head, "bias")][::-1]
+    return unflatten_dict(flat)
 
 
 def test_the_greedy_action_is_the_target_networks_and_not_the_online_ones():
@@ -222,14 +240,13 @@ def test_the_greedy_action_is_the_target_networks_and_not_the_online_ones():
         rewards=[0.5, 0.25],
     )
     params, target_params = diverged(learner, drawn)
+    target_params = ranked_differently(target_params)
 
     _, readings = learner.core._loss(params, target_params, drawn)
 
     start = learner.core.q_function.reset(drqn.ZERO_MEMORY, 1)
     _, online_q, _ = learner.core.q_function.unroll(params, drawn.inputs, start)
-    _, target_q, _ = learner.core.q_function.unroll(
-        target_params, drawn.inputs, start
-    )
+    _, target_q, _ = learner.core.q_function.unroll(target_params, drawn.inputs, start)
     online_choice = jnp.argmax(online_q[:, 1:], axis=-1)
     double_q = jnp.take_along_axis(
         target_q[:, 1:], online_choice[..., None], axis=-1
