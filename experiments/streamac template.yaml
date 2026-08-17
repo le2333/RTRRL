@@ -22,7 +22,12 @@ environment:
   id: brax::hopper
   backend: spring
   observed: [0, 2, 4, 6, 8, 10]
-  seed: 0 # 这个不进图，是 runtime 的随机源
+  # 不进图，是 runtime 的随机源。列表而非标量：每个配置在这里的**每个**种子
+  # 上各跑一次，而种子**不参与搜索**——两次只差种子的运行是同一个配置量了两
+  # 遍，让采样器抽它等于让 study 把预算花在建噪声的模型上。
+  # 调参阶段列一个；冻结最佳配置后的正式评估列 10 个（离散）或 5 个（Brax），
+  # 并在 `selection` 里声明调参用过哪些，以便拒绝重用。
+  seeds: [0]
   episode_length: 1000
 
 # [透传] num_envs 进图（每个 carry/trace 的第一维），另两个是预算
@@ -34,7 +39,16 @@ training:
 # [透传] 流数不在这里：评估复用训练时那张图的宽度
 evaluation:
   every_steps: 10000
-  rollout_steps: 1000
+  # 一个 checkpoint 恰好按这么多条完整 episode 计分。不是步数预算——跑多久由
+  # 策略决定，按步数给会让 episode 数随任务和策略变，而那正是形式化协议不允
+  # 许变的东西。
+  episodes: 5
+  # 一次评估调用最多装多少环境步，和 training.chunk_steps 同一种量（内存上
+  # 界），与总共要跑多少无关。必须是 num_envs 的整数倍。
+  chunk_steps: 1600
+  # 评估自己的随机源。写出来，训练的 key 流才不会因为「测没测」而改变；两个
+  # 方法声明同一个值，就是在同一批评估 episode 上被比较。
+  seed: 1000
 
 logging:
   aim:

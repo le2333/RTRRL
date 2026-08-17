@@ -123,7 +123,8 @@ def test_both_learners_train_and_evaluate_on_sixteen_actions(name):
 
     state = built.program.init(jax.random.key(0))
     trained, metrics = built.program.train(jax.random.key(1), state, STEPS)
-    evaluated = built.program.evaluate(jax.random.key(2), trained, STEPS)
+    opened = built.program.open_evaluation(jax.random.key(2), trained)
+    _, evaluated = built.program.evaluate(jax.random.key(3), opened, STEPS)
 
     rounds = STEPS // NUM_ENVS
     actions = np.asarray(metrics.interaction.action)

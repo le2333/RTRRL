@@ -23,7 +23,9 @@ environment:
   id: gymnax::CartPole-v1
   backend: null # gymnax 每个环境只有一种实现，没有后端可选
   observed: null
-  seed: 0 # 这个不进图，是 runtime 的随机源
+  # 不进图，是 runtime 的随机源。列表：每个配置在每个种子上各跑一次，种子不
+  # 参与搜索。详见 `streamac template.yaml`。
+  seeds: [0]
   episode_length: 32
 
 # [透传] num_envs 进图（每个 carry 和每次回放写入的第一维），另两个是预算
@@ -35,7 +37,9 @@ training:
 # [透传] 流数不在这里：评估复用训练时那张图的宽度
 evaluation:
   every_steps: 64
-  rollout_steps: 32
+  episodes: 10 # 一个 checkpoint 恰好按这么多条完整 episode 计分
+  chunk_steps: 320 # 一次评估调用的内存上界，num_envs 的整数倍
+  seed: 1000 # 评估自己的随机源，与训练的 key 流分开
 
 logging:
   aim:

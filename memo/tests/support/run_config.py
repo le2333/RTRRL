@@ -11,10 +11,12 @@ def make_run_config(**logging: object) -> RunSpec:
         {
             "contract": CONTRACT_VERSION,
             "identity": {
-                "run_id": "smoke-20260725-000000-t0",
+                "run_id": "smoke-20260725-000000-t0-s0",
                 "experiment": "infra-acceptance",
                 "launch_id": "20260725-000000",
                 "trial": 0,
+                "seed": 0,
+                "role": "tuning",
                 "digest": "registry.example/trainer@sha256:" + "a" * 64,
             },
             "entry": "e",
@@ -33,7 +35,12 @@ def make_run_config(**logging: object) -> RunSpec:
                 "total_steps": 100,
                 "chunk_steps": 100,
             },
-            "evaluation": {"every_steps": 100, "rollout_steps": 0},
+            "evaluation": {
+                "every_steps": 100,
+                "episodes": 0,
+                "chunk_steps": 100,
+                "seed": 7,
+            },
             "logging": {"aim": {"url": "aim://127.0.0.1:1"}, **logging},
         }
     )

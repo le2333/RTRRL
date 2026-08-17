@@ -11,7 +11,7 @@ import yaml
 
 from trainer_infra.experiment import ExperimentError, ExperimentRunner, _absent
 
-CONTRACT = Path(__file__).resolve().parents[2] / "tests" / "contracts" / "v9"
+CONTRACT = Path(__file__).resolve().parents[2] / "tests" / "contracts" / "v10"
 TEMPLATE = Path(__file__).resolve().parents[2] / "experiments" / "streamac template.yaml"
 
 
@@ -20,7 +20,7 @@ def read_json(name: str) -> dict[str, Any]:
 
 
 def test_catalog_fixture_is_the_contract_infra_emits(catalog: Any) -> None:
-    assert catalog["contract"] == read_json("catalog.json")["contract"] == 9
+    assert catalog["contract"] == read_json("catalog.json")["contract"] == 10
 
 
 def test_a_round_emits_the_serialized_run_spec_shape(
@@ -59,6 +59,20 @@ def test_shipped_template_is_complete_for_infra(catalog: Any) -> None:
     assert sorted(_absent(template)) == []
     assert "@sha256:" in template["image"]
     assert template["entry"] in catalog["entries"]
+
+
+@pytest.mark.parametrize(
+    "path", sorted(TEMPLATE.parent.glob("*.yaml")), ids=lambda path: path.stem
+)
+def test_every_shipped_experiment_says_what_this_side_requires(path: Path) -> None:
+    """A field the contract moved is a field every file has to have moved too.
+
+    These are checked in and run by hand months apart, so the one that was not
+    migrated is found here rather than by a container that starts, reads a
+    missing field, and dies.
+    """
+
+    assert sorted(_absent(yaml.safe_load(path.read_text(encoding="utf-8")))) == []
 
 
 def test_an_empty_file_is_refused_before_catalog_use() -> None:

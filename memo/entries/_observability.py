@@ -33,6 +33,8 @@ def build_reporter(config: RunSpec, scratch: Path) -> Reporter:
         experiment=identity.experiment,
         launch_id=identity.launch_id,
         trial=identity.trial,
+        seed=identity.seed,
+        role=identity.role,
         entry=config.entry,
         digest=identity.digest,
     )

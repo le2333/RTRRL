@@ -1,4 +1,4 @@
-"""Every image-side consumer projects the same serialized version-9 run."""
+"""Every image-side consumer projects the same serialized version-10 run."""
 
 from __future__ import annotations
 
@@ -13,7 +13,7 @@ from deployment.contract import CONTRACT_VERSION, Catalog
 from entries._contract import RunSpec
 from worker.envelope import WorkerEnvelope
 
-FIXTURES = Path(__file__).resolve().parents[4] / "tests" / "contracts" / "v9"
+FIXTURES = Path(__file__).resolve().parents[4] / "tests" / "contracts" / "v10"
 
 
 def read_json(name: str) -> dict:
@@ -26,7 +26,7 @@ def test_one_serialized_run_has_worker_and_entry_projections() -> None:
     worker = WorkerEnvelope.model_validate(payload)
     entry = RunSpec.model_validate(payload)
 
-    assert worker.contract == entry.contract == CONTRACT_VERSION == 9
+    assert worker.contract == entry.contract == CONTRACT_VERSION == 10
     assert worker.identity.model_dump() == entry.identity.model_dump()
     assert worker.artifacts.model_dump() == entry.artifacts.model_dump()
     assert worker.algorithm == payload["algorithm"]

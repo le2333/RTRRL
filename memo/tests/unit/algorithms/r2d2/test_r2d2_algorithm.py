@@ -229,8 +229,12 @@ def test_evaluation_uses_fresh_interaction_state_and_leaves_training_unchanged()
     )
 
     key = jax.random.key(16)
-    metrics = algorithm.evaluate(key, state, num_steps=2)
-    altered_metrics = algorithm.evaluate(key, altered, num_steps=2)
+    _, metrics = algorithm.evaluate(
+        key, algorithm.open_evaluation(key, state), num_steps=2
+    )
+    _, altered_metrics = algorithm.evaluate(
+        key, algorithm.open_evaluation(key, altered), num_steps=2
+    )
 
     assert metrics.update is None
     np.testing.assert_allclose(metrics.forward.epsilon, [0.375, 0.375])

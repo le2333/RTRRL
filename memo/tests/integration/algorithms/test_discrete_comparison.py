@@ -132,7 +132,8 @@ def test_every_algorithm_assembles_against_the_same_discrete_environment(name):
 
     state = built.program.init(jax.random.key(0))
     trained, metrics = built.program.train(jax.random.key(1), state, STEPS)
-    evaluated = built.program.evaluate(jax.random.key(2), trained, STEPS)
+    opened = built.program.open_evaluation(jax.random.key(2), trained)
+    _, evaluated = built.program.evaluate(jax.random.key(3), opened, STEPS)
 
     rounds = STEPS // NUM_ENVS
     assert int(trained.step) == STEPS

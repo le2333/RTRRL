@@ -21,7 +21,8 @@
 #
 # What the run is read for:
 #   - the worker exits 0 and publishes result.json and metrics.jsonl
-#   - one hundred eval/episode/return records, every 100k steps
+#   - one hundred evaluation checkpoints, every 100k steps, each of exactly
+#     ten eval/episode/return records
 #   - every train/episode and eval/episode value is finite
 #   - eval/episode/return approaching the paper's 1.00, and in any case well
 #     clear of the -0.35 a memoryless learner scores
@@ -42,7 +43,7 @@ environment:
   id: popjym::RepeatPreviousEasy
   backend: null # popjym ships one implementation per environment
   observed: null # four numbers, and the task is to remember them
-  seed: 0
+  seeds: [0]
   # POPGym's own limit for this variant. Stated because a run document must
   # state one, not because it can move it: popjym's EnvParams is empty and the
   # limit lives on the environment class.
@@ -57,7 +58,9 @@ training:
 
 evaluation:
   every_steps: 100000
-  rollout_steps: 1400
+  episodes: 10
+  chunk_steps: 520
+  seed: 1000
 
 logging:
   aim:

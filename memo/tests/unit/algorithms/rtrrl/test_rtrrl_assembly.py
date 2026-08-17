@@ -94,7 +94,7 @@ def run_document(*, every_steps=None, total_steps=50, episode_length=7):
             total_steps=total_steps,
             chunk_steps=10,
         ),
-        evaluation=SimpleNamespace(every_steps=10, rollout_steps=4),
+        evaluation=SimpleNamespace(every_steps=10, episodes=3, chunk_steps=4, seed=11),
         logging=SimpleNamespace(aim=SimpleNamespace(training=None), rerun=rerun),
     )
 
@@ -175,7 +175,9 @@ def test_entry_only_projects_the_run_config_for_assembly_and_runtime():
     assert request.num_envs == 2
     assert schedule.total_steps == 50
     assert schedule.chunk_steps == 10
-    assert schedule.rollout_steps == 4
+    assert schedule.evaluation_episodes == 3
+    assert schedule.evaluation_chunk_steps == 4
+    assert schedule.evaluation_seed == 11
     assert schedule.num_envs == 2
     assert schedule.seed == 7
 
@@ -237,7 +239,8 @@ def test_generic_assembly_closes_one_shared_torso_rtrrl_graph():
 
     state = built.program.init(jax.random.key(0))
     trained, metrics = built.program.train(jax.random.key(1), state, 2)
-    evaluated = built.program.evaluate(jax.random.key(2), trained, 2)
+    opened = built.program.open_evaluation(jax.random.key(2), trained)
+    _, evaluated = built.program.evaluate(jax.random.key(3), opened, 2)
 
     assert int(trained.step) == 2
     assert metrics.interaction.reward.shape == (2, 1)

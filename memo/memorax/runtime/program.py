@@ -9,7 +9,7 @@ from typing import Any
 
 @dataclass(frozen=True)
 class Program:
-    """The four arrows Runtime schedules, as the graph's own methods.
+    """The five arrows Runtime schedules, as the graph's own methods.
 
     Not compiled. ``assemble`` puts the graph's bound methods here and
     ``Driver`` is what wraps them in ``jax.jit``, with ``num_steps`` static
@@ -22,10 +22,21 @@ class Program:
     ``interact`` is one vectorized behavior-policy transition that learns
     nothing: Runtime schedules it only to finish a sampled episode that the
     training budget cut short.
+
+    Measuring the policy is two arrows rather than one because a checkpoint is
+    scored on a number of *episodes* and a scan is a number of *steps*: how
+    long the requested episodes take is not known until they end.
+    ``open_evaluation`` opens one rollout on the trained parameters, and
+    ``evaluate`` advances that rollout by a bounded number of steps and hands
+    it back, so Runtime can keep asking until the episodes it needs have
+    completed. The state it passes back and forth is the evaluation's own; a
+    caller that has one cannot reach the training state through it, which is
+    what keeps a measurement from becoming an update.
     """
 
     init: Callable[..., Any]
     train: Callable[..., Any]
+    open_evaluation: Callable[..., Any]
     evaluate: Callable[..., Any]
     interact: Callable[..., Any]
 

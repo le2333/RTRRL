@@ -38,12 +38,14 @@ for config_uri in manifest["runs"]:
 
 def configuration(root: Path, trial: int) -> dict:
     return {
-        "contract": 9,
+        "contract": 10,
         "identity": {
-            "run_id": f"run-t{trial}",
+            "run_id": f"run-t{trial}-s0",
             "experiment": "test",
             "launch_id": "launch",
             "trial": trial,
+            "seed": 0,
+            "role": "tuning",
             "digest": "sha256:" + "a" * 64,
         },
         "entry": "e",
@@ -84,12 +86,17 @@ def test_local_executor_serializes_invokes_worker_and_scores_results(
         ),
     )
 
-    assert results == ({"trial": 0, "value": 1.0}, {"trial": 1, "value": 2.0})
+    assert results == (
+        {"trial": 0, "seed": 0, "value": 1.0},
+        {"trial": 1, "seed": 0, "value": 2.0},
+    )
     manifest = json.loads((exchange / "round-000" / "manifest.json").read_text())
     assert len(manifest["runs"]) == 2
     assert all(uri.startswith("file:") for uri in manifest["runs"])
     assert (
-        json.loads((exchange / "round-000" / "trial-000000.json").read_text())
+        json.loads(
+            (exchange / "round-000" / "trial-000000-seed-000000.json").read_text()
+        )
         == (configurations[0])
     )
     assert executor.log_path(0).is_file()

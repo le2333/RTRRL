@@ -28,7 +28,7 @@ environment:
   id: gymnax::CartPole-v1
   backend: null # gymnax ships one implementation per environment
   observed: null
-  seed: 0
+  seeds: [0]
   episode_length: 32
 
 training:
@@ -38,7 +38,9 @@ training:
 
 evaluation:
   every_steps: 5000
-  rollout_steps: 1000
+  episodes: 10
+  chunk_steps: 320
+  seed: 1000
 
 logging:
   aim:
