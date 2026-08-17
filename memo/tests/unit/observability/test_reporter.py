@@ -1,4 +1,4 @@
-from memorax.observability import Reporter
+from memorax.observability import EpisodeScope, Reporter, StepScope, WindowScope
 from tests.support.observability import completed_episode, completed_trajectory
 
 
@@ -96,7 +96,7 @@ def test_the_record_keeps_every_episode_and_the_dashboard_keeps_a_few():
     reporter = Reporter(
         scalar_sinks=[record],
         sampled_sinks=[dashboard],
-        training_every_steps=100,
+        training_scopes=[EpisodeScope(every_episodes=5)],
     )
 
     for number, end in enumerate(range(20, 421, 20), start=1):
@@ -106,23 +106,74 @@ def test_the_record_keeps_every_episode_and_the_dashboard_keeps_a_few():
     assert steps_reaching(dashboard) == [100, 200, 300, 400]
 
 
-def test_an_evaluation_reaches_the_dashboard_whatever_the_interval():
+def test_the_record_names_the_episode_scope_whatever_the_dashboard_was_asked():
+    """The record is one reduction per episode, so it is one scope's names.
+
+    A scope is what the dashboard is configured with. What the run is scored
+    on afterwards does not move because a dashboard was asked for a window.
+    """
+
     record, dashboard = ScalarRecorder(), ScalarRecorder()
     reporter = Reporter(
         scalar_sinks=[record],
         sampled_sinks=[dashboard],
-        training_every_steps=1000,
+        training_scopes=[WindowScope(every_steps=40)],
+    )
+
+    reporter.log_episode(completed_episode(1, span=(0, 8)))
+    reporter.close()
+
+    assert list(record.records[0][1]) == [
+        "train/episode/length",
+        "train/episode/return",
+        "train/episode/return_per_step",
+        "train/episode/return_per_step_variance",
+        "train/episode/td_error",
+        "train/episode/td_error_variance",
+    ]
+    assert list(dashboard.records[0][1]) == [
+        "train/window/length",
+        "train/window/return",
+        "train/window/return_per_step",
+        "train/window/return_per_step_variance",
+        "train/window/td_error",
+        "train/window/td_error_variance",
+    ]
+
+
+def test_the_dashboard_receives_every_scope_the_run_asked_for():
+    dashboard = ScalarRecorder()
+    reporter = Reporter(
+        sampled_sinks=[dashboard],
+        training_scopes=[StepScope(every_steps=4), EpisodeScope(every_episodes=1)],
+    )
+
+    reporter.log_episode(completed_episode(1, span=(0, 8)))
+
+    assert steps_reaching(dashboard) == [4, 8]
+    assert set(dashboard.records[0][1]) == {
+        "train/step/return_per_step",
+        "train/step/td_error",
+    }
+
+
+def test_an_evaluation_reaches_the_dashboard_whatever_the_scopes():
+    record, dashboard = ScalarRecorder(), ScalarRecorder()
+    reporter = Reporter(
+        scalar_sinks=[record],
+        sampled_sinks=[dashboard],
+        training_scopes=[EpisodeScope(every_episodes=1000)],
     )
 
     reporter.log_episode(completed_episode(1, phase="eval", span=(64, 64)))
     reporter.log_episode(completed_episode(2, span=(0, 8)))
 
-    # The evaluation is what the run is scored on, so no interval withholds it.
+    # The evaluation is what the run is scored on, so no schedule withholds it.
     assert steps_reaching(dashboard) == [64]
     assert steps_reaching(record) == [64, 8]
 
 
-def test_an_interval_of_zero_sends_the_dashboard_no_training_at_all():
+def test_no_scope_at_all_sends_the_dashboard_no_training():
     record, dashboard = ScalarRecorder(), ScalarRecorder()
     reporter = Reporter(scalar_sinks=[record], sampled_sinks=[dashboard])
 
@@ -133,16 +184,18 @@ def test_an_interval_of_zero_sends_the_dashboard_no_training_at_all():
     assert steps_reaching(record) == [8, 8]
 
 
-def test_one_long_episode_does_not_fire_every_mark_it_crossed():
-    """The marks it passed are gone, not owed: it is one episode, not four."""
+def test_the_end_of_the_run_reaches_the_dashboard_before_it_is_closed():
+    """A window the budget cut short is still a stretch, and still reported."""
 
     dashboard = ScalarRecorder()
-    reporter = Reporter(sampled_sinks=[dashboard], training_every_steps=10)
+    with Reporter(
+        sampled_sinks=[dashboard], training_scopes=[WindowScope(every_steps=100)]
+    ) as reporter:
+        reporter.log_episode(completed_episode(1, span=(0, 8)))
+        assert steps_reaching(dashboard) == []
 
-    reporter.log_episode(completed_episode(1, span=(0, 45)))
-    reporter.log_episode(completed_episode(2, span=(45, 52)))
-
-    assert steps_reaching(dashboard) == [45, 52]
+    assert steps_reaching(dashboard) == [100]
+    assert dashboard.closed
 
 
 def test_reporter_fans_out_scalars_without_knowing_their_origin():
