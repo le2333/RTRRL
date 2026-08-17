@@ -172,7 +172,12 @@ def test_settle_command_scores_open_trials_and_leaves_unfinished_ones_alone(
 
     payload = json.loads(capsys.readouterr().out)
     assert payload["launch_id"] == LAUNCH
-    assert payload["settled"] == [{"trial": 0, "value": 21.0}]
+    # The seed's own score beside the mean the study was told, because with
+    # one seed they are the same number and with ten they are not.
+    assert payload["settled"] == [
+        {"trial": 0, "value": 21.0, "seed_values": {"0": 21.0}}
+    ]
+    assert payload["seeds"] == [0]
     assert [entry["trial"] for entry in payload["still_running"]] == [1]
     persisted = optuna.load_study(study_name=experiment["name"], storage=f"sqlite:///{database}")
     assert [trial.state.name for trial in persisted.trials] == ["COMPLETE", "RUNNING"]
@@ -206,6 +211,7 @@ def test_batch_run_routes_deployment_fields_to_batch_executor(
             return tuple(
                 {
                     "trial": configuration["identity"]["trial"],
+                    "seed": configuration["identity"]["seed"],
                     "value": float(configuration["identity"]["trial"]),
                 }
                 for configuration in configurations

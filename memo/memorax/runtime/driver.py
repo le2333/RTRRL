@@ -2,13 +2,12 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Protocol
 
 import jax
 
 from memorax.runtime.episode import Episode, SampledTrajectory
-from memorax.runtime.rollout import complete_episodes
 from memorax.runtime.tracker import EpisodeTracker, TrackingResult
 
 from .program import BuiltAlgorithm
@@ -40,16 +39,46 @@ def evaluation_boundaries(
     return range(every_steps, total_steps + 1, every_steps)
 
 
+def evaluation_quota(*, episodes: int, num_envs: int) -> tuple[int, ...]:
+    """How many episodes each stream contributes to one checkpoint's score.
+
+    A checkpoint is scored on an exact number of episodes, and which ones
+    those are must not depend on which finished first: an episode that ends
+    early is not thereby more representative, and taking the first to arrive
+    would score short episodes preferentially. So a slot is named before the
+    rollout runs -- stream ``i``'s ``j``-th episode fills slot ``j * n + i`` --
+    and the scored episodes are the ones whose slot number is below the
+    requested count. The rollout then runs until every named slot is filled.
+
+    This asks nothing of ``episodes`` and ``num_envs`` beyond both being
+    positive: the streams that hold a lower index simply contribute one more.
+    """
+
+    return tuple(len(range(stream, episodes, num_envs)) for stream in range(num_envs))
+
+
 @dataclass(frozen=True)
 class RuntimeConfig:
     """Only the scheduling values Runtime consumes.
 
-    Three schedules that used to be one. ``chunk_steps`` is how much a single
+    Four schedules that used to be two. ``chunk_steps`` is how much a single
     training call may hold, which is what a run costs in memory.
     ``evaluate_every_steps`` is when the policy is measured. Neither derives
     from the other, and neither derives from ``max_episode_steps``, which is
-    the environment's own limit and only a guard: an episode longer than that
-    is refused rather than reported.
+    the environment's own limit and here does double duty: it refuses an
+    episode longer than itself, and it is what bounds an evaluation that is
+    counted in episodes rather than in steps.
+
+    ``evaluation_episodes`` is how many complete episodes each checkpoint is
+    scored on, exactly; zero measures nothing. ``evaluation_chunk_steps`` is
+    the memory bound on one evaluation call, the same kind of number as
+    ``chunk_steps`` and unrelated to how long the episodes turn out to be.
+
+    ``evaluation_seed`` opens a key stream of its own. Evaluation must not
+    move the training one, or whether a run was measured would change what it
+    then learned; deriving each checkpoint's keys from this seed and the
+    boundary also makes the evaluation of two runs reproducible on its own
+    terms, and pairable across methods that declare the same seed.
 
     ``trajectory_at_steps`` names the environment steps whose training episode
     is to be kept whole.
@@ -59,7 +88,9 @@ class RuntimeConfig:
     chunk_steps: int
     max_episode_steps: int
     evaluate_every_steps: int
-    rollout_steps: int
+    evaluation_episodes: int
+    evaluation_chunk_steps: int
+    evaluation_seed: int
     num_envs: int
     seed: int
     trajectory_at_steps: tuple[int, ...] = ()
@@ -84,12 +115,16 @@ class Runtime:
 
         program = self.algorithm.program
         train = jax.jit(program.train, static_argnums=2)
+        open_evaluation = jax.jit(program.open_evaluation)
         evaluate = jax.jit(program.evaluate, static_argnums=2)
         interact = jax.jit(program.interact)
 
         key = jax.random.key(config.seed)
         key, init_key = jax.random.split(key)
         state = jax.jit(program.init)(init_key)
+        # Never split from ``key``: the training stream must run identically
+        # whether or not the policy was measured along the way.
+        evaluation_key = jax.random.key(config.evaluation_seed)
 
         tracker = EpisodeTracker(
             observations=self.algorithm.observations,
@@ -112,21 +147,96 @@ class Runtime:
                 )
                 trained_steps += steps
 
-            if not config.rollout_steps:
+            if not config.evaluation_episodes:
                 continue
-            key, eval_key = jax.random.split(key)
-            observations = evaluate(eval_key, state, config.rollout_steps)
-            eval_number = self._report(
+            eval_number = self._measure(
                 reporter,
-                observations,
-                phase="eval",
-                start_env_steps=boundary,
-                stride=0,
+                open_evaluation,
+                evaluate,
+                jax.random.fold_in(evaluation_key, boundary),
+                state,
+                boundary=boundary,
                 first_number=eval_number,
             )
 
         key, tail_key = jax.random.split(key)
         self._finish_samples(reporter, tracker, interact, tail_key, state)
+
+    def _measure(
+        self,
+        reporter: Destination,
+        open_evaluation,
+        evaluate,
+        key,
+        state,
+        *,
+        boundary: int,
+        first_number: int,
+    ) -> int:
+        """Score one checkpoint on exactly the episodes it was asked for.
+
+        The rollout is opened once and advanced in bounded calls until every
+        named slot holds a complete episode, which is why it cannot be a
+        single scan: how many steps that takes is what the policy decides.
+        Nothing here reaches the training state -- ``state`` is only ever read,
+        and what the algorithm hands back is the evaluation's own.
+        """
+
+        config = self.config
+        quota = evaluation_quota(
+            episodes=config.evaluation_episodes, num_envs=config.num_envs
+        )
+        tracker = EpisodeTracker(
+            observations=self.algorithm.observations,
+            num_envs=config.num_envs,
+            max_episode_steps=config.max_episode_steps,
+            phase="eval",
+            stride=0,
+            require_series=False,
+        )
+        collected: list[list[Episode]] = [[] for _ in quota]
+
+        # Every stream ends an episode at least once per ``max_episode_steps``
+        # rows, because that is where the environment truncates, so this many
+        # steps cannot fail to fill the quota. Reaching it means the episodes
+        # are not ending, and a measurement that never finishes is worse than
+        # one that says so.
+        budget = max(quota) * config.max_episode_steps * config.num_envs
+        key, open_key = jax.random.split(key)
+        evaluation = open_evaluation(open_key, state)
+        spent = 0
+        while any(len(found) < wanted for found, wanted in zip(collected, quota)):
+            if spent >= budget:
+                raise ValueError(
+                    f"evaluation at {boundary} environment steps did not complete "
+                    f"{config.evaluation_episodes} episodes within {budget} steps"
+                )
+            steps = min(config.evaluation_chunk_steps, budget - spent)
+            key, chunk_key = jax.random.split(key)
+            evaluation, chunk = evaluate(chunk_key, evaluation, steps)
+            for episode in tracker.consume(chunk, start_env_steps=boundary).completed:
+                collected[episode.stream].append(episode)
+            spent += steps
+
+        for slot, episode in sorted(self._slots(collected, quota)):
+            reporter.log_episode(replace(episode, number=first_number + slot))
+        return first_number + config.evaluation_episodes
+
+    def _slots(self, collected, quota) -> list[tuple[int, Episode]]:
+        """The scored episodes, each under the slot number that named it.
+
+        A stream that ran ahead of its quota has episodes here that no slot
+        asked for. They are not scored: the checkpoint was defined as an exact
+        number of episodes, and an extra one is as much a change to that
+        number as a missing one.
+        """
+
+        num_envs = self.config.num_envs
+        return [
+            (index * num_envs + stream, episode)
+            for stream, wanted in enumerate(quota)
+            for index, episode in enumerate(collected[stream][:wanted])
+        ]
 
     def _finish_samples(
         self,
@@ -169,15 +279,3 @@ class Runtime:
             reporter.log_episode(episode)
         for trajectory in result.sampled:
             reporter.log_trajectory(trajectory)
-
-    def _report(self, reporter: Destination, chunk, **cut) -> int:
-        number = cut["first_number"]
-        for episode in complete_episodes(
-            chunk,
-            observations=self.algorithm.observations,
-            num_envs=self.config.num_envs,
-            **cut,
-        ):
-            reporter.log_episode(episode)
-            number = episode.number + 1
-        return number

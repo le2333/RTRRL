@@ -103,7 +103,7 @@ def publish(
     payload = make_run_config().model_dump(mode="json")
     payload["contract"] = contract
     payload["identity"]["trial"] = trial
-    payload["identity"]["run_id"] = f"smoke-20260725-000000-t{trial}"
+    payload["identity"]["run_id"] = f"smoke-20260725-000000-t{trial}-s0"
     payload["entry"] = entry
     payload["artifacts"]["root"] = f"memory://runs/t{trial}"
     uri = f"memory://configs/t{trial}.json"
@@ -144,10 +144,12 @@ def test_runs_are_serially_isolated_and_publish_artifact_trees(
         assert payload == {
             "contract": CONTRACT_VERSION,
             "identity": {
-                "run_id": f"smoke-20260725-000000-t{trial}",
+                "run_id": f"smoke-20260725-000000-t{trial}-s0",
                 "experiment": "infra-acceptance",
                 "launch_id": "20260725-000000",
                 "trial": trial,
+                "seed": 0,
+                "role": "tuning",
                 "digest": "registry.example/trainer@sha256:" + "a" * 64,
             },
             "success": True,

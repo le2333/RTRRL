@@ -22,6 +22,11 @@ class AimSink:
         self._run.name = metadata.run_id
         self._run["launch_id"] = metadata.launch_id
         self._run["trial"] = metadata.trial
+        # Without these a formal launch is ten indistinguishable curves of one
+        # trial, and nothing on the dashboard says which of them may be read
+        # as a result.
+        self._run["seed"] = metadata.seed
+        self._run["role"] = metadata.role
         self._run["entry"] = metadata.entry
         self._run["digest"] = metadata.digest
         self._run["params"] = dict(parameters)

@@ -1136,3 +1136,102 @@ driver 两边都传 `config.evaluation.steps`，所以**每次 shipped 评估都
 去减 `(eval_envs, obs_dim)` 的样本。而 `RunningNormalization.reset_on_start` 的默认搜索值
 就是 `False`。要么拒绝这个组合，要么把逐流统计量归约后广播——后者改的是统计量的语义，
 不该由这个功能顺带决定。
+
+---
+
+# R5 — 形式化协议（issue 46，已完成）
+
+主文结果要能被引用，需要三件今天没有的东西：checkpoint 的 episode 数是**确切**的、
+主分是**固定评估曲线的 AUC**、种子的新鲜性是**被校验并归档的身份**。契约 9→10。
+
+## R5a 评估按 episode 数，而不是按步数
+
+**这是本轮唯一一处非改不可的结构变动。** 一个 checkpoint 按 N 条完整 episode 计分，
+而"N 条 episode"不是任何一个步数——跑多久由策略决定。于是 `evaluate` 一次 scan 装不下
+它，程序契约从四支箭变成五支：
+
+```
+open_evaluation(key, state) -> eval_state          # 原来的私有 _evaluation_state
+evaluate(key, eval_state, n) -> (eval_state, m)    # 原来只返回 m
+```
+
+driver 拿着 `eval_state` 反复调用，直到点名的槽位都填满。**交回状态并没有打开"评估污染
+训练"这个洞**：那个状态是 `open_evaluation` 在全新环境上建的，调用方拿到的从来不是训练
+状态，而 driver 也不写回。R4e-3 记的"`evaluate` 只返回 metrics，所以写不回去"这条论据
+到此换了形式，结论没变。
+
+### 哪 N 条算数：先点名，不看谁先跑完
+
+按完成顺序取前 N 条会**系统性偏向短 episode**——短的先结束。所以槽位在 rollout 跑之前
+就定好：第 i 流的第 j 条填 `j * num_envs + i`，槽号 < N 的才计分。这条规则不要求 N 被
+流数整除（低位流多担一条），也不受完成时间影响；跑超了的额外 episode 同样不计分——**多
+一条和少一条一样是改了那个数**。
+
+### episode 切割只剩一份实现
+
+原来训练走 `EpisodeTracker`（跨 chunk 续接），评估走 `rollout.complete_episodes`（单块内
+切）。要跨调用凑够 N 条就必须续接，于是评估也走 tracker，`rollout.py` 整个删除，它的
+`read` 搬进 `tracker.py`。tracker 多两个参数：`phase` 和 `stride`（0 = 钉在 boundary 上，
+评估不推进横轴）。
+
+第三个参数 `require_series` 是删这份重复时暴露的**真实语义差**：schema 的 series 是算法的
+**更新读数**，训练缺一个是接线错误，而评估不做更新，那些读数本来就不存在。旧的
+`complete_episodes` 静默跳过，tracker 严格报错——两边都对，只是对着不同的相位。
+
+## R5b 评估有自己的 key 流
+
+原来 driver 是 `key, eval_key = jax.random.split(key)`，也就是**跑没跑评估会改变后续训练
+的 key**。同一份配置每 10k 测一次和每 100k 测一次，训练轨迹不是同一条。这不是本轮引入
+的，是本轮才被写下来的。
+
+现在 `evaluation.seed` 独立开一条流，每个 checkpoint 的 key 是 `fold_in(eval_key,
+boundary)`。顺带得到两件事：评估自身可复现，且两个方法声明同一个 seed 就是在**配对的**
+评估 episode 上被比较。
+
+## R5c 打分器：两级归约
+
+**issue 没写这一层，但它是被数据形状逼出来的**：eval 的每条 episode 在 metrics.jsonl 里
+是**一行**，同一个 checkpoint 的 10 条是 10 行同 step。所以 AUC 不能对行做——那等于按
+"这个 checkpoint 碰巧记了几条"给它加权，而固定 episode 数存在的意义正是让这个不变。
+
+`auc` 和 `last_checkpoints` 先把同一 step 的行归约成该 checkpoint 的均值，再对均值序列
+做归约。五个老的点归约照旧读行，未动。
+
+AUC 取**归一化**形式（除以步跨度），量纲同 return，可与 last-five 并排读、可跨预算比；
+对固定预算它是原始积分乘常数，HPO 排序完全一致。端点是**窗口内实际到达的**首末
+checkpoint 而不是窗口边界——延伸到没测过的步等于外推。缺测的区间由梯形跨过（即两侧连
+线），这与画曲线时看到的是同一条线。
+
+`episodes_per_checkpoint` 是可选的一项，它把 runtime 的"确切"从一句声明变成**被检查的
+断言**：某个 checkpoint 没报够条数就拒绝这份文件。
+
+内存约束照旧（#33 的教训）：折叠只持一个未闭合 checkpoint、前一个 checkpoint、最后 k 个
+均值，不随文件长度增长。
+
+## R5d 种子是被声明的维度，不是被搜索的参数
+
+`environment.seed`（标量）→ `environment.seeds`（列表）。每个配置在列表里**每个**种子上
+各跑一次，种子**不进搜索空间**——两次只差种子的运行是同一个配置量了两遍，让采样器抽它
+等于让 study 把预算花在建噪声的模型上，然后把手气最好的那次报成最优配置。
+
+调参列一个，此时"均值"就是那一次的分数本身，与 issue 46 说的"HPO 内不做多种子聚合"一致；
+正式评估列 10 个（离散）或 5 个（Brax）。#38 想要的分组种子调参因此不需要单独的调度器，
+它是这个列表长度大于一时的自然行为。
+
+run 的身份随之变成 (trial, seed)：`run_id` 加 `-s{seed}`，`identity` 加 `seed` 和 `role`，
+交换区的文件名加 `-seed-NNNNNN`。**没有新增子命令**——正式评估是一份手写的实验文件，
+`selection` 块声明它从哪个 study 的哪个 trial 冻结而来、调参用过哪些种子，三条拒绝规则
+（种子重叠、space 还在搜、主分是 `train/` 指标）在起容器之前失败。
+
+## R5e 没做的
+
+- **"Original RTRRL 和 PPO 镜像"在本仓库无对象**：`entries/` 只有 rtrrl / r2d2 /
+  stream_ac，`algorithms/ppo.py` 存在但没有 entry 也没有 catalog 条目。issue 里"先检查
+  现有镜像是否支持精确 episode 数"这条按不适用处理。
+- **契约 bump 无法回避**：`evaluation` 块换了字段而 `RunSpec` 是 `extra="forbid"`，钉住
+  的镜像必须重建。issue 说的"prefer compatible adapters around pinned images"对 memo 的
+  三个 entry 不成立——旧镜像本来就做不到精确 episode 数。两个 smoke 配置的 `image` 因此
+  留 `TBD`，与 `rtrrl repeatprevious memo.yaml` 同样的状态。
+- **`trainerctl-manual.md` 的陈旧不止这一处**：它仍写着 `epoch_steps`、
+  `evaluation.num_envs`、`logging.aim` 是字符串、`enable_rerun`——都是 R1a 删掉的字段。
+  本轮只改了 issue 46 触及的那几节，其余未动。

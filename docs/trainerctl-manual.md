@@ -21,6 +21,7 @@ read the others when you need them.
   - [Metric names and what they were reduced over](#metric-names-and-what-they-were-reduced-over)
   - [The search space](#the-search-space)
   - [Scoring](#scoring)
+  - [Reporting a result](#reporting-a-result)
   - [Command reference](#command-reference)
   - [Output and where things land](#output-and-where-things-land)
   - [When something fails](#when-something-fails)
@@ -36,10 +37,11 @@ read the others when you need them.
 no defaults file, no groups. Everything a launch needs is in the one YAML you pass on the
 command line.
 
-**One trial is one training run.** The task, the budget and the seed are fixed for the
-study. Optuna proposes a complete algorithm parameter dictionary; that dictionary reaches
-the entry unchanged alongside the run's other sections; the entry trains once and reports
-metrics. A Batch job may carry several trials, but a trial is never split across jobs.
+**One trial is one configuration, and one run per seed it is measured on.** The task, the
+budget and the list of seeds are fixed for the study. Optuna proposes a complete algorithm
+parameter dictionary; that dictionary reaches the entry unchanged alongside the run's
+other sections; the entry trains once and reports metrics. A Batch job may carry several
+runs, but a run is never split across jobs.
 Within the algorithm parameters there is no separate notion of "fixed" versus "searched" —
 a parameter pinned to one value is a distribution with one option.
 
@@ -50,7 +52,7 @@ image digest identifies the code that runs.
 
 **The two sides share a JSON format, not a package.** Infra writes run configurations and
 manifests; the Worker and the entry inside the image read them. Neither imports the
-other. `docs/contract.md` is that format, and `contract: 10` in a document is what lets a
+other. `docs/contract.md` is that format, and `contract: 11` in a document is what lets a
 mismatch be refused rather than misread.
 
 **Rounds are how the optimiser learns.** A study of `rounds × trials_per_round` trials
@@ -105,7 +107,7 @@ storage: s3://rtrrl-artifacts-007122174918/trainer
 environment:
   id: brax::hopper
   backend: spring                     # null where the namespace has one implementation
-  seed: 0
+  seeds: [0]                          # every configuration runs once per seed; not searched
   episode_length: 1000
   observed: [0, 2, 4]                 # optional; omit for full observability
 
@@ -116,7 +118,9 @@ training:
 
 evaluation:
   every_steps: 10000
-  rollout_steps: 1000
+  episodes: 5                         # exactly this many complete episodes per checkpoint
+  chunk_steps: 16000                  # memory bound on one evaluation call
+  seed: 1000                          # the evaluation's own key stream
 
 compute:
   instance_type: c7a.large
@@ -138,7 +142,8 @@ space:                                # overrides the catalog's tree, same shape
 score:
   metric: eval/episode/return_per_step
   window_steps: [0, 2000000]
-  reduce: last
+  reduce: auc
+  episodes_per_checkpoint: 5          # optional; refuses a checkpoint that reported fewer
   non_finite: worst
   direction: maximize
 
@@ -166,7 +171,7 @@ that space change under a study that has already recorded trials against the old
 | --- | --- |
 | `id` | Environment identifier passed to the entry, such as `brax::hopper` |
 | `backend` | Physics backend, such as `spring`; `null` where the namespace has only one |
-| `seed` | Seeds this study's environment and initialisation stream; must not be negative |
+| `seeds` | The seeds every configuration is run on; distinct, non-negative, at least one |
 | `episode_length` | The environment's own episode cap; must be positive |
 | `observed` | Optional observation dimension indices visible to the agent |
 
@@ -175,8 +180,16 @@ the network's input layer genuinely shrink. Omit it for full observability. The 
 not be empty, repeat an index, or contain a negative index. `backend: null` and
 `observed: null` both say "not applicable", which is not the same as omitting the field.
 
-`seed` is one value, not a list. A study is one seed; to run several, write one experiment
-file per seed.
+`seeds` is a list, and it is **not searched**. A seed is not a hyperparameter: two runs
+that differ only in it are the same configuration measured twice, so letting the sampler
+draw one would spend the study's budget modelling noise and then report the luckiest draw
+as the best setting. Every configuration is instead run once per listed seed, and the
+optimiser is told the mean; the per-seed scores are printed beside it under `seed_values`
+and are what a result table reports.
+
+A tuning launch lists one seed, which leaves that mean the one run's score unchanged. The
+formal launch that follows lists ten fresh seeds on a discrete task or five on Brax — see
+[Reporting a result](#reporting-a-result).
 
 **`training`.** Three schedules that were one field before contract 9, and none of them
 derives from another.
@@ -196,12 +209,40 @@ it would tie a memory budget to a number that has nothing to do with memory.
 | Field | Meaning |
 | --- | --- |
 | `every_steps` | Environment steps between measurements of the policy |
-| `rollout_steps` | Length of each measurement; zero skips evaluation entirely |
+| `episodes` | How many complete episodes each measurement is scored on, exactly; zero skips evaluation entirely |
+| `chunk_steps` | How much of one measurement a single call may hold |
+| `seed` | The evaluation's own key stream; must not be negative |
 
-The entry refuses a document whose schedules do not divide: `chunk_steps` and
-`evaluation.every_steps` must each contain a whole number of environment steps
-(divisible by `num_envs`), and `total_steps` must be a whole number of evaluation
-intervals. These are checked when the run starts, not by the control plane.
+`episodes` is a count, not a budget. How long those episodes run is what the policy
+decides, so asking for steps instead lets the number of episodes vary with the task and
+with training — which is what a protocol may not let vary. Worse, it varies in a
+direction: a step budget truncates whichever episode was still running, which is the
+longest one, so the episodes that survive are systematically the short ones. On a task
+where the return is the length, that is a thumb on the scale of the very quantity being
+measured.
+
+The runtime keeps advancing the rollout until the count is reached, and refuses the run
+if the episodes are not ending. An episode a stream ran past the count is not scored
+either: one extra changes the number as much as one missing.
+
+With more than one stream the count is split by naming the slots before the rollout
+runs — stream `i`'s `j`-th episode fills slot `j * num_envs + i`, and the scored episodes
+are the ones whose slot is below `episodes`. Nothing has to divide anything: the lower
+streams simply contribute one more, and which episodes count never depends on which
+finished first.
+
+`chunk_steps` is a memory bound of the same kind as `training.chunk_steps` and says
+nothing about how much is run.
+
+`seed` is separate from the environment's seeds so that evaluation cannot move the
+training key stream: a run must learn the same thing whether it was measured every ten
+thousand steps or every hundred thousand. Two methods that declare the same evaluation
+seed are measured on paired evaluation episodes.
+
+The entry refuses a document whose schedules do not divide: `chunk_steps`,
+`evaluation.chunk_steps` and `evaluation.every_steps` must each contain a whole number of
+environment steps (divisible by `num_envs`), and `total_steps` must be a whole number of
+evaluation intervals. These are checked when the run starts, not by the control plane.
 
 **`compute`.** Required for `--backend batch`; unread for `local`.
 
@@ -350,7 +391,9 @@ The score is what the optimiser sees. It is computed by the control plane from t
 | --- | --- |
 | `metric` | Must be one of the metrics the entry declares in the catalog |
 | `window_steps` | `[low, high]`, inclusive, in environment steps |
-| `reduce` | `mean`, `median`, `min`, `max`, `last` |
+| `reduce` | `mean`, `median`, `min`, `max`, `last`, `auc`, `last_checkpoints` |
+| `checkpoints` | Required by `last_checkpoints`, accepted by nothing else: how many of the last measured steps to average |
+| `episodes_per_checkpoint` | Optional, and only for `auc` and `last_checkpoints`: the episode count each checkpoint must have reported |
 | `direction` | `maximize` or `minimize` |
 | `non_finite` | `worst`, or a number |
 
@@ -358,10 +401,68 @@ Score an evaluation metric. `eval/episode/return` and `eval/episode/return_per_s
 the two usual choices, and both are unbiased by construction: an evaluation is a
 measurement the run asked for at a fixed step, not a sample of something that happened.
 
+The first five reductions read the metric's rows. `auc` and `last_checkpoints` read the
+**evaluation curve**: a checkpoint is one measured step and arrives as one row per
+episode, so the rows of a step become that checkpoint's mean and the reduction runs over
+those means. Reducing the rows directly would weigh each checkpoint by how many episodes
+it happened to report, which is what the fixed episode count exists to stop varying.
+
+`auc` is the area under that curve per environment step — a step-weighted mean, so it
+reads on the scale of the returns it integrates and is comparable across budgets. Its
+endpoints are the first and last checkpoint the window admitted, never the window's own
+bounds, which nothing was measured at. Between them the trapezoid rule spans whatever
+spacing the checkpoints have, so an interval missing its measurement is crossed by the
+line between its neighbours rather than dropped. One checkpoint has no area and is an
+error.
+
+`episodes_per_checkpoint` turns the runtime's exactness into a claim the control plane
+checks: a checkpoint that did not report that many values for the metric is refused
+rather than averaged, because a checkpoint scored on nine episodes is not the quantity
+the other runs report.
+
 `non_finite: worst` substitutes an ordered-worst value for NaN or infinity, which keeps a
 diverged trial in the study as a strong negative signal rather than killing the launch.
 Giving a number instead pins that substitution yourself. A run that reports nothing inside
 the window is a failure, not a bad score.
+
+### Reporting a result
+
+A study chooses a configuration. It does not measure one: the configuration it reports as
+best was chosen partly by the luck of the seed it was tuned on, so its tuning score is
+biased upward and is not a result. Measuring it is a second launch.
+
+That launch is an ordinary experiment file with three differences, and declaring them is
+what makes it one:
+
+```yaml
+environment:
+  seeds: [100, 101, 102, 103, 104, 105, 106, 107, 108, 109]  # fresh; ten discrete, five Brax
+
+selection:
+  study: rtrrl-repeatprevious          # where the configuration came from
+  trial: 3                             # which trial was frozen
+  tuning_seeds: [0]                    # what it was chosen on, and may not reuse
+
+space:
+  # every leaf a single value: the frozen best parameter dictionary
+```
+
+`trainerctl` refuses the launch if any of those claims fails, before any container starts:
+
+| Refusal | Cause |
+| --- | --- |
+| `formal seeds [...] were already used to tune this configuration` | A listed seed appears in `selection.tuning_seeds` |
+| `a formal launch runs the configuration it froze, but [...] still offer more than one value` | Something under `space` is still being searched |
+| `a formal launch cannot be scored on 'train/...'` | Training return is a diagnostic, never a formal score |
+| `the selection block does not say [...]` | `selection` is present but incomplete |
+
+Every run carries `identity.role` (`tuning` or `formal`) and `identity.seed` into its
+`result.json` and onto its Aim run, so a result found on its own can still say what it is
+allowed to be used for. The launch's seeds, evaluation seed and selection are archived on
+the study as user attributes and printed in the report.
+
+There is no `trainerctl formal` subcommand. Freezing the best dictionary is an edit to a
+file you keep, which is what every other decision in this facility is.
 
 ### Command reference
 
@@ -418,7 +519,7 @@ result.json                    # written beside the run's artifacts once the upl
 The worker uploads only after the entry exits zero, and it keeps the local scratch
 directory of a failed run for diagnosis rather than cleaning it up.
 
-In Aim, each trial appears as a run named `{name}-{launch_id}-t{trial}` under the
+In Aim, each run appears named `{name}-{launch_id}-t{trial}-s{seed}` under the
 experiment, carrying the launch id, trial number, entry, image digest and the full
 algorithm parameter dictionary.
 

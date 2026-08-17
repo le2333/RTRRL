@@ -33,7 +33,7 @@ from memorax.rl.updates import (
     ObBound,
     Sgd,
 )
-from memorax.runtime.rollout import complete_episodes
+from memorax.runtime.tracker import EpisodeTracker
 from tests.support.environments import TinyContinuousEnv
 
 
@@ -253,13 +253,15 @@ def test_the_algorithm_restarts_the_environment_when_an_episode_ends():
         jax.random.key(1), state, 2 * horizon + 2
     )
 
-    episodes = list(
-        complete_episodes(
-            metrics,
-            phase="train",
-            start_env_steps=0,
+    episodes = (
+        EpisodeTracker(
+            # This program was built recording nothing, so the schema it
+            # answers to is the one without the trajectory paths.
+            observations=OBSERVATIONS.recording(frozenset()),
             num_envs=1,
-            observations=OBSERVATIONS,
+            max_episode_steps=horizon,
         )
+        .consume(metrics, start_env_steps=0)
+        .completed
     )
     assert [len(episode.rewards) for episode in episodes] == [horizon, horizon]

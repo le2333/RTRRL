@@ -50,9 +50,12 @@ def run_runtime(
     *,
     train,
     interact=None,
+    evaluate=None,
     recorder=None,
     trajectory_at_steps=(),
-    rollout_steps=0,
+    evaluation_episodes=0,
+    evaluation_chunk_steps=NUM_ENVS,
+    evaluation_seed=0,
     # Whatever the program's ``init`` hands back: an array here, a tuple of
     # counters where a test wants to see two of them move independently.
     initial_state: Any = jnp.asarray(0, jnp.int32),
@@ -64,13 +67,16 @@ def run_runtime(
             program=Program(
                 init=lambda key: initial_state,
                 train=train,
-                evaluate=lambda key, state, num_steps: None,
+                open_evaluation=lambda key, state: jnp.asarray(0, jnp.int32),
+                evaluate=evaluate or (lambda key, state, num_steps: (state, None)),
                 interact=interact or (lambda key, state: None),
             ),
             observations=OBSERVATIONS,
         ),
         config=RuntimeConfig(
-            rollout_steps=rollout_steps,
+            evaluation_episodes=evaluation_episodes,
+            evaluation_chunk_steps=evaluation_chunk_steps,
+            evaluation_seed=evaluation_seed,
             num_envs=NUM_ENVS,
             seed=0,
             trajectory_at_steps=trajectory_at_steps,
@@ -401,34 +407,23 @@ def test_evaluation_still_reports_at_the_boundary_it_measured():
         )
 
     def evaluate(key, state, num_steps):
-        del key, state, num_steps
-        return Metrics(
+        del key, num_steps
+        return state, Metrics(
             interaction=Interaction(
                 reward=jnp.ones((2, NUM_ENVS)), done=ending, terminal=ending
             )
         )
 
-    recorder = EpisodeRecorder()
-    Runtime(
-        algorithm=BuiltAlgorithm(
-            program=Program(
-                init=lambda key: jnp.asarray(0, jnp.int32),
-                train=train,
-                evaluate=evaluate,
-                interact=lambda key, state: None,
-            ),
-            observations=OBSERVATIONS,
-        ),
-        config=RuntimeConfig(
-            total_steps=8,
-            evaluate_every_steps=4,
-            rollout_steps=4,
-            num_envs=NUM_ENVS,
-            seed=0,
-            chunk_steps=4,
-            max_episode_steps=2,
-        ),
-    ).run(recorder)
+    recorder = run_runtime(
+        train=train,
+        evaluate=evaluate,
+        total_steps=8,
+        evaluate_every_steps=4,
+        evaluation_episodes=2,
+        evaluation_chunk_steps=4,
+        chunk_steps=4,
+        max_episode_steps=2,
+    )
 
     # An evaluation measures the policy as it stood at the boundary, so both of
     # its episodes are dated there rather than spread forward.

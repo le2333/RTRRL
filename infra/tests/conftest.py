@@ -18,7 +18,7 @@ IMAGE = f"registry.example/trainer@{DIGEST}"
 @pytest.fixture
 def catalog() -> dict[str, Any]:
     return {
-        "contract": 10,
+        "contract": 11,
         "entries": {
             "stream_ac": {
                 "command": ["python", "-m", "entries.stream_ac"],
@@ -63,12 +63,17 @@ EXPERIMENT: dict[str, Any] = {
     "environment": {
         "id": "brax::hopper",
         "backend": "spring",
-        "seed": 0,
+        "seeds": [0],
         "episode_length": 1000,
         "observed": [0, 2, 4],
     },
     "training": {"num_envs": 4, "total_steps": 200, "chunk_steps": 100},
-    "evaluation": {"every_steps": 100, "rollout_steps": 16},
+    "evaluation": {
+        "every_steps": 100,
+        "episodes": 2,
+        "chunk_steps": 16,
+        "seed": 1000,
+    },
     "logging": {
         "aim": {
             "url": "aim://aim:53800",
@@ -98,7 +103,7 @@ storage: s3://artifacts/trainer
 environment:
   id: brax::hopper
   backend: spring
-  seed: 0
+  seeds: [0]
   episode_length: 1000
   observed: [0, 2, 4]
 
@@ -109,7 +114,9 @@ training:
 
 evaluation:
   every_steps: 100
-  rollout_steps: 16
+  episodes: 2
+  chunk_steps: 16
+  seed: 1000
 
 logging:
   aim:

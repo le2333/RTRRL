@@ -20,12 +20,14 @@ from trainer_infra.scoring import ScoreSpec
 
 def configuration(trial: int) -> dict[str, Any]:
     return {
-        "contract": 10,
+        "contract": 11,
         "identity": {
-            "run_id": f"run-t{trial}",
+            "run_id": f"run-t{trial}-s0",
             "experiment": "test",
             "launch_id": "launch",
             "trial": trial,
+            "seed": 0,
+            "role": "tuning",
             "digest": "sha256:" + "a" * 64,
         },
         "entry": "e",
@@ -90,7 +92,9 @@ def test_batch_executor_packs_submits_collects_and_scores_a_round() -> None:
 
     results = executor(s3, batch)(configurations, score())
 
-    assert results == tuple({"trial": trial, "value": float(trial + 1)} for trial in range(4))
+    assert results == tuple(
+        {"trial": trial, "seed": 0, "value": float(trial + 1)} for trial in range(4)
+    )
     assert len(batch.submitted) == 2
     for request in batch.submitted:
         assert request["jobQueue"] == "dev-cpu-c7al-queue"
@@ -150,7 +154,7 @@ def test_scoring_a_large_object_costs_a_chunk_rather_than_the_object(tmp_path: P
     finally:
         tracemalloc.stop()
 
-    assert results == ({"trial": 0, "value": 39_999.0},)
+    assert results == ({"trial": 0, "seed": 0, "value": 39_999.0},)
     assert size > 12 * CHUNK_BYTES
     assert peak < 6 * CHUNK_BYTES
 
@@ -164,5 +168,7 @@ def test_scoring_finished_artifacts_submits_no_job() -> None:
 
     again = executor(s3, batch).score(configurations, score())
 
-    assert again == tuple({"trial": trial, "value": float(trial + 1)} for trial in range(2))
+    assert again == tuple(
+        {"trial": trial, "seed": 0, "value": float(trial + 1)} for trial in range(2)
+    )
     assert batch.submitted == []

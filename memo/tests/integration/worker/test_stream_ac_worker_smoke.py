@@ -126,10 +126,12 @@ def test_worker_runs_algorithm_and_publishes_trace_norms(
         {
             "contract": CONTRACT_VERSION,
             "identity": {
-                "run_id": f"{entry}-worker-smoke-t0",
+                "run_id": f"{entry}-worker-smoke-t0-s0",
                 "experiment": f"{entry}-worker-smoke",
                 "launch_id": "20260812-000000",
                 "trial": 0,
+                "seed": 0,
+                "role": "tuning",
                 "digest": "local@sha256:" + "a" * 64,
             },
             "entry": entry,
@@ -145,7 +147,15 @@ def test_worker_runs_algorithm_and_publishes_trace_norms(
                 "parameters": parameters(),
             },
             "training": {"seed": 0, "total_steps": 4, "chunk_steps": 4},
-            "evaluation": {"every_steps": 4, "rollout_steps": 0},
+            "evaluation": {
+                "every_steps": 4,
+                # This smoke is about the worker boundary, not the measuring:
+                # four steps of Hopper end nothing, so asking for an episode
+                # would be asking for one that cannot arrive.
+                "episodes": 0,
+                "chunk_steps": 4,
+                "seed": 1000,
+            },
             "logging": {
                 "aim": {
                     "url": str(aim_path),

@@ -1,0 +1,117 @@
+# Issue 46: the formal protocol, on Brax, at smoke size.
+#
+# The discrete file beside this one covers the same rules; this one exists
+# because Brax is where the episode count differs (five, not ten) and where
+# the environment truncates rather than terminating, so an episode's length is
+# the environment's limit and the ten-episode arithmetic that bounds an
+# evaluation is at its least forgiving.
+#
+# Same entry and image family as `rtrrl halfcheetah smoke.yaml`, so the fewest
+# images possible carry both smoke configurations.
+#
+# What the run is read for:
+#   - the worker exits 0 and publishes result.json and metrics.jsonl
+#   - four evaluation checkpoints, each of exactly five
+#     eval/episode/return_per_step records
+#   - a finite AUC over those four points
+
+experiment: protocol-brax-smoke
+name: protocol-brax-smoke
+description: "Issue 46: fixed-episode evaluation and AUC scoring, Brax, smoke size"
+
+# TODO: the contract-10 rebuild of the RTRRL image.
+image: TBD
+entry: rtrrl
+storage: s3://rtrrl-artifacts-007122174918/trainer
+
+environment:
+  id: brax::halfcheetah
+  backend: spring
+  # One tuning seed. A formal launch on Brax lists five fresh ones.
+  seeds: [0]
+  # Short on purpose: a Brax episode runs to this limit every time, so it is
+  # what an evaluation of five episodes costs.
+  episode_length: 64
+
+training:
+  num_envs: 1
+  total_steps: 1024
+  chunk_steps: 256
+
+evaluation:
+  every_steps: 256
+  # The protocol's count for Brax.
+  episodes: 5
+  chunk_steps: 320
+  # The same evaluation seed the discrete file names: two methods measured
+  # under one seed are measured on paired evaluation episodes.
+  seed: 1000
+
+logging:
+  aim:
+    url: aim://172.31.62.192:53801
+
+score:
+  metric: eval/episode/return_per_step
+  window_steps: [0, 1024]
+  reduce: auc
+  episodes_per_checkpoint: 5
+  non_finite: worst
+  direction: maximize
+
+compute:
+  instance_type: c7a.large
+  timeout_minutes: 60
+
+hpo:
+  rounds: 1
+  trials_per_round: 1
+  parallel_jobs: 1
+  startup_trials: 1
+  seed: 0
+
+space:
+  torso:
+    backbone:
+      kind: [lru]
+      lru:
+        feature_dim: [32]
+        hidden_dim: [32]
+        differentiation:
+          kind: [exact_rtrl]
+    optimizer:
+      kind: [adam]
+      adam:
+        lr: [0.001]
+    grad_clip: [1.0]
+    follow: [1.0]
+  heads:
+    optimizer:
+      kind: [adam]
+      adam:
+        lr: [0.001]
+  actor:
+    head:
+      kind: [state_std]
+      state_std:
+        initialization:
+          kind: [lecun]
+  critic:
+    head:
+      kind: [value]
+      value:
+        initialization:
+          kind: [lecun]
+  normalization:
+    observation:
+      kind: [none]
+    reward:
+      kind: [none]
+  gamma: [0.99]
+  lambda_pi: [0.99]
+  lambda_v: [0.99]
+  lambda_rnn: [0.99]
+  eta_pi: [1.0]
+  eta_f: [1.0]
+  entropy_rate: [0.00001]
+  meta_rl: [false]

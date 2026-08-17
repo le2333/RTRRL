@@ -1,14 +1,31 @@
-"""Track complete and sampled episodes across bounded rollout chunks."""
+"""Cut complete and sampled episodes out of bounded rollout chunks.
+
+A kernel runs a fixed number of steps across a fixed number of streams and
+never stops at an episode boundary, so a chunk holds whole episodes, partial
+ones at both ends, and nothing marking which is which except the done flag.
+Only the whole ones are reported; a partial episode would either invent a
+terminal that did not happen or claim a return that is not one -- and the ends
+of one chunk are the middle of the next, which is why what is open here
+survives to be finished there.
+
+An episode belongs to one stream, which is why the stream axis survives here
+and is never averaged: two streams that ended at different steps are two
+answers.
+
+This is arithmetic on an array of that shape and nothing about any one
+trainer, so it lives beside the episode it produces rather than inside
+whichever trainer needed it first.
+"""
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import dataclass
 
 import numpy as np
 
 from memorax.runtime.episode import Episode, SampledTrajectory
 from memorax.runtime.program import ObservationSchema
-from memorax.runtime.rollout import read
 
 
 @dataclass(frozen=True)
@@ -40,7 +57,15 @@ class _OpenEpisode:
 
 
 class EpisodeTracker:
-    """Reconstruct one stateful episode per environment stream."""
+    """Reconstruct one stateful episode per environment stream.
+
+    Carrying an unfinished episode from one chunk into the next is the whole
+    point, and it is what both phases need: training because a chunk is a
+    memory budget that falls where it falls, evaluation because a checkpoint
+    is scored on a number of episodes and no number of steps is known to
+    contain them. ``phase`` and ``stride`` are the only two things that differ
+    between the two readings.
+    """
 
     def __init__(
         self,
@@ -50,6 +75,9 @@ class EpisodeTracker:
         max_episode_steps: int,
         sample_steps: tuple[int, ...] = (),
         first_number: int = 1,
+        phase: str = "train",
+        stride: int | None = None,
+        require_series: bool = True,
     ) -> None:
         self._observations = observations
         self._num_envs = num_envs
@@ -57,6 +85,22 @@ class EpisodeTracker:
         self._sample_steps = sample_steps
         self._sample_index = 0
         self._next_number = first_number
+        self._phase = phase
+        # A schema's series are the algorithm's update readings, which is why
+        # a training chunk missing one is a build fault rather than a gap. An
+        # evaluation performs no update, so those readings do not exist for it
+        # and their absence says nothing about how the graph was wired.
+        self._require_series = require_series
+        # How many environment steps one row of a chunk advances the axis.
+        # Training advances it by every stream it ran. Evaluation advances it
+        # by nothing: a rollout taken at a boundary measures the policy as it
+        # stood there, and dating its episodes forward would place them in
+        # training that has not happened.
+        self._stride = num_envs if stride is None else stride
+        if sample_steps and self._stride != num_envs:
+            # A sample step names one stream's one step, which only exists
+            # where the axis counts them; a pinned rollout has no such step.
+            raise ValueError("sampling needs the stride that counts every stream")
         self._slots: list[_OpenEpisode | None] = [None] * num_envs
 
     @property
@@ -100,6 +144,8 @@ class EpisodeTracker:
         for name in observations.series:
             found = read(summary, name)
             if found is None:
+                if not self._require_series:
+                    continue
                 if not post_budget:
                     raise ValueError(f"configured series path {name!r} is missing")
                 # A post-budget transition performed no update, so its update
@@ -115,7 +161,9 @@ class EpisodeTracker:
         sampled: list[SampledTrajectory] = []
         for row in range(steps):
             for stream in range(self._num_envs):
-                position = start_env_steps + row * self._num_envs + stream
+                position = start_env_steps + row * self._stride
+                if self._stride:
+                    position += stream
                 self._attach_samples(position, stream, series)
                 slot = self._slot(stream, position, series)
 
@@ -144,10 +192,10 @@ class EpisodeTracker:
                     slot.observations.append(walk.after[row, stream].tolist())
                 episode = Episode(
                     number=self._next_number,
-                    phase="train",
+                    phase=self._phase,
                     stream=stream,
                     start_env_steps=slot.start_env_steps,
-                    end_env_steps=position + self._num_envs,
+                    end_env_steps=position + self._stride,
                     observations=slot.observations if walk is not None else None,
                     actions=slot.actions if walk is not None else None,
                     rewards=slot.rewards,
@@ -168,7 +216,7 @@ class EpisodeTracker:
                 self._next_number += 1
                 self._slots[stream] = None
 
-        ending_boundary = start_env_steps + steps * self._num_envs
+        ending_boundary = start_env_steps + steps * self._stride
         self._attach_samples(ending_boundary, 0, series)
         return TrackingResult(tuple(completed), tuple(sampled))
 
@@ -236,5 +284,33 @@ class EpisodeTracker:
             self._sample_index += 1
 
 
+def read(source: object, path: str):
+    """A named field, or a named member of one, which is how a family is read.
+
+    A kernel that reports one number per part of a network cannot know what the
+    parts are called, so it hands back a mapping and the entry names the parts
+    it built. The separator is the one a parameter inside a structure uses, so
+    that a family stays inside a single segment of a metric's name.
+    """
+
+    found = source
+    for name in path.split("."):
+        found = (
+            found.get(name)
+            if isinstance(found, Mapping)
+            else getattr(found, name, None)
+        )
+        if found is None:
+            return None
+    return found
+
+
 def _streamed(values: object, steps: int, num_envs: int) -> np.ndarray:
+    """One column per stream, from a reading that may have measured them all.
+
+    A per-stream quantity arrives with the stream axis already there; one the
+    kernel reduced over the batch arrives without it and belongs to every
+    stream alike.
+    """
+
     return np.broadcast_to(np.asarray(values).reshape(steps, -1), (steps, num_envs))

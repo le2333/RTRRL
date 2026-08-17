@@ -31,7 +31,7 @@ def test_real_worker_completes_a_local_hpo_round(tmp_path: Path) -> None:
     entry = tmp_path / "entry.py"
     entry.write_text(ENTRY, encoding="utf-8")
     catalog = {
-        "contract": 10,
+        "contract": 11,
         "entries": {
             "e": {
                 "command": [sys.executable, str(entry)],
@@ -51,12 +51,21 @@ def test_real_worker_completes_a_local_hpo_round(tmp_path: Path) -> None:
         "environment": {
             "id": "fake",
             "backend": "fake",
-            "seed": 0,
+            # Two seeds, so what this covers includes the fan-out: one
+            # configuration, two runs, two artifact trees, one score.
+            "seeds": [0, 1],
             "episode_length": 10,
         },
         "training": {"num_envs": 1, "total_steps": 10, "chunk_steps": 10},
-        "evaluation": {"every_steps": 10, "rollout_steps": 0},
-        "logging": {"aim": "unused"},
+        "evaluation": {
+            "every_steps": 10,
+            "episodes": 0,
+            "chunk_steps": 10,
+            "seed": 1000,
+        },
+        # The fake entry builds no reporter, so this is passed through and
+        # never read; it still has to be the shape the worker validates.
+        "logging": {"aim": {"url": "unused"}},
         "score": {
             "metric": "objective",
             "window_steps": [0, 10],
@@ -82,18 +91,17 @@ def test_real_worker_completes_a_local_hpo_round(tmp_path: Path) -> None:
 
     study = runner.run(executor)
 
+    # The fake entry reports the trial number, so both seeds of one trial
+    # report the same value and the mean is that value.
     assert [trial.value for trial in study.trials] == [1.0, 2.0]
     assert study.best_trial.number == 1
-    assert (
-        json.loads(
-            (
-                tmp_path
-                / "artifacts"
-                / "local-acceptance"
-                / "launch"
-                / "local-acceptance-launch-t1"
-                / "result.json"
-            ).read_text()
-        )["success"]
-        is True
-    )
+    assert runner.seed_scores == {0: {0: 1.0, 1: 1.0}, 1: {0: 2.0, 1: 2.0}}
+
+    launch = tmp_path / "artifacts" / "local-acceptance" / "launch"
+    for seed in (0, 1):
+        result = json.loads(
+            (launch / f"local-acceptance-launch-t1-s{seed}" / "result.json").read_text()
+        )
+        assert result["success"] is True
+        assert result["identity"]["seed"] == seed
+        assert result["identity"]["role"] == "tuning"

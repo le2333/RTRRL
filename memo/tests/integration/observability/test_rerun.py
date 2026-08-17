@@ -14,6 +14,8 @@ def metadata():
         experiment="experiment",
         launch_id="launch",
         trial=0,
+        seed=0,
+        role="tuning",
         entry="stream_ac",
         digest="local@sha256:" + "a" * 64,
     )

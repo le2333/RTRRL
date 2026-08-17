@@ -12,6 +12,7 @@ from typing import Any
 from urllib.parse import urlparse
 from urllib.request import url2pathname
 
+from trainer_infra.experiment import run_name
 from trainer_infra.scoring import ScoreSpec, compute_score
 
 
@@ -24,6 +25,8 @@ def file_path(uri: str) -> Path:
     if parsed.scheme != "file" or parsed.netloc:
         raise LocalExecutionError(f"local execution requires a file URI, got {uri!r}")
     return Path(url2pathname(parsed.path))
+
+
 
 
 class LocalRoundExecutor:
@@ -52,8 +55,7 @@ class LocalRoundExecutor:
         directory.mkdir(parents=True, exist_ok=True)
         config_uris = []
         for configuration in configurations:
-            trial = int(configuration["identity"]["trial"])
-            path = directory / f"trial-{trial:06d}.json"
+            path = directory / f"{run_name(configuration)}.json"
             path.write_text(json.dumps(configuration, sort_keys=True), encoding="utf-8")
             config_uris.append(path.resolve().as_uri())
 
@@ -109,11 +111,21 @@ class LocalRoundExecutor:
         configuration: Mapping[str, Any],
         score: ScoreSpec,
     ) -> dict[str, int | float]:
-        trial = int(configuration["identity"]["trial"])
+        identity = configuration["identity"]
+        trial, seed = int(identity["trial"]), int(identity["seed"])
+        run = run_name(configuration)
         root = file_path(str(configuration["artifacts"]["root"]))
         result = json.loads((root / "result.json").read_text(encoding="utf-8"))
-        if result["success"] is not True or int(result["identity"]["trial"]) != trial:
-            raise LocalExecutionError(f"artifact result does not complete trial {trial}")
+        produced = result["identity"]
+        if result["success"] is not True or (
+            int(produced["trial"]),
+            int(produced["seed"]),
+        ) != (trial, seed):
+            raise LocalExecutionError(f"artifact result does not complete {run}")
         if "metrics.jsonl" not in result["artifacts"]:
-            raise LocalExecutionError(f"trial {trial} result declares no metrics.jsonl")
-        return {"trial": trial, "value": compute_score(root / "metrics.jsonl", score)}
+            raise LocalExecutionError(f"{run} result declares no metrics.jsonl")
+        return {
+            "trial": trial,
+            "seed": seed,
+            "value": compute_score(root / "metrics.jsonl", score),
+        }

@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict
 
@@ -14,10 +14,14 @@ class _Frozen(BaseModel):
 
 
 class RunIdentity(_Frozen):
+    """What Worker needs to name a run: the configuration and its repetition."""
+
     run_id: str
     experiment: str
     launch_id: str
     trial: int
+    seed: int
+    role: Literal["tuning", "formal"]
     digest: str
 
 

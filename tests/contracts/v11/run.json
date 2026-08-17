@@ -1,0 +1,63 @@
+{
+  "contract": 11,
+  "identity": {
+    "run_id": "stream-ac-baseline-t0-s0",
+    "experiment": "stream-ac-baseline",
+    "launch_id": "20260813-000000",
+    "trial": 0,
+    "digest": "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+    "seed": 0,
+    "role": "tuning"
+  },
+  "entry": "stream_ac",
+  "artifacts": {
+    "root": "s3://artifacts/trainer/stream-ac/launch/run-t0"
+  },
+  "algorithm": {
+    "environment": {
+      "id": "brax::hopper",
+      "backend": "spring",
+      "observed": [
+        0,
+        2,
+        4
+      ],
+      "episode_length": 1000
+    },
+    "num_envs": 2,
+    "parameters": {
+      "gamma": 0.99
+    }
+  },
+  "training": {
+    "seed": 0,
+    "total_steps": 100,
+    "chunk_steps": 100
+  },
+  "evaluation": {
+    "every_steps": 100,
+    "episodes": 2,
+    "chunk_steps": 10,
+    "seed": 7
+  },
+  "logging": {
+    "aim": {
+      "url": "aim://aim:53800",
+      "training": {
+        "step": {
+          "every_steps": 50
+        },
+        "episode": {
+          "every_episodes": 20
+        },
+        "window": {
+          "every_steps": 50,
+          "length_steps": 25
+        }
+      }
+    },
+    "rerun": {
+      "log_every_steps": 100
+    }
+  }
+}

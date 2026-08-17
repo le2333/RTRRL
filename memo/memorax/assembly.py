@@ -67,6 +67,7 @@ def assemble(
         program=Program(
             init=graph.init,
             train=graph.train,
+            open_evaluation=graph.open_evaluation,
             evaluate=graph.evaluate,
             interact=graph.interact,
         ),

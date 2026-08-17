@@ -113,8 +113,13 @@ def main(argv: Sequence[str] | None = None) -> int:
             json.dumps(
                 {
                     "launch_id": runner.launch_id,
+                    "seeds": list(runner.seeds),
                     "settled": [
-                        {"trial": settlement.trial, "value": settlement.value}
+                        {
+                            "trial": settlement.trial,
+                            "value": settlement.value,
+                            "seed_values": runner.seed_scores.get(settlement.trial, {}),
+                        }
                         for settlement in settlements
                         if settlement.reason is None
                     ],
@@ -135,6 +140,10 @@ def main(argv: Sequence[str] | None = None) -> int:
             "number": trial.number,
             "state": trial.state.name,
             "value": trial.value,
+            # What the study stores is the mean over the seeds. A result table
+            # reports the seeds, so they are printed beside it rather than
+            # recovered afterwards from the artifact tree.
+            "seed_values": runner.seed_scores.get(trial.number, {}),
             "parameters": trial.params,
         }
         for trial in study.trials
@@ -144,6 +153,10 @@ def main(argv: Sequence[str] | None = None) -> int:
         json.dumps(
             {
                 "study": study.study_name,
+                "role": runner.role,
+                "seeds": list(runner.seeds),
+                "evaluation_seed": experiment["evaluation"]["seed"],
+                "selection": runner.selection,
                 "trials": trials,
                 "best": {"number": best.number, "value": best.value},
             },

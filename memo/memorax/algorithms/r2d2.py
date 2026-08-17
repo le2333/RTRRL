@@ -1339,7 +1339,9 @@ class R2D2:
             ),
         )
 
-    def _evaluation_state(self, key: Key, state: R2D2State) -> R2D2State:
+    def open_evaluation(self, key: Key, state: R2D2State) -> R2D2State:
+        """The trained parameters, opened on a fresh environment and recurrence."""
+
         env_key, recurrence_key = jax.random.split(key)
         obs, env_state = self.environment.init(env_key)
         return state.replace(
@@ -1397,10 +1399,11 @@ class R2D2:
         keys = jax.random.split(key, scan_steps)
         return jax.lax.scan(self.train_step, state, keys)
 
-    def evaluate(self, key: Key, state: R2D2State, num_steps: int) -> StepMetrics:
-        reset_key, rollout_key = jax.random.split(key)
-        eval_state = self._evaluation_state(reset_key, state)
+    def evaluate(
+        self, key: Key, state: R2D2State, num_steps: int
+    ) -> tuple[R2D2State, StepMetrics]:
+        """Advance an opened evaluation rollout, learning nothing from it."""
+
         scan_steps = self._num_scan_steps(num_steps, self.cfg.num_envs)
-        keys = jax.random.split(rollout_key, scan_steps)
-        _, metrics = jax.lax.scan(self.evaluate_step, eval_state, keys)
-        return metrics
+        keys = jax.random.split(key, scan_steps)
+        return jax.lax.scan(self.evaluate_step, state, keys)
