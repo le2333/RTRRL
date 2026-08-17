@@ -1,4 +1,4 @@
-# Issue 37 stage one: the unit-trace rule, on the shape issue 27 already runs.
+# Issue 37 D-RTRRL: the unit-trace update rule, on the shape issue 27 already runs.
 #
 # The step no longer carries the TD error's magnitude. Each block's trace is
 # exported as a unit vector and the TD error is reduced to its sign, so one
@@ -18,8 +18,8 @@
 # optimizer.
 
 experiment: rtrrl-issue37
-name: rtrrl-issue37-unit-trace
-description: "Issue 37 stage one: unit-trace rule, sign(delta), fixed step length"
+name: rtrrl-issue37-d-rtrrl
+description: "Issue 37 D-RTRRL: unit-trace update, sign(delta), fixed step length"
 
 image: 007122174918.dkr.ecr.eu-north-1.amazonaws.com/rtrrl@sha256:7ca201c304dc6a38dc45d8142cfc05d1ec4deb3046e9e8e3594b4ff635cfd32d
 entry: rtrrl
@@ -79,8 +79,8 @@ space:
         differentiation:
           kind: [exact_rtrl]
     optimizer:
-      kind: [unit_trace]
-      unit_trace:
+      kind: [d_rtrrl]
+      d_rtrrl:
         eta: [0.001]
         magnitude: [sign]
         scope: [block]
@@ -92,8 +92,8 @@ space:
     follow: [1.0]
   heads:
     optimizer:
-      kind: [unit_trace]
-      unit_trace:
+      kind: [d_rtrrl]
+      d_rtrrl:
         eta: [0.001]
         magnitude: [sign]
         scope: [block]

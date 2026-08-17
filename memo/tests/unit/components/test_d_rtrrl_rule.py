@@ -1,4 +1,4 @@
-"""The unit-trace rule: the trace says where, the learning rate says how far.
+"""The D-RTRRL rule: the trace says where, the learning rate says how far.
 
 There is no upstream implementation to drive this against, so nothing here
 compares two copies of a guess. Every assertion is a property the rule is
@@ -24,7 +24,7 @@ import jax.numpy as jnp
 import numpy as np
 import pytest
 
-from memorax.rl.updates import UnitTrace, make_unit_trace_rule
+from memorax.rl.updates import DRTRRL, make_d_rtrrl_rule
 
 ETA = 0.01
 
@@ -45,7 +45,7 @@ def blocks(key, *, streams=1, actor_scale=1.0):
 def stepped(traces, delta, *, direct=None, clip=0.0, **settings):
     """One application of the rule, with the defaults the surface declares."""
 
-    rule = make_unit_trace_rule(UnitTrace(eta=ETA, **settings), clip=clip)
+    rule = make_d_rtrrl_rule(DRTRRL(eta=ETA, **settings), clip=clip)
     return rule.apply(
         traces,
         direct,

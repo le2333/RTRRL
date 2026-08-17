@@ -7,7 +7,7 @@ algorithm; a rule only decides how far to step along the direction it is given.
 Every rule receives the eligibility trace and the TD error separately rather
 than a finished gradient. Adam does not need the split, but OBGD does: its
 step-size bound reads |delta| and the trace norm together, so delta cannot be
-folded in beforehand. The unit-trace rule needs it for the opposite reason: it
+folded in beforehand. The D-RTRRL rule needs it for the opposite reason: it
 reads only the *sign* of delta, and a folded-in delta cannot be unfolded.
 """
 
@@ -159,7 +159,7 @@ def base_transform(base):
 
 
 @dataclass(frozen=True)
-class UnitTrace:
+class DRTRRL:
     """A step whose length is the learning rate, not the surprise.
 
     The trace and the TD error say which way to go; ``eta`` says how far. The
@@ -210,7 +210,7 @@ BOUND_BRANCHES = {
 
 BASE_BRANCHES = {"sgd": Sgd, "adam": Adam}
 
-STEP_BRANCHES = {"sgd": Sgd, "adam": Adam, "unit_trace": UnitTrace}
+STEP_BRANCHES = {"sgd": Sgd, "adam": Adam, "d_rtrrl": DRTRRL}
 
 
 def _selected_parameters(selection, builder):
@@ -384,7 +384,7 @@ def _units(tree, *, by_block):
     return {None: tree}, lambda parts: parts[None]
 
 
-def make_unit_trace_rule(step, *, clip=0.0) -> UpdateRule:
+def make_d_rtrrl_rule(step, *, clip=0.0) -> UpdateRule:
     """Step ``eta`` along the trace, in the direction the TD error points.
 
     The trace and the TD error carry the direction and nothing else: the trace

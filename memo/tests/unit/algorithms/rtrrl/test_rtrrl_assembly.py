@@ -34,17 +34,17 @@ def assert_tree_equal(actual, expected, what):
 
 ETA = 0.01
 
-UNIT_TRACE = {
-    "torso.optimizer.kind": "unit_trace",
-    "torso.optimizer.unit_trace.eta": ETA,
-    "torso.optimizer.unit_trace.magnitude": "sign",
-    "torso.optimizer.unit_trace.scope": "block",
-    "torso.optimizer.unit_trace.eps": 1e-8,
-    "heads.optimizer.kind": "unit_trace",
-    "heads.optimizer.unit_trace.eta": ETA,
-    "heads.optimizer.unit_trace.magnitude": "sign",
-    "heads.optimizer.unit_trace.scope": "block",
-    "heads.optimizer.unit_trace.eps": 1e-8,
+D_RTRRL = {
+    "torso.optimizer.kind": "d_rtrrl",
+    "torso.optimizer.d_rtrrl.eta": ETA,
+    "torso.optimizer.d_rtrrl.magnitude": "sign",
+    "torso.optimizer.d_rtrrl.scope": "block",
+    "torso.optimizer.d_rtrrl.eps": 1e-8,
+    "heads.optimizer.kind": "d_rtrrl",
+    "heads.optimizer.d_rtrrl.eta": ETA,
+    "heads.optimizer.d_rtrrl.magnitude": "sign",
+    "heads.optimizer.d_rtrrl.scope": "block",
+    "heads.optimizer.d_rtrrl.eps": 1e-8,
 }
 
 
@@ -153,18 +153,18 @@ def test_rtrrl_builds_the_selected_kernel_scoped_differentiation(backbone, kind)
     assert (differentiation_state is None) is (kind == "tbptt")
 
 
-def test_the_unit_trace_optimizer_is_reachable_from_a_run_configuration():
+def test_the_d_rtrrl_optimizer_is_reachable_from_a_run_configuration():
     """The rule is only real if a run document can name it and a step can take it.
 
     The rule's own arithmetic is driven in ``tests/unit/components``. What is
     asserted here is everything between a configuration and that arithmetic:
-    that ``unit_trace`` survives the parameter surface, that the two groups
+    that ``d_rtrrl`` survives the parameter surface, that the two groups
     build a rule each, and that a scan of real transitions through the whole
     graph -- torso trace, two readouts, emphasis, resets -- stays finite.
     Finiteness is the claim the version this replaces could not make.
     """
 
-    built = assembled(optimizer=UNIT_TRACE)
+    built = assembled(optimizer=D_RTRRL)
     state = built.program.init(jax.random.key(0))
     stepped, metrics = built.program.train(jax.random.key(1), state, 32)
 
@@ -188,8 +188,8 @@ def test_a_signed_step_does_not_read_the_torso_td_scaling():
     def trained(magnitude, scaling):
         built = assembled(
             optimizer={
-                **UNIT_TRACE,
-                "torso.optimizer.unit_trace.magnitude": magnitude,
+                **D_RTRRL,
+                "torso.optimizer.d_rtrrl.magnitude": magnitude,
                 "eta_f": scaling,
             }
         )
