@@ -1,0 +1,171 @@
+# Issue 41 R3.1, cell 3 of four: Direction-only. z_eff = (||xi|| / (||z|| + eps)) * z
+#
+# The trace's direction at the derivative's size: what eligibility
+# contributes as a direction, with what it contributes as a magnitude taken
+# away.
+#
+# The four cells are one factorial over where a step's direction comes from and
+# where its size does -- the eligibility trace the block accumulated, or the
+# derivative of this transition alone. One image, one entry, one line apart:
+# `eligibility.kind` below. The other three cells are
+#   `rtrrl issue41 baseline.yaml`
+#   `rtrrl issue41 no-trace.yaml`
+#   `rtrrl issue41 gain-only.yaml`
+#
+# Same recursion under all four. Each block's trace component accumulates and
+# is read exactly as it is here; the condition applies between that reading and
+# the rule that steps along it, and writes nothing back. What a run stores at
+# the end of its first transition is bit-identical across the four, which is
+# what makes the comparison a comparison.
+#
+# Formal, under the issue-46 protocol: five fresh seeds, 1M environment steps,
+# fixed-episode evaluation and AUC over the checkpoints. The four files list
+# the same five seeds and the same evaluation seed, so the cells are paired
+# both in initialization and in the episodes they are measured on.
+#
+# TODO: the hyperparameters below are the paper's Table 1, not R2's selection.
+# R3.1 inherits the Original RTRRL configuration R2 settles on, with no
+# ablation-specific HPO; when that lands, the same values go into all four of
+# these files and nothing else about them changes.
+#
+# Read:
+#   - eval/episode/return_per_step finite throughout, on all four cells
+#   - twenty checkpoints of exactly five episodes, and a finite AUC over them
+#   - update.torso.trace_norm comparable across the cells: the trace is the
+#     same object in all four, so a divergence there is a defect and not a
+#     result
+#
+# The step rule matters to this question, and Adam is the only one of the three
+# under which it can be asked. `d_rtrrl` with `magnitude: sign` exports the
+# trace as a unit vector and the intentional update divides by a statistic
+# carrying the step's own factor; under either, the two mixtures are the two
+# pure conditions and the graph refuses to build them. Adam does read a length,
+# but per coordinate through its own moments, so the magnitude main effect
+# below is measured through that attenuation rather than directly.
+
+experiment: rtrrl-issue41
+name: rtrrl-issue41-direction-only
+description: "Issue 41 R3.1 Direction-only arm: z_eff = (||xi|| / (||z|| + eps)) * z"
+
+# TODO: the digest of the rebuild carrying the eligibility readout. Every image
+# published before it declares no `eligibility` in its catalog, and a run
+# naming one is refused before a container starts.
+image: TBD
+entry: rtrrl
+storage: s3://rtrrl-artifacts-007122174918/trainer
+
+# Masked HalfCheetah: the eight position readings of seventeen, the nine
+# velocities withheld. That is the standard position-only construction rather
+# than the alternating mask the masked-Hopper files here use; the formal mask
+# is the one R2 freezes, and this file states which one it ran.
+environment:
+  id: brax::halfcheetah
+  backend: spring
+  observed: [0, 1, 2, 3, 4, 5, 6, 7]
+  # Five fresh seeds, the protocol's count for Brax, and the same five in all
+  # four cells: the factorial is paired at the seed, not only at the mean.
+  seeds: [0, 1, 2, 3, 4]
+  episode_length: 1000
+
+# One stream, as the paper runs it, and the issue's budget.
+training:
+  num_envs: 1
+  total_steps: 1000000
+  chunk_steps: 1000
+
+evaluation:
+  every_steps: 50000
+  # A checkpoint is five complete episodes, which on Brax run to the limit
+  # every time; the chunk is what one of those rollouts may hold.
+  episodes: 5
+  chunk_steps: 5000
+  # One evaluation stream for every cell and every seed, so two conditions are
+  # measured on the same episodes rather than on their own luck.
+  seed: 1000
+
+logging:
+  aim:
+    url: aim://172.31.62.192:53801
+    training:
+      window:
+        every_steps: 50000
+
+score:
+  metric: eval/episode/return_per_step
+  window_steps: [0, 1000000]
+  # The protocol's primary: the area under the fixed-evaluation curve, not the
+  # last point and not the best one.
+  reduce: auc
+  episodes_per_checkpoint: 5
+  non_finite: worst
+  direction: maximize
+
+compute:
+  instance_type: c7a.large
+  timeout_minutes: 240
+
+# No search. A cell of a factorial is a configuration, not a trial.
+hpo:
+  rounds: 1
+  trials_per_round: 1
+  parallel_jobs: 1
+  startup_trials: 1
+  seed: 0
+
+space:
+  # The one line that differs between the four cells.
+  eligibility:
+    kind: [direction]
+    direction:
+      # The guard on the division by a norm, which only the two cells that
+      # divide by one declare.
+      eps: [0.00000001]
+  torso:
+    backbone:
+      kind: [lru]
+      lru:
+        # Their OnlineLRULayer(hidden_size) sets d_output and d_hidden to one
+        # number, so both of memo's read the paper's n = 64.
+        feature_dim: [64]
+        hidden_dim: [64]
+        differentiation:
+          kind: [exact_rtrl]
+    optimizer:
+      kind: [adam]
+      adam:
+        lr: [0.0001] # Table 1, alpha_R
+    grad_clip: [1.0] # Table 1, gradient norm clip
+    follow: [1.0] # Table 1, update period 1: no slow copy
+  actor:
+    optimizer:
+      kind: [adam]
+      adam:
+        lr: [0.0001] # Table 1, alpha_A
+    head:
+      kind: [state_std]
+      state_std:
+        initialization:
+          kind: [lecun]
+  critic:
+    optimizer:
+      kind: [adam]
+      adam:
+        lr: [0.0001] # Table 1, alpha_C
+    head:
+      kind: [value]
+      value:
+        initialization:
+          kind: [lecun]
+  normalization:
+    observation:
+      kind: [none]
+    reward:
+      kind: [none]
+  gamma: [0.99] # Table 1
+  lambda_pi: [0.9] # Table 1, lambda_A
+  lambda_v: [0.9] # Table 1, lambda_C
+  lambda_rnn: [0.9] # Table 1, lambda_R
+  eta_pi: [1.0] # Table 1, eta_A
+  eta_f: [1.0]
+  entropy_rate: [0.00001] # Table 1, eta_H
+  meta_rl: [true] # the paper's Meta-RL input [o, a, r]

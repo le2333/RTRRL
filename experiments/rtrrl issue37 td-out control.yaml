@@ -85,6 +85,11 @@ hpo:
   seed: 0
 
 space:
+  # The published condition: a step reads the trace it accumulated, in
+  # direction and in size. The other three cells of the R3.1 factorial are in
+  # `rtrrl issue41 *.yaml`.
+  eligibility:
+    kind: [trace]
   torso:
     backbone:
       kind: [lru]
