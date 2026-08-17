@@ -411,7 +411,7 @@ def _group_rule(step: Adam | DRTRRL, *, clip: float):
     A group's entries are its blocks, which is the grouping the D-RTRRL rule
     normalizes over: the torso is its own unit, and the two readouts step
     together but are two units, so a large actor trace cannot spend the critic's
-    step. What they share under one selection is ``eta``, not a unit ball.
+    step. What they share under one selection is ``c``, not a unit ball.
     """
 
     if isinstance(step, DRTRRL):
