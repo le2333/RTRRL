@@ -10,7 +10,13 @@ ENV UV_PYTHON_DOWNLOADS=never \
     UV_LINK_MODE=copy
 WORKDIR /workspace/memo
 COPY memo /workspace/memo
-RUN uv sync --frozen --no-dev --no-editable && uv cache clean
+# POPJym by name, not the whole `environments` extra. That extra also pulls
+# brax variants, mujoco and the Atari stack, none of which any experiment on
+# this image asks for, and each of which is weight the trainer carries to
+# every Batch job. An environment earns its place here by an experiment
+# naming it: the RTRRL comparison runs on POPJym's RepeatPrevious, which the
+# paper this algorithm is a rebuild of reports its own number for.
+RUN uv sync --frozen --no-dev --no-editable --extra popjym && uv cache clean
 
 FROM python:3.12.11-slim-bookworm@sha256:c00fc7b44d844b6da22861ec24af43968a5200eac4ec607b4725d585165d6b49 AS runtime
 

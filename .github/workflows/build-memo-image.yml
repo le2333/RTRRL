@@ -132,6 +132,28 @@ jobs:
               print("entry", name, "->", command[2])
           '
 
+      - name: Verify the environments an experiment names are actually reachable
+        shell: bash
+        run: |
+          set -euo pipefail
+          # An environment adapter imports its package inside `make`, so a
+          # missing extra is invisible until a job has already reached Batch and
+          # paid for an instance to raise ImportError. Assembly's own entry point
+          # is what gets called here, so a signature that assembly cannot call --
+          # which is what kept POPJym unreachable before -- fails here too.
+          docker run --rm "$IMAGE" python -c '
+          from memorax.environments import make
+          environment, parameters = make(
+              "popjym::RepeatPreviousEasy",
+              observed=None,
+              backend=None,
+              episode_length=52,
+          )
+          space = environment.action_space(parameters)
+          assert space.n == 4, space.n
+          print("popjym::RepeatPreviousEasy ->", space.n, "actions")
+          '
+
       - name: Verify the CPU image stays on the CPU
         if: ${{ matrix.variant == 'cpu' }}
         shell: bash

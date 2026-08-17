@@ -1,9 +1,23 @@
+"""POPJym behind the deployment's environment vocabulary.
+
+An environment is named the way POPJym registers it -- ``MinesweeperEasy``, not
+``Minesweeper`` plus a difficulty -- because that is the one spelling both this
+side and the authors' fork resolve, and a comparison whose two arms name the
+task differently is a comparison over the naming.
+
+Of the three things assembly always supplies, only ``observed`` means anything
+here. POPJym ships one implementation per environment, so there is no backend
+to choose between; and its ``EnvParams`` is empty, with each environment
+carrying its own ``max_episode_length`` as a class attribute, so a run document
+has nothing to move an episode limit through.
+"""
+
 from typing import Any
 
 from flax import struct
 from gymnax.environments import spaces
 
-from memorax.environments.wrappers import GymnaxWrapper
+from memorax.environments.wrappers import GymnaxWrapper, SelectObservationWrapper
 from memorax.utils.typing import Array, Key
 
 max_steps_in_episode = {
@@ -77,14 +91,21 @@ class PopJymWrapper(GymnaxWrapper):
 
 
 def make(
-    env_id: str, difficulty: str, **kwargs
+    env_id: str,
+    observed=None,
+    backend=None,
+    episode_length: int | None = None,
+    **kwargs,
 ) -> tuple[PopJymWrapper, EnvParams]:
     import popjym
 
-    env_id = f"{env_id}{difficulty}"
+    # Neither is a choice this environment offers; see the module docstring.
+    del backend, episode_length
+
     env, env_params = popjym.make(env_id, **kwargs)
     env = PopJymWrapper(env)
-    env_params = EnvParams(
+    if observed is not None:
+        env = SelectObservationWrapper(env, observed)
+    return env, EnvParams(
         env_params=env_params, max_steps_in_episode=max_steps_in_episode[env_id]
     )
-    return env, env_params

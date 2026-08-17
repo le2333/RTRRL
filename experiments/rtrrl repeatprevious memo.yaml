@@ -1,0 +1,138 @@
+# Issue 32: memo's RTRRL on the discrete task its paper reports a ceiling for.
+#
+# RTRRL's paper (arXiv:2311.04830, Table 3) reports RTRRL-LRU reaching
+# 1.00 +/- 0.00 on POPGym's RepeatPrevious, against -0.35 for linear TD(lambda)
+# and 0.93 for a BPTT-trained PPO with the same cell. Two things make that the
+# right task to hold this rebuild to. The ceiling is a number rather than a
+# comparison, so the run either reaches it or does not; and linear TD scoring
+# *negative* means the task cannot be done without memory, which is the part of
+# the algorithm a rebuild is most likely to get subtly wrong.
+#
+# Minesweeper was tried first and is a bad instrument for this: the same table
+# gives RTRRL-LRU 0.12 there, behind linear TD's 0.14, and a 10M-step run of the
+# authors' own implementation produced a flat noisy curve between -0.3 and +0.39.
+# Comparing two implementations on a task neither implementation solves compares
+# their noise.
+#
+# Every value under `space` is from the paper's Table 1, which is headed
+# "Hyperparameters of RTRRL". Where the body text disagrees with it -- the body
+# says all lambdas at 0.99 and a learning rate of 1e-3, the table says 0.9 and
+# 1e-4 -- the table is taken.
+#
+# What the run is read for:
+#   - the worker exits 0 and publishes result.json and metrics.jsonl
+#   - one hundred eval/episode/return records, every 100k steps
+#   - every train/episode and eval/episode value is finite
+#   - eval/episode/return approaching the paper's 1.00, and in any case well
+#     clear of the -0.35 a memoryless learner scores
+
+experiment: rtrrl-issue32-repeatprevious
+name: rtrrl-issue32-repeatprevious-memo
+description: "Issue 32: memo's RTRRL on POPJym RepeatPrevious Easy, 10M steps"
+
+# TODO: fill in from the build that carries the popjym extra. The published
+# image predates `docker/Dockerfile.cpu` syncing `--extra popjym`, so a run on
+# it fails at the import inside the container; the digest the rebuild reports
+# goes here.
+image: TBD
+entry: rtrrl
+storage: s3://rtrrl-artifacts-007122174918/trainer
+
+environment:
+  id: popjym::RepeatPreviousEasy
+  backend: null # popjym ships one implementation per environment
+  observed: null # four numbers, and the task is to remember them
+  seed: 0
+  # POPGym's own limit for this variant. Stated because a run document must
+  # state one, not because it can move it: popjym's EnvParams is empty and the
+  # limit lives on the environment class.
+  episode_length: 52
+
+# Batch size 1, which the paper calls out as deliberate ("to ensure biological
+# plausibility") rather than incidental. The chunk is their scan length.
+training:
+  num_envs: 1
+  total_steps: 10000000
+  chunk_steps: 1000
+
+evaluation:
+  every_steps: 100000
+  rollout_steps: 1400
+
+logging:
+  aim:
+    url: aim://172.31.62.192:53801
+    training:
+      log_every_steps: 100000
+  rerun:
+    log_every_steps: 1000000
+
+score:
+  metric: eval/episode/return
+  window_steps: [0, 10000000]
+  # The paper scores "the best validation reward achieved throughout training",
+  # so this is read the same way rather than off the last evaluation.
+  reduce: max
+  non_finite: worst
+  direction: maximize
+
+compute:
+  instance_type: c7a.large
+  timeout_minutes: 720
+
+hpo:
+  rounds: 1
+  trials_per_round: 1
+  parallel_jobs: 1
+  startup_trials: 1
+  seed: 0
+
+space:
+  torso:
+    backbone:
+      kind: [lru]
+      lru:
+        # Their OnlineLRULayer(hidden_size) sets d_output and d_hidden to one
+        # number, so both of memo's read the paper's n = 32.
+        feature_dim: [32]
+        hidden_dim: [32]
+        differentiation:
+          kind: [exact_rtrl]
+    optimizer:
+      kind: [adam]
+      adam:
+        lr: [0.0001] # Table 1, alpha_R
+    grad_clip: [1.0] # Table 1, gradient norm clip
+    follow: [1.0] # Table 1, update period 1: no slow copy
+  heads:
+    optimizer:
+      kind: [adam]
+      adam:
+        lr: [0.0001] # Table 1, alpha_A and alpha_C
+  actor:
+    # Against a Discrete space the three Gaussian heads are refused at build
+    # time, so this cannot be left at a default.
+    head:
+      kind: [categorical]
+      categorical:
+        initialization:
+          kind: [lecun]
+  critic:
+    head:
+      kind: [value]
+      value:
+        initialization:
+          kind: [lecun]
+  normalization:
+    observation:
+      kind: [none] # Table 1, normalize observations False
+    reward:
+      kind: [none]
+  gamma: [0.99] # Table 1
+  lambda_pi: [0.9] # Table 1, lambda_A
+  lambda_v: [0.9] # Table 1, lambda_C
+  lambda_rnn: [0.9] # Table 1, lambda_R
+  eta_pi: [1.0] # Table 1, eta_A
+  eta_f: [1.0]
+  entropy_rate: [0.00001] # Table 1, eta_H
+  meta_rl: [true] # the paper's Meta-RL input [o, a, r]
