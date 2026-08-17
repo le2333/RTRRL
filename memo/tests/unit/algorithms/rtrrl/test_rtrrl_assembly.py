@@ -32,7 +32,23 @@ def assert_tree_equal(actual, expected, what):
     assert not moved, f"{what}: {moved} moved"
 
 
-def parameters(backbone="lru", differentiation="exact_rtrl"):
+ETA = 0.01
+
+UNIT_TRACE = {
+    "torso.optimizer.kind": "unit_trace",
+    "torso.optimizer.unit_trace.eta": ETA,
+    "torso.optimizer.unit_trace.magnitude": "sign",
+    "torso.optimizer.unit_trace.scope": "block",
+    "torso.optimizer.unit_trace.eps": 1e-8,
+    "heads.optimizer.kind": "unit_trace",
+    "heads.optimizer.unit_trace.eta": ETA,
+    "heads.optimizer.unit_trace.magnitude": "sign",
+    "heads.optimizer.unit_trace.scope": "block",
+    "heads.optimizer.unit_trace.eps": 1e-8,
+}
+
+
+def parameters(backbone="lru", differentiation="exact_rtrl", optimizer=None):
     branch = f"torso.backbone.{backbone}"
     return expand(
         rtrrl.PARAMETERS,
@@ -47,6 +63,7 @@ def parameters(backbone="lru", differentiation="exact_rtrl"):
             "torso.follow": 0.25,
             "heads.optimizer.kind": "adam",
             "heads.optimizer.adam.lr": 5e-4,
+            **(optimizer or {}),
             "actor.head.kind": "state_std",
             "critic.head.kind": "value",
             "normalization.observation.kind": "none",
@@ -56,11 +73,13 @@ def parameters(backbone="lru", differentiation="exact_rtrl"):
     )
 
 
-def assembled(backbone="lru", differentiation="exact_rtrl", record=None):
+def assembled(
+    backbone="lru", differentiation="exact_rtrl", record=None, optimizer=None
+):
     return assemble(
         rtrrl.RTRRL,
         BuildRequest(
-            parameters=parameters(backbone, differentiation),
+            parameters=parameters(backbone, differentiation, optimizer),
             environment=EnvironmentSpec(
                 id="tiny",
                 backend=None,
@@ -132,6 +151,65 @@ def test_rtrrl_builds_the_selected_kernel_scoped_differentiation(backbone, kind)
     state = built.program.init(jax.random.key(0))
     differentiation_state = state.core.torso.recurrence.differentiation_state
     assert (differentiation_state is None) is (kind == "tbptt")
+
+
+def test_the_unit_trace_optimizer_is_reachable_from_a_run_configuration():
+    """The rule is only real if a run document can name it and a step can take it.
+
+    The rule's own arithmetic is driven in ``tests/unit/components``. What is
+    asserted here is everything between a configuration and that arithmetic:
+    that ``unit_trace`` survives the parameter surface, that the two groups
+    build a rule each, and that a scan of real transitions through the whole
+    graph -- torso trace, two readouts, emphasis, resets -- stays finite.
+    Finiteness is the claim the version this replaces could not make.
+    """
+
+    built = assembled(optimizer=UNIT_TRACE)
+    state = built.program.init(jax.random.key(0))
+    stepped, metrics = built.program.train(jax.random.key(1), state, 32)
+
+    for path, leaf in flattened(stepped.core).items():
+        assert np.all(np.isfinite(leaf)), f"{path} went non-finite"
+    assert np.all(np.isfinite(metrics.update.td_error))
+    # The rate every rule reports under one name, and here a constant one.
+    np.testing.assert_allclose(metrics.update.torso_step.step_size, ETA)
+    np.testing.assert_allclose(metrics.update.heads_step.step_size, ETA)
+
+
+def test_a_signed_step_does_not_read_the_torso_td_scaling():
+    """``eta_f`` is inert end to end, not only where the sign is taken.
+
+    The rule-level assertion pins the arithmetic; this one pins the wiring, so
+    that a future change routing ``eta_f`` somewhere other than the TD error
+    handed to the torso rule is caught here rather than in a sweep over a knob
+    that turns out to move nothing.
+    """
+
+    def trained(magnitude, scaling):
+        built = assembled(
+            optimizer={
+                **UNIT_TRACE,
+                "torso.optimizer.unit_trace.magnitude": magnitude,
+                "eta_f": scaling,
+            }
+        )
+        state = built.program.init(jax.random.key(0))
+        return built.program.train(jax.random.key(1), state, 16)[0]
+
+    signed = (trained("sign", 1.0), trained("sign", 100.0))
+    assert_tree_equal(signed[0].core.torso.params, signed[1].core.torso.params, "eta_f")
+
+    # The control, without which the assertion above would also pass if `eta_f`
+    # never reached the torso rule at all. Under the ablation the same knob has
+    # to move the same parameters, or this test is measuring the wiring being
+    # absent rather than the sign discarding it.
+    ablated = (trained("td_error", 1.0), trained("td_error", 100.0))
+    moved = [
+        path
+        for path, leaf in flattened(ablated[0].core.torso.params).items()
+        if not np.array_equal(leaf, flattened(ablated[1].core.torso.params)[path])
+    ]
+    assert moved, "eta_f reaches the torso rule under neither setting: it is unwired"
 
 
 def test_rtrrl_declares_parameters_and_observations_beside_its_graph():

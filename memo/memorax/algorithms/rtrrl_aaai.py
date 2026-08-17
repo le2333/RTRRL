@@ -49,7 +49,7 @@ from memorax.rl.normalization import (
     DISCOUNTED_NORMALIZATION_FAMILY,
     NORMALIZATION_FAMILY,
 )
-from memorax.rl.updates import BASE_FAMILY, Adam
+from memorax.rl.updates import STEP_FAMILY, Adam, UnitTrace, make_unit_trace_rule
 from memorax.runtime import ObservationSchema
 from memorax.utils import Timestep
 from memorax.utils.axes import (
@@ -86,15 +86,15 @@ class RTRRLConfig:
     eta_f: float = 1.0
     entropy_rate: float = 1e-5
 
-    torso_optimizer: Adam = field(default_factory=lambda: Adam(lr=1e-4))
-    heads_optimizer: Adam = field(default_factory=lambda: Adam(lr=1e-4))
+    torso_optimizer: Adam | UnitTrace = field(default_factory=lambda: Adam(lr=1e-4))
+    heads_optimizer: Adam | UnitTrace = field(default_factory=lambda: Adam(lr=1e-4))
     torso_grad_clip: float = 1.0
     torso_follow: float = 1.0
 
     meta_rl: bool = True
 
 
-RTRRL_OPTIMIZERS = BASE_FAMILY.restricted("adam")
+RTRRL_OPTIMIZERS = STEP_FAMILY.restricted("adam", "unit_trace")
 
 
 @dataclass(frozen=True)
@@ -366,31 +366,41 @@ def _from_batch(tree):
 
 
 # --------------------------------------------------------- the two rule groups
+def _adam_rule(base: Adam, *, clip: float):
+    """Adam over the combined ascent, which is what the paper's RTRRL steps."""
+
+    chain: list[Any] = []
+    if clip:
+        chain.append(optax.clip_by_global_norm(clip))
+    chain.extend(
+        (
+            optax.scale_by_adam(b1=base.b1, b2=base.b2, eps=base.eps),
+            optax.scale(base.lr),
+        )
+    )
+    return make_optax_rule(optax.chain(*chain), rate=base.lr)
+
+
+def _group_rule(step: Adam | UnitTrace, *, clip: float):
+    """Whichever rule a group's optimizer names, over that group's blocks.
+
+    A group's entries are its blocks, which is the grouping the unit-trace rule
+    normalizes over: the torso is its own unit, and the two readouts step
+    together but are two units, so a large actor trace cannot spend the critic's
+    step. What they share under one selection is ``eta``, not a unit ball.
+    """
+
+    if isinstance(step, UnitTrace):
+        return make_unit_trace_rule(step, clip=clip)
+    return _adam_rule(step, clip=clip)
+
+
 def make_rules(cfg: RTRRLConfig):
     """One rule per group, both answering the same contract."""
 
-    torso_base = cfg.torso_optimizer
-    heads_base = cfg.heads_optimizer
-    torso: list[Any] = []
-    if cfg.torso_grad_clip:
-        torso.append(optax.clip_by_global_norm(cfg.torso_grad_clip))
-    torso.extend(
-        (
-            optax.scale_by_adam(b1=torso_base.b1, b2=torso_base.b2, eps=torso_base.eps),
-            optax.scale(torso_base.lr),
-        )
-    )
     return {
-        TORSO_GROUP: make_optax_rule(optax.chain(*torso), rate=torso_base.lr),
-        HEAD_GROUP: make_optax_rule(
-            optax.chain(
-                optax.scale_by_adam(
-                    b1=heads_base.b1, b2=heads_base.b2, eps=heads_base.eps
-                ),
-                optax.scale(heads_base.lr),
-            ),
-            rate=heads_base.lr,
-        ),
+        TORSO_GROUP: _group_rule(cfg.torso_optimizer, clip=cfg.torso_grad_clip),
+        HEAD_GROUP: _group_rule(cfg.heads_optimizer, clip=0.0),
     }
 
 

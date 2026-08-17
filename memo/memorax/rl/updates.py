@@ -4,15 +4,16 @@ A rule owns one parameter group. Which parameters form a group, and what
 scaling an algorithm applies to a trace before handing it over, stays with the
 algorithm; a rule only decides how far to step along the direction it is given.
 
-Both rules receive the eligibility trace and the TD error separately rather
+Every rule receives the eligibility trace and the TD error separately rather
 than a finished gradient. Adam does not need the split, but OBGD does: its
 step-size bound reads |delta| and the trace norm together, so delta cannot be
-folded in beforehand.
+folded in beforehand. The unit-trace rule needs it for the opposite reason: it
+reads only the *sign* of delta, and a folded-in delta cannot be unfolded.
 """
 
 from __future__ import annotations
 
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from typing import Any
 
@@ -157,6 +158,49 @@ def base_transform(base):
     return optax.sgd(base.lr)
 
 
+@dataclass(frozen=True)
+class UnitTrace:
+    """A step whose length is the learning rate, not the surprise.
+
+    The trace and the TD error say which way to go; ``eta`` says how far. The
+    trace is exported as a unit vector, so one step moves a normalization unit
+    by exactly ``eta`` and by that much whatever the TD error happens to be.
+
+    ``magnitude`` is which part of the TD error survives into the length.
+
+    ``sign``
+        ``eta * sign(delta) * z_hat``. The published default, and the only
+        setting that has been run without diverging.
+    ``td_error``
+        ``eta * delta * z_hat``, so the step is ``eta * |delta|`` long.
+        **Unsafe ablation, and it needs TD clipping to be anything else.**
+        With the step length proportional to the raw TD error the critic
+        closes a positive feedback loop -- an overshoot grows the next
+        ``|delta|``, which grows the next step -- and goes non-finite. Adam's
+        second moment was what held that loop down, and a rule written to
+        replace Adam does not have it. Kept because the ablation is worth
+        being able to run, defaulted away from because it does not survive.
+
+    ``scope`` is what gets normalized to one:
+
+    ``block``
+        Each top-level entry of the tree handed in, separately. Which entries
+        exist is the caller's grouping decision -- for RTRRL a group's entries
+        are its blocks, which is what the name is for.
+    ``group``
+        The whole tree at once. Two blocks under one norm share a single unit
+        ball, so the one with the larger trace takes nearly all of the step;
+        that is an ablation, not a default.
+    """
+
+    eta: float = param(valid=(1e-9, 10.0), search=(1e-4, 1.0), log=True)
+    magnitude: str = param(
+        valid=["sign", "td_error"], search=["sign"], default="sign"
+    )
+    scope: str = param(valid=["block", "group"], search=["block"], default="block")
+    eps: float = param(valid=(1e-12, 1e-2), search=[1e-8], default=1e-8, log=True)
+
+
 BOUND_BRANCHES = {
     "none": (),
     "ob": ObBound,
@@ -165,6 +209,8 @@ BOUND_BRANCHES = {
 }
 
 BASE_BRANCHES = {"sgd": Sgd, "adam": Adam}
+
+STEP_BRANCHES = {"sgd": Sgd, "adam": Adam, "unit_trace": UnitTrace}
 
 
 def _selected_parameters(selection, builder):
@@ -178,6 +224,10 @@ BOUND_FAMILY = ComponentFamily(
 )
 BASE_FAMILY = ComponentFamily(
     branches=BASE_BRANCHES,
+    construct=_selected_parameters,
+)
+STEP_FAMILY = ComponentFamily(
+    branches=STEP_BRANCHES,
     construct=_selected_parameters,
 )
 
@@ -305,6 +355,110 @@ def make_bounded_rule(*, bound, base) -> UpdateRule:
             updates=updates,
             state=moment,
             metrics={"step_size": step_size},
+        )
+
+    return UpdateRule(init=init, apply=apply)
+
+
+def _stream_norm(tree):
+    """One Euclidean norm per stream over every leaf of one normalization unit.
+
+    The env axis is axis 0 of every trace leaf, so the sum runs over everything
+    but it and a unit is a whole subtree rather than a leaf: normalizing leaf by
+    leaf would keep only each leaf's sign pattern and throw the direction away,
+    which is a different algorithm.
+    """
+
+    squares = sum(
+        jnp.sum(jnp.square(leaf), axis=tuple(range(1, leaf.ndim)))
+        for leaf in jax.tree.leaves(tree)
+    )
+    return jnp.sqrt(squares)
+
+
+def _units(tree, *, by_block):
+    """The normalization units of one tree, and how to put them back together."""
+
+    if by_block and isinstance(tree, Mapping):
+        return dict(tree), lambda parts: type(tree)(parts)
+    return {None: tree}, lambda parts: parts[None]
+
+
+def make_unit_trace_rule(step, *, clip=0.0) -> UpdateRule:
+    """Step ``eta`` along the trace, in the direction the TD error points.
+
+    The trace and the TD error carry the direction and nothing else: the trace
+    is divided by its own norm and the TD error is reduced to its sign, so the
+    traced part of the step is ``eta`` long per unit per stream and says nothing
+    about how surprised the step was. That split -- trace times TD error for the
+    direction, learning rate for the length -- is the whole rule.
+
+    The trace itself is untouched. It accumulates at full magnitude, the RNN
+    torso's direction is synthesized from the raw upstream vectors, and the
+    division by ``||z||`` happens here, on the way out, on a value nothing
+    carries forward.
+
+    ``clip`` bounds the finished update by global norm, and is worth setting
+    even though the traced part is already bounded by construction: the direct
+    directions do not pass through the trace, are not normalized, and are the
+    only part of this rule that can be any length at all.
+    """
+
+    eta = step.eta
+    eps = step.eps
+    signed = step.magnitude == "sign"
+    by_block = step.scope == "block"
+    bound = None
+    if clip:
+        import optax
+
+        bound = optax.clip_by_global_norm(clip)
+
+    def unit(tree):
+        """One subtree divided by its own per-stream norm."""
+
+        length = jnp.maximum(_stream_norm(tree), eps)
+        return jax.tree.map(
+            lambda leaf: leaf / _broadcast_env(length, leaf),
+            tree,
+        )
+
+    def init(*, params, traces):
+        del params, traces
+        return ()
+
+    def apply(traced, direct, state, *, delta, step, params):
+        del step, params
+        # Only the sign survives by default. `jnp.sign` takes a TD error of
+        # exactly zero to a step of exactly zero, which is what a rule that
+        # moves a fixed distance every step otherwise would not do.
+        surprise = jnp.sign(delta) if signed else delta
+
+        units, rebuild = _units(traced, by_block=by_block)
+        ascent = rebuild(
+            {
+                name: jax.tree.map(
+                    lambda leaf: eta * _broadcast_env(surprise, leaf) * leaf,
+                    unit(part),
+                )
+                for name, part in units.items()
+            }
+        )
+        if direct is not None:
+            ascent = jax.tree.map(
+                lambda leaf, immediate: leaf + eta * immediate, ascent, direct
+            )
+        updates = jax.tree.map(lambda leaf: jnp.mean(leaf, axis=0), ascent)
+        if bound is not None:
+            updates, _ = bound.update(updates, ())
+        # The rate, as every other rule reports it, rather than the distance
+        # this step happened to move: one name means the same thing whichever
+        # rule is in the way. What the step actually moved is `eta` times
+        # `|surprise|`, and under the default that is `eta` or it is zero.
+        return RuleOutput(
+            updates=updates,
+            state=state,
+            metrics={"step_size": jnp.full_like(delta, eta)},
         )
 
     return UpdateRule(init=init, apply=apply)

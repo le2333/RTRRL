@@ -28,9 +28,11 @@ from .td import make_td0
 from .updates import (
     ObjectiveDirections,
     RuleOutput,
+    UnitTrace,
     UpdateRule,
     make_bounded_rule,
     make_optax_rule,
+    make_unit_trace_rule,
 )
 
 __all__ = [
@@ -45,6 +47,7 @@ __all__ = [
     "Statistics",
     "COLD_STARTS",
     "VARIANCES",
+    "UnitTrace",
     "UpdateRule",
     "delayed_update",
     "broadcast_stream",
@@ -54,6 +57,7 @@ __all__ = [
     "make_bounded_rule",
     "make_optax_rule",
     "make_td0",
+    "make_unit_trace_rule",
     "normalization_metrics",
     "periodic_incremental_update",
     "select_ended",
