@@ -15,7 +15,7 @@ from memorax.observability.sinks import (
 )
 
 from ._contract import RunSpec
-from ._schedule import training_every_steps
+from ._schedule import training_scopes
 
 
 def load_run() -> tuple[RunSpec, Path]:
@@ -40,7 +40,7 @@ def build_reporter(config: RunSpec, scratch: Path) -> Reporter:
     )
     # The metrics artifact is the run's complete record, so it is neither
     # optional nor sampled. Aim is the dashboard: every evaluation, and
-    # training only as often as the document asked for.
+    # training only in the scopes the document asked for.
     scalar_sinks = [MetricsSink(artifacts / METRICS_FILENAME)]
     sampled_sinks = [
         AimSink(
@@ -56,5 +56,5 @@ def build_reporter(config: RunSpec, scratch: Path) -> Reporter:
         scalar_sinks=scalar_sinks,
         sampled_sinks=sampled_sinks,
         trajectory_sinks=trajectory_sinks,
-        training_every_steps=training_every_steps(config),
+        training_scopes=training_scopes(config),
     )

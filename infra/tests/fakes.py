@@ -77,7 +77,7 @@ def publish_one_row(s3: FakeS3, config: dict[str, Any]) -> None:
 def publish_result(s3: FakeS3, config: dict[str, Any]) -> None:
     result = json.dumps(
         {
-            "contract": 10,
+            "contract": 11,
             "identity": config["identity"],
             "success": True,
             "artifacts": ["metrics.jsonl"],

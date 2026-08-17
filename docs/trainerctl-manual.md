@@ -1,13 +1,14 @@
 # trainerctl Manual
 
-`trainerctl` runs one hyperparameter study for one algorithm on AWS Batch, from your
-terminal, in the foreground, in a single command. It samples parameters with Optuna,
-writes a configuration per trial, submits Batch jobs, waits, collects scores, and
-starts the next round with what it learned. When it exits, the study is over.
+`trainerctl` runs one hyperparameter study for one algorithm, from your terminal, in the
+foreground, in a single command. It samples parameters with Optuna, writes a run
+configuration per trial, hands a round to an executor — AWS Batch, or a local worker
+subprocess — waits, scores what came back, and starts the next round with what it
+learned. When it exits, the study is over.
 
-This manual covers three audiences, in order: people running experiments, people
-adding an algorithm to the facility, and people operating the AWS side. Read the
-first part; read the others when you need them.
+This manual covers three audiences, in order: people running experiments, people adding
+an algorithm to the facility, and people operating the AWS side. Read the first part;
+read the others when you need them.
 
 ---
 
@@ -16,10 +17,11 @@ first part; read the others when you need them.
 - [Concepts](#concepts)
 - [Part 1 — Running an experiment](#part-1--running-an-experiment)
   - [Prerequisites](#prerequisites)
-  - [Quick start](#quick-start)
   - [The experiment file](#the-experiment-file)
+  - [Metric names and what they were reduced over](#metric-names-and-what-they-were-reduced-over)
   - [The search space](#the-search-space)
   - [Scoring](#scoring)
+  - [Reporting a result](#reporting-a-result)
   - [Command reference](#command-reference)
   - [Output and where things land](#output-and-where-things-land)
   - [When something fails](#when-something-fails)
@@ -32,31 +34,37 @@ first part; read the others when you need them.
 ## Concepts
 
 **One experiment file describes one algorithm and one study.** There is no inheritance,
-no defaults file, no groups. Everything a launch needs is in the one YAML you pass on
-the command line, and the file is archived verbatim alongside the results.
+no defaults file, no groups. Everything a launch needs is in the one YAML you pass on the
+command line.
 
-**One trial is one configuration, and one run per seed it is measured on.** The task and
-the budget are fixed for the study, and so is the list of seeds.
-Optuna proposes a complete algorithm parameter dictionary; that dictionary is handed to
-your script unchanged alongside those sections; the script trains once and
-reports metrics. A Batch job may carry several trials, but a trial is never split across
-jobs. Within the algorithm parameters there is no separate notion of "fixed" versus
-"searched" — a parameter pinned to one value is just a distribution with one option.
+**One trial is one configuration, and one run per seed it is measured on.** The task, the
+budget and the list of seeds are fixed for the study. Optuna proposes a complete algorithm
+parameter dictionary; that dictionary reaches the entry unchanged alongside the run's
+other sections; the entry trains once and reports metrics. A Batch job may carry several
+runs, but a run is never split across jobs.
+Within the algorithm parameters there is no separate notion of "fixed" versus "searched" —
+a parameter pinned to one value is a distribution with one option.
 
-**The image is the source of truth for what an algorithm accepts.** Each image carries
-a catalog declaring its entry points, their parameter spaces, and the metrics they report.
-The experiment file may narrow those parameters but may not invent new ones. The immutable
+**The image is the source of truth for what an algorithm accepts.** Each image carries a
+catalog declaring its entries, their parameter spaces, and the metrics they report. The
+experiment file may narrow those parameters but may not invent new ones. The immutable
 image digest identifies the code that runs.
 
+**The two sides share a JSON format, not a package.** Infra writes run configurations and
+manifests; the Worker and the entry inside the image read them. Neither imports the
+other. `docs/contract.md` is that format, and `contract: 11` in a document is what lets a
+mismatch be refused rather than misread.
+
 **Rounds are how the optimiser learns.** A study of `rounds × trials_per_round` trials
-runs in `rounds` waves. Each wave's results are read back before the next wave is
-sampled, which is what lets TPE improve. Within a wave, trials are distributed over
-`parallel_jobs` Batch jobs and the trials sharing a job run one after another.
+runs in `rounds` waves. Each wave's results are read back before the next wave is sampled,
+which is what lets TPE improve. Within a wave, trials are distributed over
+`hpo.parallel_jobs` Batch jobs and the trials sharing a job run one after another.
 
 **Failure stops everything.** If any job or any training process exits abnormally,
-`trainerctl` terminates the surviving jobs and exits non-zero. There is no retry, no
-resume, and no command to continue a launch. Fix the cause and run the study again.
-A diverging run is not a failure: it produces a bad score, which the optimiser uses.
+`trainerctl` terminates the surviving jobs of that round and exits non-zero. There is no
+retry and no resume. A diverging run is not a failure: it produces a bad score, which the
+optimiser uses. A controller killed after its workers finished is the one recoverable
+case, and `trainerctl settle` is for it.
 
 ---
 
@@ -64,269 +72,340 @@ A diverging run is not a failure: it produces a bad score, which the optimiser u
 
 ### Prerequisites
 
-Run from the control plane directory, which is where the examples and the project
-environment live:
+Run from `infra/`, which is where the control plane's project environment lives:
 
 ```bash
-cd rtrrl/infra/control-plane
-uv run trainerctl --help
+cd infra
+uv run trainerctl run --help
 ```
 
 You need, for a Batch launch:
 
-- AWS credentials for account `007122174918`. The region is fixed at `eu-north-1` in
-  code and is not read from your environment.
-- A reachable Aim server. Runs connect to it directly over the network while training,
-  so the address in your experiment file must be one a Batch worker can resolve — the
-  control plane's private IP, not `127.0.0.1`. Preflight rejects loopback addresses.
-- An image already pushed to ECR with a registered job definition. See
+- AWS credentials for account `007122174918`. The region is fixed at `eu-north-1` in code
+  and is not read from your environment.
+- A reachable Aim server. Runs connect to it directly over the network while training, so
+  the address in your experiment file must be one a Batch worker can resolve — the control
+  plane's private IP, not `127.0.0.1`.
+- An image pushed to ECR, with a job definition registered for that digest. See
   [Part 3](#part-3--operations).
-
-### Quick start
-
-Check the experiment against the image without spending anything:
-
-```bash
-uv run trainerctl validate examples/experiment-acceptance.yaml --backend batch
-```
-
-This resolves the image, reads its catalog, merges your space over it, and verifies the
-queue, job definition, S3 bucket and Aim endpoint. It never submits a job. On success it
-prints the resolved space:
-
-```
-resolved search space:
-  learning_rate: {"type":"float","low":0.0001,"high":0.001,"log":true}
-  episode_length: {"choices":[32]}
-```
-
-Then run the study:
-
-```bash
-uv run trainerctl run examples/experiment-acceptance.yaml --backend batch
-```
-
-Progress goes to stderr, the final report to stdout, so `> report.json` gives you a clean
-machine-readable result.
+- The image's `catalog.json`, which you pass with `--catalog`.
 
 ### The experiment file
 
-Every field below is required unless marked otherwise, and unknown keys are rejected.
-A complete file:
+Every field below is required unless marked otherwise. A complete file, modelled on
+`experiments/streamac template.yaml`, which is the one to copy:
 
 ```yaml
-experiment: infra-acceptance          # Aim experiment name; an archival label
-name: brax-ppo-smoke                  # study name
-description: Infrastructure-owned CPU acceptance sweep
+experiment: streamac                  # Aim experiment the runs are filed under
+name: streamac-hopper                 # study name
+description: StreamAC on a masked Hopper       # optional; archival only
 
-image: 007122174918.dkr.ecr.eu-north-1.amazonaws.com/rtrrl@sha256:d84ccca3d066ed070bd39840aebb0b04dc23d97dcaac544d2fcbca28d73dd9d9
-entry: brax_ppo_acceptance            # an entry declared by the image's catalog
+image: 007122174918.dkr.ecr.eu-north-1.amazonaws.com/rtrrl@sha256:...
+entry: stream_ac                      # an entry declared by the image's catalog
 storage: s3://rtrrl-artifacts-007122174918/trainer
 
 environment:
   id: brax::hopper
-  backend: spring
-  seeds: [0]                         # every configuration runs once per seed; not searched
-  observed: [0, 1, 2, 3, 4]          # optional; omit for full observability
+  backend: spring                     # null where the namespace has one implementation
+  seeds: [0]                          # every configuration runs once per seed; not searched
+  episode_length: 1000
+  observed: [0, 2, 4]                 # optional; omit for full observability
 
 training:
-  num_envs: 1
-  total_steps: 128
-  epoch_steps: 128
-  chunk_steps: 64                    # optional; the loop's internal scan length
-  early_stop_patience: null          # optional; null or absent never stops early
+  num_envs: 16
+  total_steps: 2000000
+  chunk_steps: 10000
 
 evaluation:
-  every_steps: 64
-  episodes: 5                        # exactly this many complete episodes per checkpoint
-  chunk_steps: 320                   # memory bound on one evaluation call
-  seed: 1000                         # the evaluation's own key stream
+  every_steps: 10000
+  episodes: 5                         # exactly this many complete episodes per checkpoint
+  chunk_steps: 16000                  # memory bound on one evaluation call
+  seed: 1000                          # the evaluation's own key stream
 
 compute:
-  instance_type: c7a.medium
-  timeout_minutes: 60
+  instance_type: c7a.large
+  timeout_minutes: 240
 
 hpo:
-  sampler: tpe
   rounds: 2
-  trials_per_round: 2
-  parallel_jobs: 1
+  trials_per_round: 4
+  startup_trials: 4
+  parallel_jobs: 2
+  seed: 7
 
-space:
-  learning_rate: {type: float, low: 1.0e-4, high: 1.0e-3, log: true}
+space:                                # overrides the catalog's tree, same shape
+  backbone:
+    kind: [rtu]
+    rtu:
+      hidden_dim: [32]
 
 score:
-  metric: eval/episode/return
-  window_steps: [0, 128]
+  metric: eval/episode/return_per_step
+  window_steps: [0, 2000000]
   reduce: auc
-  episodes_per_checkpoint: 5         # optional; refuses a checkpoint that reported fewer
-  direction: maximize
+  episodes_per_checkpoint: 5          # optional; refuses a checkpoint that reported fewer
   non_finite: worst
+  direction: maximize
 
 logging:
-  aim: aim://172.31.62.192:53801
-  enable_rerun: true
-  rerun_every_steps: 32
+  aim:
+    url: aim://172.31.62.192:53801
+    training:
+      window: { every_steps: 100000 }
+  rerun:
+    log_every_steps: 100000
 ```
 
 **Identity.** `experiment` is the Aim experiment the runs are filed under; `name` is the
 study. Repeated launches of the same file are told apart by a launch id, a UTC timestamp
-generated at start, so nothing is overwritten.
+generated at start, so nothing is overwritten. `--launch-id` pins it when you need the
+artifacts of a launch to land where an earlier one's did.
 
-**`image`** must be an ECR reference in this account. A digest (`@sha256:...`) is strongly
-preferred and is what the shipped examples use: a tag can be repointed between the moment
-preflight resolves it and the moment a job pulls it.
+**`image`** must be pinned to a digest (`@sha256:...`). A tag is refused outright: the
+catalog binds a search space to the image that declared it, and a floating tag would let
+that space change under a study that has already recorded trials against the old one.
 
 **`environment`.**
 
 | Field | Meaning |
 | --- | --- |
 | `id` | Environment identifier passed to the entry, such as `brax::hopper` |
-| `backend` | Environment physics backend, such as `spring` |
-| `seeds` | The seeds every configuration is run on; a non-empty list of distinct non-negative integers |
+| `backend` | Physics backend, such as `spring`; `null` where the namespace has only one |
+| `seeds` | The seeds every configuration is run on; distinct, non-negative, at least one |
+| `episode_length` | The environment's own episode cap; must be positive |
 | `observed` | Optional observation dimension indices visible to the agent |
 
 `observed` selects dimensions rather than zeroing the rest, so the observation space and
 the network's input layer genuinely shrink. Omit it for full observability. The list may
-not be empty, repeat an index, or contain a negative index.
+not be empty, repeat an index, or contain a negative index. `backend: null` and
+`observed: null` both say "not applicable", which is not the same as omitting the field.
 
 `seeds` is a list, and it is **not searched**. A seed is not a hyperparameter: two runs
 that differ only in it are the same configuration measured twice, so letting the sampler
 draw one would spend the study's budget modelling noise and then report the luckiest draw
 as the best setting. Every configuration is instead run once per listed seed, and the
-optimiser is told the mean; the per-seed scores are printed beside it under
-`seed_values` and are what a result table reports.
+optimiser is told the mean; the per-seed scores are printed beside it under `seed_values`
+and are what a result table reports.
 
-A tuning launch lists one seed, which makes that mean the one run's score unchanged. The
-formal launch that follows lists ten fresh seeds on a discrete task or five on Brax —
-see *Reporting a result* below.
+A tuning launch lists one seed, which leaves that mean the one run's score unchanged. The
+formal launch that follows lists ten fresh seeds on a discrete task or five on Brax — see
+[Reporting a result](#reporting-a-result).
 
-**`training`.**
+**`training`.** Three schedules that were one field before contract 9, and none of them
+derives from another.
 
 | Field | Meaning |
 | --- | --- |
 | `num_envs` | Number of parallel training streams; must be positive |
 | `total_steps` | Total training budget; must be positive |
-| `epoch_steps` | Steps per epoch; must be positive and divide `total_steps` |
-| `chunk_steps` | Optional internal scan length of the training loop |
-| `early_stop_patience` | Optional; omit or `null` to never stop early |
+| `chunk_steps` | How much one training call may hold — the run's memory cost |
 
-`epoch_steps` must also contain a whole number of training streams: it must be divisible
-by `training.num_envs`. When `chunk_steps` is given, `chunk_steps * num_envs` must divide
-both `total_steps` and `epoch_steps`.
+`chunk_steps` is deliberately unrelated to `episode_length`: how long an episode runs is
+decided while the run is going and grows as the policy improves, so sizing a buffer from
+it would tie a memory budget to a number that has nothing to do with memory.
 
 **`evaluation`.**
 
 | Field | Meaning |
 | --- | --- |
-| `every_steps` | How often the policy is measured, in environment steps |
-| `episodes` | How many complete episodes each checkpoint is scored on, exactly; zero measures nothing |
-| `chunk_steps` | How much of one evaluation rollout a single call may hold; must contain whole environment steps |
+| `every_steps` | Environment steps between measurements of the policy |
+| `episodes` | How many complete episodes each measurement is scored on, exactly; zero skips evaluation entirely |
+| `chunk_steps` | How much of one measurement a single call may hold |
 | `seed` | The evaluation's own key stream; must not be negative |
 
 `episodes` is a count, not a budget. How long those episodes run is what the policy
 decides, so asking for steps instead lets the number of episodes vary with the task and
-with training — which is exactly what a protocol may not let vary. The runtime keeps
-advancing the rollout until the count is reached and refuses the run if the episodes are
-not ending; an episode a stream ran past the count is not scored either.
+with training — which is what a protocol may not let vary. Worse, it varies in a
+direction: a step budget truncates whichever episode was still running, which is the
+longest one, so the episodes that survive are systematically the short ones. On a task
+where the return is the length, that is a thumb on the scale of the very quantity being
+measured.
 
-With more than one stream the count is split by naming the slots before the rollout runs:
-stream `i`'s `j`-th episode fills slot `j * num_envs + i`, and the scored episodes are
-the ones whose slot is below `episodes`. Nothing has to divide anything — the lower
-streams simply contribute one more — and which episodes count never depends on which
+The runtime keeps advancing the rollout until the count is reached, and refuses the run
+if the episodes are not ending. An episode a stream ran past the count is not scored
+either: one extra changes the number as much as one missing.
+
+With more than one stream the count is split by naming the slots before the rollout
+runs — stream `i`'s `j`-th episode fills slot `j * num_envs + i`, and the scored episodes
+are the ones whose slot is below `episodes`. Nothing has to divide anything: the lower
+streams simply contribute one more, and which episodes count never depends on which
 finished first.
 
 `chunk_steps` is a memory bound of the same kind as `training.chunk_steps` and says
 nothing about how much is run.
 
-`seed` is separate from `training.seed` so that evaluation cannot move the training key
-stream: a run must learn the same thing whether it was measured every ten thousand steps
-or every hundred thousand. Two methods that declare the same evaluation seed are measured
-on paired evaluation episodes.
+`seed` is separate from the environment's seeds so that evaluation cannot move the
+training key stream: a run must learn the same thing whether it was measured every ten
+thousand steps or every hundred thousand. Two methods that declare the same evaluation
+seed are measured on paired evaluation episodes.
 
-**`compute`.**
+The entry refuses a document whose schedules do not divide: `chunk_steps`,
+`evaluation.chunk_steps` and `evaluation.every_steps` must each contain a whole number of
+environment steps (divisible by `num_envs`), and `total_steps` must be a whole number of
+evaluation intervals. These are checked when the run starts, not by the control plane.
+
+**`compute`.** Required for `--backend batch`; unread for `local`.
 
 | Field | Meaning |
 | --- | --- |
 | `instance_type` | Selects the queue. One of `c7a.medium`, `c7a.large`, `c7a.xlarge`, `g6.xlarge` |
 | `timeout_minutes` | Batch kills the job after this. It covers every trial packed into that job |
 
-`timeout_minutes` must be at least 1, and it is the only thing bounding a wedged run:
-the worker starts a run and waits for it, without judging how often it reports.
-`instance_type` is only checked against the queue table during a Batch preflight, so a
-typo survives `validate --catalog`.
+`timeout_minutes` is the only thing bounding a wedged run: the worker starts a run and
+waits for it, without judging how often it reports.
 
 **`hpo`.**
 
-| Field | Values |
+| Field | Meaning |
 | --- | --- |
-| `sampler` | `tpe`, `random`, or `grid` |
 | `rounds` | Number of sequential waves |
 | `trials_per_round` | Trials sampled per wave |
-| `parallel_jobs` | Batch jobs per wave; must not exceed `trials_per_round` |
+| `startup_trials` | Trials TPE samples at random before it starts modelling |
+| `seed` | Sampler seed |
+| `parallel_jobs` | Batch jobs per wave; must be between one and `trials_per_round`. Read only by `--backend batch`, which fails without it |
 
 `parallel_jobs: 1` packs the whole wave into one job that runs its trials serially — the
 right choice for short runs, since it pays for one instance startup instead of several.
-`grid` requires every parameter to be a fixed list; preflight names the offending ranges
-if it is not.
+The sampler is TPE; there is no `sampler` field to choose another.
 
-**`logging`.**
+**`logging`.** A block that is present is a destination that is on. There is no separate
+boolean beside a value for it to disagree with.
 
 | Field | Required | Meaning |
 | --- | --- | --- |
-| `aim` | yes | `aim://host:port` of the Aim server |
-| `enable_rerun` | no | Turns the Rerun sink on; defaults to off |
-| `rerun_every_steps` | with `enable_rerun` | Stride in environment steps between sample points |
+| `aim.url` | yes | `aim://host:port` of the Aim server |
+| `aim.training` | no | Which scopes of training reach Aim; omit for evaluation only |
+| `rerun.log_every_steps` | no | Stride in environment steps between kept trajectories |
+
+The metrics artifact is the run's complete record: every episode, always, not
+configurable. `logging` decides what a *dashboard* receives, which is a different
+question, and the next section is about how to ask for it.
+
+### Metric names and what they were reduced over
+
+A metric name is `{phase}/{scope}/{quantity}`. The middle segment is the scope the number
+was reduced over, and it is the only place that says how the number was arrived at:
+
+```
+train/step/td_error       a reading at one moment
+train/episode/return      one episode's statistic
+train/window/return       every episode in a stretch, averaged
+eval/episode/return       what a score reads
+```
+
+Evaluation always reaches Aim. Training reaches it only through the scopes you name under
+`aim.training`, and each scope's interval is expressed in that scope's own unit:
+
+| scope | interval | answers |
+| --- | --- | --- |
+| `step` | `every_steps` | what a reading looks like at a typical moment |
+| `episode` | `every_episodes` | what a typical episode's statistic is |
+| `window` | `every_steps` + optional `length_steps` | what every episode in a stretch averaged |
+
+```yaml
+logging:
+  aim:
+    url: aim://172.31.62.192:53801
+    training:
+      window: { every_steps: 100000 }   # length_steps defaults to every_steps
+      step:   { every_steps: 10000 }    # any subset; all three are allowed
+```
+
+Why the unit matters: sampling an *episode* on a *step* schedule is biased, and it was the
+default before contract 10. The episode a step mark lands in is the episode that spans it,
+and a long episode spans more of the axis, so long episodes were over-represented. On a
+masked Hopper that put the sampled mean episode length near twice the true one early in
+training and near the true one at the end, so `return` and `trace_norm` came back inflated
+at the start and not at the end — a compressed curve, in which a run that is learning
+looks like a run that is not.
+
+Each scope avoids that by selecting among objects of one size. `step` selects a step. Every
+step is one step, and a mark names one stream's one transition. `episode` selects every Nth
+episode, which is uniform in episode space. `window` selects a stretch of the axis and
+counts an episode in the window it *ends* in, which partitions the episodes between
+windows. `window.length_steps` defaults to `every_steps`, which tiles the axis and uses
+every episode; a shorter length samples stretches instead — still unbiased, since a stretch
+is a fixed size — and keeps the accumulator alive for less of the run.
+
+Inside a window a series is pooled over transitions, not over episodes: episodes differ in
+length, so a mean of per-episode means is not the mean and a mean of per-episode variances
+is not the variance. `return` and `length` are per-episode quantities to begin with, so the
+window averages the episodes.
+
+Omitting `aim.training` records evaluation only. Writing the block and naming no scope in
+it is refused, rather than silently meaning nothing.
 
 ### The search space
 
-The image's catalog declares the full set of parameters an entry accepts. Your `space`
-overrides entries in that set key by key. Naming a key the entry does not declare is an
-error that lists what it does declare; omitting a key means the catalog's own declaration
-is used.
+The image's catalog declares the full set of parameters an entry accepts, as a tree. Your
+`space` is a tree of the same shape that narrows it node by node; what comes out is a
+third tree of that shape. It stays a tree because the tree *is* the conditional structure:
+a parameter under a branch exists only for the trials that chose that branch, and a flat
+table cannot say so.
 
-Three ways to write a parameter:
+Nothing but the leaf separates a group from a value. A component chosen among branches is
+a parameter named `kind` living beside those branches, which is also why the same name at
+two sites is two parameters and not a clash — `actor.optimizer` and `critic.optimizer` are
+one declaration used twice, each in its own scope.
 
 ```yaml
-trace_mode: [accumulate]                               # pinned: one option
-backbone: [lru, ctrnn]                                 # categorical: several options
-entropy_rate: {type: float, low: 1.0e-8, high: 1.0, log: true}
-hidden_dim:    {type: int,   low: 1,      high: 512, step: 1}
+space:
+  backbone:
+    kind: [rtu]                     # pinned: a one-option categorical
+    rtu:
+      hidden_dim: [16, 32, 64]      # categorical
+      differentiation:
+        kind: [tbptt]
+  actor:
+    optimizer:
+      base:
+        sgd:
+          lr: {type: float, low: 1.0e-5, high: 1.0e-3, log: true}
 ```
 
 Pinning is not a special case: a one-element list is a categorical distribution with one
-option, so the trial's recorded parameters always contain the complete configuration
-rather than only the parts that varied.
+option, so a trial's recorded parameters always contain the complete configuration rather
+than only the parts that varied. Omitting a node means the catalog's own declaration is
+used, so an empty `space` is valid and means "the catalog's space, unchanged".
 
-The task, the run shape and the evaluation shape are not algorithm parameters. Catalog
-entries must not declare them, and an experiment may not put their reserved names under
-`space`: `environment`, `env_mode`, `env_backend`, `observed`, `seed`, `num_envs`,
-`total_steps`, `epoch_steps`, `eval_steps`, `chunk_steps`, `early_stop_patience`, or
-`eval_envs`. Their values belong in the top-level `environment`, `training` and
-`evaluation` sections, and reach the worker through the manifest rather than through a
-sampled trial. The `step` value your script passes to `report()` must use the same unit as
-`training.total_steps`, so comparing a score window against the budget is pure arithmetic.
+Three rules the control plane enforces before any trial starts:
+
+- a pin must name a parameter the image declares. One that does not is refused rather than
+  ignored: it is a knob that turns nothing, and the run would start with the value its
+  author believed they had set;
+- an override must lie inside the `valid` domain the catalog declares for that parameter;
+- a structural parameter — a `kind` whose value selects which sub-graph exists — must be
+  pinned to a single option for the whole study. A structural sweep changes what other
+  parameters even exist, and that is not a search the optimiser can model.
+
+The task, the run shape and the evaluation shape are not algorithm parameters. They belong
+in the top-level `environment`, `training` and `evaluation` sections and reach the entry
+through the run configuration rather than through a sampled trial.
 
 ### Scoring
 
-The score is what the optimiser sees, and it is computed by the worker from the metrics
-your script reported, not by your script.
+The score is what the optimiser sees. It is computed by the control plane from the
+`metrics.jsonl` the run uploaded — not by the training code, and not by the worker.
 
 | Field | Values |
 | --- | --- |
-| `metric` | Must be one of the metrics the entry declares |
-| `window_steps` | `[low, high]`, inclusive, in the same unit as `training.total_steps` |
+| `metric` | Must be one of the metrics the entry declares in the catalog |
+| `window_steps` | `[low, high]`, inclusive, in environment steps |
 | `reduce` | `mean`, `median`, `min`, `max`, `last`, `auc`, `last_checkpoints` |
-| `checkpoints` | Required by `last_checkpoints` and accepted by nothing else: how many of the last measured steps to average |
+| `checkpoints` | Required by `last_checkpoints`, accepted by nothing else: how many of the last measured steps to average |
 | `episodes_per_checkpoint` | Optional, and only for `auc` and `last_checkpoints`: the episode count each checkpoint must have reported |
 | `direction` | `maximize` or `minimize` |
 | `non_finite` | `worst`, or a number |
+
+Score an evaluation metric. `eval/episode/return` and `eval/episode/return_per_step` are
+the two usual choices, and both are unbiased by construction: an evaluation is a
+measurement the run asked for at a fixed step, not a sample of something that happened.
 
 The first five reductions read the metric's rows. `auc` and `last_checkpoints` read the
 **evaluation curve**: a checkpoint is one measured step and arrives as one row per
 episode, so the rows of a step become that checkpoint's mean and the reduction runs over
 those means. Reducing the rows directly would weigh each checkpoint by how many episodes
-it happened to report, which is the thing the fixed episode count exists to stop varying.
+it happened to report, which is what the fixed episode count exists to stop varying.
 
 `auc` is the area under that curve per environment step — a step-weighted mean, so it
 reads on the scale of the returns it integrates and is comparable across budgets. Its
@@ -336,13 +415,10 @@ spacing the checkpoints have, so an interval missing its measurement is crossed 
 line between its neighbours rather than dropped. One checkpoint has no area and is an
 error.
 
-`episodes_per_checkpoint` is what turns the runtime's exactness into a checked claim: a
-checkpoint that did not report that many values for the metric is refused rather than
-averaged, because a checkpoint scored on nine episodes is not the quantity the other runs
-report.
-
-The window's upper bound may not exceed `training.total_steps`; otherwise the run could never
-fill it, and preflight says so with both numbers.
+`episodes_per_checkpoint` turns the runtime's exactness into a claim the control plane
+checks: a checkpoint that did not report that many values for the metric is refused
+rather than averaged, because a checkpoint scored on nine episodes is not the quantity
+the other runs report.
 
 `non_finite: worst` substitutes an ordered-worst value for NaN or infinity, which keeps a
 diverged trial in the study as a strong negative signal rather than killing the launch.
@@ -360,7 +436,7 @@ what makes it one:
 
 ```yaml
 environment:
-  seeds: [100, 101, 102, 103, 104, 105, 106, 107, 108, 109]   # fresh; ten discrete, five Brax
+  seeds: [100, 101, 102, 103, 104, 105, 106, 107, 108, 109]  # fresh; ten discrete, five Brax
 
 selection:
   study: rtrrl-repeatprevious          # where the configuration came from
@@ -371,7 +447,7 @@ space:
   # every leaf a single value: the frozen best parameter dictionary
 ```
 
-`trainerctl` refuses the launch if any of those claims fails:
+`trainerctl` refuses the launch if any of those claims fails, before any container starts:
 
 | Refusal | Cause |
 | --- | --- |
@@ -385,89 +461,63 @@ Every run carries `identity.role` (`tuning` or `formal`) and `identity.seed` int
 allowed to be used for. The launch's seeds, evaluation seed and selection are archived on
 the study as user attributes and printed in the report.
 
-There is no `trainerctl formal` subcommand. The freezing is an edit to a file you keep,
-which is the same thing every other decision in this facility is.
+There is no `trainerctl formal` subcommand. Freezing the best dictionary is an edit to a
+file you keep, which is what every other decision in this facility is.
 
 ### Command reference
 
 Two subcommands. There is deliberately no `status`, `resume`, or `history`.
 
-**`trainerctl validate EXPERIMENT`** — exactly one of:
-
-| Flag | Effect |
-| --- | --- |
-| `--catalog PATH` | Offline check against a catalog JSON. Touches no AWS |
-| `--backend batch` | Full check: resolves the image from ECR and verifies queue, job definition, bucket and Aim reachability |
-| `--queues run\|dev` | Which queue tier to verify against. Default `run` |
-
-**`trainerctl run EXPERIMENT --backend local|batch`**
+**`trainerctl run EXPERIMENT`**
 
 | Flag | Default | Effect |
 | --- | --- | --- |
-| `--backend` | none; required | `batch` runs on AWS; `local` runs the worker as a subprocess here |
-| `--catalog PATH` | — | Required for `local`, ignored for `batch` |
-| `--archive-dir PATH` | `archive` | Local archive root |
-| `--jobs-dir PATH` | `jobs` | Worker workspace; `local` only |
+| `--backend local\|batch` | none; required | `batch` submits to AWS; `local` runs the worker as a subprocess here |
+| `--catalog PATH` | none; required | The image's `catalog.json` |
+| `--database PATH` | none; required | The Optuna study database |
+| `--launch-id ID` | generated | Names this launch's artifacts; a UTC timestamp by default |
+| `--exchange PATH` | — | Where round configs and manifests are written; required for `local` |
+| `--workspace PATH` | — | Worker scratch root; required for `local` |
 | `--queues run\|dev` | `run` | `batch` only |
+| `--poll-seconds N` | `20` | How often a Batch round is polled |
+| `--worker-command ...` | `python -m worker` | `local` only; must be the last option |
 
-`dev` queues are for infrastructure development. Delivered runs use `run` queues, and
-choosing `dev` prints a warning.
+**`trainerctl settle EXPERIMENT --launch-id ID`** takes the same flags, with
+`--launch-id` required. It submits nothing: for each trial the study still has open it
+reads that trial's already-uploaded results, scores them, and tells Optuna. This is the
+one recoverable failure — a controller killed between a worker's last upload and
+`study.tell` leaves a trial RUNNING whose training is finished and paid for. A trial whose
+work genuinely has not finished is reported as still running and left alone.
 
-Exit codes:
-
-| Code | Meaning |
-| --- | --- |
-| 0 | Validation passed, or every trial completed |
-| 1 | Preflight rejected the experiment, or the launch failed |
-| 2 | Usage error |
-| 130 | Interrupted with Ctrl-C during `run --backend batch` |
+`dev` queues are for infrastructure development; delivered runs use `run` queues.
 
 ### Output and where things land
 
-While running, one line per finished trial goes to stderr:
+`run` prints the study to stdout as JSON: every trial's number, state, value and
+parameters, and the best trial. `settle` prints what it settled and what is still running.
+Progress and worker output go to stderr, so `> report.json` gives a clean machine-readable
+result.
+
+Under `--backend local`, the exchange holds one directory per round:
 
 ```
-trial 0: {'learning_rate': 0.00013, 'seed': 0, ...} -> 21.0
-best trial 2 scored 25.0
+{exchange}/round-000/trial-000000.json     # the run configuration handed to the entry
+{exchange}/round-000/manifest.json         # which runs this worker must execute, in order
+{exchange}/round-000/worker.log            # the worker's combined stdout and stderr
 ```
 
-On success, stdout carries the report:
-
-```json
-{
-  "best": {"job_id": "...", "log_stream": "...", "params": {...}, "trial": 2, "value": 25.0},
-  "elapsed_seconds": 426.3,
-  "failure": null,
-  "launch_id": "20260726-003613",
-  "status": "succeeded",
-  "trials": [{"job_id": "...", "params": {...}, "trial": 0, "value": 21.0}]
-}
-```
-
-The same report is written to the archive and to S3 **even when the launch fails**, with
-`status: "failed"` and `failure` naming the exception — so a paid run always leaves a
-post-mortem.
-
-Locally, under `--archive-dir`:
+Each run's own artifacts are written by the entry into a scratch directory and uploaded,
+relative paths preserved, to `artifacts.root`, which is
+`{storage}/{experiment}/{launch_id}/{run_id}`:
 
 ```
-archive/{experiment}/{name}/{launch_id}/
-    experiment.yaml   # byte-for-byte copy of what you passed
-    space.json        # the space after merging with the catalog
-    launch.json       # image digest, environment, training, evaluation, queue, job definition, hpo settings
-    study.db          # the Optuna study
-    report.json
+metrics.jsonl                  # the complete record: every episode, both phases
+rerun/train-sample-000000010000.rrd
+result.json                    # written beside the run's artifacts once the upload is done
 ```
 
-In S3, under `{storage}/{experiment}/{name}/{launch_id}/`: the same documents except
-`study.db`, which stays on your machine, plus the per-job and per-trial artefacts:
-
-```
-rounds/round-000/job-0.json        # manifest: which trial configs this job must run
-trials/t0/config.json              # the run configuration handed to the script
-trials/t0/score.json               # the score the worker computed
-trials/t0/episodes/episode-000001.rrd
-```
+The worker uploads only after the entry exits zero, and it keeps the local scratch
+directory of a failed run for diagnosis rather than cleaning it up.
 
 In Aim, each run appears named `{name}-{launch_id}-t{trial}-s{seed}` under the
 experiment, carrying the launch id, trial number, entry, image digest and the full
@@ -475,24 +525,29 @@ algorithm parameter dictionary.
 
 ### When something fails
 
-**Preflight rejected it.** Nothing was submitted and nothing was spent. The message names
-the field and, where a fix exists, the fix. Common ones:
+**The experiment file was rejected.** Nothing was submitted and nothing was spent. The
+message names the field:
 
 | Message | Cause |
 | --- | --- |
-| `image does not declare entry '...'` | `entry` does not match the image's catalog |
-| `experiment declares parameters the entry does not accept: ...` | A `space` key the catalog does not have |
-| `space names {keys}, which belong to the environment, training and evaluation sections and are not searched` | Reserved injected keys appear under `space` |
-| `epoch_steps {N} is not {M} streams' worth` | `training.epoch_steps` is not divisible by `training.num_envs` |
-| `score window upper bound {N} exceeds the training total_steps ({M})` | The window cannot be filled |
-| `entry ... does not report metric '...'` | `score.metric` is not among the entry's declared metrics |
-| `job definition '...' is not registered` | The image was never deployed; see Part 3 |
-| `logging aim '...' is a loopback address` | Batch workers would resolve it to themselves |
-| `instance_type '...' has no queue` | Not one of the four supported types |
+| `the experiment file does not say [...]` | Required keys are missing; the list is exhaustive |
+| `image '...' is not pinned to a digest; use name@sha256:...` | `image` names a tag |
+| `the image catalog declares no entry '...'` | `entry` is not in the catalog |
+| `entry '...' declares no score metric '...'` | `score.metric` is not one the entry declares |
+| `the image declares no parameter named ...` | A `space` key the catalog does not have |
+| `experiment range is outside the valid domain for ...` | An override leaves the declared domain |
+| `structure parameters must be fixed for one experiment: ...` | A structural parameter is being searched |
+| `parallel_jobs must be between one and the number of trials` | `hpo.parallel_jobs` exceeds `trials_per_round` |
 
-**A job failed.** The failing job's name, the reason, and the last 200 lines of its
+**The run was rejected inside the image.** The run configuration is validated again by the
+entry, which is where the schedule arithmetic lives — `chunk_steps must contain whole
+environment steps`, `total_steps must consist of whole evaluation intervals`, and the
+`logging` shape, including `aim training names no scope`. These arrive as a failed job, not
+as a preflight message, so a shape mistake costs one container start.
+
+**A job failed.** The failing job's name, the reason, and the last 200 events of its
 CloudWatch log are printed to stderr, surviving jobs in that round are terminated, and the
-command exits 1. The report in S3 records how far the study got.
+command exits non-zero.
 
 **A run hung.** Nothing intervenes until `timeout_minutes` elapses, at which point Batch
 kills the job and the launch fails. Raise the timeout for a run that legitimately needs
@@ -502,152 +557,143 @@ longer; lower it to cap what a wedged run can cost.
 
 ## Part 2 — Adding an algorithm
 
-An algorithm joins the facility by depending on the SDK, declaring a catalog entry, and
-being baked into an image. The reference implementation is
-`rtrrl/infra/mock-trainer/`, which is small enough to read in one sitting.
+An algorithm joins the facility by living in `memo/memorax/algorithms/`, being exposed
+through a module in `memo/entries/`, and being baked into the image.
+`memo/entries/stream_ac.py` is a complete example, and it is 66 lines.
 
-### What your script must do
+### What an entry module must export
 
-The SDK exports nothing from its top level; import from the submodule.
+The catalog scanner imports every module in `entries/` whose name does not start with an
+underscore, and requires three names from each:
+
+| Name | Meaning |
+| --- | --- |
+| `PARAMETERS` | The algorithm's complete parameter space, which the catalog describes |
+| `METRICS` | Every metric name the run reports, which `score.metric` is checked against |
+| `main` | The process entry point the worker starts |
+
+A module missing any of them fails the build with a message naming what it lacks, and an
+image with no entries at all is refused, since it could run nothing.
 
 ```python
-from training_sdk.reporter import Reporter
+from memorax.algorithms.stream_ac import METRICS as METRICS
+from memorax.algorithms.stream_ac import PARAMETERS as PARAMETERS
+from memorax.algorithms.stream_ac import StreamAC
 
-with Reporter.from_env() as reporter:
-    params = reporter.config.params        # this trial's complete configuration
-    scratch = reporter.scratch             # a writable directory, cleaned up for you
-    ...
-    reporter.report(step, {"episode_return": value})
+from ._observability import build_reporter, load_run
+from ._schedule import trajectory_at_steps, trajectory_record
+
+
+def main(argv: list[str] | None = None) -> int:
+    del argv
+    config, scratch = load_run()
+    with build_reporter(config, scratch) as reporter:
+        run(reporter, config)
+    return 0
 ```
 
-`Reporter.from_env()` reads `TRAINER_RUN_CONFIG` and `TRAINER_SCRATCH`, both injected by
-the worker; your script never sets them. It wires up the sinks automatically:
+`load_run()` reads `TRAINER_RUN_CONFIG` and `TRAINER_SCRATCH`, both injected by the
+worker; the entry never sets them. It validates the whole run document against
+`entries/_contract.py`, so a document from an older contract fails here, naming the field
+it is missing, rather than half-running.
 
-- **metrics file** — always. Every `report()` is appended to `metrics.jsonl` in the
-  scratch directory. This is what the score is computed from.
-- **Aim** — always, over the network to the configured server.
-- **Rerun** — only when `enable_rerun` is set.
+An entry's job is composition: project the run document onto the algorithm's build
+request, onto `RuntimeConfig`, and onto the reporter. It must not become the place where
+the algorithm's graph is defined.
 
-To record a trajectory, hand over a complete episode:
+### Declaring metrics
 
-```python
-from training_sdk.episode import Episode
-
-reporter.log_episode(Episode(
-    number=n,                       # 1..999999
-    phase="eval",
-    start_env_steps=start, end_env_steps=end,
-    observations=obs,               # exactly one more than actions
-    actions=acts, rewards=rews,
-    terminals=terms, truncations=truncs,
-))
-```
-
-The episode must be complete — the last transition terminal or truncated — and the arrays
-length-consistent. `Episode` checks all of this and raises rather than recording something
-misleading.
-
-Two constraints matter:
-
-**Never log inside a JIT kernel.** Cross to the host first. The reference implementation
-blocks on the device, converts with `np.asarray(jax.device_get(value))`, and only then
-appends to a Python list.
-
-**Sinks are not isolated from each other's failures.** If Aim is unreachable, the run
-crashes and the launch stops. The SDK does not buffer, retry, or degrade. This is
-deliberate: silently losing half a study's telemetry is worse than stopping.
-
-### Declaring the entry
-
-A catalog entry states how to start the script, what it reports, and what it accepts:
+Do not spell metric names by hand. `metric_names` builds them from the phase and the
+per-transition series the algorithm reports, so the declared set and the reported set
+cannot drift:
 
 ```python
-EntryDescriptor(
-    command=["python", "-m", "your_algorithm"],
-    metrics=["episode_return", "episode_length"],
-    space={
-        "seed": {"type": "int", "low": 1, "high": 1_000},
-        "learning_rate": {"type": "float", "low": 1e-6, "high": 1e-2},
-        "batch_size": {"type": "int", "low": 16, "high": 256, "step": 16},
-    },
+from memorax.observability.metrics import metric_names
+
+TRAINING_METRICS: tuple[str, ...] = taken(REPORTS, parts=PARTS)
+METRICS: tuple[str, ...] = metric_names("train", TRAINING_METRICS) + metric_names(
+    "eval"
 )
 ```
 
-Copy `rtrrl/infra/mock-trainer/scripts/build_catalog.py`. It writes `catalog.json` and,
-with `--print-label`, prints the gzipped base64 form used as an image label.
+`METRICS` declares what the *record* contains, which is one reduction per episode in both
+phases — that is what a score reads. The dashboard scopes are a deployment choice, not an
+algorithm one, and do not appear here. `check_names` refuses a name that is not
+`{phase}/{scope}/{quantity}` with a known scope, so a misspelling and an invented scope
+are both caught.
+
+### Reporting
+
+The runtime reports complete episodes; the algorithm does not call a logger. Every
+transition-level quantity the algorithm wants recorded is declared in its
+`ObservationSchema.series`, and the tracker assembles it into the `Episode` the reporter
+reduces. Two constraints matter:
+
+**Never log inside a JIT kernel.** Cross to the host first; the tracker does this once per
+chunk rather than once per step.
+
+**Sinks are not isolated from each other's failures.** If Aim is unreachable, the run
+crashes and the launch stops. There is no buffering, retry, or degradation. This is
+deliberate: silently losing half a study's telemetry is worse than stopping.
 
 ### Baking the image
 
-Follow `rtrrl/infra/mock-trainer/docker/Dockerfile.cpu`. The parts that are not optional:
+The catalog is generated at image build time by scanning `entries/`:
 
-```dockerfile
-ARG TRAINER_CATALOG_V2
-RUN test -n "${TRAINER_CATALOG_V2}"
-LABEL org.rtrrl.trainer.catalog.v2="${TRAINER_CATALOG_V2}"
-COPY your/catalog.json /opt/trainer/catalog.json
-CMD ["python", "-m", "training_sdk.worker"]
+```bash
+python -m deployment.catalog --print-label
 ```
 
+That writes `catalog.json` and prints the gzipped base64 form carried as an image label.
 The catalog appears twice on purpose: the label lets the control plane read it without
-running the container, and the file lets the worker look up the command. The CPU and GPU
-Dockerfiles should differ only in acceleration.
+running the container, and the file lets the worker look up an entry's command.
+`.github/workflows/build-memo-image.yml` builds and verifies the image on every push to
+`main` that touches `memo/`; pushing to ECR is a separate manual dispatch (see Part 3).
 
 ---
 
 ## Part 3 — Operations
 
-### Queues
+### Queues and job definitions
 
-Eight queues, one pair per instance type, created already and described in
-`trainer_infra/queues.py`. Region `eu-north-1`, account `007122174918`.
+Eight queues, one pair per instance type. Region `eu-north-1`, account `007122174918`.
 
-| `instance_type` | Profile | Run queue | Dev queue | vCPU / job | Memory | GPU |
-| --- | --- | --- | --- | --- | --- | --- |
-| `c7a.medium` | `c7am` | `run-cpu-c7am-queue` | `dev-cpu-c7am-queue` | 1 | 1600 MiB | — |
-| `c7a.large` | `c7al` | `run-cpu-c7al-queue` | `dev-cpu-c7al-queue` | 2 | 3200 MiB | — |
-| `c7a.xlarge` | `c7ax` | `run-cpu-c7ax-queue` | `dev-cpu-c7ax-queue` | 4 | 7168 MiB | — |
-| `g6.xlarge` | `g6x` | `run-gpu-queue` | `dev-gpu-queue` | 4 | 12000 MiB | 1 |
+| `instance_type` | Profile | Run queue | Dev queue |
+| --- | --- | --- | --- |
+| `c7a.medium` | `c7am` | `run-cpu-c7am-queue` | `dev-cpu-c7am-queue` |
+| `c7a.large` | `c7al` | `run-cpu-c7al-queue` | `dev-cpu-c7al-queue` |
+| `c7a.xlarge` | `c7ax` | `run-cpu-c7ax-queue` | `dev-cpu-c7ax-queue` |
+| `g6.xlarge` | `g6x` | `run-gpu-queue` | `dev-gpu-queue` |
+
+A job definition binds a queue profile to one immutable image digest, so its name contains
+the digest: `trainer-{profile}-{digest without the sha256: prefix}`. `trainerctl` derives
+that name and submits against it; it does not create it. Registering a job definition for a
+newly pushed digest is a separate, deliberate step performed outside this repository.
 
 ### Building and pushing images
 
-Images are built by GitHub Actions, never on the development machine. A push touching the
-SDK, the algorithm or the control plane builds and verifies the image without publishing
-it; publishing to ECR is a separate manual dispatch:
+Images are built by GitHub Actions, never on the development machine. A push touching
+`memo/` builds and verifies the image without publishing it; publishing to ECR is a manual
+dispatch that requires naming the account:
 
 ```bash
-gh workflow run build-infra-acceptance-image.yml \
+gh workflow run build-memo-image.yml \
   -f push=true -f confirm_account=007122174918
 ```
 
 The verification step is worth knowing about, because it has caught real breakage: it
-checks the label decodes to exactly the committed `catalog.json`, that the command is
-`python -m training_sdk.worker`, that running without a manifest fails with a clear
-message, and that the GPU image really has a CUDA plugin while the CPU image really
-reports a CPU backend.
-
-### Registering job definitions
-
-A job definition binds a queue profile to one immutable image digest, so its name contains
-the digest. Registration is a separate, explicit step; the script is dry-run by default:
-
-```bash
-uv run scripts/deploy_facility.py \
-  --cpu-digest 007122174918.dkr.ecr.eu-north-1.amazonaws.com/rtrrl@sha256:<cpu> \
-  --gpu-digest 007122174918.dkr.ecr.eu-north-1.amazonaws.com/rtrrl@sha256:<gpu>
-
-# add --register --confirm-account 007122174918 to actually create them
-```
-
-It refuses tags, refuses identical CPU and GPU digests, and verifies the credentials
-belong to the expected account before changing anything. It also ensures the
-`/trainer/jobs` log group exists with 30-day retention. Jobs are registered with
-`attempts: 1` — a retry would only pay to reproduce the same failure.
+checks that the image label decodes to exactly the committed catalog, that a worker
+started without a manifest fails with a clear message, that the CPU image really reports a
+CPU backend, and that the environments an experiment names actually build inside the
+image.
 
 ### Tests
 
-Tests never run on the development machine, which is a micro instance. `tests.yml` runs
-ruff and pytest for `training-sdk`, `rtrrl/infra/control-plane` and
-`rtrrl/infra/mock-trainer` on every push.
+The development machine is a micro instance and cannot run the suites without running out
+of memory, so CI is where they execute. `memo-ci.yml` runs the static checks and the memo
+suites — fast, service, and the pinned external parity comparisons. `tests.yml` runs
+`infra`. A `workflow_dispatch` tests the remote state, so dispatching on an unpushed
+commit tests the previous one.
 
 ---
 
@@ -655,14 +701,18 @@ ruff and pytest for `training-sdk`, `rtrrl/infra/control-plane` and
 
 Behaviours that are intentional but surprising, gathered in one place:
 
-- `run --backend batch` silently ignores `--catalog` and `--jobs-dir`;
-  `run --backend local` silently ignores `--queues`.
-- `validate --catalog` and `run --backend local` do not validate `compute.instance_type`,
-  because the queue table is only consulted during a Batch preflight.
+- `run --backend batch` ignores `--exchange`, `--workspace` and `--worker-command`;
+  `run --backend local` ignores `--queues` and never reads `compute`, so an
+  `instance_type` typo survives a local run.
+- The control plane checks that an override lies in the catalog's declared domain, but not
+  that the run's schedules divide. That arithmetic is checked inside the image, so it costs
+  a container start to find out.
 - An empty `space` is valid: it uses the catalog's complete algorithm parameter space
   unchanged.
-- Overriding a catalog parameter only checks the key's name, not that your values fall
-  within the range the catalog declared.
-- `run --backend local` does not model Ctrl-C: the report is still written and children
-  are killed, but the exit code is whatever Python produces.
-- Older design documents mention `trainer_sdk.worker`. The module is `training_sdk.worker`.
+- `metrics.jsonl` is not configurable and never sampled. Turning Aim's training scopes
+  down makes the dashboard cheaper; it does not make the run's record thinner, and the
+  score reads the record.
+- A window that the end of a run cuts short is still reported, at the close it was
+  scheduled for rather than at the last episode that reached it.
+- `settle` scores what is already in storage. It cannot tell a trial that never ran from
+  one whose upload failed; both come back as still running.

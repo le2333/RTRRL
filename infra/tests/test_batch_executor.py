@@ -20,7 +20,7 @@ from trainer_infra.scoring import ScoreSpec
 
 def configuration(trial: int) -> dict[str, Any]:
     return {
-        "contract": 10,
+        "contract": 11,
         "identity": {
             "run_id": f"run-t{trial}-s0",
             "experiment": "test",

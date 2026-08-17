@@ -49,8 +49,6 @@ evaluation:
 logging:
   aim:
     url: aim://172.31.62.192:53801
-    training:
-      log_every_steps: 10000
 
 score:
   metric: eval/episode/return_per_step

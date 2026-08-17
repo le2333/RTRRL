@@ -1,11 +1,13 @@
 {
-  "contract": 10,
+  "contract": 11,
   "identity": {
-    "run_id": "stream-ac-baseline-t0",
+    "run_id": "stream-ac-baseline-t0-s0",
     "experiment": "stream-ac-baseline",
     "launch_id": "20260813-000000",
     "trial": 0,
-    "digest": "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+    "digest": "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+    "seed": 0,
+    "role": "tuning"
   },
   "entry": "stream_ac",
   "artifacts": {
@@ -34,7 +36,9 @@
   },
   "evaluation": {
     "every_steps": 100,
-    "rollout_steps": 10
+    "episodes": 2,
+    "chunk_steps": 10,
+    "seed": 7
   },
   "logging": {
     "aim": {

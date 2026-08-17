@@ -1,4 +1,4 @@
-"""Every image-side consumer projects the same serialized version-10 run."""
+"""Every image-side consumer projects the same serialized version-11 run."""
 
 from __future__ import annotations
 
@@ -13,7 +13,7 @@ from deployment.contract import CONTRACT_VERSION, Catalog
 from entries._contract import RunSpec
 from worker.envelope import WorkerEnvelope
 
-FIXTURES = Path(__file__).resolve().parents[4] / "tests" / "contracts" / "v10"
+FIXTURES = Path(__file__).resolve().parents[4] / "tests" / "contracts" / "v11"
 
 
 def read_json(name: str) -> dict:
@@ -26,11 +26,22 @@ def test_one_serialized_run_has_worker_and_entry_projections() -> None:
     worker = WorkerEnvelope.model_validate(payload)
     entry = RunSpec.model_validate(payload)
 
-    assert worker.contract == entry.contract == CONTRACT_VERSION == 10
+    assert worker.contract == entry.contract == CONTRACT_VERSION == 11
     assert worker.identity.model_dump() == entry.identity.model_dump()
     assert worker.artifacts.model_dump() == entry.artifacts.model_dump()
     assert worker.algorithm == payload["algorithm"]
     assert entry.algorithm.parameters == payload["algorithm"]["parameters"]
+
+
+def test_each_training_scope_states_its_interval_in_its_own_unit() -> None:
+    """A scope's schedule cannot be written in another scope's unit."""
+
+    training = RunSpec.model_validate(read_json("run.json")).logging.aim.training
+
+    assert training is not None
+    assert training.step is not None and training.step.every_steps == 50
+    assert training.episode is not None and training.episode.every_episodes == 20
+    assert training.window is not None and training.window.length_steps == 25
 
 
 def test_worker_does_not_interpret_entry_owned_payload() -> None:

@@ -1,0 +1,5 @@
+{
+  "runs": [
+    "s3://artifacts/trainer/configs/stream-ac-t0.json"
+  ]
+}

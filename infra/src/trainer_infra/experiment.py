@@ -356,7 +356,13 @@ class ExperimentRunner:
         declared = experiment["logging"]
         aim: dict[str, Any] = {"url": declared["aim"]["url"]}
         if "training" in declared["aim"]:
-            aim["training"] = dict(declared["aim"]["training"])
+            # A scope block per scope asked for, each with its own interval.
+            # Copied one level deeper than the block itself so the emitted
+            # configuration shares nothing with the experiment document.
+            aim["training"] = {
+                scope: dict(interval)
+                for scope, interval in declared["aim"]["training"].items()
+            }
         logging: dict[str, Any] = {"aim": aim}
         if "rerun" in declared:
             logging["rerun"] = dict(declared["rerun"])

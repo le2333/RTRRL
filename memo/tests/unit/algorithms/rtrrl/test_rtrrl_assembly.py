@@ -32,7 +32,39 @@ def assert_tree_equal(actual, expected, what):
     assert not moved, f"{what}: {moved} moved"
 
 
-def parameters(backbone="lru", differentiation="exact_rtrl"):
+C = 1.0
+
+# `expand` fills anything unset from the low end of its search domain, which
+# leaves `eta_f`, `eta_pi` and every `lambda` at zero. That is harmless for the
+# structural assertions the shared fixture was written for, and fatal for these:
+# `eta_f == 0` makes the torso's TD error zero, so `sign` of it is zero and the
+# torso never takes a traced step at all. Anything asserting that a step was
+# taken has to say what these are.
+LIVE = {
+    "eta_f": 1.0,
+    "eta_pi": 1.0,
+    "lambda_pi": 0.9,
+    "lambda_v": 0.9,
+    "lambda_rnn": 0.9,
+    "entropy_rate": 1e-5,
+}
+
+D_RTRRL = {
+    **LIVE,
+    "torso.optimizer.kind": "d_rtrrl",
+    "torso.optimizer.d_rtrrl.c": C,
+    "torso.optimizer.d_rtrrl.magnitude": "sign",
+    "torso.optimizer.d_rtrrl.scope": "block",
+    "torso.optimizer.d_rtrrl.eps": 1e-8,
+    "heads.optimizer.kind": "d_rtrrl",
+    "heads.optimizer.d_rtrrl.c": C,
+    "heads.optimizer.d_rtrrl.magnitude": "sign",
+    "heads.optimizer.d_rtrrl.scope": "block",
+    "heads.optimizer.d_rtrrl.eps": 1e-8,
+}
+
+
+def parameters(backbone="lru", differentiation="exact_rtrl", optimizer=None):
     branch = f"torso.backbone.{backbone}"
     return expand(
         rtrrl.PARAMETERS,
@@ -47,6 +79,7 @@ def parameters(backbone="lru", differentiation="exact_rtrl"):
             "torso.follow": 0.25,
             "heads.optimizer.kind": "adam",
             "heads.optimizer.adam.lr": 5e-4,
+            **(optimizer or {}),
             "actor.head.kind": "state_std",
             "critic.head.kind": "value",
             "normalization.observation.kind": "none",
@@ -56,11 +89,13 @@ def parameters(backbone="lru", differentiation="exact_rtrl"):
     )
 
 
-def assembled(backbone="lru", differentiation="exact_rtrl", record=None):
+def assembled(
+    backbone="lru", differentiation="exact_rtrl", record=None, optimizer=None
+):
     return assemble(
         rtrrl.RTRRL,
         BuildRequest(
-            parameters=parameters(backbone, differentiation),
+            parameters=parameters(backbone, differentiation, optimizer),
             environment=EnvironmentSpec(
                 id="tiny",
                 backend=None,
@@ -132,6 +167,179 @@ def test_rtrrl_builds_the_selected_kernel_scoped_differentiation(backbone, kind)
     state = built.program.init(jax.random.key(0))
     differentiation_state = state.core.torso.recurrence.differentiation_state
     assert (differentiation_state is None) is (kind == "tbptt")
+
+
+def test_the_d_rtrrl_optimizer_is_reachable_from_a_run_configuration():
+    """The rule is only real if a run document can name it and a step can take it.
+
+    The rule's own arithmetic is driven in ``tests/unit/components``. What is
+    asserted here is everything between a configuration and that arithmetic:
+    that ``d_rtrrl`` survives the parameter surface, that the two groups
+    build a rule each, and that a scan of real transitions through the whole
+    graph -- torso trace, two readouts, emphasis, resets -- stays finite.
+    Finiteness is the claim the version this replaces could not make.
+    """
+
+    built = assembled(optimizer=D_RTRRL)
+    state = built.program.init(jax.random.key(0))
+    stepped, metrics = built.program.train(jax.random.key(1), state, 32)
+
+    for path, leaf in flattened(stepped.core).items():
+        assert np.all(np.isfinite(leaf)), f"{path} went non-finite"
+    assert np.all(np.isfinite(metrics.update.td_error))
+    # The rate every rule reports under one name, and here a constant one.
+    np.testing.assert_allclose(metrics.update.torso_step.step_size, C)
+    np.testing.assert_allclose(metrics.update.heads_step.step_size, C)
+
+    # Every block took a step. Without this the assertions above are satisfied
+    # by a run that never moved: a TD error of zero reaching `sign` leaves the
+    # traced update at exactly zero, which is finite and constant and means
+    # nothing was learned.
+    for block in ("torso", "actor", "critic"):
+        before = flattened(getattr(state.core, block).params)
+        after = flattened(getattr(stepped.core, block).params)
+        assert any(
+            not np.array_equal(leaf, after[path]) for path, leaf in before.items()
+        ), f"{block} never moved"
+
+
+def test_the_two_arms_differ_in_exactly_the_magnitude_they_keep():
+    """The R3 comparison in miniature: same C, same everything, one difference.
+
+    This is the property the formal arms are read for, asserted here on a tiny
+    environment so it is checkable without a cluster. Over a run of real
+    transitions:
+
+    ``sign``
+        every step moves the torso the same distance, whatever that step's TD
+        error was. The realized update norm is flat.
+    ``td_out``
+        every step moves it a distance proportional to ``|delta|``. The
+        realized update norm divided by ``|delta|`` is what is flat instead.
+
+    The outer clip is off here. At ``grad_clip == C`` it binds on nearly every
+    step and would flatten ``td_out`` too, which is the interaction worth
+    knowing about and not the thing being measured.
+    """
+
+    def realized(magnitude):
+        built = assembled(
+            optimizer={
+                **D_RTRRL,
+                "torso.optimizer.d_rtrrl.magnitude": magnitude,
+                "heads.optimizer.d_rtrrl.magnitude": magnitude,
+                "torso.grad_clip": 0.0,
+            }
+        )
+        state = built.program.init(jax.random.key(0))
+        moves, surprises = [], []
+        for step in range(8):
+            before = flattened(state.core.critic.params)
+            state, metrics = built.program.train(jax.random.key(step + 1), state, 1)
+            after = flattened(state.core.critic.params)
+            moves.append(
+                float(
+                    np.sqrt(
+                        sum(
+                            np.sum(np.square(np.asarray(after[k]) - np.asarray(leaf)))
+                            for k, leaf in before.items()
+                        )
+                    )
+                )
+            )
+            surprises.append(abs(float(np.asarray(metrics.update.td_error).ravel()[0])))
+        # The first step steps with the initial trace, which is zero.
+        return np.array(moves[1:]), np.array(surprises[1:])
+
+    flat, flat_delta = realized("sign")
+    scaled, scaled_delta = realized("td_out")
+
+    # The TD errors are not all equal, or neither claim below means anything.
+    assert flat_delta.std() > 0.05 * flat_delta.mean(), "no spread in |delta| to see"
+
+    # `sign`: the distance is C and says nothing about the surprise.
+    np.testing.assert_allclose(flat, C, rtol=1e-4)
+
+    # `td_out`: the distance is proportional to the surprise instead. The trace
+    # is long enough to be clipped throughout, which is what makes the ratio
+    # exactly C rather than merely increasing.
+    np.testing.assert_allclose(scaled / scaled_delta, C, rtol=1e-4)
+    assert scaled.std() > 0.05 * scaled.mean(), "td_out did not vary with |delta|"
+
+
+def test_the_shared_recurrent_direction_is_formed_before_it_is_normalized():
+    """The torso's two sources are summed first and the resultant normalized.
+
+    RTRRL's torso is fed by both readouts: ``upstream(actor_upward +
+    critic_upward)``. The sum happens before the pullback and there is one
+    torso trace, so the norm that is removed is the resultant's.
+
+    The failure this is written against is normalizing the two sources
+    separately and adding them afterwards. That version is *invariant* to the
+    actor's source magnitude -- scaling the actor's sensitivity would rescale
+    a vector that is about to be divided by its own norm, and the torso would
+    not feel it. So asymmetric sensitivities are exactly what tells the two
+    orderings apart, and ``eta_pi`` is the knob that makes them asymmetric:
+    the actor's traced objective is ``eta_pi * log_prob``, so its upward
+    gradient is proportional to it while the critic's is not.
+
+    Two update steps, because the first one steps with the initial trace,
+    which is zero.
+    """
+
+    def torso_after(sensitivity):
+        built = assembled(optimizer={**D_RTRRL, "eta_pi": sensitivity})
+        state = built.program.init(jax.random.key(0))
+        return built.program.train(jax.random.key(1), state, 2)[0].core.torso.params
+
+    balanced, actor_loud = torso_after(1.0), torso_after(50.0)
+
+    moved = [
+        path
+        for path, leaf in flattened(balanced).items()
+        if not np.array_equal(leaf, flattened(actor_loud)[path])
+    ]
+    assert moved, (
+        "the torso step did not feel the actor's source magnitude, which is "
+        "what separately normalizing the two sources would look like"
+    )
+
+
+def test_a_signed_step_does_not_read_the_torso_td_scaling():
+    """``eta_f`` is inert end to end, not only where the sign is taken.
+
+    The rule-level assertion pins the arithmetic; this one pins the wiring, so
+    that a future change routing ``eta_f`` somewhere other than the TD error
+    handed to the torso rule is caught here rather than in a sweep over a knob
+    that turns out to move nothing.
+    """
+
+    def trained(magnitude, scaling):
+        built = assembled(
+            optimizer={
+                **D_RTRRL,
+                "torso.optimizer.d_rtrrl.magnitude": magnitude,
+                "eta_f": scaling,
+            }
+        )
+        state = built.program.init(jax.random.key(0))
+        return built.program.train(jax.random.key(1), state, 16)[0]
+
+    signed = (trained("sign", 1.0), trained("sign", 100.0))
+    assert_tree_equal(signed[0].core.torso.params, signed[1].core.torso.params, "eta_f")
+
+    # The control, without which the assertion above would also pass if `eta_f`
+    # never reached the torso rule at all. Under the ablation the same knob has
+    # to move the same parameters, or this test is measuring the wiring being
+    # absent rather than the sign discarding it. `td_out` keeps |delta|, so it
+    # is the arm where the same knob must still be live.
+    ablated = (trained("td_out", 1.0), trained("td_out", 100.0))
+    moved = [
+        path
+        for path, leaf in flattened(ablated[0].core.torso.params).items()
+        if not np.array_equal(leaf, flattened(ablated[1].core.torso.params)[path])
+    ]
+    assert moved, "eta_f reaches the torso rule under neither setting: it is unwired"
 
 
 def test_rtrrl_declares_parameters_and_observations_beside_its_graph():

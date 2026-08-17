@@ -142,15 +142,73 @@ class EvaluationSpec(_Frozen):
         return self
 
 
-class AimTrainingSpec(_Frozen):
-    """Present when training metrics are wanted on the dashboard at all."""
+class AimStepSpec(_Frozen):
+    """What a reading looks like at a typical moment."""
 
-    log_every_steps: int
+    every_steps: int
+
+    @model_validator(mode="after")
+    def _usable(self) -> "AimStepSpec":
+        if self.every_steps < 1:
+            raise ValueError("aim training step every_steps must be positive")
+        return self
+
+
+class AimEpisodeSpec(_Frozen):
+    """What a typical episode's statistic is, counted in episodes."""
+
+    every_episodes: int
+
+    @model_validator(mode="after")
+    def _usable(self) -> "AimEpisodeSpec":
+        if self.every_episodes < 1:
+            raise ValueError("aim training episode every_episodes must be positive")
+        return self
+
+
+class AimWindowSpec(_Frozen):
+    """What every episode in a stretch averaged.
+
+    ``length_steps`` is null when the stretch is the whole interval, which
+    tiles the axis and uses every episode.
+    """
+
+    every_steps: int
+    length_steps: int | None = None
+
+    @model_validator(mode="after")
+    def _usable(self) -> "AimWindowSpec":
+        if self.every_steps < 1:
+            raise ValueError("aim training window every_steps must be positive")
+        if self.length_steps is not None and not (
+            1 <= self.length_steps <= self.every_steps
+        ):
+            raise ValueError(
+                "aim training window length_steps must be positive and no longer "
+                "than every_steps"
+            )
+        return self
+
+
+class AimTrainingSpec(_Frozen):
+    """Which scopes of training reach the dashboard, each in its own unit.
+
+    A scope's interval cannot be stated in another scope's unit, so the
+    combination that sampled an episode by a step mark -- and thereby favoured
+    the long episodes, which are worth more -- has no spelling here.
+    """
+
+    step: AimStepSpec | None = None
+    episode: AimEpisodeSpec | None = None
+    window: AimWindowSpec | None = None
 
     @model_validator(mode="after")
     def _usable(self) -> "AimTrainingSpec":
-        if self.log_every_steps < 1:
-            raise ValueError("aim training log_every_steps must be positive")
+        if self.step is None and self.episode is None and self.window is None:
+            raise ValueError(
+                "aim training names no scope; omit the block to record "
+                "evaluation only"
+            )
         return self
 
 
@@ -160,7 +218,7 @@ class AimSpec(_Frozen):
     A run ends one episode every few dozen steps before its policy is any
     good, so recording every one of them is tens of millions of points nobody
     can read. The complete record is the metrics artifact, which is not
-    optional and not configurable.
+    optional, not configurable, and keeps every episode's own reduction.
     """
 
     url: str

@@ -1,0 +1,150 @@
+# Issue 37 R3.3 smoke: the TD-out control. Local shape check, not the formal
+# protocol -- the safety-horizon staging and its metrics are the experiment
+# side's.
+#
+# `magnitude: td_out` is `delta * z * min(1, C/||z||)`: the trace's magnitude is
+# bounded by C and the TD error's is left in, so the step is `C * |delta|` long
+# whenever the trace is long enough to clip.
+#
+# This arm exists to be run and to fail, and the failure is the result.
+#
+# What it is controlling for: the fixed-step arm's claim is that removing
+# |delta| from the step length is what buys stability, not that bounding the
+# trace is. The only way to separate those is to bound the trace and keep
+# |delta|, which is this. If this arm were to survive, the fixed-step arm's
+# default would be unjustified.
+#
+# Expected outcome, and how it is recorded:
+#   - the run goes non-finite, typically within the first few hundred steps,
+#     via critic positive feedback: an overshoot grows the next |delta|, which
+#     grows the next step
+#   - `score.non_finite: worst` makes that a scored result rather than a crash,
+#     so it lands in the study beside the arms that finished
+#   - the 100k safety horizon is the other termination: if it has not diverged
+#     by then, the arm has not been shown to be unsafe and the fixed-step
+#     default needs its justification revisited rather than quietly kept
+#
+# Do not "fix" this configuration if it fails. A failure here is the finding.
+#
+# One trial, not a search. C is the fixed-step arm's threshold, and tuning an
+# arm whose purpose is to diverge would only find the C at which it diverges
+# slowest.
+
+experiment: rtrrl-issue37
+name: rtrrl-issue37-td-out-control
+description: "Issue 37 R3.3 smoke: TD-out control, delta * clip_C(z)"
+
+image: 007122174918.dkr.ecr.eu-north-1.amazonaws.com/rtrrl@sha256:7ca201c304dc6a38dc45d8142cfc05d1ec4deb3046e9e8e3594b4ff635cfd32d
+entry: rtrrl
+storage: s3://rtrrl-artifacts-007122174918/trainer
+
+# Masked Hopper, as issue 27 runs it: six of the eleven readings, velocities
+# withheld. Partial observation is what the recurrent torso is there for.
+environment:
+  id: brax::hopper
+  backend: spring
+  observed: [0, 2, 4, 6, 8, 10]
+  seeds: [0]
+  episode_length: 1000
+
+training:
+  num_envs: 1
+  total_steps: 100000
+  chunk_steps: 1000
+
+evaluation:
+  every_steps: 1000
+  episodes: 1
+  chunk_steps: 1000
+  seed: 1000
+
+logging:
+  aim:
+    url: aim://172.31.62.192:53801
+    training:
+      log_every_steps: 1000
+  rerun:
+    log_every_steps: 1000
+
+score:
+  metric: eval/episode/return_per_step
+  window_steps: [0, 100000]
+  reduce: last
+  non_finite: worst
+  direction: maximize
+
+compute:
+  instance_type: c7a.large
+  timeout_minutes: 60
+
+hpo:
+  rounds: 1
+  trials_per_round: 1
+  parallel_jobs: 1
+  startup_trials: 1
+  seed: 0
+
+space:
+  torso:
+    backbone:
+      kind: [lru]
+      lru:
+        feature_dim: [64]
+        hidden_dim: [64]
+        differentiation:
+          kind: [exact_rtrl]
+    optimizer:
+      kind: [d_rtrrl]
+      d_rtrrl:
+        # The same threshold the fixed-step arm is written over, so the two
+        # differ in `magnitude` and in nothing else.
+        c: [1.0]
+        magnitude: [td_out]
+        scope: [block]
+        # The preregistered denominator, z / (||z|| + eps). `clamped` is
+        # max(||z||, eps), which is a different rule near zero rather than a
+        # different spelling of this one.
+        denominator: [shifted]
+        eps: [0.00000001]
+    # Kept on, and here it can bite. Under `td_out` the traced part is
+    # `C * |delta|` long rather than `C`, so nothing in this arm is bounded by
+    # construction and the outer clip is the last thing between the feedback
+    # loop and the float. It is left at D-RTRRL's value so the arms differ in
+    # `magnitude` alone -- if the clip were removed here, a divergence would be
+    # evidence about the clip rather than about |delta|.
+    grad_clip: [1.0]
+    follow: [1.0]
+  heads:
+    optimizer:
+      kind: [d_rtrrl]
+      d_rtrrl:
+        c: [1.0]
+        magnitude: [td_out]
+        scope: [block]
+        denominator: [shifted]
+        eps: [0.00000001]
+  actor:
+    head:
+      kind: [state_std]
+      state_std:
+        initialization:
+          kind: [lecun]
+  critic:
+    head:
+      kind: [value]
+      value:
+        initialization:
+          kind: [lecun]
+  normalization:
+    observation:
+      kind: [none]
+    reward:
+      kind: [none]
+  gamma: [0.99]
+  lambda_pi: [0.9]
+  lambda_v: [0.9]
+  lambda_rnn: [0.9]
+  eta_pi: [1.0]
+  eta_f: [1.0]
+  entropy_rate: [0.00001]
+  meta_rl: [true]
