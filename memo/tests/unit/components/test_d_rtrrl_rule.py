@@ -102,9 +102,7 @@ def test_the_traced_step_is_c_long_whatever_the_surprise_or_the_trace(
     separate concern of the two tests that follow.
     """
 
-    traces = jax.tree.map(
-        lambda leaf: scale * leaf, blocks(jax.random.key(0))
-    )
+    traces = jax.tree.map(lambda leaf: scale * leaf, blocks(jax.random.key(0)))
     output = stepped(traces, [surprise], denominator=denominator)
 
     for name, block in output.updates.items():
@@ -205,9 +203,7 @@ def test_the_traced_and_direct_contributions_are_separable_and_only_one_is_fixed
     """
 
     traces = blocks(jax.random.key(11))
-    entropy = jax.tree.map(
-        lambda leaf: 0.3 * jnp.ones_like(leaf), traces
-    )
+    entropy = jax.tree.map(lambda leaf: 0.3 * jnp.ones_like(leaf), traces)
 
     traced_only = stepped(traces, [1.0])
     both = stepped(traces, [1.0], direct=entropy)
@@ -258,9 +254,9 @@ def test_the_td_error_scale_cannot_change_a_signed_step():
 
     for name in plain.updates:
         for path, leaf in leaves(plain.updates[name]).items():
-            assert np.array_equal(leaf, leaves(scaled.updates[name])[path]), (
-                f"eta_f reached the step through {name}/{path}"
-            )
+            assert np.array_equal(
+                leaf, leaves(scaled.updates[name])[path]
+            ), f"eta_f reached the step through {name}/{path}"
 
 
 def test_the_td_error_scale_does_reach_td_out():
@@ -352,9 +348,9 @@ def test_the_denominator_does_not_reach_td_out():
 
     for name in traces:
         for path, leaf in leaves(shifted.updates[name]).items():
-            assert np.array_equal(leaf, leaves(clamped.updates[name])[path]), (
-                f"the denominator reached td_out through {name}/{path}"
-            )
+            assert np.array_equal(
+                leaf, leaves(clamped.updates[name])[path]
+            ), f"the denominator reached td_out through {name}/{path}"
 
 
 def test_one_blocks_trace_cannot_spend_anothers_step():
@@ -372,9 +368,9 @@ def test_one_blocks_trace_cannot_spend_anothers_step():
 
     by_block = (stepped(ordinary, [1.0]), stepped(loud, [1.0]))
     for path, leaf in leaves(by_block[0].updates["critic"]).items():
-        assert np.array_equal(leaf, leaves(by_block[1].updates["critic"])[path]), (
-            f"the actor's trace reached the critic through {path}"
-        )
+        assert np.array_equal(
+            leaf, leaves(by_block[1].updates["critic"])[path]
+        ), f"the actor's trace reached the critic through {path}"
 
     together = (
         stepped(ordinary, [1.0], scope="group"),
@@ -394,9 +390,7 @@ def test_streams_that_disagree_take_a_shorter_step_than_streams_that_agree():
     """
 
     agreeing = blocks(jax.random.key(5), streams=1)
-    agreeing = jax.tree.map(
-        lambda leaf: jnp.repeat(leaf, 4, axis=0), agreeing
-    )
+    agreeing = jax.tree.map(lambda leaf: jnp.repeat(leaf, 4, axis=0), agreeing)
     disagreeing = blocks(jax.random.key(6), streams=4)
 
     surprise = [1.0] * 4

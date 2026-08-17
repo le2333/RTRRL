@@ -49,7 +49,7 @@ from memorax.rl.normalization import (
     DISCOUNTED_NORMALIZATION_FAMILY,
     NORMALIZATION_FAMILY,
 )
-from memorax.rl.updates import STEP_FAMILY, Adam, DRTRRL, make_d_rtrrl_rule
+from memorax.rl.updates import DRTRRL, STEP_FAMILY, Adam, make_d_rtrrl_rule
 from memorax.runtime import ObservationSchema
 from memorax.utils import Timestep
 from memorax.utils.axes import (

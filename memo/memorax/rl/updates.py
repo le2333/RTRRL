@@ -411,10 +411,17 @@ def _stream_norm(tree):
 
 
 def _units(tree, *, by_block):
-    """The normalization units of one tree, and how to put them back together."""
+    """The normalization units of one tree, and how to put them back together.
+
+    A block-scoped group goes back together as a plain mapping rather than as
+    whatever mapping arrived. What a unit is, and that each is scaled on its
+    own, is the whole of this split; the container the parts are handed back in
+    is read by ``jax.tree.map`` and by name, and neither asks for more than a
+    dict.
+    """
 
     if by_block and isinstance(tree, Mapping):
-        return dict(tree), lambda parts: type(tree)(parts)
+        return dict(tree), dict
     return {None: tree}, lambda parts: parts[None]
 
 
@@ -499,7 +506,9 @@ def make_d_rtrrl_rule(step, *, clip=0.0) -> UpdateRule:
         # the entropy term mean something different in each arm, which is the
         # one thing a control comparison cannot afford.
         if direct is not None:
-            ascent = jax.tree.map(lambda leaf, immediate: leaf + immediate, ascent, direct)
+            ascent = jax.tree.map(
+                lambda leaf, immediate: leaf + immediate, ascent, direct
+            )
         updates = jax.tree.map(lambda leaf: jnp.mean(leaf, axis=0), ascent)
         if bound is not None:
             updates, _ = bound.update(updates, ())

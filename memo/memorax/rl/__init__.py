@@ -26,13 +26,13 @@ from .normalization import (
 from .targets import delayed_update, periodic_incremental_update
 from .td import make_td0
 from .updates import (
+    DRTRRL,
     ObjectiveDirections,
     RuleOutput,
-    DRTRRL,
     UpdateRule,
     make_bounded_rule,
-    make_optax_rule,
     make_d_rtrrl_rule,
+    make_optax_rule,
 )
 
 __all__ = [
