@@ -7,6 +7,7 @@ infers it -- both are told, here, once per entry.
 
 from __future__ import annotations
 
+from memorax.observability import EpisodeScope, Scope, StepScope, WindowScope
 from memorax.runtime import ObservationSchema
 
 
@@ -37,8 +38,23 @@ def trajectory_record(config, observations: ObservationSchema) -> frozenset[str]
     return observations.trajectory_fields
 
 
-def training_every_steps(config) -> int:
-    """How often a training episode reaches the dashboard; zero for never."""
+def training_scopes(config) -> tuple[Scope, ...]:
+    """The scopes of training this run asked the dashboard for, if any.
+
+    Each is constructed from the interval stated in its own unit, so a request
+    cannot ask for one scope on another's schedule.
+    """
 
     training = config.logging.aim.training
-    return 0 if training is None else training.log_every_steps
+    if training is None:
+        return ()
+    scopes: list[Scope] = []
+    if training.step is not None:
+        scopes.append(StepScope(training.step.every_steps))
+    if training.episode is not None:
+        scopes.append(EpisodeScope(training.episode.every_episodes))
+    if training.window is not None:
+        scopes.append(
+            WindowScope(training.window.every_steps, training.window.length_steps)
+        )
+    return tuple(scopes)

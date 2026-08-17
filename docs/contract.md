@@ -1,6 +1,6 @@
-# 训练部署契约 v9
+# 训练部署契约 v10
 
-Infra、训练镜像中的 Worker 和 Entry 不共享 Python 类型。跨环境接口是版本化 JSON，当前版本为 `9`。同一份序列化 fixture 位于 `tests/contracts/v9/`，各接收方只解析自己消费的投影。
+Infra、训练镜像中的 Worker 和 Entry 不共享 Python 类型。跨环境接口是版本化 JSON，当前版本为 `10`。同一份序列化 fixture 位于 `tests/contracts/v10/`，各接收方只解析自己消费的投影。
 
 ## Catalog
 
@@ -14,7 +14,7 @@ python -m deployment.catalog --print-label
 
 ```json
 {
-  "contract": 9,
+  "contract": 10,
   "entries": {
     "stream_ac": {
       "command": ["python", "-m", "entries.stream_ac"],
@@ -42,7 +42,7 @@ Infra 从镜像产物读取 Catalog，不导入训练代码。
 实验 YAML 属于 Infra，包含镜像、计算资源、HPO、搜索空间和评分策略。Infra 根据 Catalog 验证并采样，然后为每个 trial 生成嵌套运行配置：
 
 ```yaml
-contract: 9
+contract: 10
 identity:
   run_id: stream-ac-launch-t0
   experiment: stream-ac
@@ -60,25 +60,52 @@ algorithm:
     episode_length: 1000
   num_envs: 16
   parameters: {}
-runtime:
+training:
   seed: 0
   total_steps: 2000000
-  epoch_steps: 10000
-  evaluation_steps: 1000
+  chunk_steps: 10000
+evaluation:
+  every_steps: 10000
+  rollout_steps: 1000
 logging:
   aim:
     url: aim://host:53800
+    training:
+      window: { every_steps: 100000 }
   rerun:
-    every_steps: 20000
+    log_every_steps: 200000
 ```
 
 运行配置不包含 `score`。评分策略由 Infra 持有，也不包含 `score.s3` 或 `logging.rerun_s3`。Worker 只需要一个 `artifacts.root`。
 
 `environment.backend` 在该命名空间只有一种实现可选时为 `null`：brax 要选物理后端，gymnax 没有可选的。`observed` 同理，`null` 表示不裁剪观测。两者表达的都是"不适用"，与字段缺失不是一回事。
 
+## 指标名与归约范围
+
+指标名是 `{phase}/{scope}/{quantity}`，中段是这个数被归约的范围，也是唯一说明它怎么来的地方：
+
+```
+train/step/td_error       某一刻的读数
+train/episode/return      一个 episode 的统计量
+train/window/return       一段区间内每个 episode 的平均
+eval/episode/return       评估，评分读的就是它
+```
+
+`metrics.jsonl` 是完整记录，永远按 episode 归约、每个 episode 一条，不可配置。Aim 是仪表盘：评估始终送达，训练只送 `logging.aim.training` 点名的范围，每个范围的间隔用它自己的单位表达：
+
+| scope | 间隔 | 回答 |
+|---|---|---|
+| `step` | `every_steps` | 某一刻的读数是什么样 |
+| `episode` | `every_episodes` | 典型 episode 的统计量是多少 |
+| `window` | `every_steps` + `length_steps` | 一段区间内所有 episode 平均下来是多少 |
+
+三者都不偏：`step` 选的是步，不在大小不等的对象之间做选择；`episode` 在 episode 空间里均匀；`window` 按 episode *结束* 在哪个窗口来归属，因而是对 episode 的一个划分。`window.length_steps` 默认等于 `every_steps`，即铺满整条轴、用上每个 episode；更短则是抽样若干区间——区间大小固定，同样不偏——并让累加器存活更短的时间。
+
+`training` 块整个省略表示 Aim 只记录评估；写了 `training` 却一个范围都不点名会被拒绝。窗口内的 series 按 transition 汇总，而不是对各 episode 的均值再求均值：episode 长度不等，均值的均值不是均值，方差的均值更不是方差。`return` 和 `length` 本身就是 per-episode 的量，窗口值对 episode 取平均。
+
 ## 接收方边界
 
-- Worker 的 v9 投影定义在 `memo/worker/envelope.py`，只解释 `contract`、`identity`、`entry` 和 `artifacts`；`algorithm`、`runtime`、`logging` 保持为交给子进程的 JSON。
+- Worker 的 v10 投影定义在 `memo/worker/envelope.py`，只解释 `contract`、`identity`、`entry` 和 `artifacts`；`algorithm`、`runtime`、`logging` 保持为交给子进程的 JSON。
 - Entry 使用 `memo/entries/_contract.py` 验证完整运行配置，再分别投影到算法 assembly、Runtime 和 observability。
 - Catalog 类型及版本位于 `memo/deployment/contract.py`，不属于 Worker。
 

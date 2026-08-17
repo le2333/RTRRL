@@ -17,7 +17,7 @@ def config_with_local_aim(tmp_path, *, rerun=None):
     config = make_run_config()
     payload = config.model_dump(mode="json")
     payload["logging"] = {
-        "aim": {"url": endpoint, "training": {"log_every_steps": 1}},
+        "aim": {"url": endpoint, "training": {"episode": {"every_episodes": 1}}},
         "rerun": rerun,
     }
     return type(config).model_validate(payload)

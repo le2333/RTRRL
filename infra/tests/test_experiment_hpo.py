@@ -35,7 +35,7 @@ def test_a_configuration_is_partitioned_by_its_consumers(
         "evaluation",
         "logging",
     }
-    assert first["contract"] == 9
+    assert first["contract"] == 10
     assert first["identity"]["experiment"] == "streamac-test"
     assert first["entry"] == "stream_ac"
     assert first["identity"]["digest"] == DIGEST

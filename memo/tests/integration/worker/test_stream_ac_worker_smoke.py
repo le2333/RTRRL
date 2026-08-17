@@ -149,7 +149,7 @@ def test_worker_runs_algorithm_and_publishes_trace_norms(
             "logging": {
                 "aim": {
                     "url": str(aim_path),
-                    "training": {"log_every_steps": 1},
+                    "training": {"episode": {"every_episodes": 1}},
                 }
             },
         }

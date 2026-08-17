@@ -11,7 +11,7 @@ import yaml
 
 from trainer_infra.experiment import ExperimentError, ExperimentRunner, _absent
 
-CONTRACT = Path(__file__).resolve().parents[2] / "tests" / "contracts" / "v9"
+CONTRACT = Path(__file__).resolve().parents[2] / "tests" / "contracts" / "v10"
 TEMPLATE = Path(__file__).resolve().parents[2] / "experiments" / "streamac template.yaml"
 
 
@@ -20,7 +20,7 @@ def read_json(name: str) -> dict[str, Any]:
 
 
 def test_catalog_fixture_is_the_contract_infra_emits(catalog: Any) -> None:
-    assert catalog["contract"] == read_json("catalog.json")["contract"] == 9
+    assert catalog["contract"] == read_json("catalog.json")["contract"] == 10
 
 
 def test_a_round_emits_the_serialized_run_spec_shape(

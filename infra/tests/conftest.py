@@ -18,7 +18,7 @@ IMAGE = f"registry.example/trainer@{DIGEST}"
 @pytest.fixture
 def catalog() -> dict[str, Any]:
     return {
-        "contract": 9,
+        "contract": 10,
         "entries": {
             "stream_ac": {
                 "command": ["python", "-m", "entries.stream_ac"],
@@ -70,7 +70,10 @@ EXPERIMENT: dict[str, Any] = {
     "training": {"num_envs": 4, "total_steps": 200, "chunk_steps": 100},
     "evaluation": {"every_steps": 100, "rollout_steps": 16},
     "logging": {
-        "aim": {"url": "aim://aim:53800", "training": {"log_every_steps": 100}},
+        "aim": {
+            "url": "aim://aim:53800",
+            "training": {"window": {"every_steps": 100}},
+        },
         "rerun": {"log_every_steps": 100},
     },
     "score": {
@@ -112,7 +115,8 @@ logging:
   aim:
     url: aim://aim:53800
     training:
-      log_every_steps: 100
+      window:
+        every_steps: 100
   rerun:
     log_every_steps: 100
 

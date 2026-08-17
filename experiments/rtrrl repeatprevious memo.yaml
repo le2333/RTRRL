@@ -63,7 +63,8 @@ logging:
   aim:
     url: aim://172.31.62.192:53801
     training:
-      log_every_steps: 100000
+      window:
+        every_steps: 100000
   rerun:
     log_every_steps: 1000000
 
