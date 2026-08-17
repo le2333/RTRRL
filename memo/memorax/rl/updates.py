@@ -36,6 +36,7 @@ from flax import struct
 
 from memorax.building import ComponentFamily
 from memorax.parameters import param
+from memorax.utils.trees import stream_norm
 
 from .intentional import IntentionalOptimizer, IntentionalUpdate
 
@@ -427,22 +428,6 @@ def make_bounded_rule(*, bound, base) -> UpdateRule:
     return UpdateRule(init=init, apply=apply)
 
 
-def _stream_norm(tree):
-    """One Euclidean norm per stream over every leaf of one normalization unit.
-
-    The env axis is axis 0 of every trace leaf, so the sum runs over everything
-    but it and a unit is a whole subtree rather than a leaf: normalizing leaf by
-    leaf would keep only each leaf's sign pattern and throw the direction away,
-    which is a different algorithm.
-    """
-
-    squares = sum(
-        jnp.sum(jnp.square(leaf), axis=tuple(range(1, leaf.ndim)))
-        for leaf in jax.tree.leaves(tree)
-    )
-    return jnp.sqrt(squares)
-
-
 def _units(tree, *, by_block):
     """The normalization units of one tree, and how to put them back together.
 
@@ -499,7 +484,7 @@ def make_d_rtrrl_rule(step, *, clip=0.0) -> UpdateRule:
     def factor(tree):
         """What one unit's trace is multiplied by on the way out, per stream."""
 
-        length = _stream_norm(tree)
+        length = stream_norm(tree)
         if saturated:
             # A unit vector times the threshold: every step is `c` long.
             return c / (length + eps if shifted else jnp.maximum(length, eps))

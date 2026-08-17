@@ -15,6 +15,7 @@ algorithm working rather than a leak -- which is itself checked.
 
 from __future__ import annotations
 
+from itertools import combinations
 from typing import Any
 
 import jax
@@ -62,7 +63,16 @@ def torso_network(*, meta_rl: bool = True) -> Sequence:
     )
 
 
-def build(head: str = "state_std", reports=None, **overrides) -> RTRRL:
+def eligibility(kind: str) -> rtrrl.EligibilityReadout:
+    """The readout an experiment naming one of the four conditions gets."""
+
+    direction, magnitude = rtrrl.ELIGIBILITY_SOURCES[kind]
+    return rtrrl.EligibilityReadout(direction=direction, magnitude=magnitude)
+
+
+def build(
+    head: str = "state_std", reports=None, reads: str = "trace", **overrides
+) -> RTRRL:
     """The kernel, on the smallest sequence that still has a recurrence in it."""
 
     env = TinyContinuousEnv()
@@ -101,6 +111,7 @@ def build(head: str = "state_std", reports=None, **overrides) -> RTRRL:
         actor,
         heads.VNetwork(),
         reports=rtrrl.Reports() if reports is None else reports,
+        eligibility=eligibility(reads),
     )
 
 
@@ -301,6 +312,65 @@ def test_each_decay_moves_one_block_s_trace(decay, owner, others):
             apart(getattr(low.core, name).traces, getattr(high.core, name).traces)
             == 0.0
         )
+
+
+# ------------------------------------ what a step reads of the trace it keeps
+
+
+def test_an_empty_trace_moves_nothing_unless_the_step_reads_its_own_gradient():
+    """The first transition, where the four conditions are furthest apart.
+
+    Nothing has accumulated yet, so three of them have no direction to step
+    along: the trace is zero, and a zero rescaled to any norm is still zero.
+    Only the condition that reads the gradient instead of the trace has one.
+    """
+
+    def travelled(reads):
+        agent = build(entropy_rate=0.0, reads=reads)
+        start = agent.init(jax.random.key(0))
+        after = agent.train(jax.random.key(1), start, agent.cfg.num_envs)[0]
+        return max(moved(start, after).values())
+
+    assert travelled("gradient") > 0
+    for reads in ("trace", "direction", "gain"):
+        assert travelled(reads) == 0.0, reads
+
+
+def test_the_trace_a_step_leaves_behind_does_not_depend_on_what_it_read():
+    """One recursion, four readings of it, which is what makes them comparable.
+
+    One round is the horizon at which this has content. The traces are built
+    from gradients taken at the same parameters there, because it is the update
+    those gradients feed that the conditions differ in. From the second round
+    the parameters have moved apart and everything downstream with them, which
+    is the ablation working rather than the recursion leaking.
+    """
+
+    stored = {
+        reads: run(build(entropy_rate=0.0, reads=reads), 1).core
+        for reads in rtrrl.ELIGIBILITY_SOURCES
+    }
+
+    for reads, core in stored.items():
+        for name in ("torso", "actor", "critic"):
+            distance = apart(
+                getattr(core, name).traces, getattr(stored["trace"], name).traces
+            )
+            assert distance == 0.0, f"{reads} stored a different {name} trace"
+
+
+def test_no_two_conditions_step_the_same_way_once_a_trace_exists():
+    """Four conditions and not two: the mixtures are their own runs."""
+
+    ends = {
+        reads: run(build(entropy_rate=0.0, reads=reads), 4)
+        for reads in rtrrl.ELIGIBILITY_SOURCES
+    }
+
+    for one, other in combinations(ends, 2):
+        assert (
+            apart(ends[one].core.torso.params, ends[other].core.torso.params) > 0
+        ), f"{one} and {other} left the torso in the same place"
 
 
 # ----------------------------------------------------- the recurrence is exact

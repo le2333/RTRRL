@@ -106,12 +106,19 @@ INTENTIONAL = {
 }
 
 
-def parameters(backbone="lru", differentiation="exact_rtrl", optimizer=None):
+def parameters(
+    backbone="lru",
+    differentiation="exact_rtrl",
+    optimizer=None,
+    eligibility="trace",
+    pinned=None,
+):
     branch = f"torso.backbone.{backbone}"
     return expand(
         rtrrl.PARAMETERS,
         {
             "torso.backbone.kind": backbone,
+            "eligibility.kind": eligibility,
             **({f"{branch}.feature_dim": 4} if backbone == "lru" else {}),
             f"{branch}.hidden_dim": 2,
             f"{branch}.differentiation.kind": differentiation,
@@ -129,17 +136,25 @@ def parameters(backbone="lru", differentiation="exact_rtrl", optimizer=None):
             "normalization.observation.kind": "none",
             "normalization.reward.kind": "none",
             "meta_rl": False,
+            **(pinned or {}),
         },
     )
 
 
 def assembled(
-    backbone="lru", differentiation="exact_rtrl", record=None, optimizer=None
+    backbone="lru",
+    differentiation="exact_rtrl",
+    record=None,
+    optimizer=None,
+    eligibility="trace",
+    pinned=None,
 ):
     return assemble(
         rtrrl.RTRRL,
         BuildRequest(
-            parameters=parameters(backbone, differentiation, optimizer),
+            parameters=parameters(
+                backbone, differentiation, optimizer, eligibility, pinned
+            ),
             environment=EnvironmentSpec(
                 id="tiny",
                 backend=None,
@@ -571,6 +586,22 @@ def test_a_signed_step_does_not_read_the_torso_td_scaling():
         if not np.array_equal(leaf, flattened(ablated[1].core.torso.params)[path])
     ]
     assert moved, "eta_f reaches the torso rule under neither setting: it is unwired"
+
+
+@pytest.mark.parametrize("kind", tuple(rtrrl.ELIGIBILITY_SOURCES))
+def test_a_run_selects_which_of_the_trace_its_steps_read(kind):
+    """One component, four selections: the ablation is a configuration."""
+
+    assert set(kinds(rtrrl.PARAMETERS, "eligibility")) == set(rtrrl.ELIGIBILITY_SOURCES)
+    # The guard belongs to the two conditions that divide by a norm, so only
+    # they have a name for it to arrive under.
+    rescales = kind in ("direction", "gain")
+    pinned = {f"eligibility.{kind}.eps": 1e-6} if rescales else {}
+
+    readout = graph_of(assembled(eligibility=kind, pinned=pinned)).core.eligibility
+
+    assert (readout.direction, readout.magnitude) == rtrrl.ELIGIBILITY_SOURCES[kind]
+    assert readout.eps == (1e-6 if rescales else rtrrl.EligibilityReadout().eps)
 
 
 def test_rtrrl_declares_parameters_and_observations_beside_its_graph():
