@@ -1,0 +1,139 @@
+# Issue 37 R3.2 smoke: the fixed-step saturated-limit arm, on the shape issue 27
+# already runs. This is a local shape check, not the formal protocol -- the
+# 5-seed x 1M configuration, its metrics and its choice of C are owned by the
+# experiment side.
+#
+# u_fixed = C * sign(delta) * z / (||z|| + eps). Both magnitudes are gone: the
+# trace is exported as a unit vector and the TD error is reduced to its sign,
+# so every step moves a block by exactly C. That is the original clip with the
+# clip always active, which is what "saturated limit" means.
+#
+# Read, at the reporting boundaries:
+#   - update.torso.trace_norm and the two head trace norms finite throughout
+#   - eval/episode/return finite throughout
+#   - the TD-out arm in `rtrrl issue37 td-out control.yaml` is the control for
+#     the claim that removing |delta| is what buys that
+#
+# `eta_f` is present and inert here: `sign(eta_f * delta) == sign(delta)`, so
+# it cannot set the torso-to-heads ratio. Left at 1.0 so a diff against the
+# issue-27 run shows only the optimizer.
+
+experiment: rtrrl-issue37
+name: rtrrl-issue37-d-rtrrl
+description: "Issue 37 R3.2 smoke: fixed-step saturated limit, C * sign(delta) * z_hat"
+
+image: 007122174918.dkr.ecr.eu-north-1.amazonaws.com/rtrrl@sha256:7ca201c304dc6a38dc45d8142cfc05d1ec4deb3046e9e8e3594b4ff635cfd32d
+entry: rtrrl
+storage: s3://rtrrl-artifacts-007122174918/trainer
+
+# Masked Hopper, as issue 27 runs it: six of the eleven readings, velocities
+# withheld. Partial observation is what the recurrent torso is there for.
+environment:
+  id: brax::hopper
+  backend: spring
+  observed: [0, 2, 4, 6, 8, 10]
+  seed: 0
+  episode_length: 1000
+
+training:
+  num_envs: 1
+  total_steps: 5000
+  chunk_steps: 1000
+
+evaluation:
+  every_steps: 1000
+  rollout_steps: 1000
+
+logging:
+  aim:
+    url: aim://172.31.62.192:53801
+    training:
+      log_every_steps: 1000
+  rerun:
+    log_every_steps: 1000
+
+score:
+  metric: eval/episode/return_per_step
+  window_steps: [0, 5000]
+  reduce: last
+  non_finite: worst
+  direction: maximize
+
+compute:
+  instance_type: c7a.large
+  timeout_minutes: 60
+
+# No search. C is the original clip's threshold, not a tuned quantity.
+hpo:
+  rounds: 1
+  trials_per_round: 1
+  parallel_jobs: 1
+  startup_trials: 1
+  seed: 0
+
+space:
+  torso:
+    backbone:
+      kind: [lru]
+      lru:
+        feature_dim: [64]
+        hidden_dim: [64]
+        differentiation:
+          kind: [exact_rtrl]
+    optimizer:
+      kind: [d_rtrrl]
+      d_rtrrl:
+        # `c` is the original clip's threshold, not a learning rate, and it is
+        # pinned rather than searched: this arm is only the saturated limit of
+        # that clip while it is written over the same number. The value here is
+        # a placeholder equal to `grad_clip` below -- the formal arms take the
+        # threshold selected in R2.
+        c: [1.0]
+        magnitude: [sign]
+        scope: [block]
+        # The preregistered denominator, z / (||z|| + eps). `clamped` is
+        # max(||z||, eps), which is a different rule near zero rather than a
+        # different spelling of this one.
+        denominator: [shifted]
+        eps: [0.00000001]
+    # Note this is the *outer* clip, on the finished group update, and setting
+    # it equal to C is not neutral: the traced part is already C long, so it
+    # binds on nearly every step. Kept at 1.0 here only so this smoke run
+    # differs from the issue-27 one in the optimizer alone. Which of the two
+    # clips an arm is written against is the experiment side's to declare.
+    grad_clip: [1.0]
+    follow: [1.0]
+  heads:
+    optimizer:
+      kind: [d_rtrrl]
+      d_rtrrl:
+        c: [1.0]
+        magnitude: [sign]
+        scope: [block]
+        denominator: [shifted]
+        eps: [0.00000001]
+  actor:
+    head:
+      kind: [state_std]
+      state_std:
+        initialization:
+          kind: [lecun]
+  critic:
+    head:
+      kind: [value]
+      value:
+        initialization:
+          kind: [lecun]
+  normalization:
+    observation:
+      kind: [none]
+    reward:
+      kind: [none]
+  gamma: [0.99]
+  lambda_pi: [0.9]
+  lambda_v: [0.9]
+  lambda_rnn: [0.9]
+  eta_pi: [1.0]
+  eta_f: [1.0]
+  entropy_rate: [0.00001]
+  meta_rl: [true]
