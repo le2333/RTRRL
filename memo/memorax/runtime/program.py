@@ -9,7 +9,15 @@ from typing import Any
 
 @dataclass(frozen=True)
 class Program:
-    """The four compiled arrows Runtime schedules.
+    """The four arrows Runtime schedules, as the graph's own methods.
+
+    Not compiled. ``assemble`` puts the graph's bound methods here and
+    ``Driver`` is what wraps them in ``jax.jit``, with ``num_steps`` static
+    because it is a scan length. Anything that reaches past Runtime and calls
+    these directly -- a script, a benchmark -- gets a fresh trace and a fresh
+    compilation of the whole scan on every call, which is slow, holds the
+    compiled artefacts of every call, and makes any timing a measurement of
+    the caller rather than of the algorithm.
 
     ``interact`` is one vectorized behavior-policy transition that learns
     nothing: Runtime schedules it only to finish a sampled episode that the
