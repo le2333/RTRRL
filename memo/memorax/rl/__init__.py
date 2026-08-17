@@ -23,6 +23,7 @@ from .normalization import (
     make_normalizer,
     normalization_metrics,
 )
+from .spaces import action_classes, action_dim, encode_feedback
 from .targets import delayed_update, periodic_incremental_update
 from .td import make_td0
 from .updates import (
@@ -46,8 +47,11 @@ __all__ = [
     "COLD_STARTS",
     "VARIANCES",
     "UpdateRule",
+    "action_classes",
+    "action_dim",
     "delayed_update",
     "broadcast_stream",
+    "encode_feedback",
     "declared_normalizer",
     "environment_owns_normalization",
     "make_normalizer",

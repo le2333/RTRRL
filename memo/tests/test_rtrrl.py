@@ -24,7 +24,7 @@ import pytest
 from memorax.algorithms import rtrrl_aaai as rtrrl
 from memorax.algorithms.rtrrl_aaai import RTRRL, RTRRLConfig
 from memorax.networks import heads
-from memorax.networks.components import FFN, LayerNorm, Tanh
+from memorax.networks.components import LayerNorm
 from memorax.networks.sequence import Sequence
 from memorax.networks.sequence_models import LRUCell, LRUConfig, Memoroid
 from memorax.networks.sequence_models.lru import LRUStructuredRTRL
@@ -32,20 +32,32 @@ from memorax.rl.updates import Adam
 from tests.support.environments import TinyContinuousEnv
 
 ENVS = 3
-FEATURES = 4
+OBSERVATION = 2  # TinyContinuousEnv's, and its action is as wide again
+ACTION = 2
+READOUT = 4
 HIDDEN = 2
-CELL = "components_3"
+CELL = "components_0"
 
 
-def torso_network() -> Sequence:
+def torso_network(*, meta_rl: bool = True) -> Sequence:
+    """The deployed torso's shape: the cell, and one affine-free LayerNorm.
+
+    Nothing in front of the cell, so its input width is whatever
+    ``Torso._input`` hands it -- which is why this has to be told whether the
+    previous action and reward are riding along.
+    """
+
+    features = OBSERVATION + (ACTION + 1 if meta_rl else 0)
     return Sequence(
         components=(
-            FFN(features=FEATURES),
-            LayerNorm(),
-            Tanh(),
             Memoroid(
-                cell=LRUCell(config=LRUConfig(features=FEATURES, hidden_dim=HIDDEN))
+                cell=LRUCell(
+                    config=LRUConfig(
+                        features=features, hidden_dim=HIDDEN, output_dim=READOUT
+                    )
+                )
             ),
+            LayerNorm(use_scale=False, use_bias=False),
         )
     )
 
@@ -55,7 +67,7 @@ def build(head: str = "state_std", reports=None, **overrides) -> RTRRL:
 
     env = TinyContinuousEnv()
     action_dim = int(env.action_space(env.default_params).shape[0])
-    torso = torso_network()
+    torso = torso_network(meta_rl=overrides.get("meta_rl", True))
     settings = {
         "num_envs": ENVS,
         "gamma": 0.9,
@@ -368,14 +380,17 @@ def test_evaluation_hands_back_readings_and_no_state():
 
 
 def test_meta_rl_widens_the_first_layer_and_nothing_else():
-    """The previous action and reward ride along with the observation."""
+    """The previous action and reward ride along with the observation.
+
+    The first layer is the cell itself now that nothing precedes it, so what
+    widens is the input matrix it reads the observation through.
+    """
 
     def fan_in(agent):
         state = agent.init(jax.random.key(0))
-        return state.core.torso.params["components_0"]["Dense_0"]["kernel"].shape[0]
+        return state.core.torso.params[CELL]["cell"]["B_real"].shape[1]
 
-    action_dim = 2
-    assert fan_in(build(meta_rl=True)) == fan_in(build(meta_rl=False)) + action_dim + 1
+    assert fan_in(build(meta_rl=True)) == fan_in(build(meta_rl=False)) + ACTION + 1
 
 
 # --------------------------------------------------------- what a run declares

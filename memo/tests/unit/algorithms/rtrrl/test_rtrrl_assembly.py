@@ -38,7 +38,7 @@ def parameters(backbone="lru", differentiation="exact_rtrl"):
         rtrrl.PARAMETERS,
         {
             "torso.backbone.kind": backbone,
-            f"{branch}.feature_dim": 4,
+            **({f"{branch}.feature_dim": 4} if backbone == "lru" else {}),
             f"{branch}.hidden_dim": 2,
             f"{branch}.differentiation.kind": differentiation,
             "torso.optimizer.kind": "adam",
