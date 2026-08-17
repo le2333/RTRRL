@@ -27,6 +27,7 @@ import pytest
 from memorax.rl.updates import DRTRRL, make_d_rtrrl_rule
 
 ETA = 0.01
+EPS = 1e-8
 
 
 def blocks(key, *, streams=1, actor_scale=1.0):
@@ -71,23 +72,74 @@ def leaves(tree):
     }
 
 
+def scaled_to(tree, length):
+    """One block rescaled so its norm is exactly ``length``."""
+
+    return jax.tree.map(lambda leaf: leaf * (length / norm(tree)), tree)
+
+
+@pytest.mark.parametrize("denominator", ["shifted", "clamped"])
 @pytest.mark.parametrize("surprise", [0.5, -0.5, 7.0, -300.0], ids=str)
 @pytest.mark.parametrize("scale", [1e-3, 1.0, 1e3], ids=["tiny", "unit", "huge"])
-def test_the_step_is_eta_long_whatever_the_surprise_or_the_trace(surprise, scale):
+def test_the_traced_step_is_eta_long_whatever_the_surprise_or_the_trace(
+    denominator, surprise, scale
+):
     """The defining property: length is the learning rate and nothing else.
 
     Neither the size of the TD error nor the size of the trace reaches the
     distance moved. This is the whole reason the rule exists -- it is what
     ``eta * delta * z_hat`` did not do, and what took that version non-finite.
+
+    The claim is about the *traced* part, which is why ``direct`` is absent
+    here: the entropy direction does not pass through the trace and is not
+    normalized, so it is a length this property says nothing about. It is
+    decomposed on its own further down rather than left to blur this one.
+
+    Both denominators are checked because both are offered. Neither is exactly
+    ``eta`` -- ``shifted`` is short by ``eps/(||z||+eps)`` and ``clamped`` is
+    exact only once ``||z|| >= eps`` -- and at these trace scales the gap is
+    far below the tolerance. Where it is not below the tolerance is the
+    separate concern of the two tests that follow.
     """
 
     traces = jax.tree.map(
         lambda leaf: scale * leaf, blocks(jax.random.key(0))
     )
-    output = stepped(traces, [surprise])
+    output = stepped(traces, [surprise], denominator=denominator)
 
     for name, block in output.updates.items():
         np.testing.assert_allclose(norm(block), ETA, rtol=1e-5, err_msg=name)
+
+
+def test_where_eps_sits_is_which_denominator_it_is():
+    """The two denominators are two rules, and a run answers to one of them.
+
+    Preregistration named ``||z|| + eps``; this issue's body named
+    ``max(||z||, eps)``. They are not the same arithmetic near zero, so the
+    choice is declared and this is what declaring it buys: at a trace whose
+    norm is exactly ``eps`` the shifted form has already halved the step while
+    the clamped form is still taking the whole of it. Substituting one for the
+    other silently would move a recorded run by that factor.
+    """
+
+    traces = blocks(jax.random.key(9))
+    at_eps = {name: scaled_to(block, EPS) for name, block in traces.items()}
+
+    shifted = stepped(at_eps, [1.0], denominator="shifted")
+    clamped = stepped(at_eps, [1.0], denominator="clamped")
+
+    # One trace of norm eps, normalized two ways: eps/(eps+eps) against eps/eps.
+    ratio = norm(shifted.updates) / norm(clamped.updates)
+    np.testing.assert_allclose(ratio, 0.5, rtol=1e-3)
+
+    # And they agree again once the trace clears eps by enough to drown it.
+    ordinary = (
+        stepped(traces, [1.0], denominator="shifted"),
+        stepped(traces, [1.0], denominator="clamped"),
+    )
+    np.testing.assert_allclose(
+        norm(ordinary[0].updates), norm(ordinary[1].updates), rtol=1e-6
+    )
 
 
 def test_the_direction_is_the_traces_own_turned_by_the_sign_of_the_td_error():
@@ -105,6 +157,7 @@ def test_the_direction_is_the_traces_own_turned_by_the_sign_of_the_td_error():
             np.testing.assert_allclose(cosine, turn, rtol=1e-5, err_msg=name)
 
 
+@pytest.mark.parametrize("denominator", ["shifted", "clamped"])
 @pytest.mark.parametrize(
     "traces, delta, why",
     [
@@ -113,23 +166,74 @@ def test_the_direction_is_the_traces_own_turned_by_the_sign_of_the_td_error():
     ],
     ids=["no_td", "no_trace"],
 )
-def test_a_degenerate_input_gives_exactly_no_step(traces, delta, why):
-    """Both degenerate cases give zero, and neither divides by zero.
+def test_a_degenerate_input_gives_exactly_no_step(denominator, traces, delta, why):
+    """Both degenerate cases give zero, under both denominators, finitely.
 
     A rule that moves a fixed distance every step has to be told when not to,
     and there are exactly two such moments: nothing was surprising, or nothing
-    has been credited yet. ``max(||z||, eps)`` rather than ``||z|| + eps`` is
-    what makes the second one exactly zero instead of merely small.
+    has been credited yet.
+
+    Neither denominator has any advantage here, which is worth asserting
+    because it is easy to assume otherwise: ``0 / (0 + eps)`` is exactly zero
+    for the same reason ``0 / eps`` is. The two forms differ near zero, not at
+    it, and that difference is the subject of its own test.
     """
 
     built = blocks(jax.random.key(2))
     if traces == "zero":
         built = jax.tree.map(jnp.zeros_like, built)
-    output = stepped(built, delta)
+    output = stepped(built, delta, denominator=denominator)
 
     for name, block in output.updates.items():
         for path, leaf in leaves(block).items():
+            assert jnp.all(jnp.isfinite(leaf)), f"{why}: {name}/{path} is not finite"
             assert jnp.all(leaf == 0.0), f"{why}: {name}/{path} moved"
+
+
+def test_the_traced_and_direct_contributions_are_separable_and_only_one_is_fixed():
+    """The fixed-step property belongs to the trace, and entropy is not in it.
+
+    The direct directions do not pass through the trace and are not
+    normalized, so a step taken with entropy on is not ``eta`` long. Reporting
+    the two contributions apart is what keeps that from quietly falsifying the
+    property the rule is chosen for: the traced part is ``eta``, the direct
+    part is whatever the entropy gradient happens to be times ``eta``, and the
+    step is their sum.
+    """
+
+    traces = blocks(jax.random.key(11))
+    entropy = jax.tree.map(
+        lambda leaf: 0.3 * jnp.ones_like(leaf), traces
+    )
+
+    traced_only = stepped(traces, [1.0])
+    both = stepped(traces, [1.0], direct=entropy)
+
+    for name in traces:
+        # The traced contribution, alone, is the length the rule promises.
+        np.testing.assert_allclose(norm(traced_only.updates[name]), ETA, rtol=1e-5)
+
+        # The direct contribution is exactly `eta * d`, recoverable by
+        # difference -- so it is additive and identifiable rather than folded
+        # into the normalization.
+        for path, leaf in leaves(both.updates[name]).items():
+            recovered = leaf - leaves(traced_only.updates[name])[path]
+            np.testing.assert_allclose(
+                recovered,
+                ETA * leaves(entropy[name])[path][0],
+                rtol=1e-5,
+                err_msg=f"{name}/{path}",
+            )
+
+        # And the total is therefore not eta, which is the thing that must not
+        # be claimed by accident. It is not bounded above by eta either -- the
+        # direct term can point with the trace or against it, so the sum can
+        # land on either side. All that is asserted is that it stops being the
+        # promised length.
+        assert not np.isclose(norm(both.updates[name]), ETA, rtol=1e-3), (
+            f"{name}: entropy left the step exactly eta long by coincidence; "
+            "pick a direct term that actually moves it"
+        )
 
 
 def test_the_td_error_scale_cannot_change_a_signed_step():

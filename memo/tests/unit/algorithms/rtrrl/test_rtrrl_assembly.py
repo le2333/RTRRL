@@ -34,7 +34,23 @@ def assert_tree_equal(actual, expected, what):
 
 ETA = 0.01
 
+# `expand` fills anything unset from the low end of its search domain, which
+# leaves `eta_f`, `eta_pi` and every `lambda` at zero. That is harmless for the
+# structural assertions the shared fixture was written for, and fatal for these:
+# `eta_f == 0` makes the torso's TD error zero, so `sign` of it is zero and the
+# torso never takes a traced step at all. Anything asserting that a step was
+# taken has to say what these are.
+LIVE = {
+    "eta_f": 1.0,
+    "eta_pi": 1.0,
+    "lambda_pi": 0.9,
+    "lambda_v": 0.9,
+    "lambda_rnn": 0.9,
+    "entropy_rate": 1e-5,
+}
+
 D_RTRRL = {
+    **LIVE,
     "torso.optimizer.kind": "d_rtrrl",
     "torso.optimizer.d_rtrrl.eta": ETA,
     "torso.optimizer.d_rtrrl.magnitude": "sign",
@@ -174,6 +190,55 @@ def test_the_d_rtrrl_optimizer_is_reachable_from_a_run_configuration():
     # The rate every rule reports under one name, and here a constant one.
     np.testing.assert_allclose(metrics.update.torso_step.step_size, ETA)
     np.testing.assert_allclose(metrics.update.heads_step.step_size, ETA)
+
+    # Every block took a step. Without this the assertions above are satisfied
+    # by a run that never moved: a TD error of zero reaching `sign` leaves the
+    # traced update at exactly zero, which is finite and constant and means
+    # nothing was learned.
+    for block in ("torso", "actor", "critic"):
+        before = flattened(getattr(state.core, block).params)
+        after = flattened(getattr(stepped.core, block).params)
+        assert any(
+            not np.array_equal(leaf, after[path]) for path, leaf in before.items()
+        ), f"{block} never moved"
+
+
+def test_the_shared_recurrent_direction_is_formed_before_it_is_normalized():
+    """The torso's two sources are summed first and the resultant normalized.
+
+    RTRRL's torso is fed by both readouts: ``upstream(actor_upward +
+    critic_upward)``. The sum happens before the pullback and there is one
+    torso trace, so the norm that is removed is the resultant's.
+
+    The failure this is written against is normalizing the two sources
+    separately and adding them afterwards. That version is *invariant* to the
+    actor's source magnitude -- scaling the actor's sensitivity would rescale
+    a vector that is about to be divided by its own norm, and the torso would
+    not feel it. So asymmetric sensitivities are exactly what tells the two
+    orderings apart, and ``eta_pi`` is the knob that makes them asymmetric:
+    the actor's traced objective is ``eta_pi * log_prob``, so its upward
+    gradient is proportional to it while the critic's is not.
+
+    Two update steps, because the first one steps with the initial trace,
+    which is zero.
+    """
+
+    def torso_after(sensitivity):
+        built = assembled(optimizer={**D_RTRRL, "eta_pi": sensitivity})
+        state = built.program.init(jax.random.key(0))
+        return built.program.train(jax.random.key(1), state, 2)[0].core.torso.params
+
+    balanced, actor_loud = torso_after(1.0), torso_after(50.0)
+
+    moved = [
+        path
+        for path, leaf in flattened(balanced).items()
+        if not np.array_equal(leaf, flattened(actor_loud)[path])
+    ]
+    assert moved, (
+        "the torso step did not feel the actor's source magnitude, which is "
+        "what separately normalizing the two sources would look like"
+    )
 
 
 def test_a_signed_step_does_not_read_the_torso_td_scaling():

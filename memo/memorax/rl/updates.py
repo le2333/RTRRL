@@ -191,6 +191,22 @@ class DRTRRL:
         The whole tree at once. Two blocks under one norm share a single unit
         ball, so the one with the larger trace takes nearly all of the step;
         that is an ablation, not a default.
+
+    ``denominator`` is where ``eps`` sits, which is two rules rather than two
+    spellings and is declared rather than chosen at the point of division:
+
+    ``shifted``
+        ``z / (||z|| + eps)``, the preregistered form. The default.
+    ``clamped``
+        ``z / max(||z||, eps)``.
+
+    Both are finite at a trace of exactly zero, and both give exactly zero
+    there -- ``0 / (0 + eps)`` is ``0`` just as ``0 / eps`` is. What separates
+    them is the approach: at ``||z|| == eps`` the shifted form has already
+    halved the step while the clamped form is still taking the whole of it,
+    and they agree only once ``||z||`` clears ``eps`` by enough for the shift
+    not to matter. So a run answers to one of them and substituting the other
+    is a change of algorithm.
     """
 
     eta: float = param(valid=(1e-9, 10.0), search=(1e-4, 1.0), log=True)
@@ -198,6 +214,9 @@ class DRTRRL:
         valid=["sign", "td_error"], search=["sign"], default="sign"
     )
     scope: str = param(valid=["block", "group"], search=["block"], default="block")
+    denominator: str = param(
+        valid=["shifted", "clamped"], search=["shifted"], default="shifted"
+    )
     eps: float = param(valid=(1e-12, 1e-2), search=[1e-8], default=1e-8, log=True)
 
 
@@ -408,6 +427,7 @@ def make_d_rtrrl_rule(step, *, clip=0.0) -> UpdateRule:
     eps = step.eps
     signed = step.magnitude == "sign"
     by_block = step.scope == "block"
+    shifted = step.denominator == "shifted"
     bound = None
     if clip:
         import optax
@@ -417,7 +437,8 @@ def make_d_rtrrl_rule(step, *, clip=0.0) -> UpdateRule:
     def unit(tree):
         """One subtree divided by its own per-stream norm."""
 
-        length = jnp.maximum(_stream_norm(tree), eps)
+        norm = _stream_norm(tree)
+        length = norm + eps if shifted else jnp.maximum(norm, eps)
         return jax.tree.map(
             lambda leaf: leaf / _broadcast_env(length, leaf),
             tree,

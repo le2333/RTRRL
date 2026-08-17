@@ -10,7 +10,9 @@
 #     constant at the two etas
 #   - update.torso.trace_norm and the two head trace norms finite throughout
 #   - eval/episode/return finite throughout -- the version this replaces
-#     (`magnitude: td_error`) is what went non-finite here
+#     (`magnitude: td_error`) is what went non-finite here, and it is kept as a
+#     named arm in `rtrrl issue37 td-out control.yaml` rather than deleted, so
+#     the reason for this arm's default is a recorded run and not a claim
 #
 # `eta_f` is present and inert: `sign(eta_f * delta) == sign(delta)`. The
 # torso-to-heads step ratio is the ratio of the two `eta` values below and
@@ -62,11 +64,14 @@ compute:
   instance_type: c7a.large
   timeout_minutes: 60
 
+# Two group step scales are searched, so there has to be a search. Small
+# because this is the acceptance shape rather than the tuned run: enough trials
+# for the two etas to separate, not enough to claim one is optimal.
 hpo:
-  rounds: 1
-  trials_per_round: 1
-  parallel_jobs: 1
-  startup_trials: 1
+  rounds: 2
+  trials_per_round: 8
+  parallel_jobs: 4
+  startup_trials: 4
   seed: 0
 
 space:
@@ -81,9 +86,18 @@ space:
     optimizer:
       kind: [d_rtrrl]
       d_rtrrl:
-        eta: [0.001]
+        # The group step scale, searched rather than pinned. The torso-to-heads
+        # ratio is not frozen at whatever the Adam arm's two learning rates
+        # happened to be, because it cannot be: `eta_f` is inert under `sign`,
+        # so these two etas are the only place that ratio can live and HPO has
+        # to be the thing that finds it.
+        eta: {type: float, low: 0.0001, high: 0.1, log: true}
         magnitude: [sign]
         scope: [block]
+        # The preregistered denominator, z / (||z|| + eps). `clamped` is
+        # max(||z||, eps), which is a different rule near zero rather than a
+        # different spelling of this one.
+        denominator: [shifted]
         eps: [0.00000001]
     # Kept on. The traced part of this rule is `eta` long by construction, so
     # the clip cannot reach it; the entropy direction does not pass through the
@@ -94,9 +108,10 @@ space:
     optimizer:
       kind: [d_rtrrl]
       d_rtrrl:
-        eta: [0.001]
+        eta: {type: float, low: 0.0001, high: 0.1, log: true}
         magnitude: [sign]
         scope: [block]
+        denominator: [shifted]
         eps: [0.00000001]
   actor:
     head:
