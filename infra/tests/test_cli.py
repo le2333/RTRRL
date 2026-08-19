@@ -42,6 +42,172 @@ for config_uri in manifest["runs"]:
 """
 
 
+R2_PARENT: dict[str, Any] = {
+    "contract": 11,
+    "identity": {
+        "run_id": "rtrrl-r2-t0",
+        "experiment": "rtrrl-issue45-r2",
+        "launch_id": LAUNCH,
+        "trial": 0,
+        "digest": "sha256:abc",
+    },
+    "entry": "rtrrl",
+    "artifacts": {"root": "s3://bucket/rtrrl-issue45-r2/launch/rtrrl-r2-t0"},
+    "algorithm": {
+        "environment": {
+            "id": "brax::halfcheetah",
+            "backend": "spring",
+            "observed": [0, 1],
+            "episode_length": 1000,
+        },
+        "num_envs": 1,
+        "parameters": {
+            "torso.grad_clip": 1.0,
+            "torso.optimizer.kind": "adam",
+            "heads.optimizer.kind": "adam",
+        },
+    },
+    "training": {"seed": 11, "total_steps": 100000, "chunk_steps": 10000},
+    "evaluation": {"every_steps": 10000, "rollout_steps": 5000},
+    "checkpoint": {"every_steps": 10000, "keep": None},
+    "logging": {"aim": {"url": "aim://aim:53800"}},
+}
+
+
+def collapsing_metrics(path: Path) -> Path:
+    """One seed that learns, gives back most of it, and stays down."""
+
+    returns = {10000: 10.0, 20000: 100.0, 30000: 20.0, 40000: 15.0, 50000: 18.0}
+    rows = [
+        json.dumps({"step": step, "metrics": {"eval/episode/return": value}})
+        for step, value in returns.items()
+    ]
+    rows += [
+        json.dumps(
+            {
+                "step": step,
+                "metrics": {"train/episode/update.torso.raw_update_norm": float(step)},
+            }
+        )
+        for step in returns
+    ]
+    path.write_text("\n".join(rows), encoding="utf-8")
+    return path
+
+
+def test_collapse_command_decides_each_seed_and_writes_the_decisions(
+    tmp_path: Path, capsys: Any
+) -> None:
+    """The per-seed decision document, which is what a fork is chosen from."""
+
+    spec = tmp_path / "collapse.json"
+    spec.write_text(
+        json.dumps({"metric": "eval/episode/return", "random_floor": 0.0}),
+        encoding="utf-8",
+    )
+    metrics = collapsing_metrics(tmp_path / "seed-0.jsonl")
+    decisions = tmp_path / "decisions.json"
+
+    assert (
+        main(
+            [
+                "collapse",
+                "--run",
+                f"rtrrl-r2-t0={metrics}",
+                "--spec",
+                str(spec),
+                "--decisions",
+                str(decisions),
+                "--window-steps",
+                "20000",
+            ]
+        )
+        == 0
+    )
+
+    printed = json.loads(capsys.readouterr().out)
+    assert printed == json.loads(decisions.read_text(encoding="utf-8"))
+    assert printed["collapsed"] == ["rtrrl-r2-t0"]
+    seed = printed["seeds"][0]
+    assert seed["collapse"]["step"] == 30000
+    assert seed["spec"]["random_floor"] == 0.0
+    assert seed["windows"]["train/episode/update.torso.raw_update_norm"]
+
+
+def test_fork_command_writes_three_branches_and_the_manifest_naming_them(
+    tmp_path: Path, capsys: Any
+) -> None:
+    parent = tmp_path / "parent.json"
+    parent.write_text(json.dumps(R2_PARENT), encoding="utf-8")
+    decision = tmp_path / "decision.json"
+    decision.write_text(
+        json.dumps({"run_id": "rtrrl-r2-t0", "verdict": "collapsed", "collapse": {"step": 30000}}),
+        encoding="utf-8",
+    )
+
+    assert (
+        main(
+            [
+                "fork",
+                "--parent",
+                str(parent),
+                "--decision",
+                str(decision),
+                "--into",
+                str(tmp_path / "fork"),
+                "--steps",
+                "50000",
+            ]
+        )
+        == 0
+    )
+
+    printed = json.loads(capsys.readouterr().out)
+    assert printed["from_steps"] == 20000
+    assert printed["checkpoint"].endswith("checkpoints/step-000000020000.msgpack")
+    assert printed["branches"] == [
+        "rtrrl-r2-t0-original-clip",
+        "rtrrl-r2-t0-fixed-step",
+        "rtrrl-r2-t0-td-out",
+    ]
+
+    manifest = json.loads((tmp_path / "fork" / "manifest.json").read_text())
+    assert len(manifest["runs"]) == 3
+    for uri, name in zip(manifest["runs"], printed["branches"], strict=True):
+        document = json.loads(
+            Path(url2pathname(urlparse(uri).path)).read_text(encoding="utf-8")
+        )
+        assert document["identity"]["run_id"] == name
+        assert document["fork"]["from_steps"] == 20000
+        assert document["training"]["total_steps"] == 70000
+
+
+def test_fork_refuses_a_seed_that_did_not_collapse(tmp_path: Path) -> None:
+    """Nothing is forked from a run with no event; the reason is repeated back."""
+
+    parent = tmp_path / "parent.json"
+    parent.write_text(json.dumps(R2_PARENT), encoding="utf-8")
+    decision = tmp_path / "decision.json"
+    decision.write_text(
+        json.dumps(
+            {
+                "run_id": "rtrrl-r2-t0",
+                "verdict": "steady",
+                "reason": "no drawdown of 0.5 held",
+                "collapse": None,
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    try:
+        main(["fork", "--parent", str(parent), "--decision", str(decision), "--into", str(tmp_path)])
+    except SystemExit as stopped:
+        assert "steady" in str(stopped) and "no drawdown" in str(stopped)
+    else:  # pragma: no cover - the call above must not succeed
+        raise AssertionError("a steady seed was forked")
+
+
 def test_run_command_executes_every_hpo_round(
     tmp_path: Path,
     capsys: Any,

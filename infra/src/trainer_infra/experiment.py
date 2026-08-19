@@ -57,6 +57,46 @@ class Settlement:
     reason: str | None = None
 
 
+def _formal(experiment: Mapping[str, Any]) -> None:
+    """Check the seed a formal launch runs is one of the ones it declared fresh.
+
+    A formal result is a claim about seeds that had no part in choosing the
+    configuration, and the way that goes wrong is quiet: a file copied from the
+    tuning launch keeps the tuning seed, and five runs of it report a
+    hyper-parameter search's own seed as an independent sample. So the file
+    names the fresh set and the seed it is launching, and the two are checked
+    against each other before anything starts.
+
+    What this does not do is archive the identity of a launch -- which seed
+    produced which artifact, kept somewhere a result can be traced back to.
+    That belongs with the rest of the formal protocol and is not invented here.
+    """
+
+    declared = experiment.get("formal")
+    if declared is None:
+        return
+    missing = [name for name in ("seeds", "tuning_seed") if name not in declared]
+    if missing:
+        raise ExperimentError(f"the formal block does not say {sorted(missing)}")
+    seeds = [int(seed) for seed in declared["seeds"]]
+    tuning = int(declared["tuning_seed"])
+    if not seeds:
+        raise ExperimentError("a formal block declaring no seed measures nothing")
+    if len(set(seeds)) != len(seeds):
+        raise ExperimentError(f"the formal seeds {seeds} are not distinct")
+    if tuning in seeds:
+        raise ExperimentError(
+            f"formal seed {tuning} is the tuning seed; a configuration cannot be "
+            "evaluated on the seed that chose it"
+        )
+    running = int(experiment["environment"]["seed"])
+    if running not in seeds:
+        raise ExperimentError(
+            f"this launch runs seed {running}, which the formal set {seeds} does "
+            "not contain; one launch runs one of the declared fresh seeds"
+        )
+
+
 def _absent(experiment: Mapping[str, Any]) -> Iterator[str]:
     for block, names in REQUIRED.items():
         section = experiment if not block else experiment.get(block)
@@ -93,6 +133,7 @@ class ExperimentRunner:
         missing = sorted(_absent(experiment))
         if missing:
             raise ExperimentError(f"the experiment file does not say {missing}")
+        _formal(experiment)
 
         self.experiment = experiment
         self.launch_id = launch_id or datetime.now(UTC).strftime("%Y%m%d-%H%M%S")
@@ -207,8 +248,19 @@ class ExperimentRunner:
         if "rerun" in declared:
             logging["rerun"] = dict(declared["rerun"])
 
+        # Optional, and copied rather than defaulted: a run that says nothing
+        # about checkpoints files none, which is the ordinary case. An R2 run
+        # that may need forking has to say so before it starts, because the
+        # boundary a fork wants is decided from a collapse it has not had yet.
+        checkpoint = (
+            {"checkpoint": dict(experiment["checkpoint"])}
+            if "checkpoint" in experiment
+            else {}
+        )
+
         return {
             "contract": self.contract,
+            **checkpoint,
             "identity": {
                 "run_id": run_id,
                 "experiment": experiment["experiment"],

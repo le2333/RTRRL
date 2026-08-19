@@ -76,6 +76,62 @@ def test_each_run_has_one_artifact_root(experiment: Any, catalog: Any, tmp_path:
     assert first["logging"]["rerun"] == {"log_every_steps": 100}
 
 
+def test_a_run_files_checkpoints_only_when_the_experiment_asks_for_them(
+    experiment: Any, catalog: Any, tmp_path: Path
+) -> None:
+    """A block that is present is a destination that is on, as with Rerun.
+
+    An R2 run that may need forking has to say so before it starts: which
+    boundary a fork wants is decided from a collapse the run has not had yet,
+    so a run that filed nothing cannot be given the block afterwards.
+    """
+
+    for configuration in runner(experiment, catalog, tmp_path).next_round():
+        assert "checkpoint" not in configuration
+
+    experiment["checkpoint"] = {"every_steps": 100, "keep": None}
+
+    for configuration in runner(experiment, catalog, tmp_path).next_round():
+        assert configuration["checkpoint"] == {"every_steps": 100, "keep": None}
+        # Copied, so the emitted document shares nothing with the experiment.
+        assert configuration["checkpoint"] is not experiment["checkpoint"]
+
+
+def test_a_formal_launch_must_run_one_of_the_seeds_it_declared_fresh(
+    experiment: Any, catalog: Any, tmp_path: Path
+) -> None:
+    """The failure this catches is a file copied from the tuning launch.
+
+    It keeps the tuning seed, and five runs of it report the seed that chose
+    the configuration as an independent sample of it.
+    """
+
+    experiment["formal"] = {"seeds": [11, 12, 13, 14, 15], "tuning_seed": 0}
+
+    with pytest.raises(ExperimentError, match="formal set"):
+        runner(experiment, catalog, tmp_path)
+
+    experiment["environment"]["seed"] = 11
+    assert runner(experiment, catalog, tmp_path).next_round()
+
+    experiment["formal"]["tuning_seed"] = 11
+    with pytest.raises(ExperimentError, match="cannot be evaluated on the seed"):
+        runner(experiment, catalog, tmp_path)
+
+
+def test_a_formal_block_that_cannot_be_checked_starts_nothing(
+    experiment: Any, catalog: Any, tmp_path: Path
+) -> None:
+    experiment["formal"] = {"seeds": [11, 11], "tuning_seed": 0}
+    experiment["environment"]["seed"] = 11
+    with pytest.raises(ExperimentError, match="not distinct"):
+        runner(experiment, catalog, tmp_path)
+
+    experiment["formal"] = {"seeds": [11]}
+    with pytest.raises(ExperimentError, match="does not say"):
+        runner(experiment, catalog, tmp_path)
+
+
 def test_rerun_gets_no_destination_when_it_is_off(
     experiment: Any, catalog: Any, tmp_path: Path
 ) -> None:
