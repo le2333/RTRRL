@@ -23,6 +23,7 @@ read the others when you need them.
   - [Scoring](#scoring)
   - [Reporting a result](#reporting-a-result)
   - [Command reference](#command-reference)
+  - [Reading a finished run: collapse and forks](#reading-a-finished-run-collapse-and-forks)
   - [Output and where things land](#output-and-where-things-land)
   - [When something fails](#when-something-fails)
 - [Part 2 — Adding an algorithm](#part-2--adding-an-algorithm)
@@ -293,6 +294,19 @@ train/window/return       every episode in a stretch, averaged
 eval/episode/return       what a score reads
 ```
 
+RTRRL reports six more under `update.<group>.`, where the group is `torso`,
+`actor` or `critic`. They describe what one parameter group's update asked for
+and what it got, which is what an event window around a collapse is read from:
+
+| quantity | what it is |
+| --- | --- |
+| `abs_td_error` | the TD error that group was handed; the torso's is `eta_f * delta` |
+| `used_trace_norm` | the eligibility trace this step multiplied — one accumulation *before* `trace_norm` |
+| `raw_update_norm` | `m_raw = \|\|delta * z\|\|`, the step the trace and the TD error asked for |
+| `clip_multiplier` | the factor the rule's scale handling applied |
+| `clip_fraction` | whether that factor shortened the step; the fraction is what a scope's mean of it comes to |
+| `realized_update_norm` | `\|\|dtheta\|\|`, measured on the update rather than inferred from the other two |
+
 Evaluation always reaches Aim. Training reaches it only through the scopes you name under
 `aim.training`, and each scope's interval is expressed in that scope's own unit:
 
@@ -466,7 +480,8 @@ file you keep, which is what every other decision in this facility is.
 
 ### Command reference
 
-Two subcommands. There is deliberately no `status`, `resume`, or `history`.
+Four subcommands. Two launch runs; two read finished ones and start nothing.
+There is deliberately no `status`, `resume`, or `history`.
 
 **`trainerctl run EXPERIMENT`**
 
@@ -490,6 +505,72 @@ one recoverable failure — a controller killed between a worker's last upload a
 work genuinely has not finished is reported as still running and left alone.
 
 `dev` queues are for infrastructure development; delivered runs use `run` queues.
+
+### Reading a finished run: collapse and forks
+
+Neither of these starts anything or needs an image. They read artifacts that
+already exist and write documents.
+
+**`trainerctl collapse --run ID=PATH --spec PATH`** decides, for each seed, whether
+its fixed-evaluation curve collapsed.
+
+| Flag | Default | Effect |
+| --- | --- | --- |
+| `--run ID=PATH` | none; required | One seed's run id and its `metrics.jsonl`; repeat the flag per seed |
+| `--spec PATH` | none; required | The collapse specification, in YAML or JSON |
+| `--decisions PATH` | — | Also write the decision document here |
+| `--window-steps N` | `0` | How far either side of the event the update telemetry is read |
+
+The specification is the frozen part of the result, and it is committed before
+any formal curve is read:
+
+```yaml
+metric: eval/episode/return
+random_floor: <the measured return of an unlearned policy>
+normalization: peak_to_floor   # D = (peak - value) / (peak - floor)
+decline: 0.5                   # a qualifying collapse gives back half of that
+sustain: 2                     # and holds it for two consecutive checkpoints
+recovery: 0.2                  # and has recovered at a fifth of it
+```
+
+There is no default floor; it is the return of an unlearned policy on that
+environment under that evaluation protocol, and a guessed one would decide
+every drawdown. `experiments/collapse/` holds the committed specifications.
+
+Each seed gets its own decision — `collapsed`, `steady`, `non_finite` or
+`never_learned` — carrying the spec it was decided under. Nothing is averaged
+across seeds: a collapse is an event in one run with a step attached, and the
+mean of five curves has neither that nor a checkpoint to fork from.
+
+**`trainerctl fork --parent PATH --decision PATH --into DIR`** writes the three
+branch documents for one seed's first collapse, and the manifest naming them.
+
+| Flag | Default | Effect |
+| --- | --- | --- |
+| `--parent PATH` | none; required | The collapsed run's own configuration |
+| `--decision PATH` | none; required | That seed's decision, from `collapse` |
+| `--into DIR` | none; required | Where the branch documents and manifest are written |
+| `--steps N` | `50000` | Each branch's own budget, on top of the parent's boundary |
+
+The three arms are the rule that collapsed and its two controls: `original_clip`,
+`fixed_step` and `td_out`. Their threshold `C` is read off the parent, because
+the two D-RTRRL arms are limits of *that* clip and stop being controls for it
+the moment `C` is chosen independently. The checkpoint taken is the last one
+strictly before the collapse; at it, the decline has already begun.
+
+The manifest is the format the worker already reads, so launching the branches
+is a `TRAINER_MANIFEST` pointing at it — no fork-specific job, worker or queue.
+A run can only be forked if it filed checkpoints, which it has to have declared
+before it started:
+
+```yaml
+checkpoint:
+  every_steps: 10000   # a whole number of evaluation intervals
+  keep: null           # how many to keep; null is all of them
+```
+
+Keep all of them on any run that might need forking: which boundary the fork
+wants is decided from a collapse the run has not had yet.
 
 ### Output and where things land
 
