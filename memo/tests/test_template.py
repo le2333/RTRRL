@@ -104,7 +104,9 @@ def test_the_manifest_assembles_and_steps(experiment, pins):
         SimpleNamespace(**section),
         num_envs=2,
     )
-    state = program.init(jax.random.key(int(section["seed"])))
+    # The document lists the seeds a configuration is run on; one run takes
+    # one of them, and the first is as good as any for stepping the graph.
+    state = program.init(jax.random.key(int(section["seeds"][0])))
     _, metrics = program.train(jax.random.key(1), state, 4)
 
     assert metrics.interaction.reward.shape == (2, 2)

@@ -64,13 +64,20 @@ def runtime(directory=None, keep=None, **schedule):
             program=Program(
                 init=lambda key: jnp.asarray(0, jnp.int32),
                 train=train,
+                open_evaluation=lambda key, state: state,
                 evaluate=lambda key, state, num_steps: None,
                 interact=lambda key, state: None,
             ),
             observations=OBSERVATIONS,
         ),
         config=RuntimeConfig(
-            rollout_steps=0,
+            # Nothing is measured here: what is under test is when a whole
+            # state is filed and where a run that resumes one starts, and an
+            # evaluation counted in episodes would only add a rollout the
+            # arithmetic program has no policy for.
+            evaluation_episodes=0,
+            evaluation_chunk_steps=NUM_ENVS,
+            evaluation_seed=0,
             num_envs=NUM_ENVS,
             seed=0,
             **schedule,

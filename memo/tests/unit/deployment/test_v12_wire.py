@@ -1,11 +1,11 @@
-"""Every image-side consumer projects the same serialized version-11 run.
+"""Every image-side consumer projects the same serialized version-12 run.
 
-Version 11 adds the two blocks a checkpoint fork needs: ``checkpoint``, which
-says how often a run files its whole state, and ``fork``, which says which
-filed state a run continues from. Both are optional, so a version-10 document
-means the same thing here; what makes it a new version is that a version-10
-image would reject a document carrying either, and a branch launched at one
-would silently be a fresh run.
+Version 12 adds the two blocks a checkpoint fork is made of: ``checkpoint``,
+which says how often a run files its whole state, and ``fork``, which says
+which filed state a run continues from. Both are optional, so a version-11
+document means the same thing here; what makes it a new version is that a
+version-11 image would reject a document carrying either, and a branch
+launched at one would silently be a fresh run.
 """
 
 from __future__ import annotations
@@ -21,7 +21,7 @@ from deployment.contract import CONTRACT_VERSION, Catalog
 from entries._contract import RunSpec
 from worker.envelope import WorkerEnvelope
 
-FIXTURES = Path(__file__).resolve().parents[4] / "tests" / "contracts" / "v11"
+FIXTURES = Path(__file__).resolve().parents[4] / "tests" / "contracts" / "v12"
 
 
 def read_json(name: str) -> dict:
@@ -34,7 +34,7 @@ def test_one_serialized_run_has_worker_and_entry_projections() -> None:
     worker = WorkerEnvelope.model_validate(payload)
     entry = RunSpec.model_validate(payload)
 
-    assert worker.contract == entry.contract == CONTRACT_VERSION == 11
+    assert worker.contract == entry.contract == CONTRACT_VERSION == 12
     assert worker.identity.model_dump() == entry.identity.model_dump()
     assert worker.artifacts.model_dump() == entry.artifacts.model_dump()
     assert worker.algorithm == payload["algorithm"]
@@ -96,6 +96,23 @@ def test_entry_owns_schedule_and_graph_width_validation() -> None:
         RunSpec.model_validate(payload)
 
 
+def test_manifest_names_serialized_run_documents() -> None:
+    assert read_json("manifest.json") == {
+        "runs": ["s3://artifacts/trainer/configs/stream-ac-t0.json"]
+    }
+
+
+def test_image_catalog_uses_the_deployment_contract(tmp_path: Path) -> None:
+    path = tmp_path / "catalog.json"
+    written = write_catalog(path)
+    parsed = Catalog.model_validate_json(path.read_text(encoding="utf-8"))
+
+    assert parsed == written == build_catalog()
+    assert parsed.contract == CONTRACT_VERSION
+    assert set(parsed.entries) == {"r2d2", "rtrrl", "stream_ac"}
+    assert parsed.entries["rtrrl"].command == ("python", "-m", "entries.rtrrl")
+
+
 def test_a_branch_names_its_parent_and_worker_hands_it_through() -> None:
     """Worker carries the fork block without acquiring an opinion about it.
 
@@ -115,6 +132,20 @@ def test_a_branch_names_its_parent_and_worker_hands_it_through() -> None:
     # The budget is the parent's boundary plus this branch's own 50k, on the
     # parent's step axis, so the two curves are read against the same numbers.
     assert entry.training.total_steps - entry.fork.from_steps == 50000
+    # A branch is a formal run of a configuration that was already chosen, and
+    # it carries the seed of the run it came out of.
+    assert entry.identity.role == "formal"
+    assert entry.identity.seed == entry.training.seed
+
+
+def test_a_run_that_files_its_whole_state_says_how_often_and_how_many() -> None:
+    entry = RunSpec.model_validate(read_json("run.json"))
+
+    assert entry.checkpoint is not None
+    assert entry.checkpoint.every_steps == 100
+    # Null is every one of them, which is what a run whose collapse step is not
+    # yet known has to keep.
+    assert entry.checkpoint.keep is None
 
 
 def test_a_checkpoint_that_is_not_a_measurement_is_refused() -> None:
@@ -141,20 +172,3 @@ def test_a_branch_with_no_budget_beyond_its_parent_is_refused() -> None:
 
     with pytest.raises(ValidationError, match="must exceed the boundary"):
         RunSpec.model_validate(payload)
-
-
-def test_manifest_names_serialized_run_documents() -> None:
-    assert read_json("manifest.json") == {
-        "runs": ["s3://artifacts/trainer/configs/stream-ac-t0.json"]
-    }
-
-
-def test_image_catalog_uses_the_deployment_contract(tmp_path: Path) -> None:
-    path = tmp_path / "catalog.json"
-    written = write_catalog(path)
-    parsed = Catalog.model_validate_json(path.read_text(encoding="utf-8"))
-
-    assert parsed == written == build_catalog()
-    assert parsed.contract == CONTRACT_VERSION
-    assert set(parsed.entries) == {"r2d2", "rtrrl", "stream_ac"}
-    assert parsed.entries["rtrrl"].command == ("python", "-m", "entries.rtrrl")

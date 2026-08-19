@@ -15,6 +15,8 @@ def test_aim_needs_only_an_endpoint_metadata_and_parameters(tmp_path):
         experiment="experiment",
         launch_id="launch",
         trial=0,
+        seed=0,
+        role="tuning",
         entry="stream_ac",
         digest="local@sha256:" + "a" * 64,
     )
@@ -38,6 +40,8 @@ def test_aim_keeps_every_scalar_report_and_same_step_names(tmp_path):
         experiment="experiment",
         launch_id="launch",
         trial=0,
+        seed=0,
+        role="tuning",
         entry="stream_ac",
         digest="local@sha256:" + "a" * 64,
     )

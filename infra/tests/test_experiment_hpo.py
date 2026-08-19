@@ -35,12 +35,12 @@ def test_a_configuration_is_partitioned_by_its_consumers(
         "evaluation",
         "logging",
     }
-    assert first["contract"] == 10
+    assert first["contract"] == 11
     assert first["identity"]["experiment"] == "streamac-test"
     assert first["entry"] == "stream_ac"
     assert first["identity"]["digest"] == DIGEST
     assert (first["identity"]["trial"], second["identity"]["trial"]) == (0, 1)
-    assert first["identity"]["run_id"] == f"stream-ac-test-{LAUNCH}-t0"
+    assert first["identity"]["run_id"] == f"stream-ac-test-{LAUNCH}-t0-s0"
     assert first["identity"]["launch_id"] == LAUNCH
 
 
@@ -50,18 +50,15 @@ def test_experiment_fields_are_projected_to_their_consumers(
     configuration = runner(experiment, catalog, tmp_path).next_round()[0]
 
     environment = dict(experiment["environment"])
-    del environment["seed"]
+    del environment["seeds"]
     assert configuration["algorithm"]["environment"] == environment
     assert configuration["algorithm"]["num_envs"] == experiment["training"]["num_envs"]
     assert configuration["training"] == {
-        "seed": experiment["environment"]["seed"],
+        "seed": experiment["environment"]["seeds"][0],
         "total_steps": experiment["training"]["total_steps"],
         "chunk_steps": experiment["training"]["chunk_steps"],
     }
-    assert configuration["evaluation"] == {
-        "every_steps": experiment["evaluation"]["every_steps"],
-        "rollout_steps": experiment["evaluation"]["rollout_steps"],
-    }
+    assert configuration["evaluation"] == experiment["evaluation"]
 
 
 def test_each_run_has_one_artifact_root(experiment: Any, catalog: Any, tmp_path: Path) -> None:
@@ -70,8 +67,8 @@ def test_each_run_has_one_artifact_root(experiment: Any, catalog: Any, tmp_path:
     first, second = runner(experiment, catalog, tmp_path).next_round()
     root = f"s3://artifacts/trainer/streamac-test/{LAUNCH}"
 
-    assert first["artifacts"]["root"] == f"{root}/stream-ac-test-{LAUNCH}-t0"
-    assert second["artifacts"]["root"] == f"{root}/stream-ac-test-{LAUNCH}-t1"
+    assert first["artifacts"]["root"] == f"{root}/stream-ac-test-{LAUNCH}-t0-s0"
+    assert second["artifacts"]["root"] == f"{root}/stream-ac-test-{LAUNCH}-t1-s0"
     assert "score" not in first
     assert first["logging"]["rerun"] == {"log_every_steps": 100}
 
@@ -95,41 +92,6 @@ def test_a_run_files_checkpoints_only_when_the_experiment_asks_for_them(
         assert configuration["checkpoint"] == {"every_steps": 100, "keep": None}
         # Copied, so the emitted document shares nothing with the experiment.
         assert configuration["checkpoint"] is not experiment["checkpoint"]
-
-
-def test_a_formal_launch_must_run_one_of_the_seeds_it_declared_fresh(
-    experiment: Any, catalog: Any, tmp_path: Path
-) -> None:
-    """The failure this catches is a file copied from the tuning launch.
-
-    It keeps the tuning seed, and five runs of it report the seed that chose
-    the configuration as an independent sample of it.
-    """
-
-    experiment["formal"] = {"seeds": [11, 12, 13, 14, 15], "tuning_seed": 0}
-
-    with pytest.raises(ExperimentError, match="formal set"):
-        runner(experiment, catalog, tmp_path)
-
-    experiment["environment"]["seed"] = 11
-    assert runner(experiment, catalog, tmp_path).next_round()
-
-    experiment["formal"]["tuning_seed"] = 11
-    with pytest.raises(ExperimentError, match="cannot be evaluated on the seed"):
-        runner(experiment, catalog, tmp_path)
-
-
-def test_a_formal_block_that_cannot_be_checked_starts_nothing(
-    experiment: Any, catalog: Any, tmp_path: Path
-) -> None:
-    experiment["formal"] = {"seeds": [11, 11], "tuning_seed": 0}
-    experiment["environment"]["seed"] = 11
-    with pytest.raises(ExperimentError, match="not distinct"):
-        runner(experiment, catalog, tmp_path)
-
-    experiment["formal"] = {"seeds": [11]}
-    with pytest.raises(ExperimentError, match="does not say"):
-        runner(experiment, catalog, tmp_path)
 
 
 def test_rerun_gets_no_destination_when_it_is_off(
@@ -227,7 +189,13 @@ def test_two_rounds_score_out_of_order_metric_artifacts_before_asking_next(
             metrics.write_text(
                 f'{{"step": 200, "metrics": {{"eval/episode/return_per_step": {trial}.0}}}}\n'
             )
-            results.append({"trial": trial, "value": compute_score(metrics, score)})
+            results.append(
+                {
+                    "trial": trial,
+                    "seed": configuration["identity"]["seed"],
+                    "value": compute_score(metrics, score),
+                }
+            )
         return tuple(results)
 
     study = runner(experiment, catalog, tmp_path).run(execute)
@@ -255,7 +223,13 @@ def score_written_artifacts(
             metrics.write_text(
                 f'{{"step": 200, "metrics": {{"eval/episode/return_per_step": {trial}.0}}}}\n'
             )
-            results.append({"trial": trial, "value": compute_score(metrics, score)})
+            results.append(
+                {
+                    "trial": trial,
+                    "seed": configuration["identity"]["seed"],
+                    "value": compute_score(metrics, score),
+                }
+            )
         return tuple(results)
 
     return score_round
@@ -359,6 +333,7 @@ def test_an_incomplete_round_result_fails_every_asked_trial(
         return (
             {
                 "trial": first["identity"]["trial"],
+                "seed": first["identity"]["seed"],
                 "value": 1.0,
             },
         )

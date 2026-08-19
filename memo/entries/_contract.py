@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from typing import Literal
+
 from pydantic import BaseModel, ConfigDict, model_validator
 
 from deployment.contract import ContractVersion
@@ -13,11 +15,30 @@ class _Frozen(BaseModel):
 
 
 class RunIdentity(_Frozen):
+    """Which run this is, in terms that survive into the artifact.
+
+    ``trial`` names the configuration and ``seed`` names the repetition of it,
+    because a configuration is run on a list of seeds and the two together are
+    what is unique. ``role`` says which protocol the run belongs to: a tuning
+    run chose the configuration, a formal run measures a configuration that
+    was already chosen, and only the second may be reported. Both are carried
+    here rather than inferred later, so that a result found on its own can
+    still say what it is allowed to be used for.
+    """
+
     run_id: str
     experiment: str
     launch_id: str
     trial: int
+    seed: int
+    role: Literal["tuning", "formal"]
     digest: str
+
+    @model_validator(mode="after")
+    def _usable(self) -> "RunIdentity":
+        if self.seed < 0:
+            raise ValueError("seed must not be negative")
+        return self
 
 
 class Artifacts(_Frozen):
@@ -86,17 +107,38 @@ class TrainingSpec(_Frozen):
 
 
 class EvaluationSpec(_Frozen):
-    """How often the policy is measured, and for how long each time."""
+    """How often the policy is measured, on how much, and under whose keys.
+
+    ``episodes`` is the measurement: a checkpoint is scored on exactly this
+    many complete episodes, and zero measures nothing. It is not a step budget
+    -- how long those episodes run is what the policy decides, and asking for
+    steps instead is what makes the count vary with the task and the policy,
+    which is the thing a formal protocol may not let vary.
+
+    ``chunk_steps`` is only how much of that rollout one call may hold, the
+    same kind of memory bound as the training block's, and it says nothing
+    about how much is run.
+
+    ``seed`` opens the evaluation's own key stream. Declaring it is what lets
+    two methods be measured on the same evaluation episodes, and what keeps
+    the training stream from moving because a measurement was taken.
+    """
 
     every_steps: int
-    rollout_steps: int
+    episodes: int
+    chunk_steps: int
+    seed: int
 
     @model_validator(mode="after")
     def _usable(self) -> "EvaluationSpec":
         if self.every_steps < 1:
             raise ValueError("evaluation every_steps must be positive")
-        if self.rollout_steps < 0:
-            raise ValueError("rollout_steps must not be negative")
+        if self.episodes < 0:
+            raise ValueError("evaluation episodes must not be negative")
+        if self.chunk_steps < 1:
+            raise ValueError("evaluation chunk_steps must be positive")
+        if self.seed < 0:
+            raise ValueError("evaluation seed must not be negative")
         return self
 
 
@@ -273,6 +315,10 @@ class RunSpec(_Frozen):
         if self.evaluation.every_steps % streams:
             raise ValueError(
                 "evaluation every_steps must contain whole environment steps"
+            )
+        if self.evaluation.chunk_steps % streams:
+            raise ValueError(
+                "evaluation chunk_steps must contain whole environment steps"
             )
         if self.training.total_steps % self.evaluation.every_steps:
             raise ValueError("total_steps must consist of whole evaluation intervals")

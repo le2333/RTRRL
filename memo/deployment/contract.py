@@ -9,7 +9,7 @@ from pydantic import BaseModel, ConfigDict, model_validator
 # The version is written once, as the type. ``Literal`` will not take a name,
 # so the constant is read back out of it rather than spelled a second time
 # where the two could drift apart.
-ContractVersion: TypeAlias = Literal[11]
+ContractVersion: TypeAlias = Literal[12]
 CONTRACT_VERSION: ContractVersion = get_args(ContractVersion)[0]
 
 

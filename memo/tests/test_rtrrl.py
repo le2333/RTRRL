@@ -359,22 +359,30 @@ def test_an_ending_restores_the_emphasis_and_gamma_decays_it_otherwise():
 # ------------------------------------------------- evaluation leaves nothing
 
 
-def test_evaluation_hands_back_readings_and_no_state():
-    """The two checks that used to live here are unrepresentable now.
+def test_evaluation_carries_a_state_of_its_own_and_leaves_training_alone():
+    """The state an evaluation hands back is the evaluation's, not training's.
 
-    "No parameter moved" and "it began on a fresh sequence" needed an evaluation
-    state to compare; there is none to hand out. That is the guarantee, and the
-    return type is what carries it.
+    A checkpoint is scored on a number of episodes, so the rollout has to
+    survive between calls and therefore has to be handed back. What keeps that
+    from becoming an update is where it came from: ``open_evaluation`` builds
+    it on a fresh environment and sequence, so nothing that reaches the caller
+    is the training state, and the training state is not touched by any of it.
     """
 
-    trained = run(build(), 6)
+    agent = build()
+    trained = run(agent, 6)
     kept = jax.tree.map(jnp.copy, trained.core)
-    evaluated = build().evaluate(jax.random.key(2), trained, 4 * ENVS)
 
-    assert not isinstance(evaluated, tuple)
+    opened = agent.open_evaluation(jax.random.key(2), trained)
+    advanced, evaluated = agent.evaluate(jax.random.key(3), opened, 4 * ENVS)
+
     assert evaluated.interaction.reward is not None
     assert evaluated.update is None, "nothing is updated during an evaluation"
     assert max(moved(trained, trained.replace(core=kept)).values()) == 0.0
+    # Opened on its own environment, and advanced from there: neither the
+    # rollout it starts nor the one it hands on is the training one.
+    assert int(advanced.step) != int(trained.step)
+    assert max(moved(advanced, advanced.replace(core=kept)).values()) == 0.0
 
 
 # ------------------------------------------------------------------ meta-rl

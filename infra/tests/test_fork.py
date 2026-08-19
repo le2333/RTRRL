@@ -27,22 +27,24 @@ from trainer_infra.fork import (
     threshold,
 )
 
-CONTRACT = Path(__file__).resolve().parents[2] / "tests" / "contracts" / "v11"
+CONTRACT = Path(__file__).resolve().parents[2] / "tests" / "contracts" / "v12"
 CLIP = 2.5
 
 
 def parent(**overrides):
     document = {
-        "contract": 11,
+        "contract": 12,
         "identity": {
-            "run_id": "rtrrl-r2-halfcheetah-t0",
+            "run_id": "rtrrl-r2-halfcheetah-t0-s11",
             "experiment": "rtrrl-issue45-r2",
             "launch_id": "20260817-000000",
             "trial": 0,
+            "seed": 11,
+            "role": "formal",
             "digest": "sha256:abc",
         },
         "entry": "rtrrl",
-        "artifacts": {"root": "s3://bucket/rtrrl-issue45-r2/launch/run-t0"},
+        "artifacts": {"root": "s3://bucket/rtrrl-issue45-r2/launch/run-t0-s11"},
         "algorithm": {
             "environment": {
                 "id": "brax::halfcheetah",
@@ -61,7 +63,12 @@ def parent(**overrides):
             },
         },
         "training": {"seed": 11, "total_steps": 1000000, "chunk_steps": 10000},
-        "evaluation": {"every_steps": 10000, "rollout_steps": 5000},
+        "evaluation": {
+            "every_steps": 10000,
+            "episodes": 5,
+            "chunk_steps": 5000,
+            "seed": 7,
+        },
         "checkpoint": {"every_steps": 10000, "keep": None},
         "logging": {"aim": {"url": "aim://aim:53800"}},
     }
@@ -80,7 +87,7 @@ def branches(**overrides):
 
 def by_name(documents):
     return {
-        document["identity"]["run_id"].rsplit("-t0-", 1)[1]: document
+        document["identity"]["run_id"].rsplit("-s11-", 1)[1]: document
         for document in documents
     }
 
@@ -89,9 +96,9 @@ def test_the_three_arms_are_the_rule_that_collapsed_and_its_two_controls():
     found = branches()
 
     assert [document["identity"]["run_id"] for document in found] == [
-        "rtrrl-r2-halfcheetah-t0-original-clip",
-        "rtrrl-r2-halfcheetah-t0-fixed-step",
-        "rtrrl-r2-halfcheetah-t0-td-out",
+        "rtrrl-r2-halfcheetah-t0-s11-original-clip",
+        "rtrrl-r2-halfcheetah-t0-s11-fixed-step",
+        "rtrrl-r2-halfcheetah-t0-s11-td-out",
     ]
     assert ARMS == ("original_clip", "fixed_step", "td_out")
     assert [document["identity"]["trial"] for document in found] == [0, 1, 2]
@@ -179,13 +186,27 @@ def test_a_branch_continues_its_parents_step_axis():
         assert document["evaluation"] == parent()["evaluation"]
 
 
+def test_a_branch_is_the_same_repetition_of_the_same_configuration():
+    """The seed and the role are the parent's; only the trial distinguishes arms.
+
+    A branch that renumbered the seed would claim to be another sample of the
+    configuration, when it is the same run continued under another rule -- and
+    a branch that called itself tuning would be a formal result nothing may
+    report.
+    """
+
+    for document in branches():
+        assert document["identity"]["seed"] == parent()["identity"]["seed"]
+        assert document["identity"]["role"] == "formal"
+
+
 def test_a_branch_writes_beside_its_parent_and_files_no_checkpoints_of_its_own():
     roots = {document["artifacts"]["root"] for document in branches()}
 
     assert roots == {
-        "s3://bucket/rtrrl-issue45-r2/launch/rtrrl-r2-halfcheetah-t0-original-clip",
-        "s3://bucket/rtrrl-issue45-r2/launch/rtrrl-r2-halfcheetah-t0-fixed-step",
-        "s3://bucket/rtrrl-issue45-r2/launch/rtrrl-r2-halfcheetah-t0-td-out",
+        "s3://bucket/rtrrl-issue45-r2/launch/rtrrl-r2-halfcheetah-t0-s11-original-clip",
+        "s3://bucket/rtrrl-issue45-r2/launch/rtrrl-r2-halfcheetah-t0-s11-fixed-step",
+        "s3://bucket/rtrrl-issue45-r2/launch/rtrrl-r2-halfcheetah-t0-s11-td-out",
     }
     # A 50k branch has nothing to fork from itself, and the parent's block
     # would otherwise make three more copies of the state.

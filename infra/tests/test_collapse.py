@@ -30,7 +30,7 @@ from trainer_infra.collapse import (
 
 FLOOR = 0.0
 PEAK = 100.0
-EXPERIMENTS = Path(__file__).resolve().parents[2] / "experiments"
+SPECIFICATIONS = Path(__file__).resolve().parents[2] / "experiments" / "collapse"
 
 
 def spec(**overrides) -> CollapseSpec:
@@ -204,8 +204,10 @@ def test_the_committed_specifications_are_the_frozen_part_of_the_result():
 
     import yaml
 
-    for name in ("collapse halfcheetah.yaml", "collapse hopper.yaml"):
-        declared = yaml.safe_load((EXPERIMENTS / name).read_text(encoding="utf-8"))
+    for name in ("halfcheetah.yaml", "hopper.yaml"):
+        declared = yaml.safe_load(
+            (SPECIFICATIONS / name).read_text(encoding="utf-8")
+        )
         assert declared["metric"] == "eval/episode/return"
         assert declared["normalization"] == "peak_to_floor"
         assert (declared["decline"], declared["sustain"], declared["recovery"]) == (

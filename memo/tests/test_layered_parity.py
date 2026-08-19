@@ -153,10 +153,19 @@ def _driven(module, *, normalize, evaluation, run_eval):
     state, metrics = agent.train(jax.random.key(1), state, ROUNDS * ENVS)
     readings = None
     if run_eval:
-        evaluated = agent.evaluate(jax.random.key(2), state, ROUNDS * ENVS)
-        # The layered kernel hands back readings alone, which is what stops an
-        # evaluation state being carried into training by accident.
-        readings = evaluated[1] if module is flat else evaluated
+        # Opening the rollout is a step of its own in the layered kernel now,
+        # so the split the flat one still does inside ``evaluate`` is done
+        # here instead: same two keys to the same two jobs, which is what
+        # keeps this a comparison of the arithmetic. Both hand back a pair,
+        # and the readings are its second half.
+        reset_key, rollout_key = jax.random.split(jax.random.key(2))
+        opened = state if module is flat else agent.open_evaluation(reset_key, state)
+        evaluated = (
+            agent.evaluate(jax.random.key(2), opened, ROUNDS * ENVS)
+            if module is flat
+            else agent.evaluate(rollout_key, opened, ROUNDS * ENVS)
+        )
+        readings = evaluated[1]
     return state, metrics, readings
 
 

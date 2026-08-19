@@ -1,49 +1,37 @@
 # Issue 45 R2, primary environment: characterize Original RTRRL's collapse on
 # masked HalfCheetah, and keep enough state to branch from it.
 #
-# This is the formal shape -- 1M environment steps, one of five fresh seeds per
-# launch -- not a smoke run. Three things make it a collapse experiment rather
-# than a training run:
+# A formal launch under the protocol issue 46 declares: five fresh seeds, a
+# `selection` block saying which trial was frozen and which seeds tuned it,
+# fixed-episode evaluation, and AUC as the primary score. What issue 45 adds to
+# that shape is one block and one reason:
 #
-#   1. `checkpoint` is on and keeps everything. Which boundary R3.4 forks from
-#      is decided from a collapse this run has not had yet, so nothing here can
-#      know which state to keep and the answer is all of them. At 10k intervals
-#      that is 100 objects per run, each the whole learner: parameters, traces,
-#      Adam moments, the recurrent carry and its differentiation state, the
-#      environment, the normalization statistics and the PRNG.
-#   2. `logging.aim.training.step` is on. The event-aligned window the analysis
-#      reads comes from `metrics.jsonl`, which keeps every episode's reduction
-#      of the six per-group update-scale readings whatever this block says --
-#      that part is not configurable. What the step scope adds is the
-#      moment-by-moment reading on the dashboard, which is how the transitions
-#      inside a collapse get looked at rather than summarized.
-#   3. The seeds are declared fresh and checked against the tuning seed.
+#   `checkpoint` is on and keeps everything. Which boundary R3.4 forks from is
+#   decided from a collapse this run has not had yet, so nothing here can know
+#   which state to keep and the answer is all of them. At 10k intervals that is
+#   100 objects per run, each the whole learner: parameters, traces, Adam
+#   moments, the recurrent carry and its differentiation state, the
+#   environment, the normalization statistics and the PRNG.
 #
 # Read afterwards with:
 #
-#   trainerctl collapse --spec collapse-halfcheetah.json \
+#   trainerctl collapse --spec experiments/collapse/halfcheetah.yaml \
 #       --run <run-id>=<metrics.jsonl> ... --window-steps 50000
 #   trainerctl fork --parent <that run's config> --decision <its decision> \
 #       --into <directory> --steps 50000
 #
 # The floor and the drawdown formula belong in the collapse spec and must be
-# frozen before any of this is read. They are not in this file because they are
-# not a property of the run.
-#
-# The primary formal metric is fixed-evaluation AUC, which #46 owns; `score`
-# here is the secondary reading -- the mean over the last five checkpoints --
-# because the control plane needs one number per trial and this run is not a
-# search.
+# frozen before any of this is read. They are not here because they are not a
+# property of the run.
 
 experiment: rtrrl-issue45-r2
 name: rtrrl-issue45-r2-halfcheetah
 description: "Issue 45 R2: Original RTRRL collapse on masked HalfCheetah, 1M steps"
 
-# NOTE: this digest is the image from before the checkpoint/telemetry change and
-# is here to be replaced by the one built from this commit. It cannot silently
-# run the old code: that image's catalog declares contract 10, and its Entry
-# refuses a run document carrying a `checkpoint` block.
-image: 007122174918.dkr.ecr.eu-north-1.amazonaws.com/rtrrl@sha256:7ca201c304dc6a38dc45d8142cfc05d1ec4deb3046e9e8e3594b4ff635cfd32d
+# TODO: the contract-12 rebuild of the RTRRL image. It cannot silently run the
+# old code -- an image whose catalog declares an earlier contract has an Entry
+# that refuses a run document carrying a `checkpoint` block.
+image: TBD
 entry: rtrrl
 storage: s3://rtrrl-artifacts-007122174918/trainer
 
@@ -54,15 +42,19 @@ environment:
   id: brax::halfcheetah
   backend: spring
   observed: [0, 1, 2, 3, 4, 5, 6, 7, 8]
-  seed: 11
+  # Five fresh seeds, which is the protocol's count for Brax. Every one of them
+  # runs the same frozen configuration; none of them chose it.
+  seeds: [11, 12, 13, 14, 15]
   episode_length: 1000
 
-# The fresh seeds this environment's formal results are drawn from, and the
-# tuning seed they must not overlap. One launch runs one of them: change
-# `environment.seed` above and launch again with a new --launch-id.
-formal:
-  seeds: [11, 12, 13, 14, 15]
-  tuning_seed: 0
+# What makes this launch formal, and what it is claiming: the configuration was
+# frozen from this study's trial, tuned on seeds the list above does not
+# contain. The check is what stops a file copied from the tuning launch from
+# reporting the seed that chose the configuration as a sample of it.
+selection:
+  study: rtrrl-issue45-tuning
+  trial: 0
+  tuning_seeds: [0]
 
 training:
   num_envs: 1
@@ -71,7 +63,12 @@ training:
 
 evaluation:
   every_steps: 10000
-  rollout_steps: 5000
+  # The protocol's count for Brax.
+  episodes: 5
+  chunk_steps: 5000
+  # Declared, so the arms and the branches of this run are measured on paired
+  # evaluation episodes rather than merely on the same number of them.
+  seed: 1000
 
 # Every boundary, and every one of them kept.
 checkpoint:
@@ -82,19 +79,19 @@ logging:
   aim:
     url: aim://172.31.62.192:53801
     training:
-      # The update-scale readings at one moment, for looking at the collapse
-      # transition by transition on the dashboard.
+      # The dashboard's view of the update scale at one moment. The window the
+      # collapse analysis reads comes from `metrics.jsonl`, which keeps every
+      # episode's reduction of the six per-group readings whatever this says.
       step:
         every_steps: 1000
-      # And the same run's episode returns, to see the training curve beside
-      # the evaluation one without sending a point per episode.
       window:
         every_steps: 10000
 
 score:
   metric: eval/episode/return
-  window_steps: [950000, 1000000]
-  reduce: mean
+  window_steps: [0, 1000000]
+  reduce: auc
+  episodes_per_checkpoint: 5
   non_finite: worst
   direction: maximize
 
@@ -102,8 +99,8 @@ compute:
   instance_type: c7a.large
   timeout_minutes: 1440
 
-# No search. This is Original RTRRL at the configuration R2 selected, run on a
-# fresh seed; a search would make the seed a tuning seed again.
+# No search: a formal launch runs the configuration it froze, and every leaf
+# below offers exactly one value.
 hpo:
   rounds: 1
   trials_per_round: 1

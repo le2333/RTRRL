@@ -1,20 +1,21 @@
 # Issue 45 R2, secondary environment: the same characterization on masked
 # Hopper. Identical in everything but the environment and the seed set, which
 # is the point -- a collapse that happens on one task and not the other is a
-# statement about the task, and that comparison only holds if the protocol,
-# the budget, the checkpoint schedule and the telemetry are the same.
+# statement about the task, and that comparison only holds if the protocol, the
+# budget, the checkpoint schedule and the telemetry are the same.
 #
 # See `rtrrl issue45 r2 halfcheetah.yaml` for what each block is for. The seeds
-# are a different set from HalfCheetah's because they are fresh per
-# environment, and neither set contains the tuning seed.
+# are a different set because they are fresh per environment, and neither set
+# contains a seed that tuned the configuration.
 
 experiment: rtrrl-issue45-r2
 name: rtrrl-issue45-r2-hopper
 description: "Issue 45 R2: Original RTRRL collapse on masked Hopper, 1M steps"
 
-# The pre-change image, to be replaced by the one built from this commit; see
-# the HalfCheetah file for why it cannot silently run the old code.
-image: 007122174918.dkr.ecr.eu-north-1.amazonaws.com/rtrrl@sha256:7ca201c304dc6a38dc45d8142cfc05d1ec4deb3046e9e8e3594b4ff635cfd32d
+# TODO: the contract-12 rebuild of the RTRRL image. It cannot silently run the
+# old code -- an image whose catalog declares an earlier contract has an Entry
+# that refuses a run document carrying a `checkpoint` block.
+image: TBD
 entry: rtrrl
 storage: s3://rtrrl-artifacts-007122174918/trainer
 
@@ -23,12 +24,19 @@ environment:
   id: brax::hopper
   backend: spring
   observed: [0, 2, 4, 6, 8, 10]
-  seed: 21
+  # Five fresh seeds, which is the protocol's count for Brax. Every one of them
+  # runs the same frozen configuration; none of them chose it.
+  seeds: [21, 22, 23, 24, 25]
   episode_length: 1000
 
-formal:
-  seeds: [21, 22, 23, 24, 25]
-  tuning_seed: 0
+# What makes this launch formal, and what it is claiming: the configuration was
+# frozen from this study's trial, tuned on seeds the list above does not
+# contain. The check is what stops a file copied from the tuning launch from
+# reporting the seed that chose the configuration as a sample of it.
+selection:
+  study: rtrrl-issue45-tuning
+  trial: 0
+  tuning_seeds: [1]
 
 training:
   num_envs: 1
@@ -37,8 +45,14 @@ training:
 
 evaluation:
   every_steps: 10000
-  rollout_steps: 5000
+  # The protocol's count for Brax.
+  episodes: 5
+  chunk_steps: 5000
+  # Declared, so the arms and the branches of this run are measured on paired
+  # evaluation episodes rather than merely on the same number of them.
+  seed: 1000
 
+# Every boundary, and every one of them kept.
 checkpoint:
   every_steps: 10000
   keep: null
@@ -47,8 +61,9 @@ logging:
   aim:
     url: aim://172.31.62.192:53801
     training:
-      # The dashboard's view of the update scale at one moment; the analysis
-      # reads the per-episode reduction out of `metrics.jsonl` either way.
+      # The dashboard's view of the update scale at one moment. The window the
+      # collapse analysis reads comes from `metrics.jsonl`, which keeps every
+      # episode's reduction of the six per-group readings whatever this says.
       step:
         every_steps: 1000
       window:
@@ -56,8 +71,9 @@ logging:
 
 score:
   metric: eval/episode/return
-  window_steps: [950000, 1000000]
-  reduce: mean
+  window_steps: [0, 1000000]
+  reduce: auc
+  episodes_per_checkpoint: 5
   non_finite: worst
   direction: maximize
 
@@ -65,6 +81,8 @@ compute:
   instance_type: c7a.large
   timeout_minutes: 1440
 
+# No search: a formal launch runs the configuration it froze, and every leaf
+# below offers exactly one value.
 hpo:
   rounds: 1
   trials_per_round: 1
@@ -88,6 +106,9 @@ space:
         b1: [0.9]
         b2: [0.999]
         eps: [0.00000001]
+    # The original clip. This is the `C` the R3.4 arms are written over --
+    # `trainerctl fork` reads it off this run's document rather than taking it
+    # from anywhere else, so the two arms stay limits of *this* bound.
     grad_clip: [1.0]
     follow: [1.0]
   heads:

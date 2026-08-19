@@ -31,7 +31,8 @@ from memorax.runtime import (
 from tests.support.fakes import EpisodeRecorder as Recorder
 from tests.support.programs import (
     EPOCH_STEPS,
-    EVAL_STEPS,
+    EVAL_CHUNK_STEPS,
+    EVAL_EPISODES,
     NUM_ENVS,
     SERIES,
     TOTAL_STEPS,
@@ -40,12 +41,14 @@ from tests.support.programs import (
 
 
 def run_arithmetic(recorder, **overrides):
-    init_fn, train_fn, evaluate_fn, interact_fn = arithmetic_program()
+    init_fn, train_fn, open_fn, evaluate_fn, interact_fn = arithmetic_program()
     settings: dict[str, Any] = {
         "total_steps": TOTAL_STEPS,
         "chunk_steps": EPOCH_STEPS,
         "evaluate_every_steps": EPOCH_STEPS,
-        "rollout_steps": EVAL_STEPS,
+        "evaluation_episodes": EVAL_EPISODES,
+        "evaluation_chunk_steps": EVAL_CHUNK_STEPS,
+        "evaluation_seed": 3,
         "num_envs": NUM_ENVS,
         "seed": 0,
         # Four transitions is what the arithmetic's longest episode runs to, so
@@ -59,6 +62,7 @@ def run_arithmetic(recorder, **overrides):
             program=Program(
                 init=init_fn,
                 train=train_fn,
+                open_evaluation=open_fn,
                 evaluate=evaluate_fn,
                 interact=interact_fn,
             ),
@@ -200,7 +204,7 @@ def test_an_evaluation_episode_carries_the_trajectory_it_walked():
 
 def test_evaluation_can_be_switched_off_entirely():
     recorder = Recorder()
-    run_arithmetic(recorder, rollout_steps=0)
+    run_arithmetic(recorder, evaluation_episodes=0)
 
     assert not recorder.of("eval")
     assert len(recorder.of("train")) == 4

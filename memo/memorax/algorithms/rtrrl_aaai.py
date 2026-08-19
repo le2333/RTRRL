@@ -1392,7 +1392,7 @@ class RTRRL:
 
         return num_steps // num_envs
 
-    def _evaluation_state(self, key: Any, state: RTRRLState) -> RTRRLState:
+    def open_evaluation(self, key: Any, state: RTRRLState) -> RTRRLState:
         """The trained parameters, opened on a fresh environment and sequence."""
 
         obs, env_state = self.environment.init(key)
@@ -1419,12 +1419,16 @@ class RTRRL:
         keys = jax.random.split(key, scan_steps)
         return jax.lax.scan(self.train_step, state, keys)
 
-    def evaluate(self, key: Any, state: RTRRLState, num_steps: int) -> StepMetrics:
-        """A rollout that leaves nothing behind."""
+    def evaluate(
+        self, key: Any, state: RTRRLState, num_steps: int
+    ) -> tuple[RTRRLState, StepMetrics]:
+        """Advance an opened evaluation rollout, learning nothing from it.
 
-        reset_key, rollout_key = jax.random.split(key)
-        eval_state = self._evaluation_state(reset_key, state)
+        ``state`` is what ``open_evaluation`` returned, or what an earlier call
+        to this handed back: an evaluation runs until it has the episodes it
+        was asked for, and one call is only as much of it as a scan may hold.
+        """
+
         scan_steps = self._num_scan_steps(num_steps, self.cfg.num_envs)
-        keys = jax.random.split(rollout_key, scan_steps)
-        _, metrics = jax.lax.scan(self.evaluate_step, eval_state, keys)
-        return metrics
+        keys = jax.random.split(key, scan_steps)
+        return jax.lax.scan(self.evaluate_step, state, keys)

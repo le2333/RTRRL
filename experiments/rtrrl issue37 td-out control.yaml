@@ -44,7 +44,7 @@ environment:
   id: brax::hopper
   backend: spring
   observed: [0, 2, 4, 6, 8, 10]
-  seed: 0
+  seeds: [0]
   episode_length: 1000
 
 training:
@@ -54,7 +54,9 @@ training:
 
 evaluation:
   every_steps: 1000
-  rollout_steps: 1000
+  episodes: 1
+  chunk_steps: 1000
+  seed: 1000
 
 logging:
   aim:

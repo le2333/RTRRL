@@ -92,7 +92,9 @@ def arm_parameters(parent: Mapping[str, Any]) -> dict[str, dict[str, Any]]:
     return arms
 
 
-def replacing(parent: Mapping[str, Any], overrides: Mapping[str, Any]) -> tuple[str, ...]:
+def replacing(
+    parent: Mapping[str, Any], overrides: Mapping[str, Any]
+) -> tuple[str, ...]:
     """Which state the branch supplies itself, from what its rule changed.
 
     One rule state covers both groups, so a change to either group's optimizer
@@ -175,8 +177,19 @@ def branch_documents(
                     key: value
                     for key, value in parent.items()
                     # Rebuilt below, or belonging to the parent alone.
-                    if key not in {"identity", "artifacts", "algorithm", "training", "checkpoint"}
+                    if key
+                    not in {
+                        "identity",
+                        "artifacts",
+                        "algorithm",
+                        "training",
+                        "checkpoint",
+                    }
                 },
+                # The seed and the role are the parent's: a branch is the same
+                # repetition of the same configuration, continued under another
+                # rule. Only the trial changes, because the three arms are three
+                # configurations of it.
                 "identity": {**parent["identity"], "run_id": run_id, "trial": trial},
                 "artifacts": {"root": _sibling(parent["artifacts"]["root"], run_id)},
                 "algorithm": {

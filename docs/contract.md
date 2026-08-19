@@ -1,8 +1,8 @@
-# 训练部署契约 v11
+# 训练部署契约 v12
 
-Infra、训练镜像中的 Worker 和 Entry 不共享 Python 类型。跨环境接口是版本化 JSON，当前版本为 `11`。同一份序列化 fixture 位于 `tests/contracts/v11/`，各接收方只解析自己消费的投影。
+Infra、训练镜像中的 Worker 和 Entry 不共享 Python 类型。跨环境接口是版本化 JSON，当前版本为 `12`。同一份序列化 fixture 位于 `tests/contracts/v12/`，各接收方只解析自己消费的投影。
 
-v11 相对 v10 新增两个可选块：`checkpoint`（这次运行多久归档一次完整状态）和 `fork`（这次运行从哪份归档状态继续）。两者都可省略，省略时文档语义与 v10 完全相同；升版的理由是反向不兼容——v10 的镜像会拒绝带这两个块的文档，于是在旧镜像上启动的分支会静默变成一次全新运行。
+v12 相对 v11 新增两个可选块：`checkpoint`（这次运行多久归档一次完整状态）和 `fork`（这次运行从哪份归档状态继续）。两者都可省略，省略时文档语义与 v11 完全相同；升版的理由是反向不兼容——v11 的镜像会拒绝带这两个块的文档，于是在旧镜像上启动的分支会静默变成一次全新运行。
 
 ## Catalog
 
@@ -16,7 +16,7 @@ python -m deployment.catalog --print-label
 
 ```json
 {
-  "contract": 11,
+  "contract": 12,
   "entries": {
     "stream_ac": {
       "command": ["python", "-m", "entries.stream_ac"],
@@ -41,15 +41,17 @@ Infra 从镜像产物读取 Catalog，不导入训练代码。
 
 ## 实验配置与运行配置
 
-实验 YAML 属于 Infra，包含镜像、计算资源、HPO、搜索空间和评分策略。Infra 根据 Catalog 验证并采样，然后为每个 trial 生成嵌套运行配置：
+实验 YAML 属于 Infra，包含镜像、计算资源、HPO、搜索空间和评分策略。Infra 根据 Catalog 验证并采样，然后为每个 (trial, seed) 生成嵌套运行配置——实验 YAML 的 `environment.seeds` 是一个列表，**不参与搜索**，每个配置在其中每个种子上各跑一次：
 
 ```yaml
-contract: 11
+contract: 12
 identity:
-  run_id: stream-ac-launch-t0
+  run_id: stream-ac-launch-t0-s0
   experiment: stream-ac
   launch_id: launch
   trial: 0
+  seed: 0
+  role: tuning
   digest: sha256:...
 entry: stream_ac
 artifacts:
@@ -68,7 +70,9 @@ training:
   chunk_steps: 10000
 evaluation:
   every_steps: 10000
-  rollout_steps: 1000
+  episodes: 5
+  chunk_steps: 16000
+  seed: 1000
 checkpoint:
   every_steps: 10000
   keep: null
@@ -84,6 +88,10 @@ logging:
 运行配置不包含 `score`。评分策略由 Infra 持有，也不包含 `score.s3` 或 `logging.rerun_s3`。Worker 只需要一个 `artifacts.root`。
 
 `environment.backend` 在该命名空间只有一种实现可选时为 `null`：brax 要选物理后端，gymnax 没有可选的。`observed` 同理，`null` 表示不裁剪观测。两者表达的都是"不适用"，与字段缺失不是一回事。
+
+`identity.trial` 命名配置，`identity.seed` 命名它的这一次重复，两者合起来才唯一；`identity.role` 说明这次运行属于哪个协议（`tuning` 选配置，`formal` 量已选定的配置，只有后者可被报告）。
+
+`evaluation.episodes` 是**恰好**多少条完整 episode，不是步数预算——跑多久由策略决定，按步数给会让 episode 数随任务和策略变。`evaluation.chunk_steps` 只是一次评估调用的内存上界，`evaluation.seed` 独立于训练种子，使"测没测"不改变训练的 key 流。
 
 ## Checkpoint 与 fork
 
@@ -120,7 +128,7 @@ fork:
 读完的运行由控制面分析，不需要镜像也不启动任何东西：
 
 ```bash
-trainerctl collapse --spec "experiments/collapse halfcheetah.yaml" \
+trainerctl collapse --spec experiments/collapse/halfcheetah.yaml \
     --run <run-id>=<metrics.jsonl> --window-steps 50000 --decisions decisions.json
 trainerctl fork --parent <父运行配置> --decision <该 seed 的判定> \
     --into <目录> --steps 50000
@@ -166,7 +174,7 @@ RTRRL 另外按参数组（`torso`、`actor`、`critic`）报六个描述更新�
 
 ## 接收方边界
 
-- Worker 的 v11 投影定义在 `memo/worker/envelope.py`，只解释 `contract`、`identity`、`entry` 和 `artifacts`；`algorithm`、`runtime`、`logging`、`checkpoint`、`fork` 保持为交给子进程的 JSON。后两个块被声明是为了让带它们的文档能通过校验，而不是为了让 Worker 对它们有看法：分支从哪份对象恢复是 Entry 的事，Worker 负责的还是那个它一直在填的 artifact 目录。
+- Worker 的 v12 投影定义在 `memo/worker/envelope.py`，只解释 `contract`、`identity`、`entry` 和 `artifacts`；`algorithm`、`runtime`、`logging`、`checkpoint`、`fork` 保持为交给子进程的 JSON。后两个块被声明是为了让带它们的文档能通过校验，而不是为了让 Worker 对它们有看法：分支从哪份对象恢复是 Entry 的事，Worker 负责的还是那个它一直在填的 artifact 目录。
 - Entry 使用 `memo/entries/_contract.py` 验证完整运行配置，再分别投影到算法 assembly、Runtime 和 observability。
 - Catalog 类型及版本位于 `memo/deployment/contract.py`，不属于 Worker。
 

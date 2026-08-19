@@ -10,7 +10,7 @@ storage: s3://rtrrl-artifacts-007122174918/trainer
 environment:
   id: brax::halfcheetah
   backend: spring
-  seed: 0
+  seeds: [0]
   episode_length: 64
 
 training:
@@ -20,7 +20,9 @@ training:
 
 evaluation:
   every_steps: 256
-  rollout_steps: 64
+  episodes: 5
+  chunk_steps: 320
+  seed: 1000
 
 logging:
   aim:

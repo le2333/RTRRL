@@ -30,10 +30,10 @@ from tests.support.numerics import flattened
 
 SEED = 3
 BOUNDARY = 20000
-# The serialized version-11 documents both sides of the deployment boundary
+# The serialized version-12 documents both sides of the deployment boundary
 # read, so what these project from is the shape the Entry will actually be
 # handed rather than a stand-in that cannot go out of date with it.
-FIXTURES = Path(__file__).resolve().parents[4] / "tests" / "contracts" / "v11"
+FIXTURES = Path(__file__).resolve().parents[4] / "tests" / "contracts" / "v12"
 
 
 def document(*, checkpoint=None, fork=None) -> RunSpec:
@@ -41,7 +41,12 @@ def document(*, checkpoint=None, fork=None) -> RunSpec:
 
     payload = json.loads((FIXTURES / "run.json").read_text(encoding="utf-8"))
     payload["training"] |= {"seed": SEED, "total_steps": 70000, "chunk_steps": 10000}
-    payload["evaluation"] = {"every_steps": 10000, "rollout_steps": 10}
+    payload["evaluation"] = {
+        "every_steps": 10000,
+        "episodes": 2,
+        "chunk_steps": 100,
+        "seed": 7,
+    }
     payload["algorithm"]["num_envs"] = 1
     if checkpoint is None:
         payload.pop("checkpoint", None)

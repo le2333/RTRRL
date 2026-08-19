@@ -4,7 +4,7 @@
 # collapse is a property of the study rather than of the task. What is not the
 # same is the floor: an unlearned Hopper policy and an unlearned HalfCheetah
 # policy return different numbers, and the normalized drawdown is measured
-# against each environment's own. See `collapse halfcheetah.yaml` for what the
+# against each environment's own. See `halfcheetah.yaml` for what the
 # file is for and why the floor is absent until it has been measured.
 #
 # random_floor: <the measured return of a random policy on masked Hopper>

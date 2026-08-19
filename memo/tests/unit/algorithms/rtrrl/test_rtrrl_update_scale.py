@@ -26,7 +26,7 @@ import pytest
 from memorax.algorithms import rtrrl_aaai as rtrrl
 from memorax.networks.sequence import PLACES
 from memorax.readings import taken
-from memorax.runtime.rollout import complete_episodes
+from memorax.runtime import EpisodeTracker
 from tests.support.builders import D_RTRRL, C, assemble_rtrrl, graph_of
 from tests.support.numerics import flattened
 
@@ -282,15 +282,10 @@ def test_the_scale_readings_travel_with_the_episode_they_belong_to():
     state = built.program.init(jax.random.key(0))
     _, metrics = built.program.train(jax.random.key(1), state, 24)
 
-    episodes = list(
-        complete_episodes(
-            metrics,
-            observations=built.observations,
-            phase="train",
-            start_env_steps=0,
-            num_envs=1,
-        )
+    tracker = EpisodeTracker(
+        observations=built.observations, num_envs=1, max_episode_steps=16
     )
+    episodes = list(tracker.consume(metrics, start_env_steps=0).completed)
     assert episodes, "no episode completed, so nothing carried a series"
     for episode in episodes:
         for block in BLOCKS:

@@ -43,16 +43,18 @@ for config_uri in manifest["runs"]:
 
 
 R2_PARENT: dict[str, Any] = {
-    "contract": 11,
+    "contract": 12,
     "identity": {
-        "run_id": "rtrrl-r2-t0",
+        "run_id": "rtrrl-r2-t0-s11",
         "experiment": "rtrrl-issue45-r2",
         "launch_id": LAUNCH,
         "trial": 0,
+        "seed": 11,
+        "role": "formal",
         "digest": "sha256:abc",
     },
     "entry": "rtrrl",
-    "artifacts": {"root": "s3://bucket/rtrrl-issue45-r2/launch/rtrrl-r2-t0"},
+    "artifacts": {"root": "s3://bucket/rtrrl-issue45-r2/launch/rtrrl-r2-t0-s11"},
     "algorithm": {
         "environment": {
             "id": "brax::halfcheetah",
@@ -68,7 +70,12 @@ R2_PARENT: dict[str, Any] = {
         },
     },
     "training": {"seed": 11, "total_steps": 100000, "chunk_steps": 10000},
-    "evaluation": {"every_steps": 10000, "rollout_steps": 5000},
+    "evaluation": {
+        "every_steps": 10000,
+        "episodes": 5,
+        "chunk_steps": 5000,
+        "seed": 7,
+    },
     "checkpoint": {"every_steps": 10000, "keep": None},
     "logging": {"aim": {"url": "aim://aim:53800"}},
 }
@@ -113,7 +120,7 @@ def test_collapse_command_decides_each_seed_and_writes_the_decisions(
             [
                 "collapse",
                 "--run",
-                f"rtrrl-r2-t0={metrics}",
+                f"rtrrl-r2-t0-s11={metrics}",
                 "--spec",
                 str(spec),
                 "--decisions",
@@ -127,7 +134,7 @@ def test_collapse_command_decides_each_seed_and_writes_the_decisions(
 
     printed = json.loads(capsys.readouterr().out)
     assert printed == json.loads(decisions.read_text(encoding="utf-8"))
-    assert printed["collapsed"] == ["rtrrl-r2-t0"]
+    assert printed["collapsed"] == ["rtrrl-r2-t0-s11"]
     seed = printed["seeds"][0]
     assert seed["collapse"]["step"] == 30000
     assert seed["spec"]["random_floor"] == 0.0
@@ -141,7 +148,13 @@ def test_fork_command_writes_three_branches_and_the_manifest_naming_them(
     parent.write_text(json.dumps(R2_PARENT), encoding="utf-8")
     decision = tmp_path / "decision.json"
     decision.write_text(
-        json.dumps({"run_id": "rtrrl-r2-t0", "verdict": "collapsed", "collapse": {"step": 30000}}),
+        json.dumps(
+            {
+                "run_id": "rtrrl-r2-t0-s11",
+                "verdict": "collapsed",
+                "collapse": {"step": 30000},
+            }
+        ),
         encoding="utf-8",
     )
 
@@ -166,9 +179,9 @@ def test_fork_command_writes_three_branches_and_the_manifest_naming_them(
     assert printed["from_steps"] == 20000
     assert printed["checkpoint"].endswith("checkpoints/step-000000020000.msgpack")
     assert printed["branches"] == [
-        "rtrrl-r2-t0-original-clip",
-        "rtrrl-r2-t0-fixed-step",
-        "rtrrl-r2-t0-td-out",
+        "rtrrl-r2-t0-s11-original-clip",
+        "rtrrl-r2-t0-s11-fixed-step",
+        "rtrrl-r2-t0-s11-td-out",
     ]
 
     manifest = json.loads((tmp_path / "fork" / "manifest.json").read_text())
@@ -191,7 +204,7 @@ def test_fork_refuses_a_seed_that_did_not_collapse(tmp_path: Path) -> None:
     decision.write_text(
         json.dumps(
             {
-                "run_id": "rtrrl-r2-t0",
+                "run_id": "rtrrl-r2-t0-s11",
                 "verdict": "steady",
                 "reason": "no drawdown of 0.5 held",
                 "collapse": None,
@@ -338,7 +351,12 @@ def test_settle_command_scores_open_trials_and_leaves_unfinished_ones_alone(
 
     payload = json.loads(capsys.readouterr().out)
     assert payload["launch_id"] == LAUNCH
-    assert payload["settled"] == [{"trial": 0, "value": 21.0}]
+    # The seed's own score beside the mean the study was told, because with
+    # one seed they are the same number and with ten they are not.
+    assert payload["settled"] == [
+        {"trial": 0, "value": 21.0, "seed_values": {"0": 21.0}}
+    ]
+    assert payload["seeds"] == [0]
     assert [entry["trial"] for entry in payload["still_running"]] == [1]
     persisted = optuna.load_study(study_name=experiment["name"], storage=f"sqlite:///{database}")
     assert [trial.state.name for trial in persisted.trials] == ["COMPLETE", "RUNNING"]
@@ -372,6 +390,7 @@ def test_batch_run_routes_deployment_fields_to_batch_executor(
             return tuple(
                 {
                     "trial": configuration["identity"]["trial"],
+                    "seed": configuration["identity"]["seed"],
                     "value": float(configuration["identity"]["trial"]),
                 }
                 for configuration in configurations

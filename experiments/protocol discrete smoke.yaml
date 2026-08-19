@@ -1,0 +1,134 @@
+# Issue 46: the formal protocol, on a discrete task, at smoke size.
+#
+# This file exists to be run, not to produce a number. Every rule the protocol
+# adds is exercised here at a size that finishes in minutes, so that a failure
+# is a failure of the protocol's machinery and not of a ten-million-step run:
+#
+#   - a checkpoint scored on exactly ten complete episodes, on a task whose
+#     episodes are variable-length, which is where a step budget stops being
+#     an episode count;
+#   - fixed-evaluation AUC as the primary score, with the episode count the
+#     scorer checks each checkpoint against;
+#   - an evaluation seed of its own, so the training key stream does not move
+#     because a measurement was taken.
+#
+# The image is the same RTRRL entry the other RepeatPrevious file names; it is
+# rebuilt for contract 10 and the digest goes here. Nothing about this run is
+# a claim about the algorithm.
+#
+# What the run is read for:
+#   - the worker exits 0 and publishes result.json and metrics.jsonl
+#   - four evaluation checkpoints, each of exactly ten eval/episode/return
+#     records -- the scorer refuses the file otherwise
+#   - a finite AUC, and last_checkpoints over the same four points
+
+experiment: protocol-discrete-smoke
+name: protocol-discrete-smoke
+description: "Issue 46: fixed-episode evaluation and AUC scoring, discrete, smoke size"
+
+# TODO: the contract-10 rebuild of the popjym-capable RTRRL image.
+image: TBD
+entry: rtrrl
+storage: s3://rtrrl-artifacts-007122174918/trainer
+
+environment:
+  id: popjym::RepeatPreviousEasy
+  backend: null
+  observed: null
+  # One tuning seed. The formal launch that would follow lists ten fresh ones
+  # and declares this one under `selection.tuning_seeds`.
+  seeds: [0]
+  episode_length: 52
+
+training:
+  num_envs: 1
+  total_steps: 4000
+  chunk_steps: 1000
+
+evaluation:
+  every_steps: 1000
+  # The protocol's count for a discrete task. Ten whole episodes of a
+  # variable-length task is not any number of steps, which is the whole reason
+  # this is not a rollout budget.
+  episodes: 10
+  # Ten episodes cannot exceed ten times the environment's own limit, so one
+  # call holds the rollout even in the worst case.
+  chunk_steps: 520
+  seed: 1000
+
+logging:
+  aim:
+    url: aim://172.31.62.192:53801
+    training:
+      log_every_steps: 1000
+
+score:
+  metric: eval/episode/return
+  window_steps: [0, 4000]
+  # The primary metric: the area under the fixed-evaluation curve, per
+  # environment step, so it reads on the scale of the returns it integrates.
+  reduce: auc
+  # What makes the exactness a checked claim rather than a stated one: a
+  # checkpoint that did not report ten episodes is refused here.
+  episodes_per_checkpoint: 10
+  non_finite: worst
+  direction: maximize
+
+compute:
+  instance_type: c7a.large
+  timeout_minutes: 60
+
+hpo:
+  # The protocol allows RTRRL five configurations. One here: this file is
+  # checking that a configuration can be run and scored, not choosing one.
+  rounds: 1
+  trials_per_round: 1
+  parallel_jobs: 1
+  startup_trials: 1
+  seed: 0
+
+space:
+  torso:
+    backbone:
+      kind: [lru]
+      lru:
+        feature_dim: [32]
+        hidden_dim: [32]
+        differentiation:
+          kind: [exact_rtrl]
+    optimizer:
+      kind: [adam]
+      adam:
+        lr: [0.0001]
+    grad_clip: [1.0]
+    follow: [1.0]
+  heads:
+    optimizer:
+      kind: [adam]
+      adam:
+        lr: [0.0001]
+  actor:
+    head:
+      kind: [categorical]
+      categorical:
+        initialization:
+          kind: [lecun]
+  critic:
+    head:
+      kind: [value]
+      value:
+        initialization:
+          kind: [lecun]
+  normalization:
+    observation:
+      kind: [none]
+    reward:
+      kind: [none]
+  gamma: [0.99]
+  lambda_pi: [0.9]
+  lambda_v: [0.9]
+  lambda_rnn: [0.9]
+  eta_pi: [1.0]
+  eta_f: [1.0]
+  entropy_rate: [0.00001]
+  meta_rl: [true]

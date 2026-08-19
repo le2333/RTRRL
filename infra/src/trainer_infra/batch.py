@@ -10,6 +10,7 @@ from dataclasses import dataclass
 from typing import Any
 from urllib.parse import urlparse
 
+from trainer_infra.experiment import run_name
 from trainer_infra.scoring import ScoreSpec, score_lines
 
 REGION = "eu-north-1"
@@ -115,8 +116,8 @@ class BatchRoundExecutor:
         return self.score(configurations, score)
 
     def _publish_configuration(self, configuration: dict[str, Any], round_index: int) -> str:
-        trial = int(configuration["identity"]["trial"])
-        uri = f"{self.exchange}/round-{round_index:03d}/trial-{trial:06d}.json"
+        name = run_name(configuration)
+        uri = f"{self.exchange}/round-{round_index:03d}/{name}.json"
         self._put(uri, json.dumps(configuration, sort_keys=True).encode())
         return uri
 
@@ -169,15 +170,21 @@ class BatchRoundExecutor:
 
         values = []
         for configuration in configurations:
-            trial = int(configuration["identity"]["trial"])
+            identity = configuration["identity"]
+            trial, seed = int(identity["trial"]), int(identity["seed"])
+            name = run_name(configuration)
             artifacts = str(configuration["artifacts"]["root"]).rstrip("/")
             result = json.loads(self._get(f"{artifacts}/result.json"))
-            if result["success"] is not True or int(result["identity"]["trial"]) != trial:
-                raise BatchExecutionError(f"artifact result does not complete trial {trial}")
+            produced = result["identity"]
+            if result["success"] is not True or (
+                int(produced["trial"]),
+                int(produced["seed"]),
+            ) != (trial, seed):
+                raise BatchExecutionError(f"artifact result does not complete {name}")
             if "metrics.jsonl" not in result["artifacts"]:
-                raise BatchExecutionError(f"trial {trial} result declares no metrics.jsonl")
+                raise BatchExecutionError(f"{name} result declares no metrics.jsonl")
             value = self._score_metrics(f"{artifacts}/metrics.jsonl", score)
-            values.append({"trial": trial, "value": value})
+            values.append({"trial": trial, "seed": seed, "value": value})
         return tuple(values)
 
     def _score_metrics(self, uri: str, score: ScoreSpec) -> float:

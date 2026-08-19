@@ -124,7 +124,8 @@ def test_a_discrete_graph_trains_and_evaluates_through_the_program_contract(
 
     state = built.program.init(jax.random.key(0))
     trained, metrics = built.program.train(jax.random.key(1), state, 4)
-    evaluated = built.program.evaluate(jax.random.key(2), trained, 4)
+    opened = built.program.open_evaluation(jax.random.key(2), trained)
+    _, evaluated = built.program.evaluate(jax.random.key(3), opened, 4)
 
     assert int(trained.step) == 4
     assert metrics.interaction.reward.shape == (2, 2)

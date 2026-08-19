@@ -37,7 +37,13 @@ def schedule(**overrides) -> RuntimeConfig:
             "chunk_steps": INTERVAL,
             "max_episode_steps": 16,
             "evaluate_every_steps": INTERVAL,
-            "rollout_steps": 6,
+            # Two complete episodes per checkpoint, which on this
+            # environment's three-step horizon is six steps' worth. The
+            # branches are compared on what their updates did rather than on
+            # these returns -- the reward here does not read the action.
+            "evaluation_episodes": 2,
+            "evaluation_chunk_steps": 4,
+            "evaluation_seed": 3,
             "num_envs": 1,
             "seed": 5,
             **overrides,

@@ -6,7 +6,7 @@
 # emits carries a copy of it, so a reported collapse cannot be quoted without
 # the definition that produced it.
 #
-#   trainerctl collapse --spec "experiments/collapse halfcheetah.yaml" \
+#   trainerctl collapse --spec experiments/collapse/halfcheetah.yaml \
 #       --run <run-id>=<metrics.jsonl> --window-steps 50000
 #
 # `random_floor` is deliberately absent. It is the fixed-evaluation return of
