@@ -1,0 +1,125 @@
+# Issue 45 R2, secondary environment: the same characterization on masked
+# Hopper. Identical in everything but the environment and the seed set, which
+# is the point -- a collapse that happens on one task and not the other is a
+# statement about the task, and that comparison only holds if the protocol,
+# the budget, the checkpoint schedule and the telemetry are the same.
+#
+# See `rtrrl issue45 r2 halfcheetah.yaml` for what each block is for. The seeds
+# are a different set from HalfCheetah's because they are fresh per
+# environment, and neither set contains the tuning seed.
+
+experiment: rtrrl-issue45-r2
+name: rtrrl-issue45-r2-hopper
+description: "Issue 45 R2: Original RTRRL collapse on masked Hopper, 1M steps"
+
+# The pre-change image, to be replaced by the one built from this commit; see
+# the HalfCheetah file for why it cannot silently run the old code.
+image: 007122174918.dkr.ecr.eu-north-1.amazonaws.com/rtrrl@sha256:7ca201c304dc6a38dc45d8142cfc05d1ec4deb3046e9e8e3594b4ff635cfd32d
+entry: rtrrl
+storage: s3://rtrrl-artifacts-007122174918/trainer
+
+# Masked Hopper, as issues 27 and 37 run it: six of the eleven readings.
+environment:
+  id: brax::hopper
+  backend: spring
+  observed: [0, 2, 4, 6, 8, 10]
+  seed: 21
+  episode_length: 1000
+
+formal:
+  seeds: [21, 22, 23, 24, 25]
+  tuning_seed: 0
+
+training:
+  num_envs: 1
+  total_steps: 1000000
+  chunk_steps: 10000
+
+evaluation:
+  every_steps: 10000
+  rollout_steps: 5000
+
+checkpoint:
+  every_steps: 10000
+  keep: null
+
+logging:
+  aim:
+    url: aim://172.31.62.192:53801
+    training:
+      # The dashboard's view of the update scale at one moment; the analysis
+      # reads the per-episode reduction out of `metrics.jsonl` either way.
+      step:
+        every_steps: 1000
+      window:
+        every_steps: 10000
+
+score:
+  metric: eval/episode/return
+  window_steps: [950000, 1000000]
+  reduce: mean
+  non_finite: worst
+  direction: maximize
+
+compute:
+  instance_type: c7a.large
+  timeout_minutes: 1440
+
+hpo:
+  rounds: 1
+  trials_per_round: 1
+  parallel_jobs: 1
+  startup_trials: 1
+  seed: 0
+
+space:
+  torso:
+    backbone:
+      kind: [lru]
+      lru:
+        feature_dim: [128]
+        hidden_dim: [128]
+        differentiation:
+          kind: [exact_rtrl]
+    optimizer:
+      kind: [adam]
+      adam:
+        lr: [0.0001]
+        b1: [0.9]
+        b2: [0.999]
+        eps: [0.00000001]
+    grad_clip: [1.0]
+    follow: [1.0]
+  heads:
+    optimizer:
+      kind: [adam]
+      adam:
+        lr: [0.0001]
+        b1: [0.9]
+        b2: [0.999]
+        eps: [0.00000001]
+  actor:
+    head:
+      kind: [state_std]
+      state_std:
+        initialization:
+          kind: [lecun]
+  critic:
+    head:
+      kind: [value]
+      value:
+        initialization:
+          kind: [lecun]
+  normalization:
+    observation:
+      kind: [none]
+    reward:
+      kind: [none]
+  gamma: [0.99]
+  lambda_pi: [0.9]
+  lambda_v: [0.9]
+  lambda_rnn: [0.9]
+  eta_pi: [1.0]
+  eta_f: [1.0]
+  entropy_rate: [0.00001]
+  meta_rl: [true]

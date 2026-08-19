@@ -1,0 +1,36 @@
+# The definition a collapse on masked HalfCheetah is decided under.
+#
+# This file is the frozen part of the R2 result. It exists so that the three
+# numbers a collapse depends on are committed *before* any formal curve is
+# read, rather than settled while looking at one; every decision the analysis
+# emits carries a copy of it, so a reported collapse cannot be quoted without
+# the definition that produced it.
+#
+#   trainerctl collapse --spec "experiments/collapse halfcheetah.yaml" \
+#       --run <run-id>=<metrics.jsonl> --window-steps 50000
+#
+# `random_floor` is deliberately absent. It is the fixed-evaluation return of
+# an unlearned policy on *this* environment under *this* evaluation protocol
+# --- the same masking, the same episode count, the same rollout length --- and
+# it is measured, not assumed. Fill it in from that measurement and commit the
+# file; the analysis refuses to run until it is there, which is what stops the
+# floor from being chosen after the curves are visible.
+#
+# random_floor: <the measured return of a random policy on masked HalfCheetah>
+
+metric: eval/episode/return
+
+# D = (peak - value) / (peak - floor), against the highest value seen up to
+# that checkpoint. Named rather than described so a decision document says
+# which formula produced it.
+normalization: peak_to_floor
+
+# A qualifying collapse gives back half the distance from the learned peak to
+# the floor, and holds it for two consecutive evaluation checkpoints. One
+# checkpoint is one bad evaluation.
+decline: 0.5
+sustain: 2
+
+# And it has recovered when the drawdown is back to a fifth of that distance.
+# Recovery is reported beside the collapse, never subtracted from it.
+recovery: 0.2

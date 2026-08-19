@@ -1,0 +1,18 @@
+# The definition a collapse on masked Hopper is decided under.
+#
+# The same three thresholds as HalfCheetah's, because the definition of a
+# collapse is a property of the study rather than of the task. What is not the
+# same is the floor: an unlearned Hopper policy and an unlearned HalfCheetah
+# policy return different numbers, and the normalized drawdown is measured
+# against each environment's own. See `collapse halfcheetah.yaml` for what the
+# file is for and why the floor is absent until it has been measured.
+#
+# random_floor: <the measured return of a random policy on masked Hopper>
+
+metric: eval/episode/return
+
+normalization: peak_to_floor
+
+decline: 0.5
+sustain: 2
+recovery: 0.2
