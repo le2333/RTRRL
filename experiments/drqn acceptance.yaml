@@ -20,6 +20,13 @@
 #   - train/episode/update.loss appears once replay is sampleable, at step 256
 #   - no update.priority and no update.importance_weight anywhere: this learner
 #     does not report them because it does not compute them
+#
+# CartPole episodes end when the pole drops, so early ones are short. A window
+# of ten transitions is only drawn from episodes that ran at least ten, which
+# means replay is empty of usable windows until the policy survives that long.
+# That is the published sampling rule rather than a misconfiguration: a window
+# cut short by an ending would not be TBPTT(10). If update.loss never appears,
+# read it as the policy never having lasted ten steps, not as a broken buffer.
 
 experiment: drqn-acceptance
 name: drqn-acceptance-truncation-10
@@ -108,13 +115,20 @@ space:
     truncated:
       length: [10]
 
-  # The published learner is written over RMSProp, which this repository's
-  # shared step family does not offer. Recorded as a deviation in
-  # memo/docs/drqn-reproduction.md rather than hidden here.
+  # The published solver, at the published constants: recurrent_solver.prototxt
+  # names ADADELTA with base_lr 0.1 and momentum 0.95, and Caffe reads that
+  # momentum field as the decay of ADADELTA's running averages rather than as a
+  # heavy ball, which is why it is spelled rho. Selecting adadelta is what makes
+  # this a reproduction arm rather than a matched one.
   optimizer:
-    kind: [adam]
-    adam:
-      lr: [0.0005]
+    kind: [adadelta]
+    adadelta:
+      lr: [0.1]
+      rho: [0.95]
+      eps: [0.00000001]
+
+  # clip_gradients: 10 from the same solver, on the global gradient norm.
+  grad_clip: [10.0]
 
   # Uniform replay: no priority exponent and no importance-sampling exponent,
   # because there is no priority to raise or correct for.

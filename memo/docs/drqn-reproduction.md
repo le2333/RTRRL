@@ -15,7 +15,8 @@ paper.
 | Paper | Here | Held by |
 | --- | --- | --- |
 | Uniform replay | `make_episode_buffer`, no priority declared | `test_uniform_replay_keeps_no_priority_to_update` |
-| Bootstrapped random updates from a random episode position | `any_position_starts` | `test_the_buffer_draws_from_inside_episodes_under_this_rule_and_not_the_other` |
+| A random update draws a completed episode, then a point in it | `episode_window_starts` weights each episode equally | `test_an_episode_is_not_drawn_more_often_for_being_longer` |
+| The window unrolls `t` transitions from that point | the window must fit inside the episode | `test_the_legal_starts_are_exactly_those_a_whole_window_fits_in`, `test_every_drawn_window_carries_the_full_truncation` |
 | Zero hidden state at the sampled window start | `Core._loss` opens on `q_function.reset` | `test_a_window_starts_from_a_zero_hidden_state`, `test_both_branches_open_their_window_on_the_same_zero_state` |
 | One-step target-network Q-learning | `Core._successor_values` with `make_td0` | `test_the_target_is_one_step_and_greedy_under_the_target_network` |
 | Not double Q-learning | `max` over the target network's own values | `test_the_greedy_action_is_the_target_networks_and_not_the_online_ones` |
@@ -23,6 +24,7 @@ paper.
 | Linear Q head | `DiscreteQNetwork`, no head branch declared | `test_the_head_is_one_linear_map_from_the_recurrent_output` |
 | Epsilon-greedy acting, annealed | `Core.act`, `DRQN._epsilon` | `test_act_only_advances_recurrence` |
 | Truncation 10 for the acceptance arm | `learning.truncated.length`, a manifest value | `test_the_truncation_is_the_window_and_full_bptt_is_the_episode` |
+| ADADELTA, lr 0.1, decay 0.95, gradient clip 10 | `optimizer.adadelta`, `grad_clip` | `test_the_published_solver_is_adadelta_over_a_clipped_gradient` |
 
 R2D2's additions are absent rather than disabled: there is no priority
 exponent, no importance-sampling exponent, no `n_step`, no value transform, no
@@ -30,6 +32,16 @@ burn-in and no dueling head anywhere in the parameter tree, so no manifest can
 select one and no tuning trial can be spent discovering that it should not.
 `test_the_declared_tree_offers_no_r2d2_enhancement` asserts the tree, and
 `test_the_graph_holds_no_r2d2_machinery` asserts the built graph.
+
+The two sampling rows are one clause of the paper split in half, because getting
+either half wrong changes what a truncation sweep measures. Drawing a stored
+position instead of an episode would let a long episode collect probability in
+proportion to its length; letting a window run over an ending would leave it cut
+short by the validity mask, so a run declaring `t = 64` would in places be
+training at `t = 5` and `t_eq` would be a statement about a mixture. A window
+here lies inside one completed episode and carries exactly `t` transitions, or
+it is not drawn — an episode shorter than `t` contributes nothing rather than
+contributing a short window.
 
 ## The replacement for the convolutional encoder
 
@@ -58,22 +70,43 @@ exact online recurrent sensitivity. The parameter bounds are declared to the
 same numbers on both sides so a matched pair can be pinned to identical widths
 without either search space excluding a value the other allows.
 
+## The optimiser is the published solver
+
+`recurrent_solver.prototxt` names `ADADELTA` with `base_lr: 0.1`,
+`momentum: 0.95` and `clip_gradients: 10`, and that is what the reproduction arm
+selects. Caffe's ADADELTA reads its `momentum` field as the decay of the two
+running averages the method keeps rather than as a heavy ball, so it is spelled
+`rho` here, where nobody will mistake it for the other thing.
+
+An earlier version of this document said the published learner was written over
+RMSProp. That was wrong — it was inferred from Nature DQN rather than read off
+DRQN's own solver — and both the claim and the Adam-only parameter tree that
+followed from it are gone. `adam` remains declared beside `adadelta` for the
+**matched** baseline, which tunes its optimiser so that the comparison against
+the online arm is not decided by one arm having been given a worse step rule.
+The two are different claims and a run says which it is by which branch it
+named:
+
+- **DRQN reproduction** selects `adadelta` at the published constants. It
+  answers "does the published algorithm behave as published".
+- **Matched DRQN** may select either and tunes it. It answers "does replay
+  BPTT match exact online sensitivity on the same representation". It is not a
+  claim that the optimiser reproduces the paper, and should not be written up
+  as one.
+
 ## Where this departs from the paper
 
-Three departures, none of them hidden behind a branch nothing selects.
+Two departures, neither hidden behind a branch nothing selects.
 
-**RMSProp becomes Adam.** The 2015 learner is written over RMSProp, which this
-repository's shared step family does not offer; adding it would widen the
-parameter tree of every algorithm that draws from that family. The replay arm
-therefore declares `adam` only, as the other replay learner here does, and the
-learning rate is tuned. This is a substitution in the optimiser, not in the
-learning rule.
-
-**One update per environment step, not one per four frames.** The paper's
-cadence is tied to Atari frame skip. R1 compares against an online learner that
-updates every step, and equal-budget comparison is what the truncation search
-needs, so the replay arm updates whenever the buffer can be sampled. A run
-therefore spends more gradient per environment step than the paper's would.
+**No reward clipping.** The published agent stores `sign(r)` in replay, which on
+Atari turns unbounded game scores into `{-1, 0, +1}`. Rewards are stored raw
+here. On R1's tasks that is not a difference: MemoryChain pays `±1` at the end
+and nothing in between, RepeatPrevious and StatelessCartPole pay in units, so
+`sign(r) == r` on every transition they produce and a clipping transform would
+be the identity. It stops being the identity the moment an environment with
+rewards outside the unit range is added, and at that point this arm is no longer
+storing what the published one stores. Anyone adding such an environment to R1
+has to add the transform with it.
 
 **Truncation-boundary bootstrap.** Episodes are stored end to end in a stream
 that resets itself, so the row after an ending holds the next episode's first
@@ -83,6 +116,24 @@ instead of valuing a state the transition never entered. The paper's Atari
 episodes end by failing and the case does not arise there;
 `test_a_cut_off_ending_bootstraps_from_the_state_that_was_reached` holds it,
 and `test_a_terminal_ending_has_no_successor_at_all` holds the other ending.
+
+## What is not a departure
+
+**One learner update per environment transition.** An earlier version of this
+document listed this as a deviation, on the grounds that the paper updates once
+per four frames. That conflated two different things: Atari's frame skip is
+action repeat in the environment's preprocessing, not a divisor on the update
+rate, and DRQN's own `update_frequency` is 1 — one `UpdateRandom()` per
+transition once the replay warmup has passed. One update per environment
+transition is therefore what the published agent does, and what this does.
+
+**The recurrent core.** The paper's LSTM is replaced by the structured diagonal
+cell the online arm carries exact recurrent sensitivity through. This is the
+whole point of the arm rather than an approximation of the paper: R1 compares
+two *learners* on one representation, so the representation has to be the one
+the other learner can be run on. It is an intentional architecture adaptation,
+and a write-up should say "matched DRQN on a structured diagonal core", never
+"DRQN as published" when it means the network.
 
 ## What this does not contain
 

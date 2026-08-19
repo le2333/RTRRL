@@ -30,8 +30,11 @@ def parameters(**overrides):
         "core.lru.feature_dim": 4,
         "learning.kind": "truncated",
         "learning.truncated.length": 3,
-        "optimizer.kind": "adam",
-        "optimizer.adam.lr": 1e-3,
+        "optimizer.kind": "adadelta",
+        "optimizer.adadelta.lr": 0.1,
+        "optimizer.adadelta.rho": 0.95,
+        "optimizer.adadelta.eps": 1e-8,
+        "grad_clip": 10.0,
         "replay.capacity": 64,
         "replay.minimum_size": 8,
         "replay.batch_size": 2,
@@ -103,13 +106,17 @@ def test_the_tree_declares_both_cores_both_windows_and_one_head():
     for chooser, choices in (
         ("core.kind", ("lru", "rtu")),
         ("learning.kind", ("truncated", "full_bptt")),
-        ("optimizer.kind", ("adam",)),
+        ("optimizer.kind", ("adadelta", "adam")),
     ):
         valid = declared[chooser].valid
         assert isinstance(valid, Choice), f"{chooser} is not a choice"
         assert set(valid.values) == set(choices)
     # The head is not a choice at all: the published one is linear.
     assert not [path for path in declared if path.startswith("head")]
+    # The published solver's own settings, and the clip that goes with it.
+    assert {"optimizer.adadelta.lr", "optimizer.adadelta.rho", "grad_clip"} <= set(
+        declared
+    )
 
 
 def test_the_entry_composes_and_calculates_nothing():
@@ -340,3 +347,10 @@ def test_interaction_moves_no_learned_quantity():
             if not np.array_equal(np.asarray(got), np.asarray(wanted))
         ]
         assert not moved, f"{what}: leaves {moved} moved"
+
+
+def test_a_truncation_longer_than_an_episode_is_refused_at_build_time():
+    """A window that cannot fit is a configuration error, not an empty draw."""
+
+    with pytest.raises(ValueError, match="exceeds the declared episode length"):
+        assembled(**{"learning.truncated.length": EPISODE_LENGTH + 1})

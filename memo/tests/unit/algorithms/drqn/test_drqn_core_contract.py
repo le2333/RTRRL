@@ -142,3 +142,65 @@ def test_the_reported_update_carries_no_priority_or_importance_weight():
     fields = set(type(metrics).__dataclass_fields__)
     assert fields == {"applied", "loss", "td_error", "q_value", "gradient_norm"}
     assert float(metrics.gradient_norm) > 0.0
+
+
+def test_the_published_solver_is_adadelta_over_a_clipped_gradient():
+    """The reproduction arm steps the solver the published prototxt names.
+
+    ADADELTA with the decay Caffe spells ``momentum``, reading a gradient whose
+    global norm has already been clipped at ten. The order is the claim, so the
+    test reproduces it by hand rather than comparing update sizes: ADADELTA
+    divides the gradient by a running average of itself, so its first step is
+    very nearly scale free and a clipped and an unclipped gradient move the
+    parameters by the same amount. Nothing is wrong when they do.
+    """
+
+    from memorax.algorithms.drqn import Adadelta, step_transform
+
+    published = Adadelta(lr=0.1, rho=0.95, eps=1e-8)
+    steep = {"w": jnp.asarray([300.0, 400.0])}  # global norm 500
+
+    chained = step_transform(published, grad_clip=10.0)
+    solver = step_transform(published, grad_clip=0.0)
+    clip = optax.clip_by_global_norm(10.0)
+
+    by_the_chain, _ = chained.update(steep, chained.init(steep), steep)
+    by_hand, _ = clip.update(steep, clip.init(steep), steep)
+    by_hand, _ = solver.update(by_hand, solver.init(steep), steep)
+
+    np.testing.assert_allclose(
+        np.asarray(by_the_chain["w"]), np.asarray(by_hand["w"]), rtol=1e-6
+    )
+
+
+def test_the_clip_leaves_a_gradient_under_its_bound_alone():
+    from memorax.algorithms.drqn import Adadelta, step_transform
+
+    published = Adadelta(lr=0.1, rho=0.95, eps=1e-8)
+    gentle = {"w": jnp.asarray([0.3, 0.4])}  # global norm 0.5, well under ten
+
+    chained = step_transform(published, grad_clip=10.0)
+    solver = step_transform(published, grad_clip=0.0)
+
+    bounded, _ = chained.update(gentle, chained.init(gentle), gentle)
+    plain, _ = solver.update(gentle, solver.init(gentle), gentle)
+
+    np.testing.assert_allclose(
+        np.asarray(bounded["w"]), np.asarray(plain["w"]), rtol=1e-6
+    )
+
+
+def test_the_two_declared_solvers_are_two_solvers():
+    """Not one name twice: an arm that names adadelta does not get adam."""
+
+    from memorax.algorithms.drqn import Adadelta, step_transform
+    from memorax.rl.updates import Adam
+
+    grads = {"w": jnp.asarray([0.3, -0.4])}
+    adadelta = step_transform(Adadelta(lr=0.1, rho=0.95, eps=1e-8), grad_clip=10.0)
+    adam = step_transform(Adam(lr=0.1, b1=0.9, b2=0.999, eps=1e-8), grad_clip=10.0)
+
+    stepped, _ = adadelta.update(grads, adadelta.init(grads), grads)
+    other, _ = adam.update(grads, adam.init(grads), grads)
+
+    assert not np.allclose(np.asarray(stepped["w"]), np.asarray(other["w"]))

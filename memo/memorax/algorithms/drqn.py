@@ -5,8 +5,11 @@ replaced by a recurrent one, and its learner is the 2015 DQN learner unchanged:
 uniform replay, one-step targets against a periodically copied target network,
 a linear Q head, and epsilon-greedy acting. What recurrence adds is only how a
 minibatch is drawn and unrolled -- *bootstrapped random updates*, which pick a
-random point in a stored episode, zero the hidden state there, and backpropagate
-through the following window.
+completed episode, then a point inside it far enough from the end to hold a
+whole window, zero the hidden state there, and backpropagate through the
+window. Drawing the episode first is what keeps a long episode from collecting
+probability, and requiring the window to fit is what makes the truncation the
+learner declares the truncation its gradient actually crosses.
 
 This is deliberately not R2D2 with pieces switched off. R2D2's additions --
 prioritised replay and its importance-sampling correction, n-step returns,
@@ -55,7 +58,11 @@ from memorax.rl import (
     periodic_incremental_update,
     select_ended,
 )
-from memorax.rl.recurrent_replay import completed_episode_starts, masked_sequence_loss
+from memorax.rl.recurrent_replay import (
+    completed_episode_starts,
+    episode_window_starts,
+    masked_sequence_loss,
+)
 from memorax.rl.updates import BASE_FAMILY, base_transform
 from memorax.runtime import ObservationSchema
 from memorax.utils import Timestep
@@ -119,8 +126,10 @@ class ReplayParameters:
     """Uniform replay: how much is kept, when it may be read, how much at once.
 
     There is no priority exponent and no importance-sampling exponent because
-    there is no priority. Every stored position is equally likely to begin a
-    window, which is what the published algorithm draws.
+    there is no priority: every completed episode is equally likely to be drawn
+    and every window inside one equally likely to be the one, which is what the
+    published algorithm draws. Where the window may begin is
+    ``episode_window_starts``, not a parameter.
     """
 
     capacity: int = param(valid=(1, 10_000_000), search=(1024, 1_000_000), log=True)
@@ -144,24 +153,74 @@ class ExplorationParameters:
     evaluation_epsilon: float = param(valid=(0.0, 1.0), search=(0.0, 0.1))
 
 
+@dataclass(frozen=True)
+class Adadelta:
+    """The solver the published DRQN is written over, in its own terms.
+
+    ``recurrent_solver.prototxt`` names ``ADADELTA`` with ``base_lr: 0.1`` and
+    ``momentum: 0.95``. The second is not a heavy ball: Caffe's ADADELTA reads
+    its ``momentum`` field as the decay of the two running averages the method
+    keeps, which is what everyone else calls ``rho``. It is spelled ``rho`` here
+    so that the number is not mistaken for the other thing on sight, and the
+    published values are the defaults.
+    """
+
+    lr: float = param(valid=(1e-9, 10.0), search=(1e-3, 1.0), log=True, default=0.1)
+    rho: float = param(valid=(0.0, 1.0), search=(0.8, 0.999), default=0.95)
+    eps: float = param(valid=(1e-12, 1e-2), search=[1e-8], default=1e-8, log=True)
+
+
 DRQN_CORE_BRANCHES = {"lru": LruCore, "rtu": RtuCore}
 LEARNING_BRANCHES = {"truncated": TruncatedParameters, "full_bptt": ()}
-# Adam alone, as the other replay learner here declares it. The published
-# learner is written over RMSProp, which this repository's shared base family
-# does not offer; the substitution is recorded with the reproduction rather
-# than hidden behind a branch nothing selects.
-DRQN_OPTIMIZERS = BASE_FAMILY.restricted("adam")
+# Two, and the reproduction is the first. ``adadelta`` is the published solver,
+# so an arm claiming to reproduce the paper selects it; ``adam`` is here because
+# the matched baseline tunes its optimizer against the online arm and needs a
+# step rule that HPO can move. Which one an arm chose is in its run parameters,
+# which is what keeps "reproduction" and "matched" from being read off the same
+# entry name.
+DRQN_STEP_BRANCHES = {"adadelta": Adadelta, "adam": BASE_FAMILY.branches["adam"]}
+
+
+def _select_step(selection, builder):
+    del builder
+    return selection.parameters
+
+
+DRQN_OPTIMIZERS = ComponentFamily(branches=DRQN_STEP_BRANCHES, construct=_select_step)
+
+
+def step_transform(step: Any, *, grad_clip: float) -> optax.GradientTransformation:
+    """The published solver's chain: clip the whole gradient, then step.
+
+    ``clip_gradients: 10`` in the published solver is a bound on the global L2
+    norm of the update's gradient, which is what it is here. Zero is no clip
+    rather than a clip at zero, so an arm that does not want one says so by
+    naming the number the absence corresponds to.
+    """
+
+    chain: list[optax.GradientTransformation] = []
+    if grad_clip:
+        chain.append(optax.clip_by_global_norm(grad_clip))
+    if isinstance(step, Adadelta):
+        chain.append(optax.adadelta(learning_rate=step.lr, rho=step.rho, eps=step.eps))
+    else:
+        chain.append(base_transform(step))
+    return optax.chain(*chain)
 
 
 @dataclass(frozen=True)
 class DRQNParameters:
     core: str = structure(branches=DRQN_CORE_BRANCHES)
     learning: str = structure(branches=LEARNING_BRANCHES)
-    optimizer: str = structure(branches=DRQN_OPTIMIZERS.branches)
+    optimizer: str = structure(branches=DRQN_STEP_BRANCHES)
     replay: ReplayParameters = group(of=ReplayParameters)
     target: TargetParameters = group(of=TargetParameters)
     exploration: ExplorationParameters = group(of=ExplorationParameters)
     gamma: float = param(valid=(0.0, 1.0), search=(0.9, 0.9999))
+    # The published solver's ``clip_gradients``, which is part of the same step
+    # rather than a separate opinion about it. Last only because a declared
+    # default has to follow the fields that have none.
+    grad_clip: float = param(valid=(0.0, 1000.0), search=(0.0, 10.0), default=10.0)
 
 
 PARAMETERS = describe_parameters(DRQNParameters)
@@ -196,11 +255,29 @@ class SelectedLearning:
         return self.truncation
 
     def start_flags(self, episode_length: int) -> Callable[[Any], Array]:
-        """Which stored positions this branch is allowed to sample from."""
+        """Which stored positions this branch is allowed to sample from.
+
+        Full BPTT begins an episode; a truncated window begins anywhere inside
+        one that can hold it whole. The full-episode rule needs no weighting
+        because an episode offers it exactly one start, so drawing uniformly
+        over starts already draws uniformly over episodes.
+        """
 
         if self.kind == "full_bptt":
             return partial(completed_episode_starts, transition_count=episode_length)
-        return any_position_starts
+        if self.truncation > episode_length:
+            # Refused here rather than at the first sample, because a manifest
+            # asking to reach back further than an episode can run is a
+            # configuration error and not a run that draws nothing.
+            raise ValueError(
+                f"truncation {self.truncation} exceeds the declared episode length "
+                f"{episode_length}; no window that long fits inside an episode"
+            )
+        return partial(
+            episode_window_starts,
+            truncation=self.truncation,
+            episode_length=episode_length,
+        )
 
 
 def _select_core(selection, builder) -> SelectedCore:
@@ -278,18 +355,6 @@ class LearnerSequence(struct.PyTreeNode):
     dones: Any
     terminals: Any
     valid: Any
-
-
-def any_position_starts(experience: ReplayTransition) -> Array:
-    """Every stored position, which is what a random update point means.
-
-    The paper picks a random point in an episode rather than its beginning. In
-    a stream that stores episodes end to end, that is every position: a window
-    that runs past an ending is cut there by the validity mask, which is the
-    same thing as unrolling to the end of the episode.
-    """
-
-    return jnp.ones_like(experience.done, dtype=jnp.bool_)
 
 
 def learner_sequence(sample, *, transition_count: int) -> LearnerSequence:
