@@ -11,6 +11,7 @@ from memorax.algorithms.rtrrl_aaai import RTRRL
 from memorax.assembly import BuildRequest, EnvironmentSpec, assemble
 from memorax.runtime import Runtime, RuntimeConfig
 
+from ._checkpoint import checkpoint_directory, checkpoint_every_steps, resume
 from ._observability import build_reporter, load_run
 from ._schedule import trajectory_at_steps, trajectory_record
 
@@ -46,19 +47,32 @@ def runtime_config(config) -> RuntimeConfig:
         num_envs=config.algorithm.num_envs,
         seed=training.seed,
         trajectory_at_steps=trajectory_at_steps(config),
+        checkpoint_every_steps=checkpoint_every_steps(config),
     )
 
 
-def run(reporter, config) -> None:
+def run(reporter, config, scratch) -> None:
+    """Assemble, restore if this is a branch, and run to the declared budget.
+
+    ``scratch`` is required rather than defaulted because it is where the
+    checkpoints go: a caller that did not have one would run a document asking
+    for checkpoints and quietly file none, and the run it was the parent of
+    would have nothing to fork from.
+    """
+
     algorithm = assemble(RTRRL, build_request(config))
-    Runtime(algorithm=algorithm, config=runtime_config(config)).run(reporter)
+    Runtime(
+        algorithm=algorithm,
+        config=runtime_config(config),
+        checkpoints=checkpoint_directory(config, scratch),
+    ).run(reporter, resume=resume(config, algorithm.program))
 
 
 def main(argv: list[str] | None = None) -> int:
     del argv
     config, scratch = load_run()
     with build_reporter(config, scratch) as reporter:
-        run(reporter, config)
+        run(reporter, config, scratch)
     return 0
 
 

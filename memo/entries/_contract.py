@@ -100,6 +100,61 @@ class EvaluationSpec(_Frozen):
         return self
 
 
+class CheckpointSpec(_Frozen):
+    """How often a run files its whole state, and how much of it it keeps.
+
+    ``every_steps`` is validated against the evaluation interval rather than
+    against the budget: a checkpoint is the state at a moment the run also
+    measured, which is what lets a branch taken from it be dated against the
+    evaluation curve that decided to take it.
+
+    ``keep`` is a count of checkpoints, null for all of them. A run whose
+    collapse step is not known in advance -- which is every R2 run -- has to
+    keep all of them, because which boundary the fork needs is decided after
+    the run is over.
+    """
+
+    every_steps: int
+    keep: int | None = None
+
+    @model_validator(mode="after")
+    def _usable(self) -> "CheckpointSpec":
+        if self.every_steps < 1:
+            raise ValueError("checkpoint every_steps must be positive")
+        if self.keep is not None and self.keep < 1:
+            raise ValueError("a run that keeps no checkpoint cannot be forked")
+        return self
+
+
+class ForkSpec(_Frozen):
+    """The parent checkpoint a branch continues from, and what it does not take.
+
+    ``from_steps`` says which boundary ``parent`` is, and the entry checks the
+    object against it: a manifest that names one boundary and points at another
+    would produce a branch dated to a moment it did not come from, and nothing
+    downstream could tell.
+
+    ``replacing`` names state paths the branch supplies itself. Only one thing
+    legitimately appears here -- ``core.rule``, when the branch runs a rule
+    whose own state has a different shape from the parent's, as the D-RTRRL
+    arms do against Adam. It is declared per fork rather than inferred, because
+    inferring it would let a checkpoint from an unrelated graph pass as a
+    deliberate branch.
+    """
+
+    parent: str
+    from_steps: int
+    replacing: tuple[str, ...] = ()
+
+    @model_validator(mode="after")
+    def _usable(self) -> "ForkSpec":
+        if not self.parent:
+            raise ValueError("a fork must name the checkpoint it comes from")
+        if self.from_steps < 0:
+            raise ValueError("fork from_steps must not be negative")
+        return self
+
+
 class AimStepSpec(_Frozen):
     """What a reading looks like at a typical moment."""
 
@@ -207,6 +262,8 @@ class RunSpec(_Frozen):
     training: TrainingSpec
     evaluation: EvaluationSpec
     logging: LoggingSpec
+    checkpoint: CheckpointSpec | None = None
+    fork: ForkSpec | None = None
 
     @model_validator(mode="after")
     def _graph_width_matches_schedule(self) -> "RunSpec":
@@ -219,4 +276,30 @@ class RunSpec(_Frozen):
             )
         if self.training.total_steps % self.evaluation.every_steps:
             raise ValueError("total_steps must consist of whole evaluation intervals")
+        return self
+
+    @model_validator(mode="after")
+    def _branches_are_placed_on_the_curve(self) -> "RunSpec":
+        """Both schedules answer to the evaluation's, which is the formal one.
+
+        A checkpoint between two measurements is a moment with no point on the
+        curve, and a branch from one is a result that cannot be compared with
+        the run it branched from. Both are refused here rather than in the
+        container, so a whole round of jobs does not start to find it out.
+        """
+
+        every = self.evaluation.every_steps
+        if self.checkpoint is not None and self.checkpoint.every_steps % every:
+            raise ValueError(
+                "checkpoint every_steps must consist of whole evaluation intervals"
+            )
+        if self.fork is None:
+            return self
+        if self.fork.from_steps % every:
+            raise ValueError("fork from_steps must be an evaluation boundary")
+        if self.fork.from_steps >= self.training.total_steps:
+            raise ValueError(
+                "a branch's total_steps is its parent's boundary plus its own "
+                "budget, so it must exceed the boundary it forked from"
+            )
         return self

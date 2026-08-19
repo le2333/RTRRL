@@ -34,3 +34,9 @@ class WorkerEnvelope(_Frozen):
     training: dict[str, Any]
     evaluation: dict[str, Any]
     logging: dict[str, Any]
+    # Declared so a document carrying them is accepted, and left as JSON so
+    # Worker does not acquire an opinion about them. A branch reads its parent
+    # checkpoint out of an artifact root Worker already knows how to fill; that
+    # it is a branch at all is the Entry's business.
+    checkpoint: dict[str, Any] | None = None
+    fork: dict[str, Any] | None = None
