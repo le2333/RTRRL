@@ -10,13 +10,16 @@ from entries import rtrrl as entry
 from memorax import algorithms
 from memorax.algorithms import RTRRL
 from memorax.algorithms import rtrrl_aaai as rtrrl
-from memorax.assembly import BuildRequest, EnvironmentSpec, assemble
 from memorax.networks.sequence import PLACES
 from memorax.observability.metrics import metric_names
-from memorax.parameters import expand
 from memorax.readings import taken
-from tests.support.builders import graph_of
-from tests.support.environments import TinyContinuousEnv
+from tests.support.builders import (
+    D_RTRRL,
+    C,
+    assemble_rtrrl,
+    graph_of,
+    rtrrl_parameters,
+)
 from tests.support.numerics import flattened
 from tests.support.parameters import kinds
 
@@ -32,81 +35,8 @@ def assert_tree_equal(actual, expected, what):
     assert not moved, f"{what}: {moved} moved"
 
 
-C = 1.0
-
-# `expand` fills anything unset from the low end of its search domain, which
-# leaves `eta_f`, `eta_pi` and every `lambda` at zero. That is harmless for the
-# structural assertions the shared fixture was written for, and fatal for these:
-# `eta_f == 0` makes the torso's TD error zero, so `sign` of it is zero and the
-# torso never takes a traced step at all. Anything asserting that a step was
-# taken has to say what these are.
-LIVE = {
-    "eta_f": 1.0,
-    "eta_pi": 1.0,
-    "lambda_pi": 0.9,
-    "lambda_v": 0.9,
-    "lambda_rnn": 0.9,
-    "entropy_rate": 1e-5,
-}
-
-D_RTRRL = {
-    **LIVE,
-    "torso.optimizer.kind": "d_rtrrl",
-    "torso.optimizer.d_rtrrl.c": C,
-    "torso.optimizer.d_rtrrl.magnitude": "sign",
-    "torso.optimizer.d_rtrrl.scope": "block",
-    "torso.optimizer.d_rtrrl.eps": 1e-8,
-    "heads.optimizer.kind": "d_rtrrl",
-    "heads.optimizer.d_rtrrl.c": C,
-    "heads.optimizer.d_rtrrl.magnitude": "sign",
-    "heads.optimizer.d_rtrrl.scope": "block",
-    "heads.optimizer.d_rtrrl.eps": 1e-8,
-}
-
-
-def parameters(backbone="lru", differentiation="exact_rtrl", optimizer=None):
-    branch = f"torso.backbone.{backbone}"
-    return expand(
-        rtrrl.PARAMETERS,
-        {
-            "torso.backbone.kind": backbone,
-            **({f"{branch}.feature_dim": 4} if backbone == "lru" else {}),
-            f"{branch}.hidden_dim": 2,
-            f"{branch}.differentiation.kind": differentiation,
-            "torso.optimizer.kind": "adam",
-            "torso.optimizer.adam.lr": 1e-3,
-            "torso.grad_clip": 1.0,
-            "torso.follow": 0.25,
-            "heads.optimizer.kind": "adam",
-            "heads.optimizer.adam.lr": 5e-4,
-            **(optimizer or {}),
-            "actor.head.kind": "state_std",
-            "critic.head.kind": "value",
-            "normalization.observation.kind": "none",
-            "normalization.reward.kind": "none",
-            "meta_rl": False,
-        },
-    )
-
-
-def assembled(
-    backbone="lru", differentiation="exact_rtrl", record=None, optimizer=None
-):
-    return assemble(
-        rtrrl.RTRRL,
-        BuildRequest(
-            parameters=parameters(backbone, differentiation, optimizer),
-            environment=EnvironmentSpec(
-                id="tiny",
-                backend=None,
-                observed=None,
-                episode_length=8,
-            ),
-            num_envs=1,
-            record=(rtrrl.OBSERVATIONS.trajectory_fields if record is None else record),
-        ),
-        environment_factory=tiny_environment,
-    )
+parameters = rtrrl_parameters
+assembled = assemble_rtrrl
 
 
 def run_document(*, every_steps=None, total_steps=50, episode_length=7):
@@ -131,13 +61,9 @@ def run_document(*, every_steps=None, total_steps=50, episode_length=7):
         ),
         evaluation=SimpleNamespace(every_steps=10, rollout_steps=4),
         logging=SimpleNamespace(aim=SimpleNamespace(training=None), rerun=rerun),
+        checkpoint=None,
+        fork=None,
     )
-
-
-def tiny_environment(identifier, **options):
-    del identifier, options
-    environment = TinyContinuousEnv()
-    return environment, environment.default_params
 
 
 @pytest.mark.parametrize("backbone", ("lru", "rtu"))

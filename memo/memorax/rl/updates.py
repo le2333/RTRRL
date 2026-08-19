@@ -65,6 +65,60 @@ def _broadcast_env(values, leaf):
     return values[(slice(None),) + (None,) * (leaf.ndim - 1)]
 
 
+def _blocks(tree) -> tuple:
+    """The named blocks of one rule group, in declaration order.
+
+    A group arrives as a mapping from block name to that block's tree, which is
+    the grouping an algorithm chose. A rule handed anything else -- one block's
+    parameters directly -- has no block names to report against and reports
+    none, rather than inventing names from whatever the tree's top level
+    happened to be.
+    """
+
+    return tuple(tree) if isinstance(tree, Mapping) else ()
+
+
+def _global_factor(tree, clip):
+    """The factor ``optax.clip_by_global_norm`` applied, for the record.
+
+    Reported, never applied: the update itself still goes through optax's own
+    transformation, so a discrepancy here can misdescribe a step but cannot
+    move one. The arithmetic is optax's --- ``max_norm / max(max_norm, ||g||)``
+    --- so the two agree to the last bit that matters to a reading.
+    """
+
+    if not clip:
+        return jnp.asarray(1.0)
+    norm = jnp.sqrt(sum(jnp.sum(jnp.square(leaf)) for leaf in jax.tree.leaves(tree)))
+    return clip / jnp.maximum(clip, norm)
+
+
+def _scale_report(factors, blocks, *, like):
+    """What a bound did to each block, under the two names R2 reads it by.
+
+    ``clip_multiplier`` is the factor the rule's scale handling applied to a
+    block's finished ascent, and ``clip_fraction`` is whether that factor
+    shortened it. The fraction is an indicator at one transition, so the number
+    the name promises is what a scope's mean of it comes to -- which is what
+    puts the reduction in the metric's middle segment rather than in here.
+
+    A factor above one is a rule that *stretched* a short step, which the
+    saturated arm does by construction; that is not the bound biting, so the
+    indicator reads zero there and the multiplier says what happened instead.
+    """
+
+    multipliers = {
+        name: jnp.broadcast_to(factors[name], jnp.shape(like)) for name in blocks
+    }
+    return {
+        "clip_multiplier": multipliers,
+        "clip_fraction": {
+            name: (factor < 1.0).astype(jnp.float32)
+            for name, factor in multipliers.items()
+        },
+    }
+
+
 def _combine(traced, direct, delta):
     """Weight the trace by the TD error and add the untraced directions.
 
@@ -81,7 +135,7 @@ def _combine(traced, direct, delta):
     )
 
 
-def make_optax_rule(transform, *, rate=None) -> UpdateRule:
+def make_optax_rule(transform, *, rate=None, clip=0.0) -> UpdateRule:
     """Step along delta * trace through any optax transformation.
 
     The transformation sees one finished ascent direction per parameter, so
@@ -92,6 +146,15 @@ def make_optax_rule(transform, *, rate=None) -> UpdateRule:
     caller knows it. Given, the rule reports it as the step size it took, which
     is the same reading a bound reports and lets a caller read one name whether
     or not a bound is in the way.
+
+    ``clip`` is the threshold of a ``clip_by_global_norm`` the caller has put at
+    the *head* of its transformation, and it is read here rather than applied:
+    the composed transform is what steps, and this only says by how much that
+    clip shortened it. Naming it is the only way the reading exists at all,
+    since a finished optax chain does not hand back its intermediates. It is a
+    bound on the whole group after the streams have been averaged, so its
+    multiplier is one number that belongs to every block of the group alike --
+    unlike a per-block bound, which the D-RTRRL rule reports per block.
     """
 
     def init(*, params, traces):
@@ -104,8 +167,11 @@ def make_optax_rule(transform, *, rate=None) -> UpdateRule:
             lambda leaf: jnp.mean(leaf, axis=0),
             _combine(traced, direct, delta),
         )
+        factor = _global_factor(ascent, clip)
         updates, state = transform.update(ascent, state, params)
+        blocks = _blocks(traced)
         metrics = {} if rate is None else {"step_size": jnp.full_like(delta, rate)}
+        metrics |= _scale_report(dict.fromkeys(blocks, factor), blocks, like=delta)
         return RuleOutput(updates=updates, state=state, metrics=metrics)
 
     return UpdateRule(init=init, apply=apply)
@@ -489,10 +555,11 @@ def make_d_rtrrl_rule(step, *, clip=0.0) -> UpdateRule:
         surprise = jnp.sign(delta) if saturated else delta
 
         units, rebuild = _units(traced, by_block=by_block)
+        scales = {name: factor(part) for name, part in units.items()}
         ascent = rebuild(
             {
                 name: jax.tree.map(
-                    lambda leaf, scale=factor(part): (
+                    lambda leaf, scale=scales[name]: (
                         _broadcast_env(surprise * scale, leaf) * leaf
                     ),
                     part,
@@ -510,17 +577,26 @@ def make_d_rtrrl_rule(step, *, clip=0.0) -> UpdateRule:
                 lambda leaf, immediate: leaf + immediate, ascent, direct
             )
         updates = jax.tree.map(lambda leaf: jnp.mean(leaf, axis=0), ascent)
+        outer = _global_factor(updates, clip if bound is not None else 0.0)
         if bound is not None:
             updates, _ = bound.update(updates, ())
+        # Two factors and one reading, because a block's ascent met both: the
+        # arm's own, per stream and per normalization unit, and the outer clip
+        # on the finished group update, after the streams were averaged. Their
+        # product is what happened to the block; `realized_update_norm` is
+        # measured on the update itself and is what checks it.
+        blocks = _blocks(traced)
+        metrics = {"step_size": jnp.full_like(delta, c)}
+        metrics |= _scale_report(
+            {name: scales[name if by_block else None] * outer for name in blocks},
+            blocks,
+            like=delta,
+        )
         # The threshold, under the name every rule reports its step scale by,
         # rather than the distance this step happened to move: one name means
         # the same thing whichever rule is in the way. Under `sign` the traced
         # part moved exactly this, or zero. Under `td_out` it moved this times
         # `|delta|`, or less when the trace was too short to clip.
-        return RuleOutput(
-            updates=updates,
-            state=state,
-            metrics={"step_size": jnp.full_like(delta, c)},
-        )
+        return RuleOutput(updates=updates, state=state, metrics=metrics)
 
     return UpdateRule(init=init, apply=apply)
