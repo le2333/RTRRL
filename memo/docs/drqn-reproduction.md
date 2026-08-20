@@ -17,6 +17,7 @@ paper.
 | Uniform replay | `make_episode_buffer`, no priority declared | `test_uniform_replay_keeps_no_priority_to_update` |
 | A random update draws a completed episode, then a point in it | `episode_window_starts` weights each episode equally | `test_an_episode_is_not_drawn_more_often_for_being_longer` |
 | The window unrolls `t` transitions from that point | the window must fit inside the episode | `test_the_legal_starts_are_exactly_those_a_whole_window_fits_in`, `test_every_drawn_window_carries_the_full_truncation` |
+| The target pass reads the successor sequence from its own zero state | `Core._loss` unrolls the target over `bootstrap_inputs` | `test_the_target_reads_the_successor_sequence_from_its_own_zero_state` |
 | Zero hidden state at the sampled window start | `Core._loss` opens on `q_function.reset` | `test_a_window_starts_from_a_zero_hidden_state`, `test_both_branches_open_their_window_on_the_same_zero_state` |
 | One-step target-network Q-learning | `Core._successor_values` with `make_td0` | `test_the_target_is_one_step_and_greedy_under_the_target_network` |
 | Not double Q-learning | `max` over the target network's own values | `test_the_greedy_action_is_the_target_networks_and_not_the_online_ones` |
@@ -134,6 +135,45 @@ two *learners* on one representation, so the representation has to be the one
 the other learner can be run on. It is an intentional architecture adaptation,
 and a write-up should say "matched DRQN on a structured diagonal core", never
 "DRQN as published" when it means the network.
+
+## Known deviations still open
+
+These are differences from the published implementation that are **not** fixed
+and that a formal launch has to either resolve or declare. They are listed with
+what each one puts at risk, because "a minor deviation" is not a thing that can
+be judged without saying what it would change.
+
+**Minibatch episodes are drawn with replacement.** The published update shuffles
+the episode indices and takes the first `batch_size`, so one minibatch holds
+`batch_size` *distinct* episodes. Here each window is drawn independently, so an
+episode can appear twice in a batch. The marginal distribution over episodes is
+uniform either way, which is what the sampling rule above is about, but the
+within-batch diversity is not the same.
+
+This one carries a confound specific to what R1 measures. The pool of episodes
+long enough to hold a window shrinks as `t` grows, so the chance of a repeat
+inside a batch *rises with `t`* — the effective diversity of a minibatch becomes
+a function of the truncation, which is the variable the sweep is trying to
+isolate. It should be resolved before the truncation sweep runs, not declared.
+
+**Epsilon anneals on environment steps, not on learner updates.** The published
+schedule is a function of the solver iteration and is read once per episode, so
+it holds still within an episode and stays at its starting value throughout the
+replay warmup, when no update has happened yet. Here it is recomputed every step
+against the environment-step count, so exploration already decays during warmup.
+Under an equal environment budget the step-based schedule is defensible and is
+arguably the fairer one for the matched comparison, but it is not what the
+published agent does and the reproduction arm should not claim it is.
+
+**The loss is averaged over the batch; Caffe's is not.** The published net's
+Euclidean loss divides by the first dimension of its target blob, which for the
+recurrent net is the unroll length, not the minibatch size. So the published
+gradient is `batch_size` times this one's. Under a plain step rule that is a
+learning-rate rescaling and nothing more, but the published chain clips the
+global gradient norm at ten *before* ADADELTA, and a constant factor of
+`batch_size` changes how often that clip binds. It is therefore not simply
+absorbed, and an arm calling itself a published-solver reproduction has to
+either carry the factor or say it does not.
 
 ## What this does not contain
 

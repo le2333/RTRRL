@@ -358,36 +358,27 @@ class LearnerSequence(struct.PyTreeNode):
 
 
 def learner_sequence(sample, *, transition_count: int) -> LearnerSequence:
-    """A drawn window, in the terms the loss reads it.
+    """A drawn window as the two sequences the update reads it in.
 
-    The network is run over one more input than there are transitions, so that
-    the last transition's successor is a state the unroll actually reached
-    rather than one bootstrapped from nothing.
+    ``inputs`` is what the online network is asked about and
+    ``bootstrap_inputs`` is what the target network values: the states the
+    window's transitions arrived at, as replay stored them. Two sequences of the
+    same length rather than one of one more, because the two networks are each
+    begun from no memory and neither reads the other's pass.
     """
 
     experience = jax.tree.map(
         lambda value: value[:, :transition_count], sample.experience
     )
-
-    observation = jax.tree.map(
-        lambda current, successor: jnp.concatenate(
-            (current, successor[:, -1:]), axis=1
-        ),
-        experience.observation,
-        experience.next_observation,
-    )
     inputs = RecurrentInputs(
-        observation=observation,
-        episode_start=jnp.concatenate(
-            (
-                experience.episode_start,
-                jnp.zeros_like(experience.episode_start[:, -1:]),
-            ),
-            axis=1,
-        ),
+        observation=experience.observation,
+        episode_start=experience.episode_start,
     )
     bootstrap_inputs = RecurrentInputs(
         observation=experience.next_observation,
+        # A successor sequence has no episode start of its own: it is read as
+        # one run, which is what clearing the continuation flag only on its
+        # first step amounts to.
         episode_start=jnp.zeros_like(experience.done),
     )
     valid = jnp.cumprod(
@@ -589,39 +580,6 @@ class _UpdateReadings(struct.PyTreeNode):
     valid: Any
 
 
-def _slice_time(tree: Any, start: int, stop: int | None = None) -> Any:
-    return jax.tree.map(lambda value: value[:, start:stop], tree)
-
-
-def _successor_q_values(
-    q_function: QFunction,
-    params: Any,
-    inputs: RecurrentInputs,
-    post_input_recurrences: Any,
-) -> Array:
-    """Q at a stored successor state, from the recurrence that reached it.
-
-    Only cut-off endings need this. Everywhere else the next row of the window
-    already is the successor, but a window that steps over an ending finds the
-    next episode's first observation there instead, and the state whose value
-    the target wants was never an input.
-    """
-
-    time_inputs = jax.tree.map(lambda value: jnp.swapaxes(value, 0, 1), inputs)
-    time_recurrences = jax.tree.map(
-        lambda value: jnp.swapaxes(value, 0, 1), post_input_recurrences
-    )
-
-    def apply_one(_, values):
-        timestep, recurrence = values
-        timestep = jax.tree.map(lambda value: jnp.expand_dims(value, axis=1), timestep)
-        _, q_values = q_function.apply(params, timestep, recurrence)
-        return None, q_values[:, 0]
-
-    _, q_values = jax.lax.scan(apply_one, None, (time_inputs, time_recurrences))
-    return jnp.swapaxes(q_values, 0, 1)
-
-
 @dataclass(frozen=True)
 class Core:
     q_function: QFunction
@@ -677,47 +635,39 @@ class Core:
             ForwardMetrics(selected_q=selected_q, epsilon=epsilon),
         )
 
-    def _successor_values(
-        self,
-        target_params: Any,
-        sample: LearnerSequence,
-        target_q: Array,
-        target_recurrences: Any,
-    ) -> Array:
-        """max_a Q_target at each transition's successor, as a constant.
-
-        One step and one network: the action is the target network's own
-        greedy choice, not an online argmax handed to it.
-        """
-
-        transition_count = sample.dones.shape[1]
-        cut_off = sample.dones & ~sample.terminals
-        bootstrap = _successor_q_values(
-            self.q_function,
-            target_params,
-            sample.bootstrap_inputs,
-            _slice_time(target_recurrences, 0, transition_count),
-        )
-        successor = jnp.where(cut_off[..., None], bootstrap, target_q[:, 1:])
-        return jax.lax.stop_gradient(jnp.max(successor, axis=-1))
-
     def _loss(
         self, params: Any, target_params: Any, sample: LearnerSequence
     ) -> tuple[Array, _UpdateReadings]:
+        """The published update: two networks, two sequences, both from zero.
+
+        The online network reads the window's own states and the target network
+        reads the window's *successors*, each opening on no memory of what came
+        before it. That is what the published update does -- its target pass is
+        begun with the continuation flag cleared on the first successor and set
+        thereafter -- and for a recurrent network it is not the same as reading
+        the target off the online sequence shifted by one. Doing that would
+        give the target at ``s_1`` a hidden state that had also consumed
+        ``s_0``, so the two networks would disagree about how much history the
+        state they are valuing is supposed to summarise. On a feed-forward Q
+        network the distinction does not exist; on this one it is the whole
+        subject.
+
+        Reading the successors from what replay stored also means a window
+        whose episode ended at its step limit is valued at the state it really
+        reached, rather than at whatever the next row of the buffer holds.
+        """
+
         batch_size = jax.tree.leaves(sample.inputs)[0].shape[0]
-        # Both networks read the window from no memory of what preceded it.
-        start = self.q_function.reset(ZERO_MEMORY, batch_size)
+        opening = self.q_function.reset(ZERO_MEMORY, batch_size)
 
-        _, online_q, _ = self.q_function.unroll(params, sample.inputs, start)
-        _, target_q, target_recurrences = self.q_function.unroll(
-            target_params, sample.inputs, start
+        _, online_q, _ = self.q_function.unroll(params, sample.inputs, opening)
+        _, successor_q, _ = self.q_function.unroll(
+            target_params, sample.bootstrap_inputs, opening
         )
 
-        successor_value = self._successor_values(
-            target_params, sample, target_q, target_recurrences
-        )
+        successor_value = jax.lax.stop_gradient(jnp.max(successor_q, axis=-1))
         q_value = jnp.take_along_axis(
-            online_q[:, :-1], sample.actions[..., None], axis=-1
+            online_q, sample.actions[..., None], axis=-1
         ).squeeze(axis=-1)
         td_error = _td0(
             reward=sample.rewards,
@@ -832,8 +782,9 @@ class DRQN:
                     feature_dim=selected_core.feature_dim,
                     core_kind=selected_core.kind,
                 ),
-                optimizer=base_transform(
-                    components.build(DRQN_OPTIMIZERS, "optimizer")
+                optimizer=step_transform(
+                    components.build(DRQN_OPTIMIZERS, "optimizer"),
+                    grad_clip=float(parameters["grad_clip"]),
                 ),
                 gamma=float(parameters["gamma"]),
                 target_update_period=int(parameters["target.update_period"]),
@@ -846,6 +797,10 @@ class DRQN:
                 get_start_flags=learning.start_flags(context.episode_length),
                 add_sequences=False,
                 add_batch_size=context.num_envs,
+                # Both start rules look an episode either way from a candidate
+                # position, so once the ring wraps the seam has to be kept out
+                # of that reach as well as out of the window.
+                seam_margin=context.episode_length,
             ),
             reports=REPORTS,
             record=record,

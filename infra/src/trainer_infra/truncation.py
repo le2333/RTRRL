@@ -435,14 +435,22 @@ class Search:
     ) -> tuple[Truncation, ...]:
         """The next candidate that would settle the crossing, bisecting for it.
 
-        The bracket is everything below the shortest known equivalent
-        candidate. Halving it is what keeps a five-candidate grid to two or
-        three formal launches instead of five, and running out of unknowns in
-        it is what confirms the crossing: the candidate immediately below
-        ``t_eq`` has then been measured and was not equivalent.
+        The bracket is what is still open: below the shortest candidate known
+        to be equivalent, and above the longest known *not* to be. Both ends
+        matter. Starting from zero regardless would keep asking for candidates
+        that cannot change the answer -- with 16 measured and short of the
+        margin and 64 measured and equivalent, the crossing is already between
+        them, and running 4 and then 1 spends twenty formal runs to confirm
+        something monotonicity already settled.
         """
 
-        low, high = 0, shortest
+        short_of_it = [
+            index
+            for index, candidate in enumerate(self.grid)
+            if candidate in equivalent and not equivalent[candidate]
+        ]
+        low = max(short_of_it) + 1 if short_of_it else 0
+        high = shortest
         while low < high:
             middle = (low + high) // 2
             candidate = self.grid[middle]

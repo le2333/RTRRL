@@ -52,12 +52,11 @@ def sample(key, *, dones, terminals, actions, rewards):
     walk = observations(key, transitions + 1)
     return LearnerSequence(
         inputs=RecurrentInputs(
-            observation=walk,
-            episode_start=jnp.asarray([[True] + [False] * transitions]),
+            observation=walk[:, :-1],
+            episode_start=jnp.asarray([[True] + [False] * (transitions - 1)]),
         ),
-        # Where nothing was cut off these are the same states the walk already
-        # holds; a cut-off ending is what makes them differ, and one test below
-        # makes them differ on purpose.
+        # The states the transitions arrived at. Within one episode these are
+        # the walk shifted by one, which is what replay stores.
         bootstrap_inputs=RecurrentInputs(
             observation=walk[:, 1:],
             episode_start=jnp.zeros((1, transitions), dtype=jnp.bool_),
@@ -191,11 +190,13 @@ def test_the_target_is_one_step_and_greedy_under_the_target_network(dones, termi
 
     start = learner.core.q_function.reset(drqn.ZERO_MEMORY, 1)
     _, online_q, _ = learner.core.q_function.unroll(params, drawn.inputs, start)
-    _, target_q, _ = learner.core.q_function.unroll(target_params, drawn.inputs, start)
-    q_value = jnp.take_along_axis(
-        online_q[:, :-1], drawn.actions[..., None], axis=-1
-    ).squeeze(axis=-1)
-    successor = jnp.max(target_q[:, 1:], axis=-1)
+    _, successor_q, _ = learner.core.q_function.unroll(
+        target_params, drawn.bootstrap_inputs, start
+    )
+    q_value = jnp.take_along_axis(online_q, drawn.actions[..., None], axis=-1).squeeze(
+        axis=-1
+    )
+    successor = jnp.max(successor_q, axis=-1)
     expected_target = (
         drawn.rewards + 0.5 * (1.0 - drawn.terminals.astype(jnp.float32)) * successor
     )
@@ -245,13 +246,17 @@ def test_the_greedy_action_is_the_target_networks_and_not_the_online_ones():
     _, readings = learner.core._loss(params, target_params, drawn)
 
     start = learner.core.q_function.reset(drqn.ZERO_MEMORY, 1)
-    _, online_q, _ = learner.core.q_function.unroll(params, drawn.inputs, start)
-    _, target_q, _ = learner.core.q_function.unroll(target_params, drawn.inputs, start)
-    online_choice = jnp.argmax(online_q[:, 1:], axis=-1)
+    _, successor_q, _ = learner.core.q_function.unroll(
+        target_params, drawn.bootstrap_inputs, start
+    )
+    _, online_successor_q, _ = learner.core.q_function.unroll(
+        params, drawn.bootstrap_inputs, start
+    )
+    online_choice = jnp.argmax(online_successor_q, axis=-1)
     double_q = jnp.take_along_axis(
-        target_q[:, 1:], online_choice[..., None], axis=-1
+        successor_q, online_choice[..., None], axis=-1
     ).squeeze(axis=-1)
-    greedy = jnp.max(target_q[:, 1:], axis=-1)
+    greedy = jnp.max(successor_q, axis=-1)
 
     target = readings.q_value + readings.td_error
     plain = drawn.rewards + 0.5 * greedy
@@ -263,26 +268,29 @@ def test_the_greedy_action_is_the_target_networks_and_not_the_online_ones():
     assert not np.allclose(np.asarray(plain), np.asarray(doubled))
 
 
-def test_a_cut_off_ending_bootstraps_from_the_state_that_was_reached():
-    """A step limit leaves a successor no later input holds, so it is read again.
+def test_every_target_is_read_from_the_stored_successor():
+    """Including at an ending cut off by a step limit, which is the hard case.
 
-    The next row of a window that steps over an ending is the next episode's
-    first observation. Bootstrapping from it would value a state the transition
-    never reached.
+    The row after an ending holds the next episode's first observation, so a
+    target read from the following row would value a state the transition never
+    entered. Reading the whole target pass off what replay stored makes that
+    true everywhere rather than in a special case.
     """
 
     learner = _Learner()
     drawn = sample(
         jax.random.key(6),
-        dones=[True, False],
+        dones=[False, True],
         terminals=[False, False],
         actions=[0, 1],
         rewards=[1.0, 1.0],
     )
+    # Move only the last stored successor -- the state the cut-off transition
+    # actually reached. Recurrence runs forward, so nothing earlier may move.
     elsewhere = drawn.replace(
         bootstrap_inputs=drawn.bootstrap_inputs.replace(
             observation=drawn.bootstrap_inputs.observation
-            + jnp.asarray([[[3.0, -3.0], [0.0, 0.0]]])
+            + jnp.asarray([[[0.0, 0.0], [3.0, -3.0]]])
         )
     )
     params, target_params = diverged(learner, drawn)
@@ -290,12 +298,14 @@ def test_a_cut_off_ending_bootstraps_from_the_state_that_was_reached():
     _, kept = learner.core._loss(params, target_params, drawn)
     _, moved = learner.core._loss(params, target_params, elsewhere)
 
-    # The cut-off transition is the first one, and only its target may move.
+    kept_targets = kept.q_value + kept.td_error
+    moved_targets = moved.q_value + moved.td_error
+
     assert not np.allclose(
-        np.asarray(kept.td_error)[:, 0], np.asarray(moved.td_error)[:, 0]
+        np.asarray(kept_targets)[:, 1], np.asarray(moved_targets)[:, 1]
     )
     np.testing.assert_allclose(
-        np.asarray(kept.td_error)[:, 1], np.asarray(moved.td_error)[:, 1], rtol=1e-6
+        np.asarray(kept_targets)[:, 0], np.asarray(moved_targets)[:, 0], rtol=1e-6
     )
 
 
@@ -337,3 +347,64 @@ def test_positions_past_an_ending_do_not_enter_the_loss():
         float(masked), 0.5 * float(readings.td_error[0, 0]) ** 2, rtol=1e-6
     )
     assert not np.allclose(float(masked), float(scored))
+
+
+def test_the_target_reads_the_successor_sequence_from_its_own_zero_state():
+    """The target pass is over successors, not over the online pass shifted.
+
+    The published update begins its target pass on the first successor with the
+    continuation flag cleared, so the target network's hidden state at ``s_1``
+    has seen ``s_1`` and nothing else. Reading the target off the online
+    sequence one step along would give it a state that had also consumed
+    ``s_0``. On a feed-forward Q network the two are the same number; here they
+    are not, which is what this perturbs to show.
+    """
+
+    learner = _Learner()
+    drawn = sample(
+        jax.random.key(21),
+        dones=[False, False],
+        terminals=[False, False],
+        actions=[0, 1],
+        rewards=[1.0, 1.0],
+    )
+    # Move only the first current state. Every successor, and therefore every
+    # target, is untouched.
+    moved = drawn.replace(
+        inputs=drawn.inputs.replace(
+            observation=drawn.inputs.observation
+            + jnp.asarray([[[5.0, -5.0], [0.0, 0.0]]])
+        )
+    )
+    params, target_params = diverged(learner, drawn)
+
+    _, kept = learner.core._loss(params, target_params, drawn)
+    _, shifted = learner.core._loss(params, target_params, moved)
+
+    kept_targets = kept.q_value + kept.td_error
+    shifted_targets = shifted.q_value + shifted.td_error
+
+    np.testing.assert_allclose(
+        np.asarray(kept_targets), np.asarray(shifted_targets), rtol=1e-6, atol=1e-6
+    )
+    # The arrangement has to be one where s_0 mattered to something, or the
+    # agreement above would be vacuous.
+    assert not np.allclose(np.asarray(kept.q_value), np.asarray(shifted.q_value))
+
+
+def test_the_online_and_target_passes_are_over_different_sequences():
+    """Same length, different states: current versus arrived-at."""
+
+    drawn = sample(
+        jax.random.key(22),
+        dones=[False, False],
+        terminals=[False, False],
+        actions=[0, 0],
+        rewards=[0.0, 0.0],
+    )
+
+    assert drawn.inputs.observation.shape == drawn.bootstrap_inputs.observation.shape
+    assert not np.allclose(
+        np.asarray(drawn.inputs.observation),
+        np.asarray(drawn.bootstrap_inputs.observation),
+    )

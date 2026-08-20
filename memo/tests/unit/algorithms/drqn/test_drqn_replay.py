@@ -18,6 +18,7 @@ import pytest
 
 from memorax.algorithms.drqn import ReplayTransition, SelectedLearning, learner_sequence
 from memorax.buffers import make_episode_buffer
+from memorax.buffers.episode_buffer import _valid_start_mask
 from memorax.rl.recurrent_replay import completed_episode_starts, episode_window_starts
 
 EPISODE_LENGTH = 8
@@ -224,19 +225,22 @@ def test_each_branch_reads_the_window_it_names():
     assert truncated.window(EPISODE_LENGTH) == 3
     assert full.window(EPISODE_LENGTH) == EPISODE_LENGTH
 
+    # A start rule is declared as a plain callable, so reading the horizons it
+    # was bound with means saying first that this one is a bound partial.
     inside = truncated.start_flags(EPISODE_LENGTH)
+    assert isinstance(inside, partial)
     assert inside.func is episode_window_starts
     assert inside.keywords == {"truncation": 3, "episode_length": EPISODE_LENGTH}
     # A full episode offers exactly one start, so drawing uniformly over starts
     # already draws uniformly over episodes and needs no weighting.
-    assert full.start_flags(EPISODE_LENGTH).func is completed_episode_starts
-    assert full.start_flags(EPISODE_LENGTH).keywords == {
-        "transition_count": EPISODE_LENGTH
-    }
+    whole = full.start_flags(EPISODE_LENGTH)
+    assert isinstance(whole, partial)
+    assert whole.func is completed_episode_starts
+    assert whole.keywords == {"transition_count": EPISODE_LENGTH}
 
 
 # ------------------------------------------------------ what the window hands on
-def test_the_window_is_run_over_one_more_input_than_it_has_transitions():
+def test_the_two_sequences_are_the_states_and_the_states_arrived_at():
     drawn_window = ReplayTransition(
         observation=jnp.arange(6, dtype=jnp.float32).reshape(1, 3, 2),
         episode_start=jnp.asarray([[True, False, False]]),
@@ -249,19 +253,21 @@ def test_the_window_is_run_over_one_more_input_than_it_has_transitions():
 
     sequence = learner_sequence(_Sample(drawn_window), transition_count=3)
 
-    assert sequence.inputs.observation.shape == (1, 4, 2)
+    # Two passes of the same length: the online network reads the states, the
+    # target network reads the states they arrived at.
+    assert sequence.inputs.observation.shape == (1, 3, 2)
+    assert sequence.bootstrap_inputs.observation.shape == (1, 3, 2)
     assert sequence.actions.shape == (1, 3)
-    # The extra input is the last transition's own successor, so that the last
-    # target bootstraps from a state the unroll reached.
     np.testing.assert_array_equal(
-        np.asarray(sequence.inputs.observation[:, -1]),
-        np.asarray(drawn_window.next_observation[:, -1]),
+        np.asarray(sequence.inputs.observation),
+        np.asarray(drawn_window.observation),
     )
     np.testing.assert_array_equal(
         np.asarray(sequence.bootstrap_inputs.observation),
         np.asarray(drawn_window.next_observation),
     )
-    assert not bool(jnp.any(sequence.inputs.episode_start[:, -1]))
+    # A successor sequence is read as one run, so it declares no episode start.
+    assert not bool(jnp.any(sequence.bootstrap_inputs.episode_start))
 
 
 def test_validity_stops_at_the_first_ending_and_keeps_the_ending_itself():
@@ -282,3 +288,112 @@ def test_validity_stops_at_the_first_ending_and_keeps_the_ending_itself():
     np.testing.assert_array_equal(
         np.asarray(sequence.valid), np.asarray([[True, True, False, False]])
     )
+
+
+def wrapped(capacity=40, truncation=TRUNCATION, seam_margin=0, rounds=15):
+    """A ring that has been overwritten, so its write head is a seam.
+
+    Episodes of four written round the ring more than once, so the newest row
+    and the oldest sit next to each other somewhere in the middle of the array.
+    """
+
+    buffer = make_episode_buffer(
+        max_length=capacity,
+        min_length=4,
+        sample_batch_size=8,
+        sample_sequence_length=truncation,
+        get_start_flags=partial(
+            episode_window_starts,
+            truncation=truncation,
+            episode_length=EPISODE_LENGTH,
+        ),
+        add_sequences=False,
+        add_batch_size=1,
+        seam_margin=seam_margin,
+    )
+    observation, episode_start, done = stream((4,) * rounds)
+    state = buffer.init(
+        jax.tree.map(lambda value: value[0], transition(observation[0], True, False))
+    )
+    for values in zip(observation, episode_start, done):
+        state = buffer.add(state, transition(*values))
+    return buffer, state
+
+
+def test_the_ring_is_actually_full_and_wrapped_in_this_fixture():
+    """Otherwise the tests below would be checking nothing."""
+
+    _, state = wrapped()
+
+    assert bool(state.is_full)
+    assert 0 < int(state.current_index) < 40
+
+
+def test_the_window_that_would_span_the_write_head_is_the_one_excluded():
+    """Named exactly, because "somewhere near the seam" is not a guarantee.
+
+    With the head at ``current_index``, the row before it is the newest and the
+    row at it is the oldest. Only a window covering both splices two moments
+    that never followed one another, and only those starts are dropped.
+    """
+
+    _, state = wrapped()
+    head = int(state.current_index)
+    size = 40
+
+    admitted = set(np.flatnonzero(np.asarray(_valid_start_mask(state, TRUNCATION))))
+
+    spanning = {(head - offset) % size for offset in range(1, TRUNCATION)}
+    assert admitted == set(range(size)) - spanning
+
+
+def test_the_margin_keeps_the_seam_out_of_the_start_rule_s_reach_too():
+    """The rule looks an episode either way, and that reach is not a window."""
+
+    _, state = wrapped(seam_margin=EPISODE_LENGTH)
+    head = int(state.current_index)
+    size = 40
+
+    admitted = np.flatnonzero(
+        np.asarray(_valid_start_mask(state, TRUNCATION, EPISODE_LENGTH))
+    )
+
+    from_oldest = (admitted - head) % size
+    assert from_oldest.min() >= EPISODE_LENGTH
+    assert from_oldest.max() <= size - TRUNCATION - EPISODE_LENGTH
+
+
+def test_no_window_is_spliced_across_the_write_head():
+    buffer, state = wrapped(seam_margin=EPISODE_LENGTH)
+
+    windows = drawn(buffer, state)
+
+    episodes = np.asarray(windows.observation)[..., 0]
+    indices = np.asarray(windows.observation)[..., 1]
+    assert np.all(episodes[:, 0][:, None] == episodes)
+    assert np.all(np.diff(indices, axis=1) == 1.0)
+
+
+def test_a_ring_the_margin_would_empty_is_refused_when_it_is_built():
+    """Silently drawing from position zero is not sampling, so it is refused.
+
+    A margin that leaves no admissible position produces a buffer that looks
+    like it is working until the ring wraps, and then draws the same window
+    forever. It is a build-time misconfiguration and is caught there.
+    """
+
+    with pytest.raises(ValueError, match="no position left to start a window"):
+        make_episode_buffer(
+            max_length=12,
+            min_length=4,
+            sample_batch_size=8,
+            sample_sequence_length=TRUNCATION,
+            get_start_flags=partial(
+                episode_window_starts,
+                truncation=TRUNCATION,
+                episode_length=EPISODE_LENGTH,
+            ),
+            add_sequences=False,
+            add_batch_size=1,
+            seam_margin=EPISODE_LENGTH,
+        )

@@ -44,8 +44,8 @@ def window(key, transitions):
     walk = jax.random.normal(key, (1, transitions + 1, 2))
     return LearnerSequence(
         inputs=RecurrentInputs(
-            observation=walk,
-            episode_start=jnp.asarray([[True] + [False] * transitions]),
+            observation=walk[:, :-1],
+            episode_start=jnp.asarray([[True] + [False] * (transitions - 1)]),
         ),
         bootstrap_inputs=RecurrentInputs(
             observation=walk[:, 1:],
@@ -72,20 +72,15 @@ def test_the_gradient_reaches_every_input_in_the_window(truncation):
     state = learner.init(jax.random.key(0), drawn.inputs)
 
     def loss_of(observation):
-        moved = drawn.replace(
-            inputs=drawn.inputs.replace(observation=observation),
-            bootstrap_inputs=drawn.bootstrap_inputs.replace(
-                observation=observation[:, 1:]
-            ),
-        )
+        moved = drawn.replace(inputs=drawn.inputs.replace(observation=observation))
         value, _ = learner._loss(state.params, state.target_params, moved)
         return value
 
     sensitivity = jax.grad(loss_of)(drawn.inputs.observation)
 
     reached = np.abs(np.asarray(sensitivity)).sum(axis=(0, 2))
-    assert reached.shape == (truncation + 1,)
-    assert np.all(reached[:truncation] > 0.0), reached
+    assert reached.shape == (truncation,)
+    assert np.all(reached > 0.0), reached
 
 
 def test_a_longer_window_carries_credit_the_shorter_one_cannot():
@@ -95,7 +90,7 @@ def test_a_longer_window_carries_credit_the_shorter_one_cannot():
     long_window = window(jax.random.key(3), 8)
     state = learner.init(jax.random.key(1), long_window.inputs)
     short_window = long_window.replace(
-        inputs=jax.tree.map(lambda value: value[:, :2], long_window.inputs),
+        inputs=jax.tree.map(lambda value: value[:, :1], long_window.inputs),
         bootstrap_inputs=jax.tree.map(
             lambda value: value[:, :1], long_window.bootstrap_inputs
         ),
@@ -135,11 +130,13 @@ def test_both_branches_open_their_window_on_the_same_zero_state():
 
     start = learner.q_function.reset(ZERO_MEMORY, 1)
     _, online_q, _ = learner.q_function.unroll(state.params, drawn.inputs, start)
-    _, target_q, _ = learner.q_function.unroll(state.target_params, drawn.inputs, start)
-    q_value = jnp.take_along_axis(
-        online_q[:, :-1], drawn.actions[..., None], axis=-1
-    ).squeeze(axis=-1)
-    target = drawn.rewards + 0.9 * jnp.max(target_q[:, 1:], axis=-1)
+    _, successor_q, _ = learner.q_function.unroll(
+        state.target_params, drawn.bootstrap_inputs, start
+    )
+    q_value = jnp.take_along_axis(online_q, drawn.actions[..., None], axis=-1).squeeze(
+        axis=-1
+    )
+    target = drawn.rewards + 0.9 * jnp.max(successor_q, axis=-1)
     expected = 0.5 * jnp.mean(jnp.square(target - q_value))
 
     np.testing.assert_allclose(float(scored), float(expected), rtol=1e-5)

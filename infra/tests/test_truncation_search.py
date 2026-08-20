@@ -346,3 +346,38 @@ def test_the_verdicts_come_back_shortest_first():
 
     assert [verdict.truncation for verdict in outcome.verdicts] == [1, 4, 16]
     assert all(verdict.reference == FULL for verdict in outcome.verdicts)
+
+
+def test_a_crossing_already_bracketed_asks_for_nothing_more():
+    """16 short of the margin and 64 equivalent settles it: the crossing is there.
+
+    Continuing to bisect downwards from zero would ask for 4, and then 1, and
+    neither can move a crossing that monotonicity has already placed between
+    two measured candidates. At ten formal seeds a candidate, that is twenty
+    runs spent confirming what is known.
+    """
+
+    search = Search(rule=EquivalenceRule(resamples=200))
+    results = {FULL: same(FULL), 64: same(64), 16: worse(16)}
+
+    outcome = search.outcome(results)
+
+    assert outcome.t_eq == 64
+    assert outcome.verified
+    assert outcome.settled
+    assert outcome.outstanding == ()
+    assert search.next_candidate(results) is None
+
+
+def test_the_bracket_is_halved_from_whichever_end_is_still_open():
+    """Both ends move, and the next candidate is the midpoint of what is left."""
+
+    search = Search(rule=EquivalenceRule(resamples=200))
+    equivalent_long = {FULL: same(FULL), 64: same(64)}
+
+    # Open bracket [1, 4, 16]: its midpoint is 4, which splits it evenly.
+    assert search.next_candidate(equivalent_long) == 4
+    # 4 equivalent closes the bracket from above, leaving only 1 below it.
+    assert search.next_candidate({**equivalent_long, 4: same(4)}) == 1
+    # 4 short of the margin closes it from below instead, leaving 16.
+    assert search.next_candidate({**equivalent_long, 4: worse(4)}) == 16

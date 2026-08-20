@@ -6,6 +6,7 @@ import inspect
 from types import SimpleNamespace
 
 import jax
+import jax.numpy as jnp
 import numpy as np
 import pytest
 
@@ -19,6 +20,16 @@ from tests.support.builders import graph_of
 from tests.support.environments import TinyDiscreteEnv
 
 EPISODE_LENGTH = 8
+
+
+def _only(updates):
+    """The single array in a one-parameter update, as numpy.
+
+    Indexing the tree by key would ask the type checker to believe an
+    ``ArrayTree`` is a dict, which it is not obliged to be.
+    """
+
+    return np.asarray(jax.tree.leaves(updates)[0])
 
 
 def parameters(**overrides):
@@ -354,3 +365,57 @@ def test_a_truncation_longer_than_an_episode_is_refused_at_build_time():
 
     with pytest.raises(ValueError, match="exceeds the declared episode length"):
         assembled(**{"learning.truncated.length": EPISODE_LENGTH + 1})
+
+
+def test_the_assembled_graph_steps_the_solver_the_manifest_named():
+    """The graph's own optimizer, not a helper that resembles it.
+
+    A test that exercised ``step_transform`` alone would pass while the graph
+    built something else entirely -- which is exactly what happened: the chain
+    was written, the graph was still calling the shared base transform, and a
+    manifest naming adadelta got plain SGD with no clip and no error. So the
+    thing under test here is the transform the assembled graph is holding.
+    """
+
+    import optax
+
+    from memorax.algorithms.drqn import Adadelta, step_transform
+
+    optimizer = graph_of(assembled()).core.optimizer
+    grads = {"w": jnp.asarray([300.0, -400.0])}  # global norm 500, over the clip
+
+    stepped, _ = optimizer.update(grads, optimizer.init(grads), grads)
+
+    published = step_transform(Adadelta(lr=0.1, rho=0.95, eps=1e-8), grad_clip=10.0)
+    wanted, _ = published.update(grads, published.init(grads), grads)
+    np.testing.assert_allclose(_only(stepped), _only(wanted), rtol=1e-6)
+
+    # And is not what falling through to the shared base transform would give.
+    sgd = optax.sgd(0.1)
+    fallen_through, _ = sgd.update(grads, sgd.init(grads), grads)
+    assert not np.allclose(_only(stepped), _only(fallen_through))
+
+
+def test_the_manifest_grad_clip_reaches_the_assembled_optimizer():
+    """Not merely declared: the manifest's clip has to change what is stepped.
+
+    AdaDelta divides a gradient by a running average of itself, so a *constant*
+    gradient produces the same trajectory clipped or not -- the clip cancels out
+    of both sides. It becomes visible when the magnitude changes between steps:
+    a clipped first step leaves a much smaller accumulator behind, and the
+    second step is taken against that.
+    """
+
+    steep = {"w": jnp.asarray([300.0, -400.0])}  # global norm 500, over the clip
+    gentle = {"w": jnp.asarray([0.6, -0.8])}  # global norm 1, under it
+
+    clipped = graph_of(assembled()).core.optimizer
+    loose = graph_of(assembled(**{"grad_clip": 0.0})).core.optimizer
+
+    def after_both(optimizer):
+        state = optimizer.init(steep)
+        _, state = optimizer.update(steep, state, steep)
+        update, _ = optimizer.update(gentle, state, gentle)
+        return _only(update)
+
+    assert not np.allclose(after_both(clipped), after_both(loose))

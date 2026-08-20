@@ -58,22 +58,66 @@ def validate_sample_sequence_length(
         )
 
 
+def validate_seam_margin(
+    seam_margin: int, sample_sequence_length: int, max_length: int, add_batch_size: int
+):
+    """A ring that keeps nothing once it wraps is worse than one with a seam.
+
+    When the margin and the window between them cover the whole ring, no
+    position is admissible once it fills, and the sampler falls back to drawing
+    from the beginning -- which looks like sampling and is not. Refused here,
+    because the buffer that would do it is built long before it wraps.
+    """
+
+    if seam_margin < 0:
+        raise ValueError("seam_margin must not be negative")
+    max_length_time_axis = max_length // add_batch_size
+    room = max_length_time_axis - sample_sequence_length - 2 * seam_margin
+    if seam_margin and room < 0:
+        raise ValueError(
+            f"a ring of {max_length_time_axis} per stream has no position left to "
+            f"start a window of {sample_sequence_length} once a margin of "
+            f"{seam_margin} is kept clear at each end of it; give the buffer at "
+            f"least {sample_sequence_length + 2 * seam_margin} per stream"
+        )
+
+
 def validate_episode_buffer_args(
     max_length: int,
     min_length: int,
     sample_batch_size: int,
     sample_sequence_length: int,
     add_batch_size: int,
+    seam_margin: int = 0,
 ):
     validate_sample_batch_size(sample_batch_size, max_length)
     validate_min_length(min_length, add_batch_size, max_length)
     validate_max_length_add_batch_size(max_length, add_batch_size)
     validate_sample_sequence_length(sample_sequence_length, max_length, add_batch_size)
+    validate_seam_margin(
+        seam_margin, sample_sequence_length, max_length, add_batch_size
+    )
 
 
 def _valid_start_mask(
-    state: TrajectoryBufferState[Experience], sample_sequence_length: int
+    state: TrajectoryBufferState[Experience],
+    sample_sequence_length: int,
+    seam_margin: int = 0,
 ) -> Array:
+    """Which stored positions a window may begin at, given where the head is.
+
+    Once the ring is full the write head is a seam: the row before it is the
+    newest transition and the row at it is the oldest, and they never followed
+    one another. Reading a window across it splices two moments together into
+    something that looks like a trajectory and is not, so the positions whose
+    window would span it are excluded.
+
+    ``seam_margin`` excludes that much further on both sides, for a caller whose
+    start rule reads beyond the window itself -- looking ahead for the episode's
+    ending, or back for its beginning. Such a rule is answering a question about
+    a trajectory too, and the seam is not one there either.
+    """
+
     _, max_length_time_axis = utils.get_tree_shape_prefix(state.experience, n_axes=2)
     time_indices = jnp.arange(max_length_time_axis)
 
@@ -82,7 +126,12 @@ def _valid_start_mask(
         return (time_indices >= 0) & (time_indices <= last_valid)
 
     def _full() -> Array:
-        return jnp.ones((max_length_time_axis,), dtype=bool)
+        # Distance forward from the oldest row, so that the seam is the two ends
+        # of this range rather than somewhere in the middle of it.
+        from_oldest = (time_indices - state.current_index) % max_length_time_axis
+        return (from_oldest >= seam_margin) & (
+            from_oldest <= max_length_time_axis - sample_sequence_length - seam_margin
+        )
 
     return jax.lax.cond(state.is_full, _full, _not_full)
 
@@ -96,6 +145,7 @@ def make_episode_buffer(
     add_sequences: bool = False,
     add_batch_size: int | None = None,
     min_length_time_axis: int | None = None,
+    seam_margin: int = 0,
 ) -> TrajectoryBuffer:
     if add_batch_size is None:
         add_batch_size = 1
@@ -109,6 +159,7 @@ def make_episode_buffer(
         sample_batch_size=sample_batch_size,
         sample_sequence_length=sample_sequence_length,
         add_batch_size=add_batch_size,
+        seam_margin=seam_margin,
     )
 
     buffer = make_trajectory_buffer(
@@ -143,9 +194,9 @@ def make_episode_buffer(
         chex.assert_shape(start_flags, (add_batch_size, max_length_time_axis))
         start_flags = start_flags.astype(jnp.float32)
 
-        valid_mask = _valid_start_mask(state, sample_sequence_length).astype(
-            jnp.float32
-        )
+        valid_mask = _valid_start_mask(
+            state, sample_sequence_length, seam_margin
+        ).astype(jnp.float32)
         start_mask = start_flags * valid_mask[None, :]
 
         per_row = jnp.sum(start_mask, axis=1)

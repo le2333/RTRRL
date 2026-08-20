@@ -10,6 +10,16 @@ import optax
 from memorax.algorithms.drqn import Core, LearnerSequence, QFunction, RecurrentInputs
 
 
+def _only(updates):
+    """The single array in a one-parameter update, as numpy.
+
+    Indexing the tree by key would ask the type checker to believe an
+    ``ArrayTree`` is a dict, which it is not obliged to be.
+    """
+
+    return np.asarray(jax.tree.leaves(updates)[0])
+
+
 def _tree_equal(left, right):
     return all(
         np.array_equal(a, b)
@@ -42,11 +52,14 @@ def _inputs(time):
 
 
 def _sample():
-    inputs = _inputs(3)
+    walk = _inputs(3)
     return LearnerSequence(
-        inputs=inputs,
+        inputs=RecurrentInputs(
+            observation=walk.observation[:, :-1],
+            episode_start=walk.episode_start[:, :-1],
+        ),
         bootstrap_inputs=RecurrentInputs(
-            observation=inputs.observation[:, 1:],
+            observation=walk.observation[:, 1:],
             episode_start=jnp.zeros((1, 2), dtype=jnp.bool_),
         ),
         actions=jnp.asarray([[0, 1]]),
@@ -168,9 +181,7 @@ def test_the_published_solver_is_adadelta_over_a_clipped_gradient():
     by_hand, _ = clip.update(steep, clip.init(steep), steep)
     by_hand, _ = solver.update(by_hand, solver.init(steep), steep)
 
-    np.testing.assert_allclose(
-        np.asarray(by_the_chain["w"]), np.asarray(by_hand["w"]), rtol=1e-6
-    )
+    np.testing.assert_allclose(_only(by_the_chain), _only(by_hand), rtol=1e-6)
 
 
 def test_the_clip_leaves_a_gradient_under_its_bound_alone():
@@ -185,9 +196,7 @@ def test_the_clip_leaves_a_gradient_under_its_bound_alone():
     bounded, _ = chained.update(gentle, chained.init(gentle), gentle)
     plain, _ = solver.update(gentle, solver.init(gentle), gentle)
 
-    np.testing.assert_allclose(
-        np.asarray(bounded["w"]), np.asarray(plain["w"]), rtol=1e-6
-    )
+    np.testing.assert_allclose(_only(bounded), _only(plain), rtol=1e-6)
 
 
 def test_the_two_declared_solvers_are_two_solvers():
@@ -203,4 +212,4 @@ def test_the_two_declared_solvers_are_two_solvers():
     stepped, _ = adadelta.update(grads, adadelta.init(grads), grads)
     other, _ = adam.update(grads, adam.init(grads), grads)
 
-    assert not np.allclose(np.asarray(stepped["w"]), np.asarray(other["w"]))
+    assert not np.allclose(_only(stepped), _only(other))
