@@ -52,6 +52,10 @@ def stepped(traces, delta, *, direct=None, clip=0.0, **settings):
         direct,
         rule.init(params=None, traces=traces),
         delta=jnp.asarray(delta, dtype=jnp.float32),
+        # The instantaneous derivative every rule is now handed beside the
+        # trace. This one reads the trace and nothing else, which is why the
+        # two can be the same tree here without changing a single assertion.
+        derivative=traces,
         step=1,
         params=None,
     )

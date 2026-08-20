@@ -360,6 +360,7 @@ class Network:
             None,
             state.rule.v,
             delta=delta,
+            derivative=gradient,
             step=step,
             params=state.params,
         )

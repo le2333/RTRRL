@@ -108,12 +108,11 @@ space:
         lr: [0.0001] # Table 1, alpha_R
     grad_clip: [1.0] # Table 1, gradient norm clip
     follow: [1.0] # Table 1, update period 1: no slow copy
-  heads:
+  actor:
     optimizer:
       kind: [adam]
       adam:
         lr: [0.0001] # Table 1, alpha_A and alpha_C
-  actor:
     # Against a Discrete space the three Gaussian heads are refused at build
     # time, so this cannot be left at a default.
     head:
@@ -122,6 +121,10 @@ space:
         initialization:
           kind: [lecun]
   critic:
+    optimizer:
+      kind: [adam]
+      adam:
+        lr: [0.0001] # Table 1, alpha_A and alpha_C
     head:
       kind: [value]
       value:

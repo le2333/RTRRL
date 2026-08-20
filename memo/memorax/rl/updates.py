@@ -9,6 +9,19 @@ than a finished gradient. Adam does not need the split, but OBGD does: its
 step-size bound reads |delta| and the trace norm together, so delta cannot be
 folded in beforehand. The D-RTRRL rule needs it for the opposite reason: it
 reads only the *sign* of delta, and a folded-in delta cannot be unfolded.
+
+One contract, four inputs::
+
+    apply(trace, direct, state, *, delta, derivative, step, params)
+
+``trace`` is the eligibility the algorithm's trace component left; ``direct``
+is what ascends untraced; ``delta`` is the scalar the trace is weighted by; and
+``derivative`` is the instantaneous derivative that trace was accumulated from,
+which most rules ignore. The intentional update is the one that reads it -- its
+second moment is a statistic of the derivative while its step size is one of
+the trace -- and reading it is not the same as owning it: no rule accumulates a
+trace of its own, so which eligibility an algorithm keeps stays readable from
+the algorithm.
 """
 
 from __future__ import annotations
@@ -23,6 +36,8 @@ from flax import struct
 
 from memorax.building import ComponentFamily
 from memorax.parameters import param
+
+from .intentional import IntentionalOptimizer, IntentionalUpdate
 
 
 class ObjectiveDirections(struct.PyTreeNode):
@@ -55,6 +70,10 @@ class UpdateRule:
     rules carry different shapes: Adam's moments follow the parameters, which
     the env axis has already been averaged out of, while OBGD's second moment
     follows the trace and stays per-env, since its bound is measured per-env.
+
+    Every rule answers one contract, and a rule that needs the instantaneous
+    derivative reads the ``derivative`` its algorithm passes beside the trace
+    rather than accumulating one of its own.
     """
 
     init: Callable[..., Any]
@@ -98,8 +117,8 @@ def make_optax_rule(transform, *, rate=None) -> UpdateRule:
         del traces
         return transform.init(params)
 
-    def apply(traced, direct, state, *, delta, step, params):
-        del step
+    def apply(traced, direct, state, *, delta, derivative, step, params):
+        del step, derivative
         ascent = jax.tree.map(
             lambda leaf: jnp.mean(leaf, axis=0),
             _combine(traced, direct, delta),
@@ -205,6 +224,15 @@ class DRTRRL:
         ball, so the one with the larger trace takes nearly all of the step;
         that is an ablation, not a default.
 
+        **Inert under RTRRL as it now groups.** RTRRL used to step its two
+        readouts together, which was the one place a group held two blocks;
+        since the actor and the critic became separate parameter groups every
+        group RTRRL hands this rule holds exactly one block, so the two scopes
+        cut the same unit. The setting stays because the rule is not RTRRL's --
+        a caller that does group several blocks still gets two behaviours --
+        and because a recorded run that named it should keep meaning what it
+        meant. An RTRRL run selecting ``group`` today selects ``block``.
+
     ``denominator`` is where ``eps`` sits, which is two rules rather than two
     spellings and is declared rather than chosen at the point of division:
 
@@ -244,7 +272,12 @@ BOUND_BRANCHES = {
 
 BASE_BRANCHES = {"sgd": Sgd, "adam": Adam}
 
-STEP_BRANCHES = {"sgd": Sgd, "adam": Adam, "d_rtrrl": DRTRRL}
+STEP_BRANCHES = {
+    "sgd": Sgd,
+    "adam": Adam,
+    "d_rtrrl": DRTRRL,
+    "iu": IntentionalUpdate,
+}
 
 
 def _selected_parameters(selection, builder):
@@ -318,8 +351,8 @@ def make_bounded_rule(*, bound, base) -> UpdateRule:
         del params
         return jax.tree.map(jnp.zeros_like, traces)
 
-    def apply(traced, direct, state, *, delta, step, params):
-        del params
+    def apply(traced, direct, state, *, delta, derivative, step, params):
+        del params, derivative
         # An unbounded second moment is only carried where something reads it.
         # Under the plain bound the step never does, and accumulating one there
         # meant the rule needed a decay rate that changed nothing.
@@ -481,8 +514,8 @@ def make_d_rtrrl_rule(step, *, clip=0.0) -> UpdateRule:
         del params, traces
         return ()
 
-    def apply(traced, direct, state, *, delta, step, params):
-        del step, params
+    def apply(traced, direct, state, *, delta, derivative, step, params):
+        del step, params, derivative
         # `jnp.sign` takes a TD error of exactly zero to a step of exactly
         # zero, which is what a rule that moves a fixed distance every step
         # otherwise would not do.
@@ -521,6 +554,77 @@ def make_d_rtrrl_rule(step, *, clip=0.0) -> UpdateRule:
             updates=updates,
             state=state,
             metrics={"step_size": jnp.full_like(delta, c)},
+        )
+
+    return UpdateRule(init=init, apply=apply)
+
+
+def make_intentional_rule(
+    step: IntentionalUpdate,
+    *,
+    signals: Mapping[str, str],
+    decays: Mapping[str, float],
+    streams: int,
+) -> UpdateRule:
+    """One intentional optimizer per block of a group, each with its own state.
+
+    A group's blocks share the settings this names and nothing else. Each
+    carries its own second moments, clipping statistic and dynamic step size,
+    because the whole point of the step size is that it is measured against the
+    parameters it moves.
+
+    ``signals`` says which scalar each block's step is proportional to and
+    ``decays`` says the ``gamma * lambda`` its trace runs at -- the rate
+    ``sigma_bar`` averages at, which must be the rate the algorithm's trace
+    component forgets at. Both are the algorithm's to declare.
+
+    ``streams`` is the parallel environment count. The other rules read it off
+    the trace tree they are handed; this one allocates per-stream statistics
+    before any trace has arrived, so it is told.
+    """
+
+    optimizers = {
+        name: IntentionalOptimizer(step, decay=decays[name], signal=signal)
+        for name, signal in signals.items()
+    }
+
+    def init(*, params, traces):
+        del traces
+        return {
+            name: optimizer.init(params[name], streams=streams)
+            for name, optimizer in optimizers.items()
+        }
+
+    def apply(traced, direct, state, *, delta, derivative, step, params):
+        # ``step`` here is the transition counter every bias correction reads,
+        # and not the settings of the same name outside -- the optimizers were
+        # built from those already, which is the only reason the shadowing is
+        # harmless.
+        taken = {
+            name: optimizer.update(
+                delta=delta,
+                trace=traced[name],
+                derivative=derivative[name],
+                direct=None if direct is None else direct.get(name),
+                step=step,
+                params=params[name],
+                state=state[name],
+            )
+            for name, optimizer in optimizers.items()
+        }
+        readings = {name: reading for name, (_, _, reading) in taken.items()}
+        return RuleOutput(
+            updates={name: updates for name, (updates, _, _) in taken.items()},
+            state={name: carried for name, (_, carried, _) in taken.items()},
+            metrics={
+                "intentional": readings,
+                # Under the one name every rule reports its step scale by. This
+                # rule's is dynamic and per block, which is why the name is a
+                # block's rather than a group's.
+                "step_size": {
+                    name: reading.step_size for name, reading in readings.items()
+                },
+            },
         )
 
     return UpdateRule(init=init, apply=apply)

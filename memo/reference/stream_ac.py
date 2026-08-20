@@ -723,6 +723,9 @@ class StreamAC:
             None,
             state.critic_v,
             delta=td_error,
+            # The instantaneous derivative every rule is handed beside the
+            # trace. The bounded rule this one uses reads the trace alone.
+            derivative=critic_grads,
             step=current_step,
             params=state.critic_params,
         )
@@ -730,6 +733,7 @@ class StreamAC:
             actor_trace_result.update,
             None,
             state.actor_v,
+            derivative=actor_grads,
             delta=td_error,
             step=current_step,
             params=state.actor_params,

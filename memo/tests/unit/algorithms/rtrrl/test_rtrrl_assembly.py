@@ -4,6 +4,7 @@ from types import SimpleNamespace
 import jax
 import numpy as np
 import pytest
+from flax import serialization
 
 import memorax
 from entries import rtrrl as entry
@@ -56,11 +57,52 @@ D_RTRRL = {
     "torso.optimizer.d_rtrrl.magnitude": "sign",
     "torso.optimizer.d_rtrrl.scope": "block",
     "torso.optimizer.d_rtrrl.eps": 1e-8,
-    "heads.optimizer.kind": "d_rtrrl",
-    "heads.optimizer.d_rtrrl.c": C,
-    "heads.optimizer.d_rtrrl.magnitude": "sign",
-    "heads.optimizer.d_rtrrl.scope": "block",
-    "heads.optimizer.d_rtrrl.eps": 1e-8,
+    "actor.optimizer.kind": "d_rtrrl",
+    "actor.optimizer.d_rtrrl.c": C,
+    "actor.optimizer.d_rtrrl.magnitude": "sign",
+    "actor.optimizer.d_rtrrl.scope": "block",
+    "actor.optimizer.d_rtrrl.eps": 1e-8,
+    "critic.optimizer.kind": "d_rtrrl",
+    "critic.optimizer.d_rtrrl.c": C,
+    "critic.optimizer.d_rtrrl.magnitude": "sign",
+    "critic.optimizer.d_rtrrl.scope": "block",
+    "critic.optimizer.d_rtrrl.eps": 1e-8,
+}
+
+
+# The published actor-critic's two intended reductions: a policy step aiming
+# at roughly five percent of the log-probability, a value step at half the TD
+# error. They are different numbers, and a surface that could not say so could
+# not express the configuration every reported result came from.
+ETA_ACTOR = 0.05
+ETA_CRITIC = 0.5
+
+INTENTIONAL = {
+    **LIVE,
+    # The intentional update sets its own step size, so the outer bound on the
+    # finished torso step has to be off before one can be selected at all.
+    "torso.grad_clip": 0.0,
+    "torso.optimizer.kind": "iu",
+    "torso.optimizer.iu.eta": ETA_CRITIC,
+    "torso.optimizer.iu.clip": 20.0,
+    "torso.optimizer.iu.beta_rms": 0.999,
+    "torso.optimizer.iu.beta_clip": 0.9998,
+    "torso.optimizer.iu.beta_advantage": 0.9998,
+    "torso.optimizer.iu.eps": 1e-8,
+    "actor.optimizer.kind": "iu",
+    "actor.optimizer.iu.eta": ETA_ACTOR,
+    "actor.optimizer.iu.clip": 20.0,
+    "actor.optimizer.iu.beta_rms": 0.999,
+    "actor.optimizer.iu.beta_clip": 0.9998,
+    "actor.optimizer.iu.beta_advantage": 0.9998,
+    "actor.optimizer.iu.eps": 1e-8,
+    "critic.optimizer.kind": "iu",
+    "critic.optimizer.iu.eta": ETA_CRITIC,
+    "critic.optimizer.iu.clip": 20.0,
+    "critic.optimizer.iu.beta_rms": 0.999,
+    "critic.optimizer.iu.beta_clip": 0.9998,
+    "critic.optimizer.iu.beta_advantage": 0.9998,
+    "critic.optimizer.iu.eps": 1e-8,
 }
 
 
@@ -77,8 +119,10 @@ def parameters(backbone="lru", differentiation="exact_rtrl", optimizer=None):
             "torso.optimizer.adam.lr": 1e-3,
             "torso.grad_clip": 1.0,
             "torso.follow": 0.25,
-            "heads.optimizer.kind": "adam",
-            "heads.optimizer.adam.lr": 5e-4,
+            "actor.optimizer.kind": "adam",
+            "actor.optimizer.adam.lr": 5e-4,
+            "critic.optimizer.kind": "adam",
+            "critic.optimizer.adam.lr": 5e-4,
             **(optimizer or {}),
             "actor.head.kind": "state_std",
             "critic.head.kind": "value",
@@ -188,8 +232,8 @@ def test_the_d_rtrrl_optimizer_is_reachable_from_a_run_configuration():
         assert np.all(np.isfinite(leaf)), f"{path} went non-finite"
     assert np.all(np.isfinite(metrics.update.td_error))
     # The rate every rule reports under one name, and here a constant one.
-    np.testing.assert_allclose(metrics.update.torso_step.step_size, C)
-    np.testing.assert_allclose(metrics.update.heads_step.step_size, C)
+    for block in ("torso", "actor", "critic"):
+        np.testing.assert_allclose(getattr(metrics.update, block).step_size, C)
 
     # Every block took a step. Without this the assertions above are satisfied
     # by a run that never moved: a TD error of zero reaching `sign` leaves the
@@ -201,6 +245,192 @@ def test_the_d_rtrrl_optimizer_is_reachable_from_a_run_configuration():
         assert any(
             not np.array_equal(leaf, after[path]) for path, leaf in before.items()
         ), f"{block} never moved"
+
+
+def test_the_intentional_optimizer_is_reachable_from_a_run_configuration():
+    """The same claim as above for the intentional update, which needs more.
+
+    Its arithmetic is driven in ``tests/unit/components``. Everything between a
+    run document and that arithmetic is here: that ``iu`` survives the
+    parameter surface, that each of the three blocks gets an optimizer of its
+    own, that a scan of real transitions stays finite, and that the algorithm
+    still holds every eligibility trace -- the optimizer reads one, and reading
+    is not owning.
+    """
+
+    built = assembled(optimizer=INTENTIONAL)
+    state = built.program.init(jax.random.key(0))
+    stepped, metrics = built.program.train(jax.random.key(1), state, 32)
+
+    for path, leaf in flattened(stepped.core).items():
+        assert np.all(np.isfinite(leaf)), f"{path} went non-finite"
+    for block in ("torso", "actor", "critic"):
+        reading = getattr(metrics.update, block).intentional
+        assert np.all(np.asarray(reading.non_finite) == 0.0), block
+        # The trace is still the algorithm's, and it is not empty: an
+        # optimizer that had quietly started keeping its own would leave this
+        # one at the zeros it was allocated with.
+        trace = getattr(stepped.core, block).traces
+        assert trace is not None
+        assert any(np.any(leaf != 0) for leaf in flattened(trace).values()), block
+
+        before = flattened(getattr(state.core, block).params)
+        after = flattened(getattr(stepped.core, block).params)
+        assert any(
+            not np.array_equal(leaf, after[path]) for path, leaf in before.items()
+        ), f"{block} never moved"
+
+
+def test_each_block_gets_an_intentional_state_and_an_eta_of_its_own():
+    """Three learners, three step sizes, and one advantage scale between them.
+
+    Nothing is shared: not the state, and not the intended reduction. The
+    published actor-critic sets ``eta`` to 0.05 for the policy and 0.5 for the
+    value function and sweeps them separately, so a surface that gave the two
+    heads one number could not express it -- which is what this asserts is no
+    longer the case, by reading the two step sizes back out of one run.
+
+    The critic, whose signal is a TD error rather than an advantage, carries no
+    advantage scale at all.
+    """
+
+    built = assembled(optimizer=INTENTIONAL)
+    state = built.program.init(jax.random.key(0))
+    stepped, metrics = built.program.train(jax.random.key(1), state, 8)
+
+    graph = graph_of(built)
+    assert graph.cfg.actor_optimizer.eta == ETA_ACTOR
+    assert graph.cfg.critic_optimizer.eta == ETA_CRITIC
+
+    sizes = {
+        block: np.asarray(getattr(metrics.update, block).step_size).reshape(-1)
+        for block in ("torso", "actor", "critic")
+    }
+    assert not np.allclose(sizes["actor"], sizes["critic"])
+    assert not np.allclose(sizes["torso"], sizes["critic"])
+
+    assert np.all(np.asarray(metrics.update.actor.intentional.advantage_scale) >= 0)
+    assert metrics.update.critic.intentional.advantage_scale is None
+    assert metrics.update.torso.intentional.advantage_scale is None
+    assert stepped.core.rule["critic"]["critic"].advantage_scale is None
+
+
+def test_the_entropy_direction_joins_the_trace_only_under_an_intentional_step():
+    """Where the entropy term goes is the algorithm's, and it is not one place.
+
+    RTRRL's own rules take it untraced, on the step it arises, which is what
+    the published RTRRL does: the trace after a transition is the same whether
+    the entropy coefficient is zero or not. The paper's intentional policy
+    gradient is one derivative -- the log-probability and the entropy together,
+    signed by the TD error -- and the trace has to accumulate that sum, so the
+    same comparison has to come out different.
+
+    Read on the trace rather than on the parameters, because the parameters
+    move under both and only the trace says which route the term took.
+    """
+
+    def actor_trace(optimizer):
+        loud = assembled(optimizer={**optimizer, "entropy_rate": 1e-2})
+        quiet = assembled(optimizer={**optimizer, "entropy_rate": 0.0})
+        traces = []
+        for built in (loud, quiet):
+            state = built.program.init(jax.random.key(0))
+            stepped, _ = built.program.train(jax.random.key(1), state, 1)
+            traces.append(flattened(stepped.core.actor.traces))
+        return traces
+
+    with_entropy, without = actor_trace(D_RTRRL)
+    for path, leaf in with_entropy.items():
+        np.testing.assert_array_equal(
+            leaf, without[path], err_msg=f"{path} traced the entropy under d_rtrrl"
+        )
+
+    with_entropy, without = actor_trace(INTENTIONAL)
+    assert any(
+        not np.array_equal(leaf, without[path]) for path, leaf in with_entropy.items()
+    ), "the entropy direction never reached the intentional trace"
+
+
+def test_an_intentional_run_files_exactly_the_series_its_schema_names():
+    """The declaration follows the selection, in both directions.
+
+    ``tests/test_readings.py`` holds this for the default configuration. The
+    intentional one is where it could break: it is the first selection that
+    changes which readings exist, so the schema handed to Runtime is the built
+    graph's rather than the class's, and a name in one and not the other fails
+    a run on a series that never arrives.
+    """
+
+    built = assembled(optimizer=INTENTIONAL)
+    state = built.program.init(jax.random.key(0))
+    _, metrics = built.program.train(jax.random.key(1), state, 4)
+
+    produced = {
+        name.lstrip(".").replace("/.", ".").replace("/", ".")
+        for name in flattened({"forward": metrics.forward, "update": metrics.update})
+    }
+    assert produced == set(built.observations.series)
+    assert "update.actor.intentional.sigma_bar" in produced
+    assert "update.actor.step_size" in produced
+    # A catalog advertises every reading some configuration files. This is the
+    # configuration that files all of them; the default one, which produces no
+    # intentional state at all, files strictly fewer.
+    available = set(taken(rtrrl.AVAILABLE_REPORTS, parts=PLACES))
+    assert set(built.observations.series) == available
+    assert set(assembled().observations.series) < available
+
+
+def test_a_resumed_run_carries_the_intentional_state_unchanged():
+    """What a checkpoint is here: the state crossing an invocation boundary.
+
+    Runtime trains in chunks, so every run is already a sequence of resumptions
+    from a state that was handed back. The state serialized and read back has
+    to be the same state -- the trace, the second moment, the clipping
+    statistic and the advantage scale included -- and the transitions that
+    follow it have to be the transitions that would have followed anyway.
+
+    Driven on one key sequence from both sides, so what is compared is the
+    resumption and not two different streams of random numbers.
+    """
+
+    built = assembled(optimizer=INTENTIONAL)
+    graph = graph_of(built)
+    state = built.program.init(jax.random.key(0))
+    keys = jax.random.split(jax.random.key(1), 8)
+
+    uninterrupted, _ = jax.lax.scan(graph.train_step, state, keys)
+    halfway, _ = jax.lax.scan(graph.train_step, state, keys[:4])
+
+    saved = serialization.to_state_dict(halfway)
+    held = set(saved["core"]["rule"]["actor"]["actor"])
+    assert {
+        "nu",
+        "sigma_bar",
+        "delta_square",
+        "advantage_scale",
+    } <= held, "the intentional state is not all of it in what a checkpoint would hold"
+    # And the eligibility is where it always was, under the block rather than
+    # under the rule.
+    assert set(saved["core"]["actor"]) >= {"params", "traces"}
+    restored = serialization.from_state_dict(halfway, saved)
+    assert_tree_equal(restored, halfway, "restored state")
+
+    resumed, _ = jax.lax.scan(graph.train_step, restored, keys[4:])
+    assert_tree_equal(resumed.core.rule, uninterrupted.core.rule, "intentional state")
+    assert_tree_equal(resumed.core, uninterrupted.core, "core")
+
+
+def test_the_intentional_update_refuses_a_second_bound_on_its_step():
+    """A clip over an intentional step is a different, undeclared algorithm.
+
+    The step size is derived from what the step is supposed to spend. Cutting
+    the finished step back to a fixed length spends something else, and the run
+    would still be recorded as a reproduction of the published rule -- so it is
+    refused where it is asked for rather than applied quietly.
+    """
+
+    with pytest.raises(ValueError, match="second, undeclared bound"):
+        assembled(optimizer={**INTENTIONAL, "torso.grad_clip": 1.0})
 
 
 def test_the_two_arms_differ_in_exactly_the_magnitude_they_keep():
@@ -227,7 +457,8 @@ def test_the_two_arms_differ_in_exactly_the_magnitude_they_keep():
             optimizer={
                 **D_RTRRL,
                 "torso.optimizer.d_rtrrl.magnitude": magnitude,
-                "heads.optimizer.d_rtrrl.magnitude": magnitude,
+                "actor.optimizer.d_rtrrl.magnitude": magnitude,
+                "critic.optimizer.d_rtrrl.magnitude": magnitude,
                 "torso.grad_clip": 0.0,
             }
         )
@@ -348,9 +579,14 @@ def test_rtrrl_declares_parameters_and_observations_beside_its_graph():
     assert entry.METRICS is rtrrl.METRICS
     assert rtrrl.PARAMETERS
     assert rtrrl.TRAINING_METRICS == taken(rtrrl.REPORTS, parts=PLACES)
-    assert rtrrl.METRICS == metric_names(
-        "train", rtrrl.TRAINING_METRICS
-    ) + metric_names("eval")
+    # The catalog advertises every reading some configuration files, which is
+    # more than the default configuration files: the intentional optimizer
+    # carries state that has no counterpart under Adam, and an Adam run's
+    # schema must not name a series it is never going to produce. So these two
+    # are no longer one list, and the wider one is what is published.
+    available = taken(rtrrl.AVAILABLE_REPORTS, parts=PLACES)
+    assert rtrrl.METRICS == metric_names("train", available) + metric_names("eval")
+    assert set(rtrrl.TRAINING_METRICS) < set(available)
 
 
 def test_observation_schema_separates_episode_and_trajectory_fields():
@@ -442,7 +678,8 @@ def test_generic_assembly_closes_one_shared_torso_rtrrl_graph():
     assert isinstance(graph.core.torso, rtrrl.Torso)
     assert graph.core.actor is not graph.core.critic
     assert graph.cfg.torso_optimizer.lr == 1e-3
-    assert graph.cfg.heads_optimizer.lr == 5e-4
+    assert graph.cfg.actor_optimizer.lr == 5e-4
+    assert graph.cfg.critic_optimizer.lr == 5e-4
     assert built.observations is rtrrl.OBSERVATIONS
 
     state = built.program.init(jax.random.key(0))

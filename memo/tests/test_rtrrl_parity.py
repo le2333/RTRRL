@@ -53,9 +53,10 @@ import pytest
 # one thing against another.
 from test_rtrrl import build, torso_network
 
-from memorax.algorithms.rtrrl_aaai import RTRRLConfig, _advance_trace
+from memorax.algorithms.rtrrl_aaai import RTRRLConfig
 from memorax.networks.sequence_models import LRUCell, LRUConfig, Memoroid
 from memorax.networks.sequence_models.lru import LRUStructuredRTRL
+from memorax.rl.traces import Trace
 from tests.support.numerics import assert_within, deviations, flattened
 
 pytestmark = [pytest.mark.parity, pytest.mark.external]
@@ -120,10 +121,11 @@ def _algebra():
         # Jitted on both sides: ``trace_update`` carries ``@jax.jit`` and XLA
         # fuses its multiply-add, so an eager comparison is a sub-ulp apart for
         # reasons that are the format's and not the algorithm's.
+        # RTRRL's own recurrence, which is now a trace component rather than a
+        # function on the algorithm: emphasis-weighted, and read as it stood.
+        # What is compared is the recurrence, and it did not move.
         mine = jax.jit(
-            lambda i, g, r, e, d=rate: _advance_trace(
-                i, g, decay=d, reset_before=r, emphasis=e
-            )
+            lambda i, g, r, e, d=rate: Trace(decay=d).advance(i, g, reset=r, emphasis=e)
         )(incoming, gradient, done, emphasis)
         found[name] = (flattened(mine), flattened(theirs))
     return found

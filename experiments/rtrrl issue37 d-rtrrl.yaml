@@ -105,7 +105,7 @@ space:
     # clips an arm is written against is the experiment side's to declare.
     grad_clip: [1.0]
     follow: [1.0]
-  heads:
+  actor:
     optimizer:
       kind: [d_rtrrl]
       d_rtrrl:
@@ -114,13 +114,20 @@ space:
         scope: [block]
         denominator: [shifted]
         eps: [0.00000001]
-  actor:
     head:
       kind: [state_std]
       state_std:
         initialization:
           kind: [lecun]
   critic:
+    optimizer:
+      kind: [d_rtrrl]
+      d_rtrrl:
+        c: [1.0]
+        magnitude: [sign]
+        scope: [block]
+        denominator: [shifted]
+        eps: [0.00000001]
     head:
       kind: [value]
       value:

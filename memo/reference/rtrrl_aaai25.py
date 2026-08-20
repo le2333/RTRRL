@@ -77,13 +77,18 @@ def make_reference(agent, sequence):
     )
     transforms = {
         "torso": optax.chain(*chain),
+        # The published wiring steps both readouts under one transformation.
+        # RTRRL now declares an optimizer per readout, and this file re-hosts
+        # the published grouping rather than ours -- so it reads the actor's
+        # and holds the two to being the same selection, which is what a
+        # comparison against a one-optimizer implementation requires.
         "heads": optax.chain(
             optax.scale_by_adam(
-                b1=cfg.heads_optimizer.b1,
-                b2=cfg.heads_optimizer.b2,
-                eps=cfg.heads_optimizer.eps,
+                b1=cfg.actor_optimizer.b1,
+                b2=cfg.actor_optimizer.b2,
+                eps=cfg.actor_optimizer.eps,
             ),
-            optax.scale(cfg.heads_optimizer.lr),
+            optax.scale(cfg.actor_optimizer.lr),
         ),
     }
 
@@ -190,14 +195,22 @@ def make_reference(agent, sequence):
 
         # The published chain, rebuilt here rather than reached for through the
         # kernel's ``make_rules``: an optimiser under test is not a reference.
+        # The published chain is the *group's* -- one transformation over both
+        # readouts -- and the state it is carried in is the kernel's, which is
+        # now a rule per block. Applying the same chain to each block on its
+        # own is the same arithmetic: Adam's moments are per leaf, its count
+        # steps once per call either way, and the only cross-block operation in
+        # either chain is the torso's global-norm clip, whose group is one
+        # block. So the grouping under comparison is unchanged and only the
+        # bookkeeping follows the state.
         taken = {}
         stepped = {}
         for group, names in (("torso", ("torso",)), ("heads", ("actor", "critic"))):
-            tree = {name: updates[name] for name in names}
-            held = {name: params_of(core, name) for name in names}
-            moved, opt = transforms[group].update(tree, state.core.rule[group], held)
-            taken[group] = opt
             for name in names:
+                tree = {name: updates[name]}
+                held = {name: params_of(core, name)}
+                moved, opt = transforms[group].update(tree, state.core.rule[name], held)
+                taken[name] = opt
                 stepped[name] = optax.apply_updates(held[name], moved[name])
 
         # I <- gamma I (1 - done) + done

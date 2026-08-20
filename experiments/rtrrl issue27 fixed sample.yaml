@@ -86,18 +86,21 @@ space:
         lr: [0.0001]
     grad_clip: [1.0]
     follow: [1.0]
-  heads:
+  actor:
     optimizer:
       kind: [adam]
       adam:
         lr: [0.0001]
-  actor:
     head:
       kind: [state_std]
       state_std:
         initialization:
           kind: [lecun]
   critic:
+    optimizer:
+      kind: [adam]
+      adam:
+        lr: [0.0001]
     head:
       kind: [value]
       value:

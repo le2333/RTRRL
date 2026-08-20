@@ -71,5 +71,11 @@ def assemble(
             evaluate=graph.evaluate,
             interact=graph.interact,
         ),
-        observations=definition.observations.recording(request.record),
+        # The built graph's schema rather than the class's. They are the same
+        # object for a graph whose readings do not depend on what it selected;
+        # where they do -- an optimizer that carries state worth reading and
+        # one that does not -- only the built graph knows which names are going
+        # to arrive, and a schema naming the others fails the run on a series
+        # that was never going to exist.
+        observations=graph.observations.recording(request.record),
     )

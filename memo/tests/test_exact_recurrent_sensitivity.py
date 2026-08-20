@@ -648,8 +648,12 @@ def test_the_trace_recursion_is_the_one_each_block_declares(block, declared):
         ).astype(jnp.float32)
         emphasis = jax.random.uniform(jax.random.fold_in(keys[2], step), (STREAMS,))
 
-        trace = trace_blocks(cfg)[block].advance_trace(
-            trace, gradient, reset_before=reset, emphasis=emphasis
+        # Through the block's own trace component, which is where the
+        # recursion lives now. Which component a block gets is the algorithm's
+        # pairing decision; that it is this recursion when nothing says
+        # otherwise is what is asserted here.
+        trace = trace_blocks(cfg)[block].trace.advance(
+            trace, gradient, reset=reset, emphasis=emphasis
         )
         wanted = {
             "kernel": rate * (1.0 - reset)[:, None, None] * wanted["kernel"]
@@ -660,7 +664,7 @@ def test_the_trace_recursion_is_the_one_each_block_declares(block, declared):
 
 
 class _Emphasised:
-    """``_advance_traces`` reads one field of the state, and this is it."""
+    """``_emphasis`` reads one field of the state, and this is it."""
 
     def __init__(self, emphasis):
         self.emphasis = emphasis
@@ -670,8 +674,8 @@ def test_the_emphasis_recursion_discounts_until_a_stream_ends():
     """``F <- gamma * F * (1 - reset) + reset``, which is what scales the traces.
 
     Kept apart from the recursion above because the emphasis is formed once in
-    ``_advance_traces`` and handed to all three blocks: getting it wrong moves
-    every trace by the same factor and leaves their ratios intact.
+    ``_emphasis`` and handed to all three blocks: getting it wrong moves every
+    trace by the same factor and leaves their ratios intact.
     """
 
     cfg = settings()
@@ -683,13 +687,6 @@ def test_the_emphasis_recursion_discounts_until_a_stream_ends():
         heads.StateStdGaussian(action_dim=ACTIONS),
         heads.VNetwork(),
     )
-    zeros = {"kernel": jnp.zeros((STREAMS, 2, 3))}
-    traces = {
-        rtrrl.TORSO_GROUP: {"torso": zeros},
-        rtrrl.HEAD_GROUP: {"actor": zeros, "critic": zeros},
-    }
-    gradients = {"torso": zeros, "actor": zeros, "critic": zeros}
-
     emphasis = jnp.ones((STREAMS,), dtype=jnp.float32)
     wanted = emphasis
     for reset in (
@@ -697,9 +694,7 @@ def test_the_emphasis_recursion_discounts_until_a_stream_ends():
         jnp.asarray([0.0, 0.0, 1.0]),
         jnp.asarray([0.0, 0.0, 0.0]),
     ):
-        emphasis, _ = core._advance_traces(
-            _Emphasised(emphasis), traces, gradients, reset
-        )
+        emphasis = core._emphasis(_Emphasised(emphasis), reset)
         wanted = cfg.gamma * wanted * (1.0 - reset) + reset
 
     assert_within(

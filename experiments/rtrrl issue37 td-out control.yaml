@@ -114,7 +114,7 @@ space:
     # evidence about the clip rather than about |delta|.
     grad_clip: [1.0]
     follow: [1.0]
-  heads:
+  actor:
     optimizer:
       kind: [d_rtrrl]
       d_rtrrl:
@@ -123,13 +123,20 @@ space:
         scope: [block]
         denominator: [shifted]
         eps: [0.00000001]
-  actor:
     head:
       kind: [state_std]
       state_std:
         initialization:
           kind: [lecun]
   critic:
+    optimizer:
+      kind: [d_rtrrl]
+      d_rtrrl:
+        c: [1.0]
+        magnitude: [td_out]
+        scope: [block]
+        denominator: [shifted]
+        eps: [0.00000001]
     head:
       kind: [value]
       value:
