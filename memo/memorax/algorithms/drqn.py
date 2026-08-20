@@ -753,6 +753,22 @@ class DRQN:
     ) -> DRQN:
         """Declare DRQN's instances and connections using shared builders."""
 
+        if context.num_envs != 1:
+            # The published agent steps one environment and calls
+            # ``UpdateRandom()`` once per transition. This loop adds every
+            # stream's transition and then updates once, so with several
+            # streams the ratio silently becomes one update per ``num_envs``
+            # transitions -- a change to the learner's cadence, which is the
+            # one thing an arm reproducing a published learner may not make
+            # quietly. Refused rather than corrected, because a vectorised DRQN
+            # is not what this arm is for and inventing a cadence for it would
+            # be a third algorithm nobody asked for.
+            raise ValueError(
+                f"drqn runs one environment: num_envs is {context.num_envs}, and "
+                f"one learner update per environment transition -- which is what "
+                f"the published agent does -- is only true at one"
+            )
+
         selected_core = components.build(DRQN_CORES, "core")
         learning = components.build(LEARNING_FAMILY, "learning")
 

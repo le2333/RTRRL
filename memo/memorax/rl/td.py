@@ -46,9 +46,12 @@ def masked_sequence_loss(
     to the learning rate schedule disguised as a padding convention.
     """
 
-    mask = valid.astype(td_error.dtype)
-    per_sequence = 0.5 * jnp.sum(jnp.square(td_error) * mask, axis=1)
-    per_sequence = per_sequence / jnp.maximum(jnp.sum(mask, axis=1), 1.0)
+    # Selected rather than multiplied by a zero: a masked position is one
+    # nobody drew, and if anything ever put a non-finite value there,
+    # multiplying would carry it into the sum instead of dropping it.
+    kept = jnp.where(valid, 0.5 * jnp.square(td_error), 0.0)
+    counted = valid.astype(td_error.dtype)
+    per_sequence = jnp.sum(kept, axis=1) / jnp.maximum(jnp.sum(counted, axis=1), 1.0)
     if weights is not None:
         per_sequence = per_sequence * weights
     if batch_valid is None:

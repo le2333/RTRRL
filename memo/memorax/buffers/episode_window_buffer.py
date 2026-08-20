@@ -39,6 +39,17 @@ knows how many episodes are eligible, so `can_sample` can answer honestly
 instead of reporting on the buffer's length and leaving the sampler to
 discover there is nothing to draw -- the failure that a silent fall back to
 position zero turns into a run that trains, reports, and means nothing.
+
+Flashbax is storage here and nothing else. Its own `can_sample` is not called,
+because it answers for its own trajectory sampler: it will not report ready
+until a whole `sample_sequence_length` has been written, which is the right
+contract for drawing a fixed-length slice off the head and the wrong one for
+drawing an episode. Left in, it would make the warmup a function of the window
+length -- `max(min_length, t)` rather than `min_length` -- so a run at t=64
+would begin learning later than one at t=4 and a full-episode run later still,
+by the length of the whole horizon. Under a learning-curve AUC that is the
+truncation moving the score through the number of updates the run gets to make,
+which is precisely the confound the sweep exists to avoid.
 """
 
 from __future__ import annotations
@@ -150,6 +161,8 @@ def make_uniform_episode_window_buffer(
 
     if add_batch_size < 1:
         raise ValueError("add_batch_size must be at least one")
+    if min_length < 1:
+        raise ValueError("min_length must be at least one transition")
     time_capacity = max_length // add_batch_size
     if time_capacity < 2:
         raise ValueError(
@@ -179,7 +192,11 @@ def make_uniform_episode_window_buffer(
 
     trajectory = make_trajectory_buffer(
         max_length_time_axis=time_capacity,
-        min_length_time_axis=max(min_length // add_batch_size, sample_sequence_length),
+        # Flashbax's own readiness rule, declared only because it validates the
+        # argument. ``can_sample`` below does not consult it: this buffer's
+        # warmup is ``min_length`` transitions and nothing to do with how long
+        # a window is.
+        min_length_time_axis=sample_sequence_length,
         add_batch_size=add_batch_size,
         sample_batch_size=sample_batch_size,
         sample_sequence_length=sample_sequence_length,
@@ -265,9 +282,16 @@ def make_uniform_episode_window_buffer(
         Both halves are needed and neither implies the other: a buffer past its
         minimum length can be entirely one unfinished episode, and a buffer
         holding one short completed episode is not yet worth learning from.
+
+        The first half counts transitions collected, which is what a replay
+        warmup means, and is the same number whatever window the learner
+        intends to draw. Deferring to Flashbax here instead would fold the
+        window length into the warmup and make the learning-curve AUC a
+        function of the truncation through when learning started.
         """
 
-        return trajectory.can_sample(state.trajectory) & jnp.any(eligible_fn(state))
+        collected = state.written * add_batch_size
+        return (collected >= min_length) & jnp.any(eligible_fn(state))
 
     def sample_fn(state: EpisodeWindowBufferState, key: Key) -> EpisodeWindowSample:
         episode_key, offset_key = jax.random.split(key)
@@ -301,14 +325,28 @@ def make_uniform_episode_window_buffer(
         # beginning; it is masked everywhere it is used, and the read has to
         # land somewhere in bounds.
         stream = jnp.where(batch_valid, stream, 0)
-        experience = jax.tree.map(
+        drawn_window = jax.tree.map(
             lambda value: value[stream[:, None], logical % time_capacity],
             state.trajectory.experience,
         )
+        valid = (step[None, :] < (length - offset)[:, None]) & batch_valid[:, None]
+        # A window longer than its episode reads slots belonging to some other
+        # episode, or never written at all. Those steps are masked out of the
+        # loss, but they are still unrolled through the recurrent cell, so what
+        # they hold is not nothing: it decides what the padding computes and,
+        # for an unwritten slot, whether that is even a defined number. Zeroing
+        # them makes the padding one fixed thing rather than a reading of
+        # whatever the ring happened to hold.
+        experience = jax.tree.map(
+            lambda value: jnp.where(
+                valid.reshape(valid.shape + (1,) * (value.ndim - 2)),
+                value,
+                jnp.zeros((), dtype=value.dtype),
+            ),
+            drawn_window,
+        )
         return EpisodeWindowSample(
-            experience=experience,
-            valid=(step[None, :] < (length - offset)[:, None]) & batch_valid[:, None],
-            batch_valid=batch_valid,
+            experience=experience, valid=valid, batch_valid=batch_valid
         )
 
     return EpisodeWindowBuffer(

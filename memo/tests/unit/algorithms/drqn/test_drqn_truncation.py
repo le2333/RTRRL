@@ -15,11 +15,11 @@ import optax
 import pytest
 
 from memorax.algorithms.drqn import (
+    ZERO_MEMORY,
     Core,
     LearnerSequence,
     QFunction,
     RecurrentInputs,
-    ZERO_MEMORY,
 )
 
 

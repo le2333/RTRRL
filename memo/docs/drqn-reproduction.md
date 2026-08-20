@@ -19,9 +19,10 @@ paper.
 | then a point uniformly inside each | `r ~ U{0..L-t}` inside the drawn episode | `test_a_start_is_uniform_over_the_places_a_window_fits` |
 | The window unrolls `t` transitions from that point | the episode must be at least `t` long | `test_an_episode_shorter_than_the_truncation_is_never_drawn`, `test_every_drawn_window_carries_the_full_truncation` |
 | A minibatch holds `min(episodes, batch_size)` windows | `batch_valid`, and the loss divides by it | `test_the_minibatch_shrinks_to_the_episodes_there_are` |
+| One `UpdateRandom()` per environment transition | `num_envs` other than one is refused | `test_more_than_one_environment_is_refused_rather_than_given_a_cadence` |
 | The target pass reads the successor sequence from its own zero state | `Core._loss` unrolls the target over `bootstrap_inputs` | `test_the_target_reads_the_successor_sequence_from_its_own_zero_state` |
 | Zero hidden state at the sampled window start | `Core._loss` opens on `q_function.reset` | `test_a_window_starts_from_a_zero_hidden_state`, `test_both_branches_open_their_window_on_the_same_zero_state` |
-| One-step target-network Q-learning | `Core._successor_values` with `make_td0` | `test_the_target_is_one_step_and_greedy_under_the_target_network` |
+| One-step target-network Q-learning | `Core._loss` with `make_td0` | `test_the_target_is_one_step_and_greedy_under_the_target_network` |
 | Not double Q-learning | `max` over the target network's own values | `test_the_greedy_action_is_the_target_networks_and_not_the_online_ones` |
 | Hard target copy on a period | `periodic_incremental_update(..., 1.0)` | `test_the_copy_is_hard_and_not_an_average` |
 | Linear Q head | `DiscreteQNetwork`, no head branch declared | `test_the_head_is_one_linear_map_from_the_recurrent_output` |
@@ -79,6 +80,24 @@ log-weight by an independent Gumbel and take the largest `B`. That is a uniform
 subset without replacement in one fixed-shape operation, and the rows it could
 not fill come back marked in `batch_valid` — which is how a shrinking minibatch
 survives JIT, and what the loss divides by.
+
+Flashbax is storage here and nothing else; its own `can_sample` is not called.
+It answers for its own trajectory sampler and will not report ready until a
+whole `sample_sequence_length` has been written, which is the right contract
+for drawing a fixed-length slice off the head and the wrong one for drawing an
+episode. Left in, the warmup would be `max(min_length, t)` — a `t = 64` run
+would start learning later than a `t = 4` one, and a full-episode run later
+still by the whole horizon. Under a learning-curve AUC that is the truncation
+moving the score through how many updates the run got to make, which is
+exactly the confound the sweep exists to avoid, so readiness here counts
+transitions collected and nothing else
+(`test_the_warmup_is_the_declared_minimum_and_not_the_window_length`).
+
+Padding is zeroed rather than left as whatever the ring held. A step past the
+end of a short episode does not enter the loss, but it is still unrolled
+through the recurrent cell, so it is not nothing: unzeroed it would be the
+*next* episode's transitions, or a slot never written at all
+(`test_the_padding_past_an_episode_is_zeros_and_not_the_next_episode`).
 
 The masks the learner reads are the sampler's, not the window's. Rederiving
 validity from the window's own `done` flags would call a window good to its end
@@ -205,25 +224,49 @@ published agent does and the reproduction arm should not claim it is.
 
 **The loss is averaged over the batch; Caffe's is not.** The published net's
 Euclidean loss divides by the first dimension of its target blob, which for the
-recurrent net is the unroll length, not the minibatch size. So the published
-gradient is `batch_size` times this one's. (This arm now divides by the number
-of windows actually drawn rather than by the declared `batch_size`, which is the
-right denominator for a minibatch that shrinks — but it is a different question
-from the factor, and does not settle it.) Under a plain step rule that is a
-learning-rate rescaling and nothing more, but the published chain clips the
-global gradient norm at ten *before* ADADELTA, and a constant factor of
-`batch_size` changes how often that clip binds. It is therefore not simply
-absorbed, and an arm calling itself a published-solver reproduction has to
-either carry the factor or say it does not.
+recurrent net is the unroll length, not the minibatch size. This arm divides by
+the number of windows actually drawn, so the published gradient is
+
+    N_drawn = min(eligible episodes, batch_size)
+
+times this one's — not `batch_size` times, and not a constant. It equals
+`batch_size` only once replay holds at least that many eligible episodes, which
+is later in training the longer the truncation is, because the pool of episodes
+long enough to hold a window shrinks as `t` grows.
+
+Under a plain step rule a constant factor would be a learning-rate rescaling
+and nothing more, but the published chain clips the global gradient norm at ten
+*before* ADADELTA, so the factor changes how often the clip binds, and a factor
+that varies with training changes it over time.
+
+Dividing by the drawn count rather than by the declared `batch_size` is
+nonetheless the right choice here, and deliberately so: it is what keeps a
+shrinking minibatch from quietly rescaling the effective step. The two
+questions are separate, and this one settles only the first. **What this arm
+reproduces is DRQN's learner and replay semantics; the solver's loss
+normalisation remains an explicit deviation** and a write-up should not call it
+a complete reproduction of the published solver.
 
 ## What this does not contain
 
-The truncation sweep and everything that would license a claim from it are not
-here, and not because they were forgotten. Judging `t_eq` needs a fixed-episode
-evaluation, an AUC over environment steps, and an archived separation of tuning
-from formal seeds; all three are #46's, which is open. The equal-budget
-bracketed search over `t = {1, 4, 16, 64, full}` selects *which* candidates run
-and reads their scores, so it is written once there is a score to read.
+The truncation sweep has not been run, and no `t_eq` has been measured. The
+machinery for judging one — fixed-episode evaluation, AUC over environment
+steps, and an archived separation of tuning from formal seeds — landed with #46
+and the equal-budget bracketed search over `t = {1, 4, 16, 64, full}` is in
+`infra/src/trainer_infra/truncation.py`, but two things still stand between
+that and a number.
 
-Until then this entry supports diagnostic and smoke training only. A number
-taken from it is not a paper number.
+**No image carries the `drqn` entry.** The entry is new, so the contract-10
+rebuild has to happen before anything can be launched; the acceptance manifest
+names `image: TBD` for exactly that reason.
+
+**The equivalence reference is not settled.** `truncation.py` currently judges
+each `t` against DRQN at full BPTT, which answers "how long a truncation
+approximates the untruncated gradient". R1's own question may instead be "how
+long a truncation reaches Structured RTRRL's performance", which is a different
+reference and a different `t_eq`. This has to be fixed and written down before
+the formal sweep runs, because it is not something a result can be reinterpreted
+into afterwards.
+
+Until both are settled this entry supports diagnostic and smoke training only.
+A number taken from it is not a paper number.

@@ -303,6 +303,35 @@ def test_both_branches_train_through_the_episode_sampler(branch):
     assert np.all(np.isfinite(np.asarray(metrics.update.loss)[applied]))
 
 
+def test_more_than_one_environment_is_refused_rather_than_given_a_cadence():
+    """One update per environment transition is a claim, so it is enforced.
+
+    This loop adds every stream's transition and then updates once, so several
+    streams would silently make it one update per ``num_envs`` transitions.
+    That is a change to the published learner's cadence, and an arm calling
+    itself a reproduction may not make one quietly. A vectorised DRQN is not
+    what this arm is for, so the answer is a refusal rather than an invented
+    schedule.
+    """
+
+    with pytest.raises(ValueError, match="drqn runs one environment"):
+        assemble(
+            drqn.DRQN,
+            BuildRequest(
+                parameters=parameters(),
+                environment=EnvironmentSpec(
+                    id="tiny",
+                    backend=None,
+                    observed=None,
+                    episode_length=EPISODE_LENGTH,
+                ),
+                num_envs=4,
+                record=frozenset(),
+            ),
+            environment_factory=tiny_environment,
+        )
+
+
 def test_the_graph_holds_no_r2d2_machinery():
     graph = graph_of(assembled())
 

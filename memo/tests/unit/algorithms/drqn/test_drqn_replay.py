@@ -306,6 +306,63 @@ def test_only_completed_episodes_are_drawn_from():
     assert 9 not in set(episode.ravel().tolist())
 
 
+def test_the_warmup_is_the_declared_minimum_and_not_the_window_length():
+    """When learning may start cannot be a function of how long a window is.
+
+    Flashbax's own readiness rule will not report ready until a whole
+    ``sample_sequence_length`` has been written, which is right for drawing a
+    fixed-length slice and wrong for drawing an episode. Deferring to it would
+    make the warmup ``max(min_length, t)``, so a run at t=64 would begin
+    learning later than one at t=4 and a full-episode run later still. Under a
+    learning-curve AUC that is the truncation moving the score through how many
+    updates the run got to make, which is the confound the sweep exists to
+    avoid.
+    """
+
+    ready = {}
+    for window in (2, 16):
+        buffer = make_uniform_episode_window_buffer(
+            max_length=64,
+            min_length=8,
+            sample_batch_size=2,
+            sample_sequence_length=window,
+            add_batch_size=1,
+            minimum_episode_length=1,
+        )
+        # Two episodes of four: eight transitions, the declared minimum, and
+        # both are complete and eligible under either window.
+        ready[window] = bool(buffer.can_sample(filled(buffer, (4, 4))))
+
+    assert ready == {2: True, 16: True}
+
+
+def test_the_padding_past_an_episode_is_zeros_and_not_the_next_episode():
+    """A masked step is still unrolled, so what it holds is not nothing.
+
+    The slots after a short episode physically hold the episode that followed
+    it. Those steps do not enter the loss, but they do pass through the
+    recurrent cell, so leaving them as stored data would make the padding a
+    reading of whatever the ring happened to hold -- and, for a slot never
+    written, of whatever the buffer was initialised with.
+    """
+
+    buffer, state = stored(lengths=(4, 4), minimum_episode_length=1, window=8)
+
+    sample = buffer.sample(state, jax.random.key(0))
+    marks = np.asarray(sample.experience.observation)
+    valid = np.asarray(sample.valid)
+
+    drawn = valid[np.asarray(sample.batch_valid)]
+    assert drawn.shape[0] == 2 and np.all(drawn.sum(axis=1) == 4)
+    # Every masked position, in every row, is zero across every stored field.
+    for field in jax.tree.leaves(sample.experience):
+        blanked = np.asarray(field)[~valid]
+        assert not np.any(blanked), field.shape
+    # And the episode the padding covers really is a different one, so this is
+    # not a test that passes because there was nothing there.
+    assert set(marks[valid][:, 0].astype(int).tolist()) == {0, 1}
+
+
 # ----------------------------------------------------------- once the ring wraps
 def wrapped(capacity=40, truncation=TRUNCATION, rounds=15):
     """A ring overwritten several times, so its write head is a seam.
