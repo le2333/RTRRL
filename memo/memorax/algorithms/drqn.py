@@ -154,8 +154,21 @@ class TargetParameters:
 
 @dataclass(frozen=True)
 class ExplorationParameters:
+    """Epsilon-greedy on the published schedule, which is not a step schedule.
+
+    The published agent anneals over solver iterations and reads the value once
+    per episode, so exploration holds still inside an episode and stays at
+    ``epsilon_start`` for the whole replay warmup, when no update has happened
+    yet. That is a different exploration profile from annealing on environment
+    steps, not a rescaling of the same one: an agent that has not learned
+    anything yet acts uniformly at random rather than at a rate that has
+    already begun to decay.
+    """
+
     epsilon_start: float = param(valid=(0.0, 1.0), search=(0.05, 1.0))
     epsilon_end: float = param(valid=(0.0, 1.0), search=(0.0, 0.2))
+    # In learner updates, not environment transitions, which is what the
+    # published schedule anneals over.
     epsilon_decay_steps: int = param(
         valid=(1, 1_000_000_000), search=(1000, 10_000_000), log=True
     )
@@ -329,6 +342,13 @@ class DRQNState(struct.PyTreeNode):
     env_state: Any
     buffer_state: Any
     core: CoreState
+    epsilon: Any
+    """The exploration rate this episode is being played at.
+
+    Carried rather than recomputed, because the published schedule is read once
+    per episode: a value that changed mid-episode would be a different policy
+    from the one the episode began under.
+    """
 
 
 class ReplayTransition(struct.PyTreeNode):
@@ -877,10 +897,27 @@ class DRQN:
             gradient_norm=zero,
         )
 
-    def _epsilon(self, step: Array) -> Array:
-        progress = jnp.clip(step / self.cfg.epsilon_decay_steps, 0.0, 1.0)
+    def _epsilon(self, update_step: Array) -> Array:
+        """The published anneal, in solver iterations.
+
+        Counting learner updates rather than environment steps is what keeps
+        the rate at ``epsilon_start`` through the replay warmup: no update has
+        happened, so no progress has been made, so nothing has been learned to
+        act on.
+        """
+
+        progress = jnp.clip(update_step / self.cfg.epsilon_decay_steps, 0.0, 1.0)
         return self.cfg.epsilon_start + progress * (
             self.cfg.epsilon_end - self.cfg.epsilon_start
+        )
+
+    def _episode_epsilon(self, state: DRQNState) -> Array:
+        """Re-read at an episode boundary, held everywhere else."""
+
+        return jnp.where(
+            state.episode_start,
+            self._epsilon(state.core.update_step),
+            state.epsilon,
         )
 
     def _reset(self, key: Key, state: DRQNState) -> DRQNState:
@@ -985,13 +1022,16 @@ class DRQN:
             env_state=env_state,
             buffer_state=buffer_state,
             core=core_state,
+            epsilon=jnp.full(
+                (self.cfg.num_envs,), self.cfg.epsilon_start, dtype=jnp.float32
+            ),
         )
 
     def train_step(self, state: DRQNState, key: Key) -> tuple[DRQNState, StepMetrics]:
         reset_key, action_key, env_key, update_key = jax.random.split(key, 4)
         state = self._reset(reset_key, state)
         observation = state.timestep.obs
-        epsilon = self._epsilon(state.step)
+        epsilon = self._episode_epsilon(state)
         recurrence, action, forward = self.core.act(
             action_key,
             state.core,
@@ -1026,6 +1066,7 @@ class DRQN:
             env_state=env_state,
             buffer_state=buffer_state,
             core=core_state,
+            epsilon=epsilon,
         )
         return next_state, StepMetrics(
             interaction=self._interaction(
@@ -1053,11 +1094,12 @@ class DRQN:
         reset_key, action_key, env_key = jax.random.split(key, 3)
         state = self._reset(reset_key, state)
         observation = state.timestep.obs
+        epsilon = self._episode_epsilon(state)
         recurrence, action, _ = self.core.act(
             action_key,
             state.core,
             self._inputs(state.timestep, state.episode_start),
-            epsilon=self._epsilon(state.step),
+            epsilon=epsilon,
         )
         next_obs, env_state, reward, done, terminal, info = self.environment.step(
             env_key, state.env_state, action
@@ -1069,6 +1111,7 @@ class DRQN:
             episode_start=done,
             env_state=env_state,
             core=state.core.replace(recurrence=recurrence),
+            epsilon=epsilon,
         ), StepMetrics(
             interaction=self._interaction(
                 observation=observation,

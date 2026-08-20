@@ -144,6 +144,10 @@ space:
   target:
     update_period: [100]
 
+  # The published schedule anneals over solver iterations and is read once per
+  # episode, so epsilon_decay_steps counts learner updates rather than
+  # environment transitions -- and stays at 1.0 through the replay warmup,
+  # because no update has happened for it to anneal against.
   exploration:
     epsilon_start: [1.0]
     epsilon_end: [0.05]

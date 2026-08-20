@@ -355,6 +355,61 @@ def test_the_stored_reward_is_clipped_and_the_reported_one_is_not():
     np.testing.assert_allclose(stored, np.sign(paid).T, atol=0)
 
 
+def test_exploration_holds_still_inside_an_episode():
+    """The published schedule is read once per episode, not once per step.
+
+    A rate that moved mid-episode would make the episode a mixture of two
+    policies, which is not what the agent whose schedule this is plays.
+    """
+
+    built = assembled()
+    graph = graph_of(built)
+    state = built.program.init(jax.random.key(0))
+
+    # Mid-episode, whatever the update counter says, the rate is the one the
+    # episode began under.
+    inside = state.replace(
+        episode_start=jnp.zeros_like(state.episode_start),
+        epsilon=jnp.full_like(state.epsilon, 0.17),
+        core=state.core.replace(update_step=jnp.asarray(500, dtype=jnp.int32)),
+    )
+    np.testing.assert_allclose(np.asarray(graph._episode_epsilon(inside)), 0.17)
+
+    # At a boundary it is re-read, and 500 updates of a 1000-update anneal from
+    # 0.2 to 0.05 is halfway.
+    opening = inside.replace(episode_start=jnp.ones_like(state.episode_start))
+    np.testing.assert_allclose(
+        np.asarray(graph._episode_epsilon(opening)), 0.125, rtol=1e-6
+    )
+
+
+def test_epsilon_anneals_on_learner_updates_and_not_on_environment_steps():
+    """No update has happened, so no progress has been made.
+
+    The published schedule counts solver iterations, so it sits at
+    ``epsilon_start`` for the whole replay warmup: an agent that has learned
+    nothing yet acts uniformly at random rather than at a rate that has already
+    begun to decay because the clock ran. Annealing on environment steps is a
+    different exploration profile, not a rescaling of the same one.
+    """
+
+    warming = assembled(**{"replay.minimum_size": 10_000})
+    learning = assembled()
+
+    held, _ = warming.program.train(
+        jax.random.key(1), warming.program.init(jax.random.key(0)), 40
+    )
+    moved, _ = learning.program.train(
+        jax.random.key(1), learning.program.init(jax.random.key(0)), 40
+    )
+
+    assert int(held.core.update_step) == 0
+    np.testing.assert_allclose(np.asarray(held.epsilon), 0.2)
+
+    assert int(moved.core.update_step) > 0
+    assert float(np.asarray(moved.epsilon).item()) < 0.2
+
+
 def test_the_graph_holds_no_r2d2_machinery():
     graph = graph_of(assembled())
 

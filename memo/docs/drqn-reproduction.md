@@ -27,7 +27,8 @@ paper.
 | Not double Q-learning | `max` over the target network's own values | `test_the_greedy_action_is_the_target_networks_and_not_the_online_ones` |
 | Hard target copy on a period | `periodic_incremental_update(..., 1.0)` | `test_the_copy_is_hard_and_not_an_average` |
 | Linear Q head | `DiscreteQNetwork`, no head branch declared | `test_the_head_is_one_linear_map_from_the_recurrent_output` |
-| Epsilon-greedy acting, annealed | `Core.act`, `DRQN._epsilon` | `test_act_only_advances_recurrence` |
+| Epsilon-greedy acting, annealed over solver iterations | `DRQN._epsilon` counts learner updates | `test_epsilon_anneals_on_learner_updates_and_not_on_environment_steps` |
+| The rate is read once per episode | `DRQN._episode_epsilon`, held in `DRQNState.epsilon` | `test_exploration_holds_still_inside_an_episode` |
 | Truncation 10 for the acceptance arm | `learning.truncated.length`, a manifest value | `test_the_truncation_is_the_window_and_full_bptt_is_the_episode` |
 | ADADELTA, lr 0.1, decay 0.95, gradient clip 10 | `optimizer.adadelta`, `grad_clip` | `test_the_published_solver_is_adadelta_over_a_clipped_gradient` |
 
@@ -208,19 +209,10 @@ and a write-up should say "matched DRQN on a structured diagonal core", never
 
 ## Known deviations still open
 
-These are differences from the published implementation that are **not** fixed
-and that a formal launch has to either resolve or declare. They are listed with
-what each one puts at risk, because "a minor deviation" is not a thing that can
+This is the one difference from the published implementation that is **not**
+fixed, and a formal launch has to either resolve or declare it. It is listed
+with what it puts at risk, because "a minor deviation" is not a thing that can
 be judged without saying what it would change.
-
-**Epsilon anneals on environment steps, not on learner updates.** The published
-schedule is a function of the solver iteration and is read once per episode, so
-it holds still within an episode and stays at its starting value throughout the
-replay warmup, when no update has happened yet. Here it is recomputed every step
-against the environment-step count, so exploration already decays during warmup.
-Under an equal environment budget the step-based schedule is defensible and is
-arguably the fairer one for the matched comparison, but it is not what the
-published agent does and the reproduction arm should not claim it is.
 
 **The loss is averaged over the batch; Caffe's is not.** The published net's
 Euclidean loss divides by the first dimension of its target blob, which for the
