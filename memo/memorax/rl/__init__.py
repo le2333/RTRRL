@@ -4,6 +4,14 @@ Only computation lives here. How an algorithm allocates traces, routes
 objectives, or drives its own loop stays with the algorithm.
 """
 
+from .intentional import (
+    ADVANTAGE,
+    TD,
+    IntentionalOptimizer,
+    IntentionalReading,
+    IntentionalState,
+    IntentionalUpdate,
+)
 from .interaction import (
     EnvironmentStreams,
     InteractionNormalization,
@@ -33,6 +41,7 @@ from .updates import (
     UpdateRule,
     make_bounded_rule,
     make_d_rtrrl_rule,
+    make_intentional_rule,
     make_optax_rule,
 )
 
@@ -48,7 +57,13 @@ __all__ = [
     "Statistics",
     "COLD_STARTS",
     "VARIANCES",
+    "ADVANTAGE",
     "DRTRRL",
+    "IntentionalOptimizer",
+    "IntentionalReading",
+    "IntentionalState",
+    "IntentionalUpdate",
+    "TD",
     "UpdateRule",
     "action_classes",
     "action_dim",
@@ -62,6 +77,7 @@ __all__ = [
     "make_optax_rule",
     "make_td0",
     "make_d_rtrrl_rule",
+    "make_intentional_rule",
     "normalization_metrics",
     "periodic_incremental_update",
     "select_ended",

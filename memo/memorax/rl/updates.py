@@ -24,6 +24,8 @@ from flax import struct
 from memorax.building import ComponentFamily
 from memorax.parameters import param
 
+from .intentional import IntentionalOptimizer, IntentionalUpdate
+
 
 class ObjectiveDirections(struct.PyTreeNode):
     """What an objective asks for, split by how the ascent reaches a parameter.
@@ -55,10 +57,19 @@ class UpdateRule:
     rules carry different shapes: Adam's moments follow the parameters, which
     the env axis has already been averaged out of, while OBGD's second moment
     follows the trace and stays per-env, since its bound is measured per-env.
+
+    ``owns_trace`` says which of two contracts ``apply`` answers. False, the
+    default and what every rule above does, is handed the trace the algorithm
+    accumulated. True is handed the *instantaneous* derivative and one more
+    keyword, ``reset``, and accumulates whatever trace it needs itself -- which
+    the intentional update must, because its step size reads a statistic of the
+    derivative and one of the trace together. An algorithm reads this to know
+    which of the two it is holding; it is not a setting.
     """
 
     init: Callable[..., Any]
     apply: Callable[..., RuleOutput]
+    owns_trace: bool = False
 
 
 def _broadcast_env(values, leaf):
@@ -244,7 +255,12 @@ BOUND_BRANCHES = {
 
 BASE_BRANCHES = {"sgd": Sgd, "adam": Adam}
 
-STEP_BRANCHES = {"sgd": Sgd, "adam": Adam, "d_rtrrl": DRTRRL}
+STEP_BRANCHES = {
+    "sgd": Sgd,
+    "adam": Adam,
+    "d_rtrrl": DRTRRL,
+    "iu": IntentionalUpdate,
+}
 
 
 def _selected_parameters(selection, builder):
@@ -524,3 +540,74 @@ def make_d_rtrrl_rule(step, *, clip=0.0) -> UpdateRule:
         )
 
     return UpdateRule(init=init, apply=apply)
+
+
+def make_intentional_rule(
+    step: IntentionalUpdate,
+    *,
+    signals: Mapping[str, str],
+    decays: Mapping[str, float],
+    streams: int,
+) -> UpdateRule:
+    """One intentional optimizer per block of a group, each with its own state.
+
+    A group's blocks step under one declared ``eta`` and share nothing else.
+    Each carries its own trace, second moment, statistic and dynamic step size,
+    because the whole point of the step size is that it is measured against the
+    curvature of the parameters it moves, and an actor and a critic under one
+    denominator would spend one intended outcome between them.
+
+    ``signals`` says which scalar each block's step is proportional to and
+    ``decays`` says what ``gamma * lambda`` it runs at. Both are the algorithm's
+    to declare: the first follows from what the block's objective is, and the
+    second from which of the algorithm's lambdas the block answers to.
+
+    ``streams`` is the parallel environment count, which this rule needs and
+    the others read off the trace tree they are handed. It has no trace tree to
+    read: it is the thing that allocates one.
+    """
+
+    optimizers = {
+        name: IntentionalOptimizer(step, decay=decays[name], signal=signal)
+        for name, signal in signals.items()
+    }
+
+    def init(*, params, traces):
+        del traces
+        return {
+            name: optimizer.init(params[name], streams=streams)
+            for name, optimizer in optimizers.items()
+        }
+
+    def apply(derivative, direct, state, *, delta, step, params, reset):
+        # ``step`` here is the transition counter every bias correction reads,
+        # and not the settings of the same name outside -- the optimizers were
+        # built from those already, which is the only reason the shadowing is
+        # harmless.
+        taken = {
+            name: optimizer.update(
+                delta=delta,
+                derivative=derivative[name],
+                direct=None if direct is None else direct.get(name),
+                reset=reset,
+                step=step,
+                params=params[name],
+                state=state[name],
+            )
+            for name, optimizer in optimizers.items()
+        }
+        return RuleOutput(
+            updates={name: updates for name, (updates, _, _) in taken.items()},
+            state={name: carried for name, (_, carried, _) in taken.items()},
+            # The trace is reported because the algorithm no longer holds one
+            # to measure: a block under this rule keeps no trace of its own,
+            # and its trace reading has to come from the rule that does.
+            metrics={
+                "intentional": {
+                    name: reading for name, (_, _, reading) in taken.items()
+                },
+                "trace": {name: carried.z for name, (_, carried, _) in taken.items()},
+            },
+        )
+
+    return UpdateRule(init=init, apply=apply, owns_trace=True)
