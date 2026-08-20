@@ -36,8 +36,7 @@ from __future__ import annotations
 
 from collections.abc import Iterable
 from dataclasses import dataclass, field
-from functools import partial
-from typing import Any, Callable, cast
+from typing import Any, cast
 
 import flax.linen as nn
 import jax
@@ -45,7 +44,11 @@ import jax.numpy as jnp
 import optax
 from flax import struct
 
-from memorax.buffers import make_episode_buffer
+from memorax.buffers import (
+    EpisodeWindowBuffer,
+    EpisodeWindowBufferState,
+    make_uniform_episode_window_buffer,
+)
 from memorax.building import BuildContext, ComponentBuilder, ComponentFamily
 from memorax.networks import LayerNorm, Sequence, backbone
 from memorax.networks.heads import DiscreteQNetwork
@@ -55,18 +58,14 @@ from memorax.readings import reading, taken
 from memorax.rl import (
     EnvironmentStreams,
     make_td0,
+    masked_sequence_loss,
     periodic_incremental_update,
     select_ended,
-)
-from memorax.rl.recurrent_replay import (
-    completed_episode_starts,
-    episode_window_starts,
-    masked_sequence_loss,
 )
 from memorax.rl.updates import BASE_FAMILY, base_transform
 from memorax.runtime import ObservationSchema
 from memorax.utils import Timestep
-from memorax.utils.typing import Array, Buffer, BufferState, Key
+from memorax.utils.typing import Array, Key
 
 from .contract import ActionDecision, InteractionMetrics, StepMetrics
 
@@ -128,8 +127,8 @@ class ReplayParameters:
     There is no priority exponent and no importance-sampling exponent because
     there is no priority: every completed episode is equally likely to be drawn
     and every window inside one equally likely to be the one, which is what the
-    published algorithm draws. Where the window may begin is
-    ``episode_window_starts``, not a parameter.
+    published algorithm draws. Where the window may begin is decided by the
+    episode it was drawn from, not by a parameter.
     """
 
     capacity: int = param(valid=(1, 10_000_000), search=(1024, 1_000_000), log=True)
@@ -254,17 +253,19 @@ class SelectedLearning:
             return episode_length
         return self.truncation
 
-    def start_flags(self, episode_length: int) -> Callable[[Any], Array]:
-        """Which stored positions this branch is allowed to sample from.
+    def minimum_episode_length(self, episode_length: int) -> int:
+        """How long an episode must be before this branch will draw from it.
 
-        Full BPTT begins an episode; a truncated window begins anywhere inside
-        one that can hold it whole. The full-episode rule needs no weighting
-        because an episode offers it exactly one start, so drawing uniformly
-        over starts already draws uniformly over episodes.
+        A truncated window has to fit whole, or the gradient would reach back
+        however far the episode happened to have left rather than the ``t`` the
+        learner declares -- and ``t`` is the quantity the sweep sweeps, so it
+        may not be a function of where an episode ended. Full BPTT sets no bar:
+        every completed episode is one, whatever its length, and its window is
+        padded out to the declared limit and masked past the ending.
         """
 
         if self.kind == "full_bptt":
-            return partial(completed_episode_starts, transition_count=episode_length)
+            return 1
         if self.truncation > episode_length:
             # Refused here rather than at the first sample, because a manifest
             # asking to reach back further than an episode can run is a
@@ -273,11 +274,7 @@ class SelectedLearning:
                 f"truncation {self.truncation} exceeds the declared episode length "
                 f"{episode_length}; no window that long fits inside an episode"
             )
-        return partial(
-            episode_window_starts,
-            truncation=self.truncation,
-            episode_length=episode_length,
-        )
+        return self.truncation
 
 
 def _select_core(selection, builder) -> SelectedCore:
@@ -355,9 +352,10 @@ class LearnerSequence(struct.PyTreeNode):
     dones: Any
     terminals: Any
     valid: Any
+    batch_valid: Any
 
 
-def learner_sequence(sample, *, transition_count: int) -> LearnerSequence:
+def learner_sequence(sample) -> LearnerSequence:
     """A drawn window as the two sequences the update reads it in.
 
     ``inputs`` is what the online network is asked about and
@@ -365,11 +363,14 @@ def learner_sequence(sample, *, transition_count: int) -> LearnerSequence:
     window's transitions arrived at, as replay stored them. Two sequences of the
     same length rather than one of one more, because the two networks are each
     begun from no memory and neither reads the other's pass.
+
+    Neither mask is rebuilt here. Which steps lie inside the drawn episode, and
+    which rows are a drawn episode at all, are answers the sampler already has
+    -- it chose the episode -- and rederiving them from the stored ``done``
+    flags would be asking the window to testify about a draw it did not make.
     """
 
-    experience = jax.tree.map(
-        lambda value: value[:, :transition_count], sample.experience
-    )
+    experience = sample.experience
     inputs = RecurrentInputs(
         observation=experience.observation,
         episode_start=experience.episode_start,
@@ -381,16 +382,6 @@ def learner_sequence(sample, *, transition_count: int) -> LearnerSequence:
         # first step amounts to.
         episode_start=jnp.zeros_like(experience.done),
     )
-    valid = jnp.cumprod(
-        jnp.concatenate(
-            (
-                jnp.ones_like(experience.done[:, :1], dtype=jnp.int32),
-                (~experience.done[:, :-1]).astype(jnp.int32),
-            ),
-            axis=1,
-        ),
-        axis=1,
-    ).astype(jnp.bool_)
     return LearnerSequence(
         inputs=inputs,
         bootstrap_inputs=bootstrap_inputs,
@@ -398,7 +389,8 @@ def learner_sequence(sample, *, transition_count: int) -> LearnerSequence:
         rewards=experience.reward,
         dones=experience.done,
         terminals=experience.terminal,
-        valid=valid,
+        valid=sample.valid,
+        batch_valid=sample.batch_valid,
     )
 
 
@@ -676,7 +668,9 @@ class Core:
             terminal=sample.terminals.astype(q_value.dtype),
             gamma=self.gamma,
         )
-        loss = masked_sequence_loss(td_error, sample.valid)
+        loss = masked_sequence_loss(
+            td_error, sample.valid, batch_valid=sample.batch_valid
+        )
         return loss, _UpdateReadings(
             td_error=td_error, q_value=q_value, valid=sample.valid
         )
@@ -739,7 +733,7 @@ class DRQN:
     env: Any
     env_params: Any
     core: Core
-    buffer: Buffer
+    buffer: EpisodeWindowBuffer
     reports: Reports = Reports()
     record: Iterable[str] = ()
     # Derived in __post_init__ from cfg and the environment, so a caller never
@@ -789,18 +783,15 @@ class DRQN:
                 gamma=float(parameters["gamma"]),
                 target_update_period=int(parameters["target.update_period"]),
             ),
-            buffer=make_episode_buffer(
+            buffer=make_uniform_episode_window_buffer(
                 max_length=int(parameters["replay.capacity"]),
                 min_length=int(parameters["replay.minimum_size"]),
                 sample_batch_size=int(parameters["replay.batch_size"]),
                 sample_sequence_length=learning.window(context.episode_length),
-                get_start_flags=learning.start_flags(context.episode_length),
-                add_sequences=False,
                 add_batch_size=context.num_envs,
-                # Both start rules look an episode either way from a candidate
-                # position, so once the ring wraps the seam has to be kept out
-                # of that reach as well as out of the window.
-                seam_margin=context.episode_length,
+                minimum_episode_length=learning.minimum_episode_length(
+                    context.episode_length
+                ),
             ),
             reports=REPORTS,
             record=record,
@@ -897,15 +888,15 @@ class DRQN:
         self,
         key: Key,
         core_state: CoreState,
-        buffer_state: BufferState,
+        buffer_state: EpisodeWindowBufferState,
     ) -> tuple[CoreState, UpdateMetrics]:
         sample_key, learner_key = jax.random.split(key)
 
         def update(current_core):
             sample = self.buffer.sample(buffer_state, sample_key)
-            transition_count = jax.tree.leaves(sample.experience)[0].shape[1]
-            sequence = learner_sequence(sample, transition_count=transition_count)
-            return self.core.update_parameters(learner_key, current_core, sequence)
+            return self.core.update_parameters(
+                learner_key, current_core, learner_sequence(sample)
+            )
 
         def no_update(current_core):
             return current_core, self._no_update_metrics()

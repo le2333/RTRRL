@@ -3,6 +3,13 @@ from .episode_buffer import (
     get_start_flags_from_done,
     make_episode_buffer,
 )
+from .episode_window_buffer import (
+    EpisodeIndexState,
+    EpisodeWindowBuffer,
+    EpisodeWindowBufferState,
+    EpisodeWindowSample,
+    make_uniform_episode_window_buffer,
+)
 from .prioritised_episode_buffer import (
     PrioritisedEpisodeBufferSample,
     compute_importance_weights,

@@ -66,6 +66,7 @@ def sample(key, *, dones, terminals, actions, rewards):
         dones=jnp.asarray([dones]),
         terminals=jnp.asarray([terminals]),
         valid=jnp.asarray([[True] * transitions]),
+        batch_valid=jnp.asarray([True]),
     )
 
 

@@ -22,10 +22,11 @@ from memorax.networks.heads import DiscreteQNetwork
 from memorax.observability.metrics import metric_names
 from memorax.parameters import describe_parameters, group, param, structure
 from memorax.readings import reading, taken
-from memorax.rl import EnvironmentStreams, periodic_incremental_update, select_ended
-from memorax.rl.recurrent_replay import (
-    completed_episode_starts,
+from memorax.rl import (
+    EnvironmentStreams,
     masked_sequence_loss,
+    periodic_incremental_update,
+    select_ended,
 )
 from memorax.rl.updates import BASE_FAMILY, base_transform
 from memorax.runtime import ObservationSchema
@@ -131,6 +132,22 @@ class SelectedBackbone:
     kind: str
     feature_dim: int
     hidden_dim: int
+
+
+def completed_episode_starts(experience: Any, *, transition_count: int) -> Array:
+    """Episode starts whose episode also ends inside a window this long.
+
+    A full-episode learner may only begin where the whole episode is there to
+    be read. A start whose ending falls past the window would be scored on a
+    prefix and called an episode.
+    """
+
+    ending_within_window = jnp.zeros_like(experience.done, dtype=jnp.bool_)
+    for offset in range(transition_count):
+        ending_within_window = ending_within_window | jnp.roll(
+            experience.done, -offset, axis=1
+        )
+    return experience.episode_start & ending_within_window
 
 
 @dataclass(frozen=True)

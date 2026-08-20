@@ -67,6 +67,7 @@ def _sample():
         dones=jnp.asarray([[False, True]]),
         terminals=jnp.asarray([[False, True]]),
         valid=jnp.asarray([[True, True]]),
+        batch_valid=jnp.asarray([True]),
     )
 
 

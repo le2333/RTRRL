@@ -13,6 +13,7 @@ import pytest
 from entries import drqn as entry
 from memorax.algorithms import drqn
 from memorax.assembly import BuildRequest, EnvironmentSpec, assemble
+from memorax.buffers import EpisodeWindowBuffer
 from memorax.parameters import Choice
 from memorax.parameters import expand as expand_parameters
 from memorax.parameters import flatten
@@ -234,6 +235,72 @@ def test_the_truncation_is_the_window_and_full_bptt_is_the_episode():
     # the loss differentiates whatever it is handed.
     assert not hasattr(truncated.core, "truncation")
     assert not hasattr(full.core, "truncation")
+
+
+def test_the_assembled_graph_draws_episodes_and_not_stored_positions():
+    """Read off the built graph, because a helper tested alone proves nothing.
+
+    The one thing that has already gone wrong here is a correct helper the
+    assembled graph never called. What the sampling claims are about is the
+    buffer this object holds, so that is what is asked.
+    """
+
+    built = assembled()
+    graph = graph_of(built)
+    state = built.program.init(jax.random.key(0)).buffer_state
+    blank = jax.tree.map(lambda value: value[:, 0], state.trajectory.experience)
+
+    def stored(state, ending):
+        return graph.buffer.add(
+            state,
+            blank.replace(
+                done=jnp.full_like(blank.done, ending),
+                terminal=jnp.full_like(blank.terminal, ending),
+            ),
+        )
+
+    assert isinstance(graph.buffer, EpisodeWindowBuffer)
+    # Eight transitions is the declared minimum size, so a buffer that reported
+    # on length alone would call this ready. It is four episodes of two, and
+    # the truncation is three: there is nothing here to draw.
+    for _ in range(4):
+        state = stored(stored(state, False), True)
+    assert int(state.written) == 8
+    assert bool(graph.buffer.can_sample(state)) is False
+
+    # One episode long enough to hold a window, and now there is.
+    state = stored(stored(stored(state, False), False), True)
+    assert bool(graph.buffer.can_sample(state)) is True
+    assert int(jnp.sum(graph.buffer.sample(state, jax.random.key(0)).batch_valid)) == 1
+
+
+@pytest.mark.parametrize(
+    "branch",
+    [
+        {"learning.kind": "truncated", "learning.truncated.length": 3},
+        {"learning.kind": "full_bptt", "replay.minimum_size": EPISODE_LENGTH},
+    ],
+)
+def test_both_branches_train_through_the_episode_sampler(branch):
+    """Full BPTT is not a second replay path, so it has to reach an update too.
+
+    A full-episode window is drawn from any completed episode and padded out to
+    the declared limit, where a truncated one is drawn only from episodes long
+    enough to hold it. Those are different eligibility rules over the same
+    buffer, and only running both says both reach a learner update.
+    """
+
+    built = assembled(**branch)
+
+    state = built.program.init(jax.random.key(0))
+    trained, metrics = built.program.train(jax.random.key(1), state, 40)
+
+    assert int(trained.core.update_step) > 0
+    assert np.isfinite(np.asarray(metrics.update.loss)).all()
+    # A masked-out row must not leave the loss undefined for the rows that are
+    # there, which is the failure a padded window would produce.
+    applied = np.asarray(metrics.update.applied)
+    assert np.all(np.isfinite(np.asarray(metrics.update.loss)[applied]))
 
 
 def test_the_graph_holds_no_r2d2_machinery():

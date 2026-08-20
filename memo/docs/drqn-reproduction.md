@@ -14,9 +14,11 @@ paper.
 
 | Paper | Here | Held by |
 | --- | --- | --- |
-| Uniform replay | `make_episode_buffer`, no priority declared | `test_uniform_replay_keeps_no_priority_to_update` |
-| A random update draws a completed episode, then a point in it | `episode_window_starts` weights each episode equally | `test_an_episode_is_not_drawn_more_often_for_being_longer` |
-| The window unrolls `t` transitions from that point | the window must fit inside the episode | `test_the_legal_starts_are_exactly_those_a_whole_window_fits_in`, `test_every_drawn_window_carries_the_full_truncation` |
+| Uniform replay | `make_uniform_episode_window_buffer`, no priority declared | `test_uniform_replay_keeps_no_priority_to_update` |
+| A random update draws completed episodes without replacement | Gumbel top-k over the eligible episodes | `test_an_episode_is_not_drawn_more_often_for_being_longer`, `test_a_minibatch_draws_each_episode_at_most_once` |
+| then a point uniformly inside each | `r ~ U{0..L-t}` inside the drawn episode | `test_a_start_is_uniform_over_the_places_a_window_fits` |
+| The window unrolls `t` transitions from that point | the episode must be at least `t` long | `test_an_episode_shorter_than_the_truncation_is_never_drawn`, `test_every_drawn_window_carries_the_full_truncation` |
+| A minibatch holds `min(episodes, batch_size)` windows | `batch_valid`, and the loss divides by it | `test_the_minibatch_shrinks_to_the_episodes_there_are` |
 | The target pass reads the successor sequence from its own zero state | `Core._loss` unrolls the target over `bootstrap_inputs` | `test_the_target_reads_the_successor_sequence_from_its_own_zero_state` |
 | Zero hidden state at the sampled window start | `Core._loss` opens on `q_function.reset` | `test_a_window_starts_from_a_zero_hidden_state`, `test_both_branches_open_their_window_on_the_same_zero_state` |
 | One-step target-network Q-learning | `Core._successor_values` with `make_td0` | `test_the_target_is_one_step_and_greedy_under_the_target_network` |
@@ -34,15 +36,64 @@ select one and no tuning trial can be spent discovering that it should not.
 `test_the_declared_tree_offers_no_r2d2_enhancement` asserts the tree, and
 `test_the_graph_holds_no_r2d2_machinery` asserts the built graph.
 
-The two sampling rows are one clause of the paper split in half, because getting
-either half wrong changes what a truncation sweep measures. Drawing a stored
-position instead of an episode would let a long episode collect probability in
-proportion to its length; letting a window run over an ending would leave it cut
-short by the validity mask, so a run declaring `t = 64` would in places be
-training at `t = 5` and `t_eq` would be a statement about a mixture. A window
-here lies inside one completed episode and carries exactly `t` transitions, or
-it is not drawn — an episode shorter than `t` contributes nothing rather than
-contributing a short window.
+## Why replay has its own buffer
+
+The sampling rows above are one clause of the paper, split up because each half
+can be got wrong on its own and each changes what a truncation sweep measures.
+Drawing a stored *position* instead of an episode lets a long episode collect
+probability in proportion to its length; letting a window run over an ending
+leaves it cut short by the validity mask, so a run declaring `t = 64` is in
+places training at `t = 5` and `t_eq` becomes a statement about a mixture. A
+window here lies inside one completed episode and carries exactly `t`
+transitions, or it is not drawn — an episode shorter than `t` contributes
+nothing rather than contributing a short window.
+
+An earlier version of this arm expressed that on top of `make_episode_buffer`,
+by weighting each admissible position by one over how many its episode offers.
+That reproduces the *marginal* — each episode equally likely on a single draw —
+and cannot reproduce the rest of the clause, because the rest of the clause is
+about a minibatch: "without replacement" is a statement about `B` draws taken
+together, and a weight vector describes one draw. It also has nothing to say
+when fewer than `B` episodes are eligible, where the published loop shrinks the
+minibatch. The layer was wrong, not the arithmetic on top of it.
+
+`make_uniform_episode_window_buffer` separates the two questions. Flashbax
+stores the transitions per stream, unchanged; an episode index records where
+each completed episode lives, in *logical* time — a counter that only increases,
+whose physical slot is `logical % capacity`. Two consequences worth naming,
+because each replaces a patch that was there before:
+
+- **The ring seam stops being a special case.** An episode is entirely stored
+  exactly when its first transition is (`start >= written - capacity`), so a
+  window from inside it cannot splice across the write head. No margin, no
+  exclusion zone. `test_no_window_is_spliced_across_the_write_head` and
+  `test_an_episode_the_ring_has_overwritten_is_no_longer_drawn` hold it, the
+  latter by naming which episodes survive rather than approximately how many.
+- **"Enough data" and "something to draw" become the same question.**
+  `can_sample` reads the eligible count, so a buffer holding only an unfinished
+  episode says so instead of leaving the sampler to invent a window
+  (`test_a_buffer_holding_no_finished_episode_says_it_cannot_sample`).
+
+Episode selection is Gumbel top-k: perturb each eligible episode's equal
+log-weight by an independent Gumbel and take the largest `B`. That is a uniform
+subset without replacement in one fixed-shape operation, and the rows it could
+not fill come back marked in `batch_valid` — which is how a shrinking minibatch
+survives JIT, and what the loss divides by.
+
+The masks the learner reads are the sampler's, not the window's. Rederiving
+validity from the window's own `done` flags would call a window good to its end
+whenever it happens to contain no ending, which is true of a padded window and
+of a spliced one alike; the claim is about the draw, so it comes from the draw
+(`test_the_masks_are_the_sampler_s_and_are_not_rebuilt_from_the_window`).
+
+The buffers this one sits beside are unchanged. DQN's replay unit is a
+transition and R2D2's is a fixed-length sequence, so for them the position and
+the item are the same thing and a position sampler is the right shape. Two
+pre-existing weaknesses in `episode_buffer.py` and the prioritised buffer — a
+silent fall back to position zero when no start is admissible, and a full ring
+that admits every position including the ones spanning the seam — are real but
+are not this arm's to fix; they are filed separately so that fixing them is
+judged on DQN's and R2D2's terms rather than smuggled through here.
 
 ## The replacement for the convolutional encoder
 
@@ -143,19 +194,6 @@ and that a formal launch has to either resolve or declare. They are listed with
 what each one puts at risk, because "a minor deviation" is not a thing that can
 be judged without saying what it would change.
 
-**Minibatch episodes are drawn with replacement.** The published update shuffles
-the episode indices and takes the first `batch_size`, so one minibatch holds
-`batch_size` *distinct* episodes. Here each window is drawn independently, so an
-episode can appear twice in a batch. The marginal distribution over episodes is
-uniform either way, which is what the sampling rule above is about, but the
-within-batch diversity is not the same.
-
-This one carries a confound specific to what R1 measures. The pool of episodes
-long enough to hold a window shrinks as `t` grows, so the chance of a repeat
-inside a batch *rises with `t`* — the effective diversity of a minibatch becomes
-a function of the truncation, which is the variable the sweep is trying to
-isolate. It should be resolved before the truncation sweep runs, not declared.
-
 **Epsilon anneals on environment steps, not on learner updates.** The published
 schedule is a function of the solver iteration and is read once per episode, so
 it holds still within an episode and stays at its starting value throughout the
@@ -168,7 +206,10 @@ published agent does and the reproduction arm should not claim it is.
 **The loss is averaged over the batch; Caffe's is not.** The published net's
 Euclidean loss divides by the first dimension of its target blob, which for the
 recurrent net is the unroll length, not the minibatch size. So the published
-gradient is `batch_size` times this one's. Under a plain step rule that is a
+gradient is `batch_size` times this one's. (This arm now divides by the number
+of windows actually drawn rather than by the declared `batch_size`, which is the
+right denominator for a minibatch that shrinks — but it is a different question
+from the factor, and does not settle it.) Under a plain step rule that is a
 learning-rate rescaling and nothing more, but the published chain clips the
 global gradient norm at ten *before* ADADELTA, and a constant factor of
 `batch_size` changes how often that clip binds. It is therefore not simply

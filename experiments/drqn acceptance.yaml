@@ -17,7 +17,9 @@
 #   - four evaluation checkpoints at 5000, 10000, 15000 and 20000, each of
 #     exactly ten eval/episode/return records
 #   - every train/episode and eval/episode value finite
-#   - train/episode/update.loss appears once replay is sampleable, at step 256
+#   - train/episode/update.loss appears once replay holds a completed episode of
+#     at least ten transitions, which is at or after the minimum size of 256 and
+#     not implied by it
 #   - no update.priority and no update.importance_weight anywhere: this learner
 #     does not report them because it does not compute them
 #
@@ -25,8 +27,10 @@
 # of ten transitions is only drawn from episodes that ran at least ten, which
 # means replay is empty of usable windows until the policy survives that long.
 # That is the published sampling rule rather than a misconfiguration: a window
-# cut short by an ending would not be TBPTT(10). If update.loss never appears,
-# read it as the policy never having lasted ten steps, not as a broken buffer.
+# cut short by an ending would not be TBPTT(10). The buffer says so -- its
+# can_sample counts eligible episodes rather than stored transitions -- so if
+# update.loss never appears, read it as the policy never having lasted ten
+# steps, not as a broken buffer.
 
 experiment: drqn-acceptance
 name: drqn-acceptance-truncation-10

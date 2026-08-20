@@ -56,6 +56,7 @@ def window(key, transitions):
         dones=jnp.zeros((1, transitions), dtype=jnp.bool_),
         terminals=jnp.zeros((1, transitions), dtype=jnp.bool_),
         valid=jnp.ones((1, transitions), dtype=jnp.bool_),
+        batch_valid=jnp.ones((1,), dtype=jnp.bool_),
     )
 
 
@@ -99,6 +100,7 @@ def test_a_longer_window_carries_credit_the_shorter_one_cannot():
         dones=long_window.dones[:, :1],
         terminals=long_window.terminals[:, :1],
         valid=long_window.valid[:, :1],
+        batch_valid=long_window.batch_valid,
     )
 
     def gradient(sample):

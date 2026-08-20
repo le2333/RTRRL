@@ -2,6 +2,10 @@
 
 from __future__ import annotations
 
+import jax.numpy as jnp
+
+from memorax.utils.typing import Array
+
 
 def make_td0():
     """Build TD(0) over the ending that decides whether there is a future.
@@ -18,3 +22,36 @@ def make_td0():
         return reward + gamma * (1 - terminal) * next_value - value
 
     return td0
+
+
+def masked_sequence_loss(
+    td_error: Array,
+    valid: Array,
+    weights: Array | None = None,
+    batch_valid: Array | None = None,
+) -> Array:
+    """Half the squared error, averaged within a sequence and then across them.
+
+    Averaging inside the sequence first is what makes sequences of different
+    valid lengths weigh the same, and ``weights`` is the caller's opportunity
+    to say they should not: a learner that draws non-uniformly hands its
+    correction here, and one that draws uniformly hands nothing, because
+    uniform weights are the absence of a correction rather than a choice of
+    one.
+
+    ``batch_valid`` says how many sequences there really are, for a sampler
+    that could not fill the minibatch. Dividing by the declared batch size
+    instead would shrink the loss, and with it the gradient, in exactly the
+    situation where replay is thinnest -- early training -- which is a change
+    to the learning rate schedule disguised as a padding convention.
+    """
+
+    mask = valid.astype(td_error.dtype)
+    per_sequence = 0.5 * jnp.sum(jnp.square(td_error) * mask, axis=1)
+    per_sequence = per_sequence / jnp.maximum(jnp.sum(mask, axis=1), 1.0)
+    if weights is not None:
+        per_sequence = per_sequence * weights
+    if batch_valid is None:
+        return jnp.mean(per_sequence)
+    drawn = batch_valid.astype(per_sequence.dtype)
+    return jnp.sum(per_sequence * drawn) / jnp.maximum(jnp.sum(drawn), 1.0)

@@ -25,7 +25,7 @@ from .normalization import (
 )
 from .spaces import action_classes, action_dim, encode_feedback
 from .targets import delayed_update, periodic_incremental_update
-from .td import make_td0
+from .td import make_td0, masked_sequence_loss
 from .updates import (
     DRTRRL,
     ObjectiveDirections,
@@ -61,6 +61,7 @@ __all__ = [
     "make_bounded_rule",
     "make_optax_rule",
     "make_td0",
+    "masked_sequence_loss",
     "make_d_rtrrl_rule",
     "normalization_metrics",
     "periodic_incremental_update",
