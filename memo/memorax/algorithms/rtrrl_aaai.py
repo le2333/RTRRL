@@ -60,7 +60,7 @@ from memorax.utils.axes import (
     remove_feature_axis,
     remove_time_axis,
 )
-from memorax.utils.trees import subtree_norms
+from memorax.utils.trees import subtree_norms, tree_norm
 
 from .contract import (
     ActionDecision,
@@ -260,16 +260,45 @@ class CoreState(struct.PyTreeNode):
 
 # -------------------------------------------------------------------- readings
 @dataclass(frozen=True)
-class BlockReports:
-    """Which position-split torso readings to take."""
+class ScaleReports:
+    """The six readings one block's update scale is characterized by.
+
+    Each is a per-transition quantity of one parameter group, in that group's
+    own units: ``abs_td_error`` is dimensionless, the four norms are Euclidean
+    norms over the group's parameters, and ``clip_multiplier`` is a ratio.
+    Together they decompose how far a step moved and what shortened it ---
+    ``raw_update_norm`` is what the trace and the TD error asked for,
+    ``clip_multiplier`` is what the rule's scale handling granted, and
+    ``realized_update_norm`` is what the parameters actually did, measured on
+    the update rather than inferred from the other two.
+
+    They are declared apart from ``grad_norm``/``trace_norm`` because they are
+    a different measurement of a different moment. ``trace_norm`` is the trace
+    *after* this transition was accumulated into it -- what the next step will
+    read -- while ``used_trace_norm`` is the trace this step multiplied. The
+    two differ by exactly one accumulation, which is the whole quantity an
+    event-aligned window around a collapse is trying to see.
+    """
+
+    abs_td_error: bool = reading(at="abs_td_error")
+    used_trace_norm: bool = reading(at="used_trace_norm")
+    raw_update_norm: bool = reading(at="raw_update_norm")
+    clip_multiplier: bool = reading(at="clip_multiplier")
+    clip_fraction: bool = reading(at="clip_fraction")
+    realized_update_norm: bool = reading(at="realized_update_norm")
+
+
+@dataclass(frozen=True)
+class BlockReports(ScaleReports):
+    """Which position-split torso readings to take, and its scale readings."""
 
     grad_norm: bool = reading(at="grad_norm", split=True)
     trace_norm: bool = reading(at="trace_norm", split=True)
 
 
 @dataclass(frozen=True)
-class HeadReports:
-    """Which whole-readout readings to take."""
+class HeadReports(ScaleReports):
+    """Which whole-readout readings to take, and its scale readings."""
 
     grad_norm: bool = reading(at="grad_norm")
     trace_norm: bool = reading(at="trace_norm")
@@ -339,10 +368,16 @@ class ForwardMetrics(struct.PyTreeNode):
 
 
 class BlockUpdate(struct.PyTreeNode):
-    """How big what went into one block's step was."""
+    """How big what went into one block's step was, and what came out."""
 
     grad_norm: Any = None
     trace_norm: Any = None
+    abs_td_error: Any = None
+    used_trace_norm: Any = None
+    raw_update_norm: Any = None
+    clip_multiplier: Any = None
+    clip_fraction: Any = None
+    realized_update_norm: Any = None
 
 
 class GroupUpdate(struct.PyTreeNode):
@@ -402,7 +437,11 @@ def _adam_rule(base: Adam, *, clip: float):
             optax.scale(base.lr),
         )
     )
-    return make_optax_rule(optax.chain(*chain), rate=base.lr)
+    # The clip is named twice on purpose: once to `optax.chain`, which is what
+    # applies it, and once to the rule, which is what reports how much of the
+    # step it took away. R2 reads that number over the transitions around a
+    # collapse, and a finished chain cannot be asked for it afterwards.
+    return make_optax_rule(optax.chain(*chain), rate=base.lr, clip=clip)
 
 
 def _group_rule(step: Adam | DRTRRL, *, clip: float):
@@ -857,7 +896,63 @@ class Core:
             )
             for name in params
         }
-        return stepped, taken, grouped_traces
+        return stepped, taken, grouped_traces, deltas
+
+    def _scale_readings(self, grouped_traces, deltas, taken):
+        """One block's update-scale measurements, each taken where it is defined.
+
+        ``abs_td_error`` and ``used_trace_norm`` are per stream because the TD
+        error and the eligibility trace are, and ``raw_update_norm`` is their
+        product -- which is ``||delta * z||`` exactly rather than approximately,
+        since one stream's TD error is a scalar and comes straight out of the
+        norm. ``used_trace_norm`` is the incoming trace, the one this step's
+        update multiplied; the trace under ``trace_norm`` is the same trace one
+        accumulation later.
+
+        ``realized_update_norm`` is measured on the finished update, which the
+        rule has already averaged over the streams, so it is one number that
+        belongs to every stream of the transition alike. It is reported against
+        each of them rather than against a stream axis it does not have, which
+        is the same thing ``step_size`` does for a rule with no per-stream rate.
+        """
+
+        def measured(name, reports):
+            group = self.group_of[name]
+
+            def surprise():
+                return jnp.abs(deltas[group])
+
+            def length():
+                return _head_gradient_norm(grouped_traces[group][name])
+
+            def realized():
+                return jnp.full_like(
+                    deltas[group], tree_norm(taken[group].updates[name])
+                )
+
+            def bound(reading):
+                """One of the two readings only the group's rule can produce."""
+
+                return lambda: taken[group].metrics[reading][name]
+
+            taking = {
+                "abs_td_error": surprise,
+                "used_trace_norm": length,
+                "raw_update_norm": lambda: surprise() * length(),
+                "clip_multiplier": bound("clip_multiplier"),
+                "clip_fraction": bound("clip_fraction"),
+                "realized_update_norm": realized,
+            }
+            # Each is taken only if it was asked for, as every reading is. Six
+            # per block is eighteen extra series on every transition of a
+            # million-step run: cheap, and still not something a run should pay
+            # for without saying so.
+            return {
+                key: take() if getattr(reports, key) else None
+                for key, take in taking.items()
+            }
+
+        return measured
 
     def _advance_traces(self, state, grouped_traces, traced, reset_before):
         """Advance each block's trace after the current update has used it."""
@@ -880,7 +975,7 @@ class Core:
         }
         return emphasis, advanced
 
-    def _update_reading(self, delta, emphasis, traced, advanced, taken):
+    def _update_reading(self, delta, emphasis, traced, advanced, taken, scale):
         """Project update products onto the readings this graph declares."""
 
         blocks = {
@@ -892,6 +987,7 @@ class Core:
         def block_reading(name):
             reports = getattr(self.reports, name)
             block = blocks[name]
+            measured = scale(name, reports)
             return BlockUpdate(
                 grad_norm=(
                     block.gradient_norms(traced[name]) if reports.grad_norm else None
@@ -899,6 +995,7 @@ class Core:
                 trace_norm=(
                     block.gradient_norms(advanced[name]) if reports.trace_norm else None
                 ),
+                **measured,
             )
 
         return UpdateMetrics(
@@ -940,7 +1037,7 @@ class Core:
         )
 
         delta = self._td_error(state, timestep, value, terminal)
-        stepped, taken, grouped_traces = self._take_updates(
+        stepped, taken, grouped_traces, deltas = self._take_updates(
             state, traced, direct, delta, step
         )
         emphasis, advanced = self._advance_traces(
@@ -968,7 +1065,14 @@ class Core:
                 actor=actor_reading,
                 critic=CriticForward(value=value if self.reports.value else None),
             ),
-            self._update_reading(delta, emphasis, traced, advanced, taken),
+            self._update_reading(
+                delta,
+                emphasis,
+                traced,
+                advanced,
+                taken,
+                self._scale_readings(grouped_traces, deltas, taken),
+            ),
         )
 
 

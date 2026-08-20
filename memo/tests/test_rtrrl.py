@@ -28,6 +28,7 @@ from memorax.networks.components import LayerNorm
 from memorax.networks.sequence import Sequence
 from memorax.networks.sequence_models import LRUCell, LRUConfig, Memoroid
 from memorax.networks.sequence_models.lru import LRUStructuredRTRL
+from memorax.readings import quiet
 from memorax.rl.updates import Adam
 from tests.support.environments import TinyContinuousEnv
 
@@ -441,20 +442,10 @@ def test_declaring_less_compiles_to_less():
         )
 
     everything = lowered(rtrrl.Reports()).as_text()
-    nothing = lowered(
-        rtrrl.Reports(
-            log_prob=False,
-            entropy=False,
-            value=False,
-            td_error=False,
-            emphasis=False,
-            torso=rtrrl.BlockReports(False, False),
-            actor=rtrrl.HeadReports(False, False),
-            critic=rtrrl.HeadReports(False, False),
-            torso_step=rtrrl.GroupReports(False),
-            heads_step=rtrrl.GroupReports(False),
-        )
-    ).as_text()
+    # Every reading off, whatever the declaration holds today: a positional
+    # tuple of booleans here would keep compiling and stop meaning "nothing"
+    # the day a reading was added.
+    nothing = lowered(quiet(rtrrl.Reports)).as_text()
 
     assert everything is not None and nothing is not None
     assert len(nothing.splitlines()) < len(everything.splitlines())

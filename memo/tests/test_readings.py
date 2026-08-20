@@ -15,7 +15,7 @@ import pytest
 from test_rtrrl import ENVS, build
 
 from memorax.networks.sequence import PLACES
-from memorax.readings import declared, reading, readings, taken
+from memorax.readings import declared, quiet, reading, readings, taken
 from tests.support.numerics import flattened
 
 layered = importlib.import_module("memorax.algorithms.stream_ac")
@@ -49,12 +49,14 @@ def test_a_split_reading_becomes_one_name_per_part():
 
 def test_taking_less_publishes_less():
     everything = set(taken(rtrrl.Reports()))
-    less = set(
-        taken(rtrrl.Reports(entropy=False, torso=rtrrl.BlockReports(False, False)))
-    )
+    less = set(taken(rtrrl.Reports(entropy=False, torso=quiet(rtrrl.BlockReports))))
     assert less < everything
     assert "forward.actor.entropy" in everything - less
     assert "update.torso.grad_norm" in everything - less
+    assert "update.torso.raw_update_norm" in everything - less
+    # A block turned off entirely leaves no path of its own, whatever readings
+    # the block declares today.
+    assert not {name for name in less if name.startswith("update.torso.")}
 
 
 def test_what_rtrrl_declares_is_what_rtrrl_emits():

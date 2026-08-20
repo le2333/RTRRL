@@ -1,0 +1,55 @@
+{
+  "contract": 12,
+  "identity": {
+    "run_id": "rtrrl-collapse-fork-fixed-step-t0-s11",
+    "experiment": "rtrrl-issue45-fork",
+    "launch_id": "20260817-000000",
+    "trial": 0,
+    "digest": "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+    "seed": 11,
+    "role": "formal"
+  },
+  "entry": "rtrrl",
+  "artifacts": {
+    "root": "s3://artifacts/trainer/rtrrl-issue45-fork/launch/fixed-step-t0-s11"
+  },
+  "algorithm": {
+    "environment": {
+      "id": "brax::halfcheetah",
+      "backend": "spring",
+      "observed": [
+        0,
+        2,
+        4
+      ],
+      "episode_length": 1000
+    },
+    "num_envs": 1,
+    "parameters": {
+      "gamma": 0.99
+    }
+  },
+  "training": {
+    "seed": 11,
+    "total_steps": 750000,
+    "chunk_steps": 10000
+  },
+  "evaluation": {
+    "every_steps": 10000,
+    "episodes": 5,
+    "chunk_steps": 5000,
+    "seed": 7
+  },
+  "logging": {
+    "aim": {
+      "url": "aim://aim:53800"
+    }
+  },
+  "fork": {
+    "parent": "s3://artifacts/trainer/rtrrl-issue45-r2/launch/run-t0-s11/checkpoints/step-000000700000.msgpack",
+    "from_steps": 700000,
+    "replacing": [
+      "core.rule"
+    ]
+  }
+}

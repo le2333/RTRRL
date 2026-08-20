@@ -66,14 +66,26 @@ def taken(declaration, *, parts: tuple[str, ...] = ()) -> tuple[str, ...]:
 def declared(model: type) -> tuple[str, ...]:
     """Every path the declaration can offer, whatever a run asked for."""
 
-    return taken(_all(model))
+    return taken(_filled(model, True))
 
 
-def _all(model: type):
+def quiet(model: type):
+    """One instance of a declaration with every reading in it turned off.
+
+    Spelled once because the alternative is a positional tuple of booleans at
+    the call site, and that quietly means something else the day a reading is
+    added to the declaration -- which is exactly the day a test asserting that
+    nothing is taken needs to still be asserting it.
+    """
+
+    return _filled(model, False)
+
+
+def _filled(model: type, value: bool):
     filled = {}
     for item in fields(model):
         if "readings" in item.metadata:
-            filled[item.name] = _all(item.metadata["readings"])
+            filled[item.name] = _filled(item.metadata["readings"], value)
         else:
-            filled[item.name] = True
+            filled[item.name] = value
     return model(**filled)

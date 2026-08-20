@@ -367,8 +367,19 @@ class ExperimentRunner:
         if "rerun" in declared:
             logging["rerun"] = dict(declared["rerun"])
 
+        # Optional, and copied rather than defaulted: a run that says nothing
+        # about checkpoints files none, which is the ordinary case. An R2 run
+        # that may need forking has to say so before it starts, because the
+        # boundary a fork wants is decided from a collapse it has not had yet.
+        checkpoint = (
+            {"checkpoint": dict(experiment["checkpoint"])}
+            if "checkpoint" in experiment
+            else {}
+        )
+
         return {
             "contract": self.contract,
+            **checkpoint,
             "identity": {
                 "run_id": run_id,
                 "experiment": experiment["experiment"],

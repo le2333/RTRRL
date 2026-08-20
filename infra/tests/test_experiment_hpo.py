@@ -73,6 +73,27 @@ def test_each_run_has_one_artifact_root(experiment: Any, catalog: Any, tmp_path:
     assert first["logging"]["rerun"] == {"log_every_steps": 100}
 
 
+def test_a_run_files_checkpoints_only_when_the_experiment_asks_for_them(
+    experiment: Any, catalog: Any, tmp_path: Path
+) -> None:
+    """A block that is present is a destination that is on, as with Rerun.
+
+    An R2 run that may need forking has to say so before it starts: which
+    boundary a fork wants is decided from a collapse the run has not had yet,
+    so a run that filed nothing cannot be given the block afterwards.
+    """
+
+    for configuration in runner(experiment, catalog, tmp_path).next_round():
+        assert "checkpoint" not in configuration
+
+    experiment["checkpoint"] = {"every_steps": 100, "keep": None}
+
+    for configuration in runner(experiment, catalog, tmp_path).next_round():
+        assert configuration["checkpoint"] == {"every_steps": 100, "keep": None}
+        # Copied, so the emitted document shares nothing with the experiment.
+        assert configuration["checkpoint"] is not experiment["checkpoint"]
+
+
 def test_rerun_gets_no_destination_when_it_is_off(
     experiment: Any, catalog: Any, tmp_path: Path
 ) -> None:
