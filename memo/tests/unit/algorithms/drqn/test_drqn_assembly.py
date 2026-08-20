@@ -332,6 +332,29 @@ def test_more_than_one_environment_is_refused_rather_than_given_a_cadence():
         )
 
 
+def test_the_stored_reward_is_clipped_and_the_reported_one_is_not():
+    """Read off a real run, because the helper alone proves only arithmetic.
+
+    This environment pays ``0.4 + 0.35 * step``, so it never pays in units and
+    the clip is not the identity: replay must hold ones where the run reports
+    0.4, 0.75, 1.1 and so on. That separation is the claim -- a run is scored
+    on what the environment paid, and the learner reads what DQN would have
+    stored.
+    """
+
+    built = assembled()
+
+    state = built.program.init(jax.random.key(0))
+    trained, metrics = built.program.train(jax.random.key(1), state, 6)
+
+    paid = np.asarray(metrics.interaction.reward)
+    written = int(trained.buffer_state.written)
+    stored = np.asarray(trained.buffer_state.trajectory.experience.reward)[:, :written]
+
+    assert np.any(paid != np.sign(paid)), paid
+    np.testing.assert_allclose(stored, np.sign(paid).T, atol=0)
+
+
 def test_the_graph_holds_no_r2d2_machinery():
     graph = graph_of(assembled())
 

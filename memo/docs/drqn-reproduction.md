@@ -15,6 +15,7 @@ paper.
 | Paper | Here | Held by |
 | --- | --- | --- |
 | Uniform replay | `make_uniform_episode_window_buffer`, no priority declared | `test_uniform_replay_keeps_no_priority_to_update` |
+| Rewards clipped to their sign | `clipped_reward`, on the way into replay only | `test_replay_stores_the_clipped_reward_and_the_metric_keeps_the_raw_one` |
 | A random update draws completed episodes without replacement | Gumbel top-k over the eligible episodes | `test_an_episode_is_not_drawn_more_often_for_being_longer`, `test_a_minibatch_draws_each_episode_at_most_once` |
 | then a point uniformly inside each | `r ~ U{0..L-t}` inside the drawn episode | `test_a_start_is_uniform_over_the_places_a_window_fits` |
 | The window unrolls `t` transitions from that point | the episode must be at least `t` long | `test_an_episode_shorter_than_the_truncation_is_never_drawn`, `test_every_drawn_window_carries_the_full_truncation` |
@@ -40,14 +41,13 @@ select one and no tuning trial can be spent discovering that it should not.
 ## Why replay has its own buffer
 
 The sampling rows above are one clause of the paper, split up because each half
-can be got wrong on its own and each changes what a truncation sweep measures.
-Drawing a stored *position* instead of an episode lets a long episode collect
-probability in proportion to its length; letting a window run over an ending
-leaves it cut short by the validity mask, so a run declaring `t = 64` is in
-places training at `t = 5` and `t_eq` becomes a statement about a mixture. A
-window here lies inside one completed episode and carries exactly `t`
-transitions, or it is not drawn — an episode shorter than `t` contributes
-nothing rather than contributing a short window.
+can be got wrong on its own. Drawing a stored *position* instead of an episode
+lets a long episode collect probability in proportion to its length; letting a
+window run over an ending leaves it cut short by the validity mask, so a
+learner declaring TBPTT(64) is in places performing TBPTT(5). A window here
+lies inside one completed episode and carries exactly `t` transitions, or it is
+not drawn — an episode shorter than `t` contributes nothing rather than
+contributing a short window.
 
 An earlier version of this arm expressed that on top of `make_episode_buffer`,
 by weighting each admissible position by one over how many its episode offers.
@@ -85,12 +85,11 @@ Flashbax is storage here and nothing else; its own `can_sample` is not called.
 It answers for its own trajectory sampler and will not report ready until a
 whole `sample_sequence_length` has been written, which is the right contract
 for drawing a fixed-length slice off the head and the wrong one for drawing an
-episode. Left in, the warmup would be `max(min_length, t)` — a `t = 64` run
-would start learning later than a `t = 4` one, and a full-episode run later
-still by the whole horizon. Under a learning-curve AUC that is the truncation
-moving the score through how many updates the run got to make, which is
-exactly the confound the sweep exists to avoid, so readiness here counts
-transitions collected and nothing else
+episode. Left in, the warmup would be `max(min_length, t)` — a sequential-update
+run would start learning a whole horizon later than a random-update one at the
+same declared replay settings, the window length reaching out of the sampler
+and into the schedule. A replay warmup is how much experience has been collected
+before learning starts, so readiness here counts transitions and nothing else
 (`test_the_warmup_is_the_declared_minimum_and_not_the_window_length`).
 
 Padding is zeroed rather than left as whatever the ring held. A step past the
@@ -167,17 +166,7 @@ named:
 
 ## Where this departs from the paper
 
-Two departures, neither hidden behind a branch nothing selects.
-
-**No reward clipping.** The published agent stores `sign(r)` in replay, which on
-Atari turns unbounded game scores into `{-1, 0, +1}`. Rewards are stored raw
-here. On R1's tasks that is not a difference: MemoryChain pays `±1` at the end
-and nothing in between, RepeatPrevious and StatelessCartPole pay in units, so
-`sign(r) == r` on every transition they produce and a clipping transform would
-be the identity. It stops being the identity the moment an environment with
-rewards outside the unit range is added, and at that point this arm is no longer
-storing what the published one stores. Anyone adding such an environment to R1
-has to add the transform with it.
+One departure, not hidden behind a branch nothing selects.
 
 **Truncation-boundary bootstrap.** Episodes are stored end to end in a stream
 that resets itself, so the row after an ending holds the next episode's first
@@ -189,6 +178,17 @@ episodes end by failing and the case does not arise there;
 and `test_a_terminal_ending_has_no_successor_at_all` holds the other ending.
 
 ## What is not a departure
+
+**Reward clipping.** `clipped_reward` stores `sign(r)`, which is DQN's own
+preprocessing and therefore the units the published agent's Q values are in. It
+is applied on the way into replay and nowhere else: a run is scored on what the
+environment paid, and clipping that would change the number being reported
+rather than the number being learned from. It is not a parameter, because it is
+not a choice the published agent offers. On R1's tasks it is the identity —
+MemoryChain pays `±1` at the end and nothing in between, RepeatPrevious and
+StatelessCartPole pay in units — so it changes no result here; a task whose
+reward magnitudes carry information beyond their sign is not one this learner
+can be run on as published.
 
 **One learner update per environment transition.** An earlier version of this
 document listed this as a deviation, on the grounds that the paper updates once
@@ -249,24 +249,14 @@ a complete reproduction of the published solver.
 
 ## What this does not contain
 
-The truncation sweep has not been run, and no `t_eq` has been measured. The
-machinery for judging one — fixed-episode evaluation, AUC over environment
-steps, and an archived separation of tuning from formal seeds — landed with #46
-and the equal-budget bracketed search over `t = {1, 4, 16, 64, full}` is in
-`infra/src/trainer_infra/truncation.py`, but two things still stand between
-that and a number.
+This entry is the learner. What is done with a set of runs at different `t` —
+which candidates to launch, what counts as equivalent, and what number to
+report — is not here and not this layer's business; it lives in
+`infra/src/trainer_infra/truncation.py`, which this package neither imports nor
+knows about.
 
-**No image carries the `drqn` entry.** The entry is new, so the contract-10
-rebuild has to happen before anything can be launched; the acceptance manifest
-names `image: TBD` for exactly that reason.
-
-**The equivalence reference is not settled.** `truncation.py` currently judges
-each `t` against DRQN at full BPTT, which answers "how long a truncation
-approximates the untruncated gradient". R1's own question may instead be "how
-long a truncation reaches Structured RTRRL's performance", which is a different
-reference and a different `t_eq`. This has to be fixed and written down before
-the formal sweep runs, because it is not something a result can be reinterpreted
-into afterwards.
-
-Until both are settled this entry supports diagnostic and smoke training only.
-A number taken from it is not a paper number.
+One thing does have to be said here, because it is about the entry: **no image
+carries `drqn` yet.** The entry is new, so a contract-10 rebuild has to happen
+before anything can be launched, which is why the acceptance manifest names
+`image: TBD`. Until then this entry supports diagnostic and smoke training
+only, and a number taken from it is not a paper number.

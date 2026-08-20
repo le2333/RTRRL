@@ -4,12 +4,21 @@ The paper (arXiv:1507.06527) is DQN with the first fully-connected layer
 replaced by a recurrent one, and its learner is the 2015 DQN learner unchanged:
 uniform replay, one-step targets against a periodically copied target network,
 a linear Q head, and epsilon-greedy acting. What recurrence adds is only how a
-minibatch is drawn and unrolled -- *bootstrapped random updates*, which pick a
-completed episode, then a point inside it far enough from the end to hold a
-whole window, zero the hidden state there, and backpropagate through the
-window. Drawing the episode first is what keeps a long episode from collecting
-probability, and requiring the window to fit is what makes the truncation the
-learner declares the truncation its gradient actually crosses.
+minibatch is drawn and unrolled, and the paper gives two ways of doing it. Both
+are here, as the two ``learning`` branches:
+
+*Bootstrapped random updates* (``truncated``) draw a completed episode, then a
+point inside it far enough from the end to hold a whole window, zero the hidden
+state there, and backpropagate through the window. Drawing the episode first is
+what keeps a long episode from collecting probability; requiring the window to
+fit is what makes the ``t`` the learner declares the number of transitions its
+gradient actually crosses.
+
+*Bootstrapped sequential updates* (``full_bptt``) draw a completed episode and
+run it from its first transition to its last, carrying the hidden state forward
+and backpropagating through the whole of it. The paper reports the two
+performing comparably; they differ in what a single update sees, and this
+implementation shares everything else between them, because the paper does too.
 
 This is deliberately not R2D2 with pieces switched off. R2D2's additions --
 prioritised replay and its importance-sampling correction, n-step returns,
@@ -113,8 +122,9 @@ class TruncatedParameters:
     """The paper's truncation, which is the whole of what TBPTT(t) declares.
 
     No burn-in and no stored recurrence: the hidden state at a sampled start is
-    zero by construction, which is the published rule and the thing the
-    truncation sweep is a sweep over.
+    zero by construction, which is the published rule. ``length`` is therefore
+    the entire description of a random update -- how many transitions it holds,
+    and how far back its gradient reaches, which here are the same number.
     """
 
     length: int = param(valid=(1, 4096), search=(1, 64))
@@ -236,18 +246,20 @@ class SelectedCore:
 
 @dataclass(frozen=True)
 class SelectedLearning:
-    """How far back the gradient reaches, and where a window may begin.
+    """Which of the paper's two update schemes this run performs.
 
-    The two branches differ in exactly those two things. Neither differs in
-    what the loss computes, because the hidden state at a window's first input
-    is zero either way -- full BPTT is the branch whose window is the episode.
+    They differ in how much of an episode one update sees and where in the
+    episode it begins, and in nothing else: the loss is the same expression,
+    over the same two networks, opened on the same zero hidden state. A
+    sequential update is the whole episode from its first transition; a random
+    update is ``t`` transitions from somewhere inside one.
     """
 
     kind: str
     truncation: int
 
     def window(self, episode_length: int) -> int:
-        """Executed transitions per replay item, one fewer than its inputs."""
+        """Transitions one update unrolls: ``t``, or an episode's declared limit."""
 
         if self.kind == "full_bptt":
             return episode_length
@@ -256,12 +268,16 @@ class SelectedLearning:
     def minimum_episode_length(self, episode_length: int) -> int:
         """How long an episode must be before this branch will draw from it.
 
-        A truncated window has to fit whole, or the gradient would reach back
-        however far the episode happened to have left rather than the ``t`` the
-        learner declares -- and ``t`` is the quantity the sweep sweeps, so it
-        may not be a function of where an episode ended. Full BPTT sets no bar:
-        every completed episode is one, whatever its length, and its window is
-        padded out to the declared limit and masked past the ending.
+        A random update draws its start from ``U{0 .. L - t}``, which exists
+        only for an episode of at least ``t`` transitions. An episode shorter
+        than that contributes no start rather than a short window: a window cut
+        off at an ending would carry fewer than ``t`` transitions, so the
+        gradient would reach back however far that episode happened to have
+        left, and the learner would not be performing TBPTT(t).
+
+        A sequential update sets no bar, because its window is whatever the
+        episode is. It begins at the first transition, runs to the last, and
+        the declared limit is padding it never reads.
         """
 
         if self.kind == "full_bptt":
@@ -321,6 +337,9 @@ class ReplayTransition(struct.PyTreeNode):
     No actor recurrence is kept. A learner that zeroes the hidden state at the
     start of every window has no use for the one the behaviour policy held
     there, and storing it would suggest otherwise.
+
+    ``reward`` is the clipped reward, which is what the published agent stores
+    and therefore what its Q values are in units of.
     """
 
     observation: Any
@@ -392,6 +411,25 @@ def learner_sequence(sample) -> LearnerSequence:
         valid=sample.valid,
         batch_valid=sample.batch_valid,
     )
+
+
+def clipped_reward(reward: Array) -> Array:
+    """The reward as replay stores it: its sign, which is DQN's preprocessing.
+
+    The published agent stores ``sign(r)``, so its Q values are in units of
+    clipped reward and its gradient magnitudes do not depend on how a task
+    happens to scale its payoffs. Applied on the way into replay and nowhere
+    else -- what a run is scored on is the reward the environment paid, and
+    clipping that would change the number being reported rather than the number
+    being learned from.
+
+    This is the published behaviour rather than a choice, so it is not a
+    parameter. A task whose reward magnitudes carry information beyond their
+    sign is not one this learner can be run on as published; on a task paying
+    in units or in +/-1 it is the identity.
+    """
+
+    return jnp.sign(reward)
 
 
 def encode_observation(inputs: RecurrentInputs) -> Array:
@@ -967,7 +1005,7 @@ class DRQN:
             observation=observation,
             episode_start=state.episode_start,
             action=action,
-            reward=reward,
+            reward=clipped_reward(reward),
             next_observation=next_obs,
             done=done,
             terminal=terminal,

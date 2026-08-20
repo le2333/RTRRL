@@ -163,6 +163,29 @@ def test_a_window_starts_from_a_zero_hidden_state():
     )
 
 
+def test_replay_stores_the_clipped_reward_and_the_metric_keeps_the_raw_one():
+    """DQN's preprocessing: ``sign(r)`` into replay, and only into replay.
+
+    The published agent's Q values are in units of clipped reward, so the
+    clipping belongs on the way into the buffer. It does not belong on the way
+    into a metric: what a run is scored on is what the environment paid, and
+    clipping that would change the number being reported rather than the number
+    being learned from.
+    """
+
+    paid = jnp.asarray([-7.0, -0.5, 0.0, 0.5, 3.0])
+
+    np.testing.assert_array_equal(
+        np.asarray(drqn.clipped_reward(paid)), np.asarray([-1.0, -1.0, 0.0, 1.0, 1.0])
+    )
+    # On a task paying in units or in +/-1 it is the identity, which is why it
+    # changes nothing on the environments this arm is run on.
+    unit = jnp.asarray([1.0, 1.0, -1.0])
+    np.testing.assert_array_equal(
+        np.asarray(drqn.clipped_reward(unit)), np.asarray(unit)
+    )
+
+
 @pytest.mark.parametrize(
     "dones,terminals",
     [

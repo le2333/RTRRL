@@ -44,12 +44,12 @@ Flashbax is storage here and nothing else. Its own `can_sample` is not called,
 because it answers for its own trajectory sampler: it will not report ready
 until a whole `sample_sequence_length` has been written, which is the right
 contract for drawing a fixed-length slice off the head and the wrong one for
-drawing an episode. Left in, it would make the warmup a function of the window
-length -- `max(min_length, t)` rather than `min_length` -- so a run at t=64
-would begin learning later than one at t=4 and a full-episode run later still,
-by the length of the whole horizon. Under a learning-curve AUC that is the
-truncation moving the score through the number of updates the run gets to make,
-which is precisely the confound the sweep exists to avoid.
+drawing an episode. Left in, it would make the warmup `max(min_length, t)`
+rather than `min_length`, so a learner asking for a long window would begin
+learning later than one asking for a short window at the same declared replay
+settings -- the window length reaching out of the sampler and into the schedule.
+A replay warmup is how much experience has been collected before learning
+starts, and that is the same quantity whatever the caller intends to draw.
 """
 
 from __future__ import annotations
@@ -149,14 +149,13 @@ def make_uniform_episode_window_buffer(
     need a scan to stay correct.
 
     ``minimum_episode_length`` is the length below which an episode is not
-    worth drawing, and it is the one knob that separates this module's two
-    callers. A truncated learner sets it to the truncation: a window shorter
-    than the ``t`` the learner declares would make the sweep's independent
-    variable a function of where the episode happened to end, which is the one
-    thing a truncation sweep cannot tolerate. A full-episode learner sets it to
-    one and takes whatever length the episode has, padding to the declared
-    limit and masking the rest -- which is the same code path, because an
-    episode that cannot fill the window simply has no start to choose between.
+    worth drawing. A caller wanting exactly ``t`` transitions per window sets
+    it to ``t``, because ``U{0 .. L - t}`` has no start to draw from in a
+    shorter episode and a window cut off at an ending would not be ``t``
+    transitions. A caller wanting whole episodes sets it to one and takes
+    whatever length there is, padding to the declared limit and masking the
+    rest -- which is the same code path, because an episode that cannot fill
+    the window simply has no start to choose between.
     """
 
     if add_batch_size < 1:
@@ -284,10 +283,9 @@ def make_uniform_episode_window_buffer(
         holding one short completed episode is not yet worth learning from.
 
         The first half counts transitions collected, which is what a replay
-        warmup means, and is the same number whatever window the learner
-        intends to draw. Deferring to Flashbax here instead would fold the
-        window length into the warmup and make the learning-curve AUC a
-        function of the truncation through when learning started.
+        warmup means and is the same number whatever window the caller intends
+        to draw. Deferring to Flashbax here would fold the window length into
+        the warmup instead.
         """
 
         collected = state.written * add_batch_size

@@ -7,9 +7,9 @@
 Each line of that is a separate claim and gets a separate test. The episode is
 the unit, so a long one is not drawn more often and the same one is not drawn
 twice in a minibatch; the window lies inside it, so the gradient crosses the t
-the sweep names rather than however much of an episode happened to be left; and
-when fewer than B episodes are eligible the minibatch shrinks, rather than being
-padded with repeats or -- worse -- with position zero.
+the learner declares rather than however much of an episode happened to be
+left; and when fewer than B episodes are eligible the minibatch shrinks, rather
+than being padded with repeats or -- worse -- with position zero.
 """
 
 from __future__ import annotations
@@ -134,9 +134,9 @@ def test_every_drawn_window_lies_inside_one_episode():
 def test_every_drawn_window_carries_the_full_truncation():
     """The nominal t and the number of transitions the gradient crosses agree.
 
-    This is what the sweep's independent variable has to be. Cutting a window
-    at an ending would make the effective truncation a function of where in an
-    episode the window landed, and t=64 would in places be t=5.
+    Cutting a window at an ending would make the effective truncation a
+    function of where in the episode the window landed, so a learner declaring
+    TBPTT(64) would in places be performing TBPTT(5).
     """
 
     buffer, state = stored()
@@ -312,11 +312,10 @@ def test_the_warmup_is_the_declared_minimum_and_not_the_window_length():
     Flashbax's own readiness rule will not report ready until a whole
     ``sample_sequence_length`` has been written, which is right for drawing a
     fixed-length slice and wrong for drawing an episode. Deferring to it would
-    make the warmup ``max(min_length, t)``, so a run at t=64 would begin
-    learning later than one at t=4 and a full-episode run later still. Under a
-    learning-curve AUC that is the truncation moving the score through how many
-    updates the run got to make, which is the confound the sweep exists to
-    avoid.
+    make the warmup ``max(min_length, t)``: two learners with identical replay
+    settings would start learning at different times because one asked for a
+    longer window, which is the window length reaching out of the sampler and
+    into the schedule.
     """
 
     ready = {}

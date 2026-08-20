@@ -1,7 +1,7 @@
-"""How far back a window's gradient reaches, which is what the sweep sweeps.
+"""How far back a window's gradient reaches.
 
-The truncation search only means something if t is the number of steps the
-gradient actually crosses. These tests hold that: the whole window is
+TBPTT(t) is a claim about a number of steps, so t has to be the number of steps
+the gradient actually crosses. These tests hold that: the whole window is
 differentiated, nothing before it is, and the two branches differ in the window
 rather than in the loss.
 """
@@ -65,7 +65,7 @@ def test_the_gradient_reaches_every_input_in_the_window(truncation):
     """Each step in the window moves the loss, including the earliest one.
 
     A gradient that stopped short would leave the first inputs unable to change
-    it, and the sweep would be measuring a shorter truncation than it named.
+    it, and the learner would be performing a shorter truncation than it named.
     """
 
     learner = core()
