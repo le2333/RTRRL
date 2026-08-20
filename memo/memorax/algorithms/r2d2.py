@@ -22,12 +22,7 @@ from memorax.networks.heads import DiscreteQNetwork
 from memorax.observability.metrics import metric_names
 from memorax.parameters import describe_parameters, group, param, structure
 from memorax.readings import reading, taken
-from memorax.rl import (
-    EnvironmentStreams,
-    masked_sequence_loss,
-    periodic_incremental_update,
-    select_ended,
-)
+from memorax.rl import EnvironmentStreams, periodic_incremental_update, select_ended
 from memorax.rl.updates import BASE_FAMILY, base_transform
 from memorax.runtime import ObservationSchema
 from memorax.utils import Timestep
@@ -132,6 +127,25 @@ class SelectedBackbone:
     kind: str
     feature_dim: int
     hidden_dim: int
+
+
+def masked_sequence_loss(
+    td_error: Array, valid: Array, weights: Array | None = None
+) -> Array:
+    """Half the squared error, averaged within a sequence and then across them.
+
+    Averaging inside the sequence first is what makes sequences of different
+    valid lengths weigh the same, and ``weights`` is where a learner that draws
+    non-uniformly hands its correction: uniform weights are the absence of a
+    correction rather than a choice of one.
+    """
+
+    mask = valid.astype(td_error.dtype)
+    per_sequence = 0.5 * jnp.sum(jnp.square(td_error) * mask, axis=1)
+    per_sequence = per_sequence / jnp.maximum(jnp.sum(mask, axis=1), 1.0)
+    if weights is None:
+        return jnp.mean(per_sequence)
+    return jnp.mean(per_sequence * weights)
 
 
 def completed_episode_starts(experience: Any, *, transition_count: int) -> Array:

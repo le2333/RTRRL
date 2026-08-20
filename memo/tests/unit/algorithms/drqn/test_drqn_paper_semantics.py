@@ -351,6 +351,15 @@ def test_a_terminal_ending_has_no_successor_at_all():
 
 
 def test_positions_past_an_ending_do_not_enter_the_loss():
+    """A masked step contributes nothing, and does not shrink the divisor.
+
+    The published objective divides by the unroll length, so a padded window
+    weighs less than a full one rather than being renormalised up to it. That
+    is Caffe's Euclidean loss over the recurrent net's target blob, whose first
+    dimension is time, and it is the whole of why this is not a mean over both
+    axes.
+    """
+
     learner = _Learner()
     drawn = sample(
         jax.random.key(8),
@@ -364,13 +373,40 @@ def test_positions_past_an_ending_do_not_enter_the_loss():
     params, target_params = diverged(learner, drawn)
 
     masked, _ = learner.core._loss(params, target_params, cut)
-    scored, _ = learner.core._loss(params, target_params, kept)
+    scored, readings = learner.core._loss(params, target_params, kept)
 
-    _, readings = learner.core._loss(params, target_params, cut)
+    window = 2
     np.testing.assert_allclose(
-        float(masked), 0.5 * float(readings.td_error[0, 0]) ** 2, rtol=1e-6
+        float(masked),
+        0.5 * float(readings.td_error[0, 0]) ** 2 / window,
+        rtol=1e-6,
+    )
+    np.testing.assert_allclose(
+        float(scored),
+        0.5 * float(np.square(np.asarray(readings.td_error)).sum()) / window,
+        rtol=1e-6,
     )
     assert not np.allclose(float(masked), float(scored))
+
+
+def test_the_loss_sums_over_the_batch_and_averages_over_time():
+    """Caffe divides by the unroll length, not by the minibatch size.
+
+    An ordinary mean over both axes would divide by the batch size as well, and
+    that factor is not absorbed into the learning rate here: the published
+    chain clips the global gradient norm before ADADELTA, so scaling the
+    gradient changes when the clip binds.
+    """
+
+    error = jnp.asarray([[1.0, 2.0], [3.0, 4.0]])
+    valid = jnp.ones((2, 2), dtype=jnp.bool_)
+
+    # Half the summed squares is 15.0, over an unroll length of 2.
+    np.testing.assert_allclose(float(drqn.published_loss(error, valid)), 7.5, rtol=1e-6)
+    # Two identical rows weigh twice one row, which is what summing means.
+    one_row = drqn.published_loss(error[:1], valid[:1])
+    doubled = drqn.published_loss(jnp.concatenate([error[:1]] * 2), valid)
+    np.testing.assert_allclose(float(doubled), 2.0 * float(one_row), rtol=1e-6)
 
 
 def test_the_target_reads_the_successor_sequence_from_its_own_zero_state():

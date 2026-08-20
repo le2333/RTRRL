@@ -67,7 +67,6 @@ from memorax.readings import reading, taken
 from memorax.rl import (
     EnvironmentStreams,
     make_td0,
-    masked_sequence_loss,
     periodic_incremental_update,
     select_ended,
 )
@@ -433,6 +432,36 @@ def learner_sequence(sample) -> LearnerSequence:
     )
 
 
+def published_loss(td_error: Array, valid: Array) -> Array:
+    """The Euclidean loss the published net minimises, with its own divisor.
+
+    Caffe's ``EuclideanLoss`` divides the summed squared error by the first
+    dimension of its target blob, and for the recurrent net that dimension is
+    the unroll length -- not the minibatch size. So the published objective
+    sums over the batch and averages over time, where an ordinary mean over
+    both would divide by the batch size as well.
+
+    That factor is not absorbed into the learning rate here, because the
+    published chain clips the global gradient norm at ten *before* ADADELTA:
+    scaling the gradient changes how often the clip binds, so a mean-over-both
+    reproduction would clip at a different point in training than the published
+    one, on the same data.
+
+    Reproducing the published *scale* additionally needs the published
+    ``replay.batch_size`` of 32, since the factor this leaves in is the number
+    of windows in the batch. That is a manifest value rather than something
+    this function can assert, and an arm choosing a different batch size is
+    reproducing the objective rather than the step size.
+
+    Positions past the end of a drawn episode contribute nothing, and neither
+    do rows the sampler could not fill -- both arrive already false in
+    ``valid``, which is the sampler's answer rather than a re-reading of the
+    window.
+    """
+
+    return jnp.sum(jnp.where(valid, 0.5 * jnp.square(td_error), 0.0)) / valid.shape[1]
+
+
 def clipped_reward(reward: Array) -> Array:
     """The reward as replay stores it: its sign, which is DQN's preprocessing.
 
@@ -726,9 +755,7 @@ class Core:
             terminal=sample.terminals.astype(q_value.dtype),
             gamma=self.gamma,
         )
-        loss = masked_sequence_loss(
-            td_error, sample.valid, batch_valid=sample.batch_valid
-        )
+        loss = published_loss(td_error, sample.valid)
         return loss, _UpdateReadings(
             td_error=td_error, q_value=q_value, valid=sample.valid
         )

@@ -15,6 +15,7 @@ paper.
 | Paper | Here | Held by |
 | --- | --- | --- |
 | Uniform replay | `make_uniform_episode_window_buffer`, no priority declared | `test_uniform_replay_keeps_no_priority_to_update` |
+| Caffe's Euclidean loss over the unroll length | `published_loss` sums the batch, averages time | `test_the_loss_sums_over_the_batch_and_averages_over_time` |
 | Rewards clipped to their sign | `clipped_reward`, on the way into replay only | `test_replay_stores_the_clipped_reward_and_the_metric_keeps_the_raw_one` |
 | A random update draws completed episodes without replacement | Gumbel top-k over the eligible episodes | `test_an_episode_is_not_drawn_more_often_for_being_longer`, `test_a_minibatch_draws_each_episode_at_most_once` |
 | then a point uniformly inside each | `r ~ U{0..L-t}` inside the drawn episode | `test_a_start_is_uniform_over_the_places_a_window_fits` |
@@ -207,37 +208,31 @@ the other learner can be run on. It is an intentional architecture adaptation,
 and a write-up should say "matched DRQN on a structured diagonal core", never
 "DRQN as published" when it means the network.
 
-## Known deviations still open
+## The one thing the batch size still decides
 
-This is the one difference from the published implementation that is **not**
-fixed, and a formal launch has to either resolve or declare it. It is listed
-with what it puts at risk, because "a minor deviation" is not a thing that can
-be judged without saying what it would change.
+`published_loss` is Caffe's Euclidean loss over the recurrent net's target
+blob: half the summed squared error divided by the **unroll length**, not by
+the minibatch size. An ordinary mean over both axes would divide by the batch
+size as well, and that factor is not absorbed into the learning rate, because
+the published chain clips the global gradient norm at ten *before* ADADELTA —
+scaling the gradient changes when the clip binds.
 
-**The loss is averaged over the batch; Caffe's is not.** The published net's
-Euclidean loss divides by the first dimension of its target blob, which for the
-recurrent net is the unroll length, not the minibatch size. This arm divides by
-the number of windows actually drawn, so the published gradient is
+What this reproduces is the objective. Reproducing the published *gradient
+scale* additionally needs the published `replay.batch_size` of 32, since the
+factor the divisor leaves in is the number of windows in the batch. That is a
+manifest value, so an arm at a different batch size is reproducing the
+objective at a different step size, and a write-up comparing gradient
+magnitudes to the paper's has to say which batch size it ran at.
 
-    N_drawn = min(eligible episodes, batch_size)
-
-times this one's — not `batch_size` times, and not a constant. It equals
-`batch_size` only once replay holds at least that many eligible episodes, which
-is later in training the longer the truncation is, because the pool of episodes
-long enough to hold a window shrinks as `t` grows.
-
-Under a plain step rule a constant factor would be a learning-rate rescaling
-and nothing more, but the published chain clips the global gradient norm at ten
-*before* ADADELTA, so the factor changes how often the clip binds, and a factor
-that varies with training changes it over time.
-
-Dividing by the drawn count rather than by the declared `batch_size` is
-nonetheless the right choice here, and deliberately so: it is what keeps a
-shrinking minibatch from quietly rescaling the effective step. The two
-questions are separate, and this one settles only the first. **What this arm
-reproduces is DRQN's learner and replay semantics; the solver's loss
-normalisation remains an explicit deviation** and a write-up should not call it
-a complete reproduction of the published solver.
+One consequence worth stating because it is not obvious: this arm begins
+updating as soon as **one** eligible episode exists, where the published
+agent's 50,000-transition warmup guarantees a full batch before its first
+update. So the factor is `min(eligible, batch_size)` here and a constant 32
+there, until replay holds enough episodes. Requiring a full batch before the
+first update would close that too, at the cost of a later learning start; it is
+not done, because when learning may start is a manifest's business
+(`replay.minimum_size`) and this is the layer that says what an update
+computes.
 
 ## What this does not contain
 
