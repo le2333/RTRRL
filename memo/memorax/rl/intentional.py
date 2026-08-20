@@ -86,6 +86,12 @@ class IntentionalState(struct.PyTreeNode):
     ``advantage_scale`` is None for a group whose signal is a TD error: there
     is no advantage to normalize there, and carrying a zero would say there was
     one that happened to be zero.
+
+    ``rho`` and ``alpha`` are not here. Both are functions of what is -- the
+    preconditioner of ``nu``, the step size of ``sigma_bar`` and this step's
+    trace -- so carrying them would be a second copy of a derived number that a
+    resumption could disagree with. They are computed where they are used and
+    reported as readings.
     """
 
     z: Any
