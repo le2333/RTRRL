@@ -4,21 +4,28 @@ The paper (arXiv:1507.06527) is DQN with the first fully-connected layer
 replaced by a recurrent one, and its learner is the 2015 DQN learner unchanged:
 uniform replay, one-step targets against a periodically copied target network,
 a linear Q head, and epsilon-greedy acting. What recurrence adds is only how a
-minibatch is drawn and unrolled, and the paper gives two ways of doing it. Both
-are here, as the two ``learning`` branches:
+minibatch is drawn and unrolled. The published update is *bootstrapped random
+updates* (``truncated``): draw a completed episode, then a point inside it far
+enough from the end to hold a whole window, zero the hidden state there, and
+backpropagate through the window. Drawing the episode first is what keeps a
+long episode from collecting probability; requiring the window to fit is what
+makes the ``t`` the learner declares the number of transitions its gradient
+actually crosses.
 
-*Bootstrapped random updates* (``truncated``) draw a completed episode, then a
-point inside it far enough from the end to hold a whole window, zero the hidden
-state there, and backpropagate through the window. Drawing the episode first is
-what keeps a long episode from collecting probability; requiring the window to
-fit is what makes the ``t`` the learner declares the number of transitions its
-gradient actually crosses.
+``full_bptt`` is **not** the paper's other scheme and should not be described
+as one. The paper's *bootstrapped sequential updates* run an episode as a
+succession of fixed-length unrolls, carrying the hidden state from one to the
+next and taking an optimizer step at each -- truncated backpropagation with a
+stored state, which is nearer to what R2D2 does than to what this branch does.
+``full_bptt`` here draws a completed episode and backpropagates through the
+whole of it in one step, with no state carried in and no boundary for the
+gradient to stop at. That is the untruncated reference this repository wants a
+truncation to be compared against; it is a deliberate addition, not a
+reproduction, and a write-up should call it full BPTT rather than DRQN's
+sequential arm.
 
-*Bootstrapped sequential updates* (``full_bptt``) draw a completed episode and
-run it from its first transition to its last, carrying the hidden state forward
-and backpropagating through the whole of it. The paper reports the two
-performing comparably; they differ in what a single update sees, and this
-implementation shares everything else between them, because the paper does too.
+The two branches share everything but the window: the same loss over the same
+two networks, opened on the same zero hidden state, drawn from the same replay.
 
 This is deliberately not R2D2 with pieces switched off. R2D2's additions --
 prioritised replay and its importance-sampling correction, n-step returns,
@@ -258,13 +265,19 @@ class SelectedCore:
 
 @dataclass(frozen=True)
 class SelectedLearning:
-    """Which of the paper's two update schemes this run performs.
+    """How much of an episode one update sees, and where in it that begins.
 
-    They differ in how much of an episode one update sees and where in the
-    episode it begins, and in nothing else: the loss is the same expression,
-    over the same two networks, opened on the same zero hidden state. A
-    sequential update is the whole episode from its first transition; a random
-    update is ``t`` transitions from somewhere inside one.
+    ``truncated`` is the published random update: ``t`` transitions from
+    somewhere inside a completed episode. ``full_bptt`` is this repository's
+    untruncated reference: a whole completed episode from its first transition,
+    differentiated in one piece. They differ in those two things and in nothing
+    else -- the loss is the same expression, over the same two networks, opened
+    on the same zero hidden state.
+
+    ``full_bptt`` is not the paper's *bootstrapped sequential updates*, which
+    carry a hidden state across fixed-length unrolls and step the optimizer at
+    each; nothing here carries a state into a window or stops a gradient inside
+    one.
     """
 
     kind: str
@@ -287,9 +300,9 @@ class SelectedLearning:
         gradient would reach back however far that episode happened to have
         left, and the learner would not be performing TBPTT(t).
 
-        A sequential update sets no bar, because its window is whatever the
-        episode is. It begins at the first transition, runs to the last, and
-        the declared limit is padding it never reads.
+        Full BPTT sets no bar, because its window is whatever the episode is.
+        It begins at the first transition, runs to the last, and the declared
+        limit is padding it never reads.
         """
 
         if self.kind == "full_bptt":
@@ -1077,14 +1090,20 @@ class DRQN:
             done=done,
             terminal=terminal,
         )
-        buffer_state = self.buffer.add(state.buffer_state, transition)
-        next_timestep = self.environment.persisted(
-            Timestep(obs=next_obs, action=action, reward=reward, done=done)
-        )
+        # The update reads replay as it stood before this transition, which is
+        # what a learner that stores whole episodes does: the published loop
+        # accumulates the episode locally, updates once per frame against the
+        # episodes it has already remembered, and remembers the current one at
+        # its ending. Adding first would let the update on an episode's last
+        # frame draw the episode it has just finished playing.
         core_state, update = self._maybe_update(
             update_key,
             state.core.replace(recurrence=recurrence),
-            buffer_state,
+            state.buffer_state,
+        )
+        buffer_state = self.buffer.add(state.buffer_state, transition)
+        next_timestep = self.environment.persisted(
+            Timestep(obs=next_obs, action=action, reward=reward, done=done)
         )
         next_state = state.replace(
             step=state.step + self.cfg.num_envs,

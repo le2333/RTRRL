@@ -275,6 +275,40 @@ def test_a_buffer_holding_no_finished_episode_says_it_cannot_sample():
     assert bool(buffer.can_sample(state)) is False
 
 
+def test_the_warmup_counts_finished_episodes_and_not_written_transitions():
+    """An episode still being played is not experience replay has.
+
+    Its transitions are in the ring and nothing can draw them, so counting them
+    towards the warmup would start learning early by however much of an episode
+    happened to be in progress -- the same class of error as letting the window
+    length decide when learning starts, one step further in.
+    """
+
+    buffer = make_uniform_episode_window_buffer(
+        max_length=64,
+        min_length=8,
+        sample_batch_size=2,
+        sample_sequence_length=TRUNCATION,
+        add_batch_size=1,
+        minimum_episode_length=1,
+    )
+
+    # Four transitions ended, four still being played: eight written, four
+    # replay can do anything with.
+    state = filled(buffer, (4,))
+    for index in range(4):
+        state = buffer.add(state, transition([9.0, float(index)], index == 0, False))
+
+    assert int(state.written) == 8
+    assert int(state.episodes.committed) == 4
+    assert bool(buffer.can_sample(state)) is False
+
+    # The ending is what makes those four transitions replay.
+    state = buffer.add(state, transition([9.0, 4.0], False, True))
+    assert int(state.episodes.committed) == 9
+    assert bool(buffer.can_sample(state)) is True
+
+
 def test_a_buffer_with_only_a_short_episode_waits_for_a_long_enough_one():
     buffer, state = stored(lengths=(3,), truncation=4)
 

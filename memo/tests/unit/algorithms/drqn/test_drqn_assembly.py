@@ -410,6 +410,33 @@ def test_epsilon_anneals_on_learner_updates_and_not_on_environment_steps():
     assert float(np.asarray(moved.epsilon).item()) < 0.2
 
 
+def test_an_update_cannot_draw_the_episode_it_is_still_finishing():
+    """Replay is read as it stood before this transition, which is the loop.
+
+    The published agent accumulates an episode locally, updates once per frame
+    against the episodes it has already remembered, and remembers the current
+    one at its ending. Adding first would let the update on an episode's last
+    frame draw the episode that frame just completed.
+
+    The arithmetic here is exact rather than approximate. This environment ends
+    every three steps and the declared minimum size is eight, so eight
+    transitions of *finished* episodes first exist after step nine. The update
+    on step nine reads replay as of step eight -- six transitions, two
+    episodes -- and does not fire; the update on step ten reads nine and does.
+    """
+
+    built = assembled()
+    state = built.program.init(jax.random.key(0))
+
+    before, _ = built.program.train(jax.random.key(1), state, 9)
+    after, _ = built.program.train(jax.random.key(1), state, 10)
+
+    assert int(before.buffer_state.written) == 9
+    assert int(before.buffer_state.episodes.committed) == 9
+    assert int(before.core.update_step) == 0
+    assert int(after.core.update_step) == 1
+
+
 def test_the_graph_holds_no_r2d2_machinery():
     graph = graph_of(assembled())
 

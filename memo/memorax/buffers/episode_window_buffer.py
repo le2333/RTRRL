@@ -40,6 +40,15 @@ instead of reporting on the buffer's length and leaving the sampler to
 discover there is nothing to draw -- the failure that a silent fall back to
 position zero turns into a run that trains, reports, and means nothing.
 
+The index is also what makes replay episode-atomic without a staging buffer.
+Transitions of an episode still being played are in the ring, but no record
+describes them, so nothing can draw from them and `committed` does not count
+them: an episode becomes replay at its ending, in one piece, which is what a
+learner that stores whole episodes does. What this does not reproduce is the
+*storage* of a staging buffer -- an open episode here occupies ring slots that
+a separate one would not, so the ring's usable depth dips by at most the length
+of one episode per stream and recovers when it commits.
+
 Flashbax is storage here and nothing else. Its own `can_sample` is not called,
 because it answers for its own trajectory sampler: it will not report ready
 until a whole `sample_sequence_length` has been written, which is the right
@@ -96,6 +105,15 @@ class EpisodeIndexState(struct.PyTreeNode):
 
     open_start: Array
     """Logical index each stream's unfinished episode began at. ``[streams]``"""
+
+    committed: Array
+    """Transitions in episodes that have ended, across all streams. ``[]``
+
+    Not the same as transitions written: an episode still being played has its
+    transitions in the ring and none of them here. That is the number a replay
+    warmup is about, since an episode nobody can draw from is not experience
+    replay has yet.
+    """
 
 
 class EpisodeWindowBufferState(struct.PyTreeNode):
@@ -218,6 +236,7 @@ def make_uniform_episode_window_buffer(
                 live=jnp.zeros((episode_capacity,), dtype=jnp.bool_),
                 write_index=jnp.asarray(0, dtype=jnp.int32),
                 open_start=jnp.zeros((add_batch_size,), dtype=jnp.int32),
+                committed=jnp.asarray(0, dtype=jnp.int32),
             ),
             written=jnp.asarray(0, dtype=jnp.int32),
         )
@@ -251,6 +270,7 @@ def make_uniform_episode_window_buffer(
             write_index=(index.write_index + jnp.sum(done.astype(jnp.int32)))
             % episode_capacity,
             open_start=jnp.where(done, state.written + 1, index.open_start),
+            committed=index.committed + jnp.sum(jnp.where(done, length, 0)),
         )
         return EpisodeWindowBufferState(
             trajectory=add_timestep(state.trajectory, transition),
@@ -282,14 +302,15 @@ def make_uniform_episode_window_buffer(
         minimum length can be entirely one unfinished episode, and a buffer
         holding one short completed episode is not yet worth learning from.
 
-        The first half counts transitions collected, which is what a replay
-        warmup means and is the same number whatever window the caller intends
-        to draw. Deferring to Flashbax here would fold the window length into
-        the warmup instead.
+        The first half counts transitions in episodes that have *ended*. An
+        episode still being played is not experience replay has: none of it can
+        be drawn, so counting it would start learning early by however much of
+        an episode happened to be in progress. It is also the same number
+        whatever window the caller intends to draw, where deferring to
+        Flashbax would fold the window length into the warmup instead.
         """
 
-        collected = state.written * add_batch_size
-        return (collected >= min_length) & jnp.any(eligible_fn(state))
+        return (state.episodes.committed >= min_length) & jnp.any(eligible_fn(state))
 
     def sample_fn(state: EpisodeWindowBufferState, key: Key) -> EpisodeWindowSample:
         episode_key, offset_key = jax.random.split(key)

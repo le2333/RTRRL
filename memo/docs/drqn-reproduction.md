@@ -31,6 +31,7 @@ paper.
 | Epsilon-greedy acting, annealed over solver iterations | `DRQN._epsilon` counts learner updates | `test_epsilon_anneals_on_learner_updates_and_not_on_environment_steps` |
 | The rate is read once per episode | `DRQN._episode_epsilon`, held in `DRQNState.epsilon` | `test_exploration_holds_still_inside_an_episode` |
 | Truncation 10 for the acceptance arm | `learning.truncated.length`, a manifest value | `test_the_truncation_is_the_window_and_full_bptt_is_the_episode` |
+| Replay stores whole episodes | committed at the ending; the update reads replay as of before this transition | `test_an_update_cannot_draw_the_episode_it_is_still_finishing` |
 | ADADELTA, lr 0.1, decay 0.95, gradient clip 10 | `optimizer.adadelta`, `grad_clip` | `test_the_published_solver_is_adadelta_over_a_clipped_gradient` |
 
 R2D2's additions are absent rather than disabled: there is no priority
@@ -87,10 +88,10 @@ Flashbax is storage here and nothing else; its own `can_sample` is not called.
 It answers for its own trajectory sampler and will not report ready until a
 whole `sample_sequence_length` has been written, which is the right contract
 for drawing a fixed-length slice off the head and the wrong one for drawing an
-episode. Left in, the warmup would be `max(min_length, t)` — a sequential-update
-run would start learning a whole horizon later than a random-update one at the
-same declared replay settings, the window length reaching out of the sampler
-and into the schedule. A replay warmup is how much experience has been collected
+episode. Left in, the warmup would be `max(min_length, t)` — a full-BPTT run
+would start learning a whole horizon later than a `t = 4` one at the same
+declared replay settings, the window length reaching out of the sampler and
+into the schedule. A replay warmup is how much experience has been collected
 before learning starts, so readiness here counts transitions and nothing else
 (`test_the_warmup_is_the_declared_minimum_and_not_the_window_length`).
 
@@ -114,6 +115,27 @@ silent fall back to position zero when no start is admissible, and a full ring
 that admits every position including the ones spanning the seam — are real but
 are not this arm's to fix; they are filed separately so that fixing them is
 judged on DQN's and R2D2's terms rather than smuggled through here.
+
+## `full_bptt` is not the paper's sequential arm
+
+The paper offers two ways of drawing and unrolling a minibatch, and this
+implements one of them. `truncated` is *bootstrapped random updates*, which is
+the published update and what the reproduction arm runs.
+
+`full_bptt` is **not** *bootstrapped sequential updates*. The paper's
+sequential scheme runs an episode as a succession of fixed-length unrolls,
+carrying the hidden state from one to the next and taking an optimizer step at
+each — truncated backpropagation with a stored state, nearer to R2D2's scheme
+than to this one. `full_bptt` draws a completed episode and differentiates the
+whole of it in a single step, with no state carried in and no boundary for the
+gradient to stop at.
+
+It is here because #43 requires an untruncated arm for a truncation to be
+compared against, and because "the gradient crosses the entire episode" is the
+limit a truncation is a truncation *of* — which the paper's sequential scheme,
+being itself truncated, is not. It is a deliberate addition to the two
+learners this repository compares, not a second thing the paper published, and
+a write-up should call it full BPTT and never DRQN's sequential arm.
 
 ## The replacement for the convolutional encoder
 
