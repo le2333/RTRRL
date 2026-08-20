@@ -43,7 +43,7 @@ position zero turns into a run that trains, reports, and means nothing.
 The index is also what makes replay episode-atomic without a staging buffer,
 and there are two halves to that. The easy half is that transitions of an
 episode still being played are in the ring but no record describes them, so
-nothing can draw from them and `committed` does not count them.
+nothing can draw from them and the warmup does not count them.
 
 The half that is easy to get wrong is *eviction*. An open episode's writes
 advance the ring's head, so left alone they overwrite the oldest committed
@@ -52,17 +52,25 @@ of storage but **which episodes an update can draw while the current one is
 being played**, and that is the replay distribution. A learner that stages an
 episode and commits it whole leaves replay untouched until the ending.
 
-So the ring reserves a `max_episode_length` slack: an episode counts as stored
-while
+So the ring is allocated a `max_episode_length` slack **on top of** the
+capacity it was asked for, and an episode counts as stored while
 
-    start >= open_start[stream] - (time_capacity - max_episode_length)
+    start >= open_start[stream] - committed_capacity
 
 rather than while `start >= written - time_capacity`. That threshold moves only
 when an episode commits, so the drawable set is fixed for the duration of an
 episode, and it is strictly inside physical presence, because an open episode
-runs at most `max_episode_length` past `open_start`. The cost is the slack
-itself -- committed episodes get `time_capacity - max_episode_length` per
-stream, which is the same room a staging array would have taken.
+runs at most `max_episode_length` past `open_start`.
+
+`max_length` therefore means what it says: the transitions of *finished*
+episodes replay keeps. The slack is this module's cost and is paid out of its
+own allocation, not out of the caller's number -- a buffer asked for 8192 keeps
+8192 and stores 8192 + `max_episode_length` per stream, where charging the
+slack to the caller would quietly make it 8192 - `max_episode_length`.
+
+Readiness is measured the same way, against what replay is holding rather than
+against what it has ever held. A lifetime count only rises, so it would keep
+reporting ready on a buffer that had since evicted most of what it counted.
 
 Flashbax is storage here and nothing else. Its own `can_sample` is not called,
 because it answers for its own trajectory sampler: it will not report ready
@@ -121,15 +129,6 @@ class EpisodeIndexState(struct.PyTreeNode):
     open_start: Array
     """Logical index each stream's unfinished episode began at. ``[streams]``"""
 
-    committed: Array
-    """Transitions in episodes that have ended, across all streams. ``[]``
-
-    Not the same as transitions written: an episode still being played has its
-    transitions in the ring and none of them here. That is the number a replay
-    warmup is about, since an episode nobody can draw from is not experience
-    replay has yet.
-    """
-
 
 class EpisodeWindowBufferState(struct.PyTreeNode):
     trajectory: TrajectoryBufferState
@@ -164,6 +163,13 @@ class EpisodeWindowBuffer:
     add: Callable[[EpisodeWindowBufferState, Any], EpisodeWindowBufferState]
     sample: Callable[[EpisodeWindowBufferState, Key], EpisodeWindowSample]
     can_sample: Callable[[EpisodeWindowBufferState], Array]
+    retained: Callable[[EpisodeWindowBufferState], Array]
+    """Transitions of finished episodes replay is currently holding.
+
+    The quantity the warmup is a threshold on, exposed because a caller
+    checking whether replay is full should not have to infer it from
+    ``can_sample`` saying no.
+    """
 
 
 def make_uniform_episode_window_buffer(
@@ -191,47 +197,48 @@ def make_uniform_episode_window_buffer(
     rest -- which is the same code path, because an episode that cannot fill
     the window simply has no start to choose between.
 
-    ``max_episode_length`` is the longest an episode can run, and it is the
-    slack the ring holds back so that an episode being played cannot evict a
-    committed one. It is a declared limit rather than an observed maximum: an
-    episode that overran it would not corrupt a sample -- the eligibility test
-    takes whichever of the two bounds is stricter -- but replay would start
-    moving under the open episode again, which is the thing the slack exists to
-    prevent.
+    ``max_length`` is the transitions of *finished* episodes replay keeps. The
+    physical ring is that plus ``max_episode_length`` per stream, so the episode
+    being played has somewhere to go that is not somebody else's.
+
+    ``max_episode_length`` is the longest an episode can run. It is a declared
+    limit rather than an observed maximum: an episode that overran it would not
+    corrupt a sample -- the eligibility test takes whichever of the two bounds
+    is stricter -- but replay would start moving under the open episode again,
+    which is the thing the slack exists to prevent.
     """
 
     if add_batch_size < 1:
         raise ValueError("add_batch_size must be at least one")
     if min_length < 1:
         raise ValueError("min_length must be at least one transition")
-    time_capacity = max_length // add_batch_size
-    if time_capacity < 2:
-        raise ValueError(
-            f"max_length//add_batch_size must be at least 2; it is "
-            f"{max_length}//{add_batch_size} = {time_capacity}"
-        )
     if max_episode_length < 1:
         raise ValueError("an episode runs at least one transition")
-    committed_capacity = time_capacity - max_episode_length
-    if committed_capacity < 1:
+    committed_capacity = max_length // add_batch_size
+    if committed_capacity < 2:
         raise ValueError(
-            f"a ring of {time_capacity} per stream has nothing left for finished "
-            f"episodes once {max_episode_length} is held back for the one being "
-            f"played; give the buffer more than {max_episode_length} per stream"
+            f"max_length//add_batch_size must be at least 2; it is "
+            f"{max_length}//{add_batch_size} = {committed_capacity}"
         )
+    # The slack the open episode writes into, on top of what the caller asked
+    # replay to keep rather than out of it.
+    time_capacity = committed_capacity + max_episode_length
     if sample_sequence_length > committed_capacity:
         raise ValueError(
             f"a window of {sample_sequence_length} does not fit in the "
             f"{committed_capacity} per stream this buffer keeps finished episodes in"
         )
-    if min_length > add_batch_size * committed_capacity:
-        # Otherwise the warmup is a threshold replay can never be holding, and
-        # the run would either never learn or -- since the count is cumulative
-        # -- start learning against a buffer that had already evicted most of
-        # what the threshold was counting.
+    # An episode straddling the oldest kept position is dropped whole, so what
+    # replay holds sits just above `committed_capacity - max_episode_length`
+    # once the ring has wrapped. A warmup above that could be met and then
+    # unmet, and a learner that stops learning because an episode fell off a
+    # boundary is a failure nobody would look for.
+    steady_state = add_batch_size * (committed_capacity - max_episode_length)
+    if min_length > steady_state:
         raise ValueError(
-            f"a warmup of {min_length} transitions cannot be met by a buffer that "
-            f"keeps {add_batch_size * committed_capacity} finished ones"
+            f"a warmup of {min_length} transitions is not one this buffer stays "
+            f"above: with episodes of up to {max_episode_length} it keeps more "
+            f"than {steady_state} finished transitions and not reliably more"
         )
     if minimum_episode_length is None:
         minimum_episode_length = sample_sequence_length
@@ -279,7 +286,6 @@ def make_uniform_episode_window_buffer(
                 live=jnp.zeros((episode_capacity,), dtype=jnp.bool_),
                 write_index=jnp.asarray(0, dtype=jnp.int32),
                 open_start=jnp.zeros((add_batch_size,), dtype=jnp.int32),
-                committed=jnp.asarray(0, dtype=jnp.int32),
             ),
             written=jnp.asarray(0, dtype=jnp.int32),
         )
@@ -313,7 +319,6 @@ def make_uniform_episode_window_buffer(
             write_index=(index.write_index + jnp.sum(done.astype(jnp.int32)))
             % episode_capacity,
             open_start=jnp.where(done, state.written + 1, index.open_start),
-            committed=index.committed + jnp.sum(jnp.where(done, length, 0)),
         )
         return EpisodeWindowBufferState(
             trajectory=add_timestep(state.trajectory, transition),
@@ -321,11 +326,10 @@ def make_uniform_episode_window_buffer(
             written=state.written + 1,
         )
 
-    def eligible_fn(state: EpisodeWindowBufferState) -> Array:
-        """Completed, long enough, and still stored -- in that order. ``[E]``
+    def stored_fn(state: EpisodeWindowBufferState) -> Array:
+        """Which records describe an episode replay is still holding. ``[E]``
 
-        The third clause is the whole of the ring's bookkeeping, and it is
-        measured from the stream's last *commit* rather than from its write
+        Measured from the stream's last *commit* rather than from its write
         head. Measuring from the head would let the episode being played evict
         the oldest committed ones as it went, so which episodes an update could
         draw would change during an episode -- a moving replay distribution,
@@ -340,11 +344,17 @@ def make_uniform_episode_window_buffer(
         index = state.episodes
         reserved = index.open_start[index.stream] - committed_capacity
         physical = state.written - time_capacity
-        return (
-            index.live
-            & (index.length >= minimum_episode_length)
-            & (index.start >= jnp.maximum(reserved, physical))
-        )
+        return index.live & (index.start >= jnp.maximum(reserved, physical))
+
+    def eligible_fn(state: EpisodeWindowBufferState) -> Array:
+        """Still stored, and long enough to draw a window from. ``[E]``"""
+
+        return stored_fn(state) & (state.episodes.length >= minimum_episode_length)
+
+    def retained_fn(state: EpisodeWindowBufferState) -> Array:
+        """Transitions of finished episodes replay is currently holding."""
+
+        return jnp.sum(jnp.where(stored_fn(state), state.episodes.length, 0))
 
     def can_sample_fn(state: EpisodeWindowBufferState) -> Array:
         """Whether a draw would return anything, not whether the buffer is big.
@@ -353,15 +363,18 @@ def make_uniform_episode_window_buffer(
         minimum length can be entirely one unfinished episode, and a buffer
         holding one short completed episode is not yet worth learning from.
 
-        The first half counts transitions in episodes that have *ended*. An
-        episode still being played is not experience replay has: none of it can
-        be drawn, so counting it would start learning early by however much of
-        an episode happened to be in progress. It is also the same number
-        whatever window the caller intends to draw, where deferring to
-        Flashbax would fold the window length into the warmup instead.
+        The first half counts the transitions of finished episodes replay is
+        *currently holding*. Not transitions written, because an episode still
+        being played is not experience replay has and counting it would start
+        learning early by however much of one happened to be in progress. Not a
+        lifetime total either, because that only rises: it would go on
+        reporting ready against a buffer that had since evicted most of what it
+        counted. And it is the same number whatever window the caller intends
+        to draw, where deferring to Flashbax would fold the window length into
+        the warmup instead.
         """
 
-        return (state.episodes.committed >= min_length) & jnp.any(eligible_fn(state))
+        return (retained_fn(state) >= min_length) & jnp.any(eligible_fn(state))
 
     def sample_fn(state: EpisodeWindowBufferState, key: Key) -> EpisodeWindowSample:
         episode_key, offset_key = jax.random.split(key)
@@ -420,5 +433,9 @@ def make_uniform_episode_window_buffer(
         )
 
     return EpisodeWindowBuffer(
-        init=init_fn, add=add_fn, sample=sample_fn, can_sample=can_sample_fn
+        init=init_fn,
+        add=add_fn,
+        sample=sample_fn,
+        can_sample=can_sample_fn,
+        retained=retained_fn,
     )

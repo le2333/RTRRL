@@ -136,6 +136,9 @@ space:
 
   # Uniform replay: no priority exponent and no importance-sampling exponent,
   # because there is no priority to raise or correct for.
+  # capacity is the transitions of finished episodes replay keeps. The ring is
+  # allocated that plus one episode_length of slack, so an episode being played
+  # writes into room of its own instead of evicting what is already there.
   replay:
     capacity: [8192]
     minimum_size: [256]

@@ -305,12 +305,38 @@ def test_the_warmup_counts_finished_episodes_and_not_written_transitions():
         state = buffer.add(state, transition([9.0, float(index)], index == 0, False))
 
     assert int(state.written) == 8
-    assert int(state.episodes.committed) == 4
+    assert int(buffer.retained(state)) == 4
     assert bool(buffer.can_sample(state)) is False
 
     # The ending is what makes those four transitions replay.
     state = buffer.add(state, transition([9.0, 4.0], False, True))
-    assert int(state.episodes.committed) == 9
+    assert int(buffer.retained(state)) == 9
+    assert bool(buffer.can_sample(state)) is True
+
+
+def test_the_warmup_is_what_replay_holds_and_not_what_it_has_held():
+    """A lifetime count only rises, and replay does not.
+
+    Counting every episode ever finished would keep reporting ready against a
+    buffer that had since evicted most of what it counted. Here the ring keeps
+    eight finished transitions, so once it has wrapped, what it holds stays
+    near eight however many hundreds have gone through it.
+    """
+
+    buffer = make_uniform_episode_window_buffer(
+        max_length=8,
+        min_length=4,
+        sample_batch_size=2,
+        sample_sequence_length=2,
+        add_batch_size=1,
+        max_episode_length=4,
+        minimum_episode_length=1,
+    )
+    state = filled(buffer, (4,) * 10)
+
+    # Forty transitions have been finished; the ring keeps eight of them.
+    assert int(state.written) == 40
+    assert int(buffer.retained(state)) == 8
     assert bool(buffer.can_sample(state)) is True
 
 
@@ -407,11 +433,10 @@ def test_the_padding_past_an_episode_is_zeros_and_not_the_next_episode():
 def wrapped(capacity=40, truncation=TRUNCATION, rounds=15):
     """A ring overwritten several times, so its write head is a seam.
 
-    Episodes of four written round a ring of forty more than three times, so
-    the newest row and the oldest sit next to each other somewhere in the
-    middle of the array and an unguarded window could span them. The declared
-    horizon is four, so finished episodes get thirty-six of the forty and the
-    rest is held back for whatever is being played.
+    Episodes of four written round a ring of forty-four -- forty the buffer was
+    asked to keep plus four of slack -- more than once, so the newest row and
+    the oldest sit next to each other somewhere in the middle of the array and
+    an unguarded window could span them.
     """
 
     return stored(
@@ -429,7 +454,8 @@ def test_the_ring_is_actually_full_and_wrapped_in_this_fixture():
     _, state = wrapped()
 
     assert bool(state.trajectory.is_full)
-    assert 0 < int(state.trajectory.current_index) < 40
+    # Forty kept plus four of slack, so the head is somewhere inside forty-four.
+    assert 0 < int(state.trajectory.current_index) < 44
     assert int(state.written) == 60
 
 
@@ -452,19 +478,22 @@ def test_no_window_is_spliced_across_the_write_head():
 def test_an_episode_the_ring_has_overwritten_is_no_longer_drawn():
     """Named exactly, because "roughly the recent ones" is not a guarantee.
 
-    Fifteen episodes of four are sixty transitions, and finished episodes get
-    thirty-six of the ring's forty, so the oldest drawable transition is
-    logical twenty-four -- the first of episode six. Episode five begins at
-    twenty and is out; episode six begins exactly at the boundary and is in.
-    Episode five is still physically there, in the four slots the ring holds
-    back for whatever is played next, and is not offered.
+    Fifteen episodes of four are sixty transitions, and the buffer was asked to
+    keep forty, so the oldest kept transition is logical twenty -- the first of
+    episode five. Episode four begins at sixteen and is out; episode five
+    begins exactly at the boundary and is in.
+
+    Episode four is still *physically* there: the ring is forty-four, forty for
+    what replay was asked to keep and four held back for whatever is played
+    next. It is not offered, because what replay keeps is the number the caller
+    gave, not that number plus this module's slack.
     """
 
     buffer, state = wrapped()
 
     episode, _ = only_valid(stacked(draws(buffer, state, keys=64)))
 
-    assert set(episode.ravel().tolist()) == set(range(6, 15))
+    assert set(episode.ravel().tolist()) == set(range(5, 15))
 
 
 def test_an_episode_being_played_evicts_nothing_that_could_be_drawn():
@@ -532,14 +561,9 @@ def test_a_window_longer_than_an_episode_can_run_is_refused_at_build_time():
 
 
 def test_a_warmup_the_buffer_could_never_hold_is_refused():
-    """A threshold replay can never be at is a misconfiguration, not a long wait.
+    """A threshold replay can never be at is a misconfiguration, not a long wait."""
 
-    The count is cumulative, so a warmup larger than what the ring keeps would
-    be reached eventually anyway -- against a buffer that had already evicted
-    most of what the count was counting. Refused where it is declared.
-    """
-
-    with pytest.raises(ValueError, match="cannot be met by a buffer"):
+    with pytest.raises(ValueError, match="not one this buffer stays above"):
         make_uniform_episode_window_buffer(
             max_length=64,
             min_length=100,
@@ -550,15 +574,23 @@ def test_a_warmup_the_buffer_could_never_hold_is_refused():
         )
 
 
-def test_a_ring_with_no_room_left_for_finished_episodes_is_refused():
-    with pytest.raises(ValueError, match="nothing left for finished episodes"):
+def test_a_warmup_at_the_buffer_s_capacity_is_refused_too():
+    """Because replay dips below capacity, and a learner that stops is silent.
+
+    An episode straddling the oldest kept position is dropped whole, so what
+    replay holds sits a little under what it was asked to keep. A warmup set at
+    capacity would be met and then unmet as episodes fell off the boundary, and
+    a run that quietly stopped learning is not a failure anyone would look for.
+    """
+
+    with pytest.raises(ValueError, match="not one this buffer stays above"):
         make_uniform_episode_window_buffer(
-            max_length=8,
-            min_length=4,
+            max_length=64,
+            min_length=64,
             sample_batch_size=2,
-            sample_sequence_length=2,
+            sample_sequence_length=TRUNCATION,
             add_batch_size=1,
-            max_episode_length=8,
+            max_episode_length=EPISODE_LENGTH,
         )
 
 

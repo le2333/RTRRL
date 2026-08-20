@@ -426,13 +426,14 @@ def test_an_update_cannot_draw_the_episode_it_is_still_finishing():
     """
 
     built = assembled()
+    graph = graph_of(built)
     state = built.program.init(jax.random.key(0))
 
     before, _ = built.program.train(jax.random.key(1), state, 9)
     after, _ = built.program.train(jax.random.key(1), state, 10)
 
     assert int(before.buffer_state.written) == 9
-    assert int(before.buffer_state.episodes.committed) == 9
+    assert int(graph.buffer.retained(before.buffer_state)) == 9
     assert int(before.core.update_step) == 0
     assert int(after.core.update_step) == 1
 

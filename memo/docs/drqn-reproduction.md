@@ -107,17 +107,27 @@ That is not a difference in how much storage there is; it is a replay
 distribution that moves under the learner, where an agent that commits whole
 episodes has a still one.
 
-So the ring reserves a `max_episode_length` slack and measures presence from
-each stream's last commit rather than from its write head:
+So the ring is allocated a `max_episode_length` slack **on top of** the
+capacity it was asked for, and presence is measured from each stream's last
+commit rather than from its write head:
 
-    start >= open_start[stream] - (capacity - max_episode_length)
+    start >= open_start[stream] - capacity
 
 The threshold moves only when an episode commits, and it is strictly inside
 physical presence because an open episode runs at most `max_episode_length`
-past `open_start`. Finished episodes get `capacity - max_episode_length` per
-stream, which is the room a staging array would have taken anyway. A warmup
-larger than that is refused where it is declared, since a cumulative count
-would otherwise reach a threshold the buffer can never be holding.
+past `open_start`. `replay.capacity` therefore means what it says — the
+transitions of finished episodes replay keeps — and the slack is the buffer's
+own cost, paid out of its own allocation rather than deducted from the caller's
+number.
+
+Readiness is measured the same way: against what replay is *currently holding*,
+not against everything it has ever held. A lifetime count only rises, so it
+would go on reporting ready against a buffer that had since evicted most of
+what it counted. An episode straddling the oldest kept position is dropped
+whole, so what replay holds sits a little under capacity, and a warmup set at
+or above capacity is refused where it is declared — it would be met and then
+unmet as episodes fell off the boundary, and a run that quietly stopped
+learning is not a failure anyone would look for.
 
 Padding is zeroed rather than left as whatever the ring held. A step past the
 end of a short episode does not enter the loss, but it is still unrolled
