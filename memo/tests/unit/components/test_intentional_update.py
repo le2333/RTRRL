@@ -1,17 +1,27 @@
 """The intentional update, against the equations it is a transcription of.
 
-There is no reference implementation to drive this against, so the reference
-is written here: ``paper_step`` is Algorithm 1 and Algorithm 3 transcribed into
-NumPy, line for line and in the paper's order, and the optimizer is driven
-against it over a sequence with resets, sign changes and an outlier in it. A
-transcription checked against a transcription would only agree about what both
-authors read, so the equations are also pinned from the other side -- by the
-properties that make them the algorithm they are:
+Three oracles, because one is never enough for a transcription:
 
-    one step spends exactly ``eta`` of the TD error       (what "intentional" is)
-    the trace takes this step's derivative before the step (ordering)
-    the first sample of every average is taken whole       (bias correction)
-    the clip is a multiple of the error's own RMS          (scale invariance)
+``tests/test_intentional_parity.py``
+    the published implementation itself, driven side by side with this one.
+    That file is the authority and it is marked ``external``, so it runs where
+    the clone exists and skips where it does not.
+``paper_step``, below
+    Algorithm 1 and Algorithm 3 in NumPy, line for line and in the paper's
+    order. It catches what a reordering breaks without needing the clone.
+the properties
+    what the equations are *defined* by, which a second transcription of the
+    same misreading would still fail:
+
+        one step spends exactly ``eta`` of the TD error  (what "intentional" is)
+        the first sample of every average is taken whole  (bias correction)
+        the clip is a multiple of the error's own RMS     (scale invariance)
+        the floored denominator bounds one step           (the safeguard)
+
+The trace is not the optimizer's, so these drive the pair the algorithm drives:
+a :class:`Trace` reading ``current`` and unemphasized, which is the recurrence
+the intentional update is derived against, and the optimizer that steps along
+what it hands back.
 
 Streams are the env axis, axis 0 of every derivative leaf. Most cases use one,
 where the finished update is one stream's update; the case about independence
@@ -32,20 +42,33 @@ from memorax.rl.intentional import (
     IntentionalUpdate,
     clipped_td_error,
 )
+from memorax.rl.traces import CURRENT, Trace
 
 ETA = 0.25
 DECAY = 0.8
 EPS = 1e-8
+FLOOR = 1e-8
 SETTINGS = IntentionalUpdate(
-    eta=ETA, clip=20.0, beta_rms=0.9, beta_clip=0.95, beta_advantage=0.9, eps=EPS
+    eta=ETA,
+    clip=20.0,
+    beta_rms=0.9,
+    beta_clip=0.95,
+    beta_advantage=0.9,
+    denominator_floor=FLOOR,
+    eps=EPS,
 )
 
 WIDTH = 4
 PARAMS = {"w": jnp.zeros((WIDTH,), dtype=jnp.float32)}
 
 
-def optimizer(*, decay=DECAY, signal=TD, settings=SETTINGS):
-    return IntentionalOptimizer(settings, decay=decay, signal=signal)
+def pair(*, decay=DECAY, signal=TD, settings=SETTINGS):
+    """The trace and the optimizer, wired the way RTRRL wires them."""
+
+    return (
+        Trace(decay=decay, reads=CURRENT, emphasized=False),
+        IntentionalOptimizer(settings, decay=decay, signal=signal),
+    )
 
 
 def streamed(values, streams=1):
@@ -54,28 +77,44 @@ def streamed(values, streams=1):
     return jnp.asarray(np.tile(np.asarray(values, dtype=np.float32), (streams, 1)))
 
 
-def stepped(rule, state, *, delta, derivative, step, direct=None, reset=0.0):
-    """One transition through the optimizer, spelled the way RTRRL spells it."""
+def drive(trace, rule, sequence, *, streams=1):
+    """A whole sequence of transitions, and everything each one produced.
 
-    return rule.update(
-        delta=jnp.asarray([delta], dtype=jnp.float32),
-        derivative={"w": streamed(derivative)},
-        direct=None if direct is None else {"w": streamed(direct)},
-        reset=jnp.asarray([reset], dtype=jnp.float32),
-        step=step,
-        params=PARAMS,
-        state=state,
-    )
+    The entropy direction is folded into the derivative here rather than
+    inside the optimizer, because that is where RTRRL folds it: the paper's
+    policy gradient is one derivative, and the trace has to accumulate the sum.
+    """
 
-
-def drive(rule, sequence, *, streams=1):
-    """A whole sequence of transitions, and everything the last one produced."""
-
+    carried = trace.initial(PARAMS, streams)
     state = rule.init(PARAMS, streams=streams)
+    ones = jnp.ones((streams,), dtype=jnp.float32)
     taken = []
     for step, transition in enumerate(sequence, start=1):
-        updates, state, reading = stepped(rule, state, step=step, **transition)
-        taken.append((updates, state, reading))
+        delta = jnp.asarray([transition["delta"]] * streams, dtype=jnp.float32)
+        derivative = {"w": streamed(transition["derivative"], streams)}
+        if transition.get("direct") is not None:
+            entropy = {"w": streamed(transition["direct"], streams)}
+            derivative = jax.tree.map(
+                lambda leaf, term: leaf + jnp.sign(delta)[:, None] * term,
+                derivative,
+                entropy,
+            )
+        used, carried = trace.stepped(
+            carried,
+            derivative,
+            reset=jnp.asarray([transition.get("reset", 0.0)] * streams),
+            emphasis=ones,
+        )
+        updates, state, reading = rule.update(
+            delta=delta,
+            trace=used,
+            derivative=derivative,
+            direct=None,
+            step=step,
+            params=PARAMS,
+            state=state,
+        )
+        taken.append((updates, state, reading, used))
     return taken
 
 
@@ -106,7 +145,7 @@ def paper_step(carried, transition, *, settings, decay, signal, step):
     clipped = np.sign(delta) * min(abs(delta), settings.clip * np.sqrt(mean_square))
     if signal == ADVANTAGE:
         scale = averaged(scale, abs(clipped), settings.beta_advantage)
-        chosen = clipped / scale if scale > 0 else 0.0
+        chosen = clipped / max(scale, 1e-12)
     else:
         chosen = clipped
 
@@ -118,7 +157,7 @@ def paper_step(carried, transition, *, settings, decay, signal, step):
     z = decay * (1 - reset) * z + gradient
     quadratic = float(rho @ (z**2))
     denominator = np.sqrt(sigma_bar * quadratic)
-    alpha = settings.eta / denominator if denominator > 0 else 0.0
+    alpha = settings.eta / max(denominator, settings.denominator_floor)
 
     update = alpha * chosen * rho * z
     return (z, nu, sigma_bar, mean_square, scale), update
@@ -127,13 +166,7 @@ def paper_step(carried, transition, *, settings, decay, signal, step):
 def paper(sequence, *, settings=SETTINGS, decay=DECAY, signal=TD):
     """Every update the paper's equations produce over one sequence."""
 
-    carried = (
-        np.zeros(WIDTH),
-        np.zeros(WIDTH),
-        0.0,
-        0.0,
-        0.0,
-    )
+    carried = (np.zeros(WIDTH), np.zeros(WIDTH), 0.0, 0.0, 0.0)
     updates = []
     for step, transition in enumerate(sequence, start=1):
         carried, update = paper_step(
@@ -173,10 +206,12 @@ def test_every_update_is_the_one_the_paper_s_equations_produce(signal, sequence)
     its first sample behind.
     """
 
-    taken = drive(optimizer(signal=signal), sequence)
+    taken = drive(*pair(signal=signal), sequence)
     expected = paper(sequence, signal=signal)
 
-    for step, ((updates, _, _), reference) in enumerate(zip(taken, expected), start=1):
+    for step, ((updates, _, _, _), reference) in enumerate(
+        zip(taken, expected), start=1
+    ):
         np.testing.assert_allclose(
             np.asarray(updates["w"]),
             reference,
@@ -205,8 +240,8 @@ def test_one_step_spends_exactly_the_intended_fraction_of_the_td_error():
 
     delta = 0.5
     derivative = [1.0, -2.0, 0.5, 0.25]
-    ((updates, _, reading),) = drive(
-        optimizer(decay=0.0), [{"delta": delta, "derivative": derivative}]
+    ((updates, _, reading, _),) = drive(
+        *pair(decay=0.0), [{"delta": delta, "derivative": derivative}]
     )
 
     spent = float(np.dot(np.asarray(derivative), np.asarray(updates["w"])))
@@ -217,73 +252,51 @@ def test_one_step_spends_exactly_the_intended_fraction_of_the_td_error():
     np.testing.assert_allclose(float(reading.clipped_delta[0]), delta, rtol=1e-6)
 
 
-def test_the_trace_takes_this_step_s_derivative_before_the_step_is_taken():
-    """``z_t``, not ``z_{t-1}``: the first transition already moves.
+def test_the_step_is_along_the_trace_the_optimizer_was_handed():
+    """The trace is an input. Nothing here accumulates one.
 
-    RTRRL's own rules read the trace as it stood and advance it afterwards, so
-    their first step moves nothing at all. This is a different algorithm and
-    the difference is visible at the first transition, which is the only place
-    the two orderings can be told apart without unwinding a decay.
+    A call whose trace is zero takes no step at all, however large the
+    derivative it is told about -- which is what an optimizer that had quietly
+    kept a trace of its own could not do.
     """
 
-    ((updates, state, _),) = drive(
-        optimizer(), [{"delta": 1.0, "derivative": [1.0, -2.0, 0.5, 0.25]}]
+    _, rule = pair()
+    derivative = {"w": streamed([1.0, -2.0, 0.5, 0.25])}
+
+    updates, _, _ = rule.update(
+        delta=jnp.asarray([1.0]),
+        trace={"w": jnp.zeros((1, WIDTH))},
+        derivative=derivative,
+        direct=None,
+        step=1,
+        params=PARAMS,
+        state=rule.init(PARAMS, streams=1),
     )
 
-    assert float(jnp.max(jnp.abs(updates["w"]))) > 0
-    np.testing.assert_allclose(
-        np.asarray(state.z["w"][0]), [1.0, -2.0, 0.5, 0.25], rtol=1e-6
-    )
+    assert float(jnp.max(jnp.abs(updates["w"]))) == 0.0
 
 
-# ------------------------------------------------------------------ the trace
+def test_an_untraced_direction_is_refused():
+    """The paper's update has no term the trace did not accumulate.
 
+    An algorithm pairing this optimizer with an entropy term applied outside
+    the trace would be stepping a rule nobody published, and would do it
+    silently. Refusing at the wiring is what makes that unreachable by
+    accident.
+    """
 
-def test_the_trace_decays_at_gamma_lambda_and_adds_the_derivative():
-    """Accumulation, read off two steps of a trace that has nothing else in it."""
+    _, rule = pair()
+    derivative = {"w": streamed([1.0, 0.0, 0.0, 0.0])}
 
-    first = [1.0, -2.0, 0.5, 0.25]
-    second = [0.5, 0.5, -1.0, 2.0]
-    taken = drive(
-        optimizer(),
-        [
-            {"delta": 1.0, "derivative": first},
-            {"delta": 1.0, "derivative": second},
-        ],
-    )
-
-    np.testing.assert_allclose(
-        np.asarray(taken[-1][1].z["w"][0]),
-        DECAY * np.asarray(first) + np.asarray(second),
-        rtol=1e-6,
-    )
-
-
-def test_a_reset_drops_what_the_trace_carried_and_keeps_what_arrived():
-    """An episode boundary ends the credit, and does not skip a derivative."""
-
-    first = [1.0, -2.0, 0.5, 0.25]
-    second = [0.5, 0.5, -1.0, 2.0]
-    taken = drive(
-        optimizer(),
-        [
-            {"delta": 1.0, "derivative": first},
-            {"delta": 1.0, "derivative": second, "reset": 1.0},
-        ],
-    )
-
-    np.testing.assert_allclose(np.asarray(taken[-1][1].z["w"][0]), second, rtol=1e-6)
-
-
-def test_a_lambda_of_zero_leaves_the_trace_at_the_derivative():
-    """The degenerate case, and the one the intended fraction is exact at."""
-
-    sequence = SEQUENCE[:3]
-    taken = drive(optimizer(decay=0.0), sequence)
-
-    for (_, state, _), transition in zip(taken, sequence):
-        np.testing.assert_allclose(
-            np.asarray(state.z["w"][0]), transition["derivative"], rtol=1e-6
+    with pytest.raises(ValueError, match="no untraced term"):
+        rule.update(
+            delta=jnp.asarray([1.0]),
+            trace=derivative,
+            derivative=derivative,
+            direct=derivative,
+            step=1,
+            params=PARAMS,
+            state=rule.init(PARAMS, streams=1),
         )
 
 
@@ -301,8 +314,8 @@ def test_the_first_sample_of_every_average_is_taken_whole():
     """
 
     derivative = [1.0, -2.0, 0.5, 0.25]
-    ((_, state, reading),) = drive(
-        optimizer(signal=ADVANTAGE), [{"delta": -0.5, "derivative": derivative}]
+    ((_, state, reading, _),) = drive(
+        *pair(signal=ADVANTAGE), [{"delta": -0.5, "derivative": derivative}]
     )
 
     np.testing.assert_allclose(
@@ -370,7 +383,7 @@ def test_an_advantage_is_divided_by_the_running_mean_of_its_own_magnitude():
         {"delta": 2.0, "derivative": [1.0, 0.0, 0.0, 0.0]},
         {"delta": -1.0, "derivative": [0.0, 1.0, 0.0, 0.0]},
     ]
-    taken = drive(optimizer(signal=ADVANTAGE), sequence)
+    taken = drive(*pair(signal=ADVANTAGE), sequence)
 
     scale = float(taken[-1][1].advantage_scale[0])
     np.testing.assert_allclose(float(taken[-1][2].signal[0]), -1.0 / scale, rtol=1e-5)
@@ -380,85 +393,80 @@ def test_an_advantage_is_divided_by_the_running_mean_of_its_own_magnitude():
 def test_a_td_group_carries_no_advantage_scale_at_all():
     """Absent rather than zero: nothing normalizes a value function's error."""
 
-    ((_, state, reading),) = drive(optimizer(), SEQUENCE[:1])
+    ((_, state, reading, _),) = drive(*pair(), SEQUENCE[:1])
 
     assert state.advantage_scale is None
     assert reading.advantage_scale is None
 
 
-# ---------------------------------------------- entropy, and where it is folded
+# ------------------------------------------------------------- the safeguard
 
 
-def test_entropy_is_folded_into_the_derivative_and_signed_by_the_signal():
-    """The paper's policy gradient is one derivative, not two directions.
+def test_the_denominator_is_floored_where_the_implementation_floors_it():
+    """``eta / max(u, 1e-8)``, which bounds one step instead of letting it run.
 
-    RTRRL's own rules add the entropy direction on the step it arises and never
-    trace it. This one traces it, because the paper's ``g`` is the derivative
-    of the log-probability and the entropy together -- and it enters with the
-    sign of the signal, since the whole trace is later multiplied by that
-    signal and an entropy term that did not flip with it would spend half its
-    steps descending entropy.
+    The paper's Eq. 12 is a plain quotient and the implementation every
+    reported number came from is not. It matters only where the denominator
+    collapses -- an unfloored step there is unbounded, and this optimizer's
+    entire subject is what a streaming run does at its worst moment.
+
+    Driven at a derivative small enough for ``sqrt(sigma_bar <rho z, z>)`` to
+    fall under the floor, where the two rules differ by orders of magnitude.
     """
 
-    derivative = [1.0, -2.0, 0.5, 0.25]
-    entropy = [0.05, -0.05, 0.1, 0.0]
-    negative = {"delta": -0.5, "derivative": derivative, "direct": entropy}
-    positive = {**negative, "delta": 0.5}
-
-    down = drive(optimizer(signal=ADVANTAGE), [negative])[0][1]
-    up = drive(optimizer(signal=ADVANTAGE), [positive])[0][1]
-
-    np.testing.assert_allclose(
-        np.asarray(down.z["w"][0]),
-        np.asarray(derivative) - np.asarray(entropy),
-        rtol=1e-6,
+    tiny = [1e-9, 0.0, 0.0, 0.0]
+    ((updates, _, reading, _),) = drive(
+        *pair(decay=0.0), [{"delta": 1.0, "derivative": tiny}]
     )
-    np.testing.assert_allclose(
-        np.asarray(up.z["w"][0]),
-        np.asarray(derivative) + np.asarray(entropy),
-        rtol=1e-6,
-    )
+
+    assert float(reading.denominator[0]) < FLOOR
+    np.testing.assert_allclose(float(reading.step_size[0]), ETA / FLOOR, rtol=1e-6)
+    # And the step is finite, which is the whole of what the floor buys.
+    assert np.all(np.isfinite(np.asarray(updates["w"])))
+    assert float(reading.non_finite[0]) == 0.0
 
 
 # ------------------------------------------------------ streams, and repeating
 
 
-def test_each_stream_carries_its_own_trace_and_its_own_step_size():
+def test_each_stream_carries_its_own_statistics_and_its_own_step_size():
     """Three streams under one optimizer are three intentional updates."""
 
-    rule = optimizer()
-    state = rule.init(PARAMS, streams=3)
+    trace, rule = pair()
+    derivative = {
+        "w": jnp.asarray(
+            [
+                [1.0, -2.0, 0.5, 0.25],
+                [0.1, 0.1, 0.1, 0.1],
+                [3.0, 0.0, -1.0, 0.5],
+            ]
+        )
+    }
+    used, _ = trace.stepped(
+        trace.initial(PARAMS, 3),
+        derivative,
+        reset=jnp.asarray([0.0, 0.0, 1.0]),
+        emphasis=jnp.ones((3,)),
+    )
     updates, state, reading = rule.update(
         delta=jnp.asarray([0.5, -1.0, 2.0]),
-        derivative={
-            "w": jnp.asarray(
-                [
-                    [1.0, -2.0, 0.5, 0.25],
-                    [0.1, 0.1, 0.1, 0.1],
-                    [3.0, 0.0, -1.0, 0.5],
-                ]
-            )
-        },
+        trace=used,
+        derivative=derivative,
         direct=None,
-        reset=jnp.asarray([0.0, 0.0, 1.0]),
         step=1,
         params=PARAMS,
-        state=state,
+        state=rule.init(PARAMS, streams=3),
     )
 
     assert len(set(np.asarray(reading.step_size).tolist())) == 3
     # And the finished update is their mean, which is where the parameters --
     # which have no stream axis -- are waiting.
-    per_stream = (
-        np.asarray(reading.step_size)[:, None] * np.asarray(reading.signal)[:, None]
-    )
-    assert per_stream.shape == (3, 1)
     np.testing.assert_allclose(
         np.asarray(updates["w"]),
         np.mean(
             np.asarray(reading.step_size)[:, None]
             * np.asarray(reading.signal)[:, None]
-            * np.asarray(state.z["w"])
+            * np.asarray(used["w"])
             / (np.sqrt(np.asarray(state.nu["w"])) + EPS),
             axis=0,
         ),
@@ -469,10 +477,10 @@ def test_each_stream_carries_its_own_trace_and_its_own_step_size():
 def test_the_same_sequence_gives_the_same_state_and_the_same_updates():
     """Nothing here is sampled, so a repeated drive is bit-identical."""
 
-    once = drive(optimizer(signal=ADVANTAGE), WITH_ENTROPY)
-    again = drive(optimizer(signal=ADVANTAGE), WITH_ENTROPY)
+    once = drive(*pair(signal=ADVANTAGE), WITH_ENTROPY)
+    again = drive(*pair(signal=ADVANTAGE), WITH_ENTROPY)
 
-    for (updates, state, _), (repeated, carried, _) in zip(once, again):
+    for (updates, state, _, _), (repeated, carried, _, _) in zip(once, again):
         assert jax.tree.all(
             jax.tree.map(lambda a, b: bool(jnp.array_equal(a, b)), updates, repeated)
         )
@@ -486,3 +494,10 @@ def test_a_signal_nothing_names_is_refused():
 
     with pytest.raises(ValueError, match="not one of the signals"):
         IntentionalOptimizer(SETTINGS, decay=DECAY, signal="surprise")
+
+
+def test_a_trace_reading_nothing_names_is_refused():
+    """And when an update reads is the trace's own declaration."""
+
+    with pytest.raises(ValueError, match="not one of the traces"):
+        Trace(decay=DECAY, reads="afterwards")

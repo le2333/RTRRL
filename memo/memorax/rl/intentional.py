@@ -1,36 +1,36 @@
 """The Intentional Update optimizer, written as its paper defines it.
 
-    https://arxiv.org/abs/2604.19033
+    paper           https://arxiv.org/abs/2604.19033
+    implementation  https://github.com/sharifnassab/Intentional_RL
 
-An intentional update asks how far a step may go before it has spent the
-outcome it was aiming at, and answers with a step size rather than with a clip
-placed after the fact. The pieces are:
+An intentional update sizes a step by what the step is supposed to spend:
 
     nu      a diagonal second moment of the instantaneous derivative
     rho     its inverse root, the preconditioner every term is read through
-    z       the eligibility trace, accumulated *here* rather than by the caller
-    sigma   the trace-weighted statistic <rho g, g>, averaged into sigma_bar
-    alpha   eta / sqrt(sigma_bar <rho z, z>), the intentional step size
+    sigma   the statistic <rho p, p>, averaged into sigma_bar at the trace's
+            own decay
+    alpha   eta / max(sqrt(sigma_bar <rho z, z>), floor)
 
 and one transition's update is ``alpha * signal * rho * z``, where the signal
-is a clipped TD error for a value function and a normalized advantage for a
-policy.
+is a clipped TD error for a value function and an advantage normalized by its
+own running scale for a policy.
 
-**The trace belongs to the optimizer.** Every other rule in this package is
-handed a finished trace and decides only how far to step along it; this one is
-handed the instantaneous derivative and accumulates ``z = decay * z + p``
-itself. That is not a packaging choice: ``sigma_bar`` averages a statistic of
-the *derivative* at the same decay the trace runs at, and ``alpha`` divides one
-by the other, so a rule that only saw the trace could not compute its own step
-size. The decay is the algorithm's ``gamma * lambda`` and arrives at
-construction, because which lambda a parameter group answers to is the
-algorithm's routing decision and not a setting of this optimizer.
+**The trace is not this optimizer's.** It arrives already accumulated, from
+:mod:`memorax.rl.traces`, and so does the instantaneous derivative it was
+accumulated from. Both are needed and they are needed for different things:
+``nu`` and ``sigma`` are statistics of the *derivative*, while the step size
+and the step itself read the *trace*. What this optimizer carries is only what
+no one else could carry for it -- two running second moments, a clipping
+statistic and, for a policy, an advantage scale.
 
-Every quantity here is per stream: the leading axis of a derivative leaf is the
-parallel environment axis, and each stream carries its own trace, second
-moment, statistic and step size. Only the finished update is averaged across
-them, which is where the caller's parameters -- which have no stream axis --
-are waiting.
+The trace's decay still arrives here, because ``sigma_bar`` averages at it.
+That is a number the two components have to agree on, not a second trace: an
+algorithm constructs the trace and the optimizer from one ``gamma * lambda``.
+
+Every quantity is per stream: the leading axis of a derivative leaf is the
+parallel environment axis, and each stream carries its own second moment,
+statistic and step size. Only the finished update is averaged across them,
+which is where the caller's parameters -- which have no stream axis -- wait.
 """
 
 from __future__ import annotations
@@ -50,26 +50,40 @@ TD = "td"
 ADVANTAGE = "advantage"
 SIGNALS: tuple[str, ...] = (TD, ADVANTAGE)
 
+# The published implementation divides the clipped advantage by its running
+# scale under this floor rather than guarding the zero it starts at. It is not
+# a setting there and it is not one here: at every scale a run reaches, it is
+# the same arithmetic as dividing.
+SCALE_FLOOR = 1e-12
+
 
 @dataclass(frozen=True)
 class IntentionalUpdate:
-    """What an intentional update reads, and what the paper's defaults are.
+    """What an intentional update reads, and what the published values are.
 
     ``eta`` is the intended fractional reduction: the share of the outcome one
     step sets out to spend. It is the only quantity here an experiment is
-    expected to search over; the rest are the published constants and are
-    declared with their published values so that a run asking for one of them
-    by name says so, and a run that does not ask still records what it used.
+    expected to search over, and it is *not* one number for an agent -- the
+    published actor-critic uses ``0.05`` for the policy and ``0.5`` for the
+    value function, and sweeps them separately. Anything selecting one ``eta``
+    for both is not that configuration.
 
     ``clip`` is the paper's ``C``, the number of root-mean-square TD errors a
-    single TD error may be before it is cut back to that many. It is a
-    multiplier on a running scale rather than an absolute threshold, so it
-    means the same thing whatever the reward scale is.
+    single TD error may be before it is cut back to that many. A multiplier on
+    a running scale rather than an absolute threshold, so it means the same
+    thing whatever the reward scale is.
 
-    ``eps`` sits beside the root -- ``(sqrt(nu) + eps)`` -- which is where the
-    paper puts it. It is not the same rule as ``sqrt(nu + eps)``; see
-    :class:`memorax.rl.updates.AdaptiveObBoundFixed`, where the same two
-    spellings are two components because a recorded run answers to one of them.
+    ``denominator_floor`` is the published implementation's ``max(u, 1e-8)``.
+    The paper's Eq. 12 writes the step size as a plain quotient; the
+    implementation every reported result came from divides by the floored
+    denominator, which bounds one step at ``eta / floor`` instead of letting a
+    vanishing denominator take an unbounded one. For an optimizer whose whole
+    subject is streaming stability that safeguard is part of the algorithm, so
+    it is declared rather than dropped -- and declared, so that a run answering
+    to the unfloored equation can ask for a smaller one and say it did.
+
+    ``eps`` sits beside the root -- ``(sqrt(nu) + eps)`` -- which is where both
+    the paper and the implementation put it.
     """
 
     eta: float = param(valid=(1e-9, 100.0), search=(1e-4, 1.0), log=True)
@@ -77,24 +91,29 @@ class IntentionalUpdate:
     beta_rms: float = param(valid=(0.0, 1.0), search=[0.999], default=0.999)
     beta_clip: float = param(valid=(0.0, 1.0), search=[0.9998], default=0.9998)
     beta_advantage: float = param(valid=(0.0, 1.0), search=[0.9998], default=0.9998)
+    denominator_floor: float = param(
+        valid=(0.0, 1.0), search=[1e-8], default=1e-8, log=True
+    )
     eps: float = param(valid=(1e-12, 1e-2), search=[1e-8], default=1e-8, log=True)
 
 
 class IntentionalState(struct.PyTreeNode):
     """One parameter group's intentional state, all of it per stream.
 
+    No eligibility trace: that is the algorithm's, and it arrives at each step
+    from the trace component that owns it.
+
+    ``rho`` and ``alpha`` are not here either, being functions of what is --
+    the preconditioner of ``nu``, the step size of ``sigma_bar`` and this
+    step's trace. Carrying them would be a second copy of a derived number that
+    a resumption could disagree with; they are computed where they are used and
+    reported as readings.
+
     ``advantage_scale`` is None for a group whose signal is a TD error: there
     is no advantage to normalize there, and carrying a zero would say there was
     one that happened to be zero.
-
-    ``rho`` and ``alpha`` are not here. Both are functions of what is -- the
-    preconditioner of ``nu``, the step size of ``sigma_bar`` and this step's
-    trace -- so carrying them would be a second copy of a derived number that a
-    resumption could disagree with. They are computed where they are used and
-    reported as readings.
     """
 
-    z: Any
     nu: Any
     sigma_bar: Any
     delta_square: Any
@@ -104,10 +123,9 @@ class IntentionalState(struct.PyTreeNode):
 class IntentionalReading(struct.PyTreeNode):
     """Every quantity one intentional step passed through, per stream.
 
-    All ten are produced whether or not anything reads them; which are filed is
-    the caller's declaration. They are here rather than derived afterwards
-    because most of them cannot be recovered from the update: ``alpha`` and the
-    signal reach it only as their product, and ``sigma_bar`` not at all.
+    They are reported rather than derived afterwards because most of them
+    cannot be recovered from the update: the step size and the signal reach the
+    parameters only as their product, and ``sigma_bar`` not at all.
     """
 
     clipped_delta: Any = None
@@ -129,12 +147,12 @@ def corrected_average(previous, sample, *, beta, step):
 
         x_t = x_{t-1} + (1 - beta) / (1 - beta^t) * (sample - x_{t-1})
 
-    which is the same sequence as an exponential average divided by
-    ``1 - beta^t`` afterwards, and differs from correcting at the end in that
-    the corrected value is what the next step averages into. At ``t = 1`` the
-    rate is exactly one, so the first sample is taken whole and a zero
-    initialization is never something a later step is still shrinking away
-    from.
+    which is the same sequence as the published implementation's -- a plain
+    exponential average kept, and divided by ``1 - beta^t`` where it is read.
+    The two are equal term by term, not approximately: this recursion is what
+    the corrected value satisfies. Keeping the corrected one is what makes the
+    first sample arrive whole rather than at ``(1 - beta)`` of itself, with
+    hundreds of steps spent climbing out of a zero nobody measured.
 
     A ``beta`` of exactly one names an average that never moves. The rate is
     ``0/0`` there, and the limit is the reading taken: nothing is averaged in.
@@ -167,14 +185,13 @@ def normalized_advantage(advantage, scale, *, beta, step):
 
     The mean is of ``|A|`` and is therefore never negative, so the normalized
     advantage keeps the sign of the advantage exactly. Before anything has been
-    averaged the scale is zero and the ratio is ``0/0``; the reading taken
-    there is zero, which is the one value that leaves the parameters where they
-    were on a step that had no scale to measure against.
+    averaged the scale is zero, and the division is floored rather than
+    guarded, which is what the published implementation does and gives the same
+    zero at the only place the two could differ.
     """
 
     scale = corrected_average(scale, jnp.abs(advantage), beta=beta, step=step)
-    positive = scale > 0
-    return jnp.where(positive, advantage / jnp.where(positive, scale, 1.0), 0.0), scale
+    return advantage / jnp.maximum(scale, SCALE_FLOOR), scale
 
 
 def _stream_sum(tree):
@@ -219,12 +236,12 @@ def _stream_non_finite(tree):
 class IntentionalOptimizer:
     """One parameter group's intentional update, and the state it carries.
 
-    ``decay`` is ``gamma * lambda`` for the group: the rate its trace forgets
-    at, and the rate ``sigma_bar`` averages at. ``signal`` is which scalar the
-    step is proportional to -- the clipped TD error of Intentional TD, or the
-    normalized advantage of the intentional policy gradient -- and it is passed
-    in rather than declared because it follows from what the group's objective
-    is, which only the algorithm knows.
+    ``decay`` is ``gamma * lambda`` for the group: the rate ``sigma_bar``
+    averages at, which has to be the rate the group's trace forgets at.
+    ``signal`` is which scalar the step is proportional to -- the clipped TD
+    error of Intentional TD, or the normalized advantage of the intentional
+    policy gradient -- and it is passed in rather than declared because it
+    follows from what the group's objective is, which only the algorithm knows.
     """
 
     def __init__(
@@ -240,14 +257,13 @@ class IntentionalOptimizer:
         self.signal = signal
 
     def init(self, params, *, streams: int) -> IntentionalState:
-        """Fresh state: an empty trace and empty averages, one set per stream."""
+        """Fresh state: empty averages, one set per stream."""
 
         empty = jax.tree.map(
             lambda leaf: jnp.zeros((streams, *leaf.shape), dtype=jnp.float32), params
         )
         zero = jnp.zeros((streams,), dtype=jnp.float32)
         return IntentionalState(
-            z=empty,
             nu=empty,
             sigma_bar=zero,
             delta_square=zero,
@@ -276,23 +292,27 @@ class IntentionalOptimizer:
         self,
         *,
         delta,
+        trace,
         derivative,
         direct,
-        reset,
         step,
         params,
         state: IntentionalState,
     ) -> tuple[Any, IntentionalState, IntentionalReading]:
-        """One transition: accumulate, precondition, and step as far as intended.
+        """One transition: precondition, size the step, and take it.
 
-        ``derivative`` is the instantaneous derivative of the group's traced
-        objective, per stream. ``direct`` is what ascends on the step it arises
-        -- the policy's entropy term, already carrying its own coefficient --
-        and it is folded into the derivative before the trace sees it, because
-        the paper's policy gradient is the derivative of the log-probability
-        *and* the entropy together. It enters multiplied by the sign of the
-        signal, since the whole trace is later multiplied by the signal and an
-        entropy term that flipped with it would descend entropy half the time.
+        ``trace`` is the group's eligibility trace as its own component left
+        it, and ``derivative`` is the instantaneous derivative that trace was
+        accumulated from. Both are read and neither is written.
+
+        ``direct`` is refused. The paper's update has no untraced term: its
+        policy gradient is the derivative of the log-probability *and* the
+        entropy together, signed by the signal, and an algorithm pairing this
+        optimizer with an entropy term applied outside the trace would be
+        stepping a rule the paper does not define. Where that folding happens
+        is the algorithm's business -- it is the thing that owns the objective
+        -- but handing an intentional group a direction it never traced is a
+        wiring mistake rather than a configuration, so it is refused here.
 
         ``params`` is accepted and unused. An intentional step reads the
         derivative's scale and never the parameters', which is a property worth
@@ -300,65 +320,46 @@ class IntentionalOptimizer:
         """
 
         del params
+        if direct is not None:
+            raise ValueError(
+                "an intentional update has no untraced term; the entropy "
+                "direction belongs in the derivative the trace accumulates, "
+                "signed by the signal, before either reaches this optimizer"
+            )
         settings = self.settings
         signal, clipped, delta_square, scale = self._signal(delta, state, step=step)
-
-        gradient = derivative
-        if direct is not None:
-            gradient = jax.tree.map(
-                lambda traced, immediate: (
-                    traced + broadcast_stream(jnp.sign(signal), immediate) * immediate
-                ),
-                derivative,
-                direct,
-            )
 
         nu = jax.tree.map(
             lambda old, leaf: corrected_average(
                 old, jnp.square(leaf), beta=settings.beta_rms, step=step
             ),
             state.nu,
-            gradient,
+            derivative,
         )
         rho = jax.tree.map(lambda leaf: 1.0 / (jnp.sqrt(leaf) + settings.eps), nu)
         sigma = _stream_sum(
             jax.tree.map(
-                lambda inverse, leaf: inverse * jnp.square(leaf), rho, gradient
+                lambda inverse, leaf: inverse * jnp.square(leaf), rho, derivative
             )
         )
         sigma_bar = corrected_average(
             state.sigma_bar, sigma, beta=self.decay, step=step
         )
 
-        # The trace takes this step's derivative before the step is taken, so
-        # the update reads `z_t` and not `z_{t-1}`. RTRRL's own rules read the
-        # trace as it stood and advance it afterwards; that is a difference
-        # between two algorithms rather than an ordering detail, and it is the
-        # reason the first transition of an intentional run already moves.
-        kept = self.decay * (1.0 - reset)
-        z = jax.tree.map(
-            lambda old, leaf: broadcast_stream(kept, old) * old + leaf,
-            state.z,
-            gradient,
-        )
-
         quadratic = _stream_sum(
-            jax.tree.map(lambda inverse, leaf: inverse * jnp.square(leaf), rho, z)
+            jax.tree.map(lambda inverse, leaf: inverse * jnp.square(leaf), rho, trace)
         )
         denominator = jnp.sqrt(sigma_bar * quadratic)
-        intended = denominator > 0
-        alpha = jnp.where(
-            intended, settings.eta / jnp.where(intended, denominator, 1.0), 0.0
-        )
+        alpha = settings.eta / jnp.maximum(denominator, settings.denominator_floor)
 
         ascent = _stream_scaled(
-            jax.tree.map(lambda inverse, leaf: inverse * leaf, rho, z), alpha * signal
+            jax.tree.map(lambda inverse, leaf: inverse * leaf, rho, trace),
+            alpha * signal,
         )
         updates = jax.tree.map(lambda leaf: jnp.mean(leaf, axis=0), ascent)
         return (
             updates,
             IntentionalState(
-                z=z,
                 nu=nu,
                 sigma_bar=sigma_bar,
                 delta_square=delta_square,

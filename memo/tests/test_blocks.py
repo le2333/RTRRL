@@ -364,7 +364,9 @@ def test_the_bounded_step_is_upstreams(rule_name, magnitude, step, surprise):
     their_updates, their_moment = theirs._obgd_update(
         traces, moment, td_error, cfg.critic_lr, cfg.critic_kappa, step
     )
-    output = rule.apply(traces, None, moment, delta=td_error, step=step, params=None)
+    output = rule.apply(
+        traces, None, moment, delta=td_error, derivative=traces, step=step, params=None
+    )
 
     what = f"{rule_name} trace={magnitude} step={step} td={surprise}"
     if adaptive:
@@ -653,6 +655,7 @@ def test_the_bound_and_the_base_are_two_axes():
             None,
             moment,
             delta=jnp.array([0.5, -1.5, 0.0], dtype=jnp.float32),
+            derivative=traces,
             step=1,
             params=None,
         )
@@ -673,7 +676,7 @@ def test_where_eps_sits_is_which_component_it_is():
         rule = make_bounded_rule(bound=BOUNDS[name], base=Sgd(lr=0.1))
         moment = rule.init(params=None, traces=traces)
         steps[name] = rule.apply(
-            traces, None, moment, delta=delta, step=1, params=None
+            traces, None, moment, delta=delta, derivative=traces, step=1, params=None
         ).metrics["step_size"]
 
     assert not jnp.allclose(steps["adaptive_obgd"], steps["adaptive_obgd_fixed"])
@@ -691,6 +694,7 @@ def test_no_bound_is_the_base_on_its_own():
             jax.tree.map(jnp.zeros_like, traces),
             rule.init(params=params, traces=traces),
             delta=jnp.array([0.5, -1.5, 0.0], dtype=jnp.float32),
+            derivative=traces,
             step=1,
             params=params,
         )

@@ -216,7 +216,13 @@ def test_the_two_rules_agree_on_their_contract():
     for name, rule in rules.items():
         state = rule.init(params={"w": jnp.ones((3,))}, traces=traces)
         output = rule.apply(
-            traces, direct, state, delta=delta, step=1, params={"w": jnp.ones((3,))}
+            traces,
+            direct,
+            state,
+            delta=delta,
+            derivative=traces,
+            step=1,
+            params={"w": jnp.ones((3,))},
         )
         assert output.updates["w"].shape == (3,), f"{name} dropped the env axis"
         assert finite(output.updates)
@@ -231,6 +237,7 @@ def test_the_bound_never_lets_obgd_step_past_its_learning_rate():
         None,
         state,
         delta=jnp.array([9.0]),
+        derivative=traces,
         step=1,
         params={"w": jnp.zeros((8,))},
     )

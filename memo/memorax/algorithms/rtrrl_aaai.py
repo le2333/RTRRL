@@ -17,7 +17,7 @@ Rebuilt from ``../RTRRL-AAAI25/rtrrl.py``. Driven against it by
 
 from __future__ import annotations
 
-from collections.abc import Iterable
+from collections.abc import Iterable, Mapping
 from dataclasses import dataclass, field, fields, replace
 from typing import Any
 
@@ -58,6 +58,7 @@ from memorax.rl.normalization import (
     DISCOUNTED_NORMALIZATION_FAMILY,
     NORMALIZATION_FAMILY,
 )
+from memorax.rl.traces import CARRIED, CURRENT, Trace
 from memorax.rl.updates import (
     DRTRRL,
     STEP_FAMILY,
@@ -81,8 +82,13 @@ from .contract import (
     StepMetrics,
 )
 
-TORSO_GROUP = "torso"
-HEAD_GROUP = "heads"
+# Three parameter groups, one per block. They used to be two, with the actor
+# and the critic stepping together under one selection; the intentional update
+# is the first rule for which that is not a grouping but a constraint, since
+# the published actor-critic sets a different intended reduction for the policy
+# than for the value function. A group of one also makes every rule's step size
+# a block's reading rather than a group's.
+BLOCKS: tuple[str, ...] = ("torso", "actor", "critic")
 
 
 # --------------------------------------------------------------- configuration
@@ -104,7 +110,10 @@ class RTRRLConfig:
     torso_optimizer: Adam | DRTRRL | IntentionalUpdate = field(
         default_factory=lambda: Adam(lr=1e-4)
     )
-    heads_optimizer: Adam | DRTRRL | IntentionalUpdate = field(
+    actor_optimizer: Adam | DRTRRL | IntentionalUpdate = field(
+        default_factory=lambda: Adam(lr=1e-4)
+    )
+    critic_optimizer: Adam | DRTRRL | IntentionalUpdate = field(
         default_factory=lambda: Adam(lr=1e-4)
     )
     torso_grad_clip: float = 1.0
@@ -199,18 +208,15 @@ class TorsoParameters:
 
 
 @dataclass(frozen=True)
-class HeadsParameters:
-    optimizer: str = structure(branches=RTRRL_OPTIMIZERS.branches)
-
-
-@dataclass(frozen=True)
 class ActorParameters:
     head: str = structure(branches=ACTOR_HEAD_FAMILY.branches)
+    optimizer: str = structure(branches=RTRRL_OPTIMIZERS.branches)
 
 
 @dataclass(frozen=True)
 class CriticParameters:
     head: str = structure(branches=CRITIC_HEAD_FAMILY.branches)
+    optimizer: str = structure(branches=RTRRL_OPTIMIZERS.branches)
 
 
 @dataclass(frozen=True)
@@ -222,7 +228,6 @@ class NormalizationParameters:
 @dataclass(frozen=True)
 class RTRRLParameters:
     torso: TorsoParameters = group(of=TorsoParameters)
-    heads: HeadsParameters = group(of=HeadsParameters)
     actor: ActorParameters = group(of=ActorParameters)
     critic: CriticParameters = group(of=CriticParameters)
     normalization: NormalizationParameters = group(of=NormalizationParameters)
@@ -295,7 +300,6 @@ class IntentionalReports:
     sigma_bar: bool = reading(at="sigma_bar", default=False)
     trace_quadratic: bool = reading(at="trace_quadratic", default=False)
     denominator: bool = reading(at="denominator", default=False)
-    step_size: bool = reading(at="step_size", default=False)
     update_norm: bool = reading(at="update_norm", default=False)
     non_finite: bool = reading(at="non_finite", default=False)
 
@@ -306,6 +310,7 @@ class BlockReports:
 
     grad_norm: bool = reading(at="grad_norm", split=True)
     trace_norm: bool = reading(at="trace_norm", split=True)
+    step_size: bool = reading(at="step_size")
     intentional: IntentionalReports = readings(of=IntentionalReports, at="intentional")
 
 
@@ -315,21 +320,15 @@ class HeadReports:
 
     grad_norm: bool = reading(at="grad_norm")
     trace_norm: bool = reading(at="trace_norm")
-    intentional: IntentionalReports = readings(of=IntentionalReports, at="intentional")
-
-
-@dataclass(frozen=True)
-class GroupReports:
-    """Which of one rule group's readings to take."""
-
     step_size: bool = reading(at="step_size")
+    intentional: IntentionalReports = readings(of=IntentionalReports, at="intentional")
 
 
 @dataclass(frozen=True)
 class Reports:
     """Which readings to take, in the shape of what produces them.
 
-    Two levels, because three blocks step in two groups.
+    Two levels, because a block's readings hang off the block that took them.
     """
 
     log_prob: bool = reading(at="forward.actor.log_prob")
@@ -340,8 +339,6 @@ class Reports:
     torso: BlockReports = readings(of=BlockReports, at="update.torso")
     actor: HeadReports = readings(of=HeadReports, at="update.actor")
     critic: HeadReports = readings(of=HeadReports, at="update.critic")
-    torso_step: GroupReports = readings(of=GroupReports, at="update.torso_step")
-    heads_step: GroupReports = readings(of=GroupReports, at="update.heads_step")
 
 
 def _intentional_reports(*, taken: bool, advantage: bool = False) -> IntentionalReports:
@@ -362,24 +359,21 @@ def _intentional_reports(*, taken: bool, advantage: bool = False) -> Intentional
     )
 
 
-def _reports(*, torso: bool, heads: bool) -> Reports:
-    """The readings one configuration takes, given which groups are intentional.
+def _reports(*, torso: bool, actor: bool, critic: bool) -> Reports:
+    """The readings one configuration takes, given which blocks are intentional.
 
-    The step size is filed in two different places by the two kinds of rule and
-    that is not an inconsistency: Adam and D-RTRRL take one step per *group*,
-    so one name per group is the whole of it, while an intentional group takes
-    a different step for each block in it and a group-level name could only
-    report one of two.
+    ``step_size`` is every block's, whichever rule stepped it: Adam reports its
+    rate, D-RTRRL its threshold, and the intentional update the dynamic step it
+    derived. One name, because a reader comparing two runs is asking the same
+    question of both.
     """
 
     return Reports(
         torso=BlockReports(intentional=_intentional_reports(taken=torso)),
         actor=HeadReports(
-            intentional=_intentional_reports(taken=heads, advantage=True)
+            intentional=_intentional_reports(taken=actor, advantage=True)
         ),
-        critic=HeadReports(intentional=_intentional_reports(taken=heads)),
-        torso_step=GroupReports(step_size=not torso),
-        heads_step=GroupReports(step_size=not heads),
+        critic=HeadReports(intentional=_intentional_reports(taken=critic)),
     )
 
 
@@ -438,25 +432,18 @@ class BlockUpdate(struct.PyTreeNode):
 
     grad_norm: Any = None
     trace_norm: Any = None
+    step_size: Any = None
     intentional: IntentionalReading = IntentionalReading()
 
 
-class GroupUpdate(struct.PyTreeNode):
-    """What one rule group's step did."""
-
-    step_size: Any = None
-
-
 class UpdateMetrics(struct.PyTreeNode):
-    """Three blocks, two groups, and two quantities belonging to neither."""
+    """Three blocks, and two quantities belonging to none of them."""
 
     td_error: Any = None
     emphasis: Any = None
     torso: BlockUpdate = BlockUpdate()
     actor: BlockUpdate = BlockUpdate()
     critic: BlockUpdate = BlockUpdate()
-    torso_step: GroupUpdate = GroupUpdate()
-    heads_step: GroupUpdate = GroupUpdate()
 
 
 class RTRRLState(struct.PyTreeNode):
@@ -502,31 +489,38 @@ def _adam_rule(base: Adam, *, clip: float):
 
 
 # Which of the three lambdas a block's trace forgets at, and which scalar its
-# intentional step is proportional to. Both are routing decisions: the paper
-# names one trace and one signal per learner, and RTRRL has three parameter
-# groups because it shares a torso between two of them.
+# step is proportional to. Both are routing decisions: the intentional-update
+# paper names one trace and one signal per learner, and RTRRL has three
+# parameter groups because it shares a torso between two of them.
 BLOCK_DECAYS = {
     "torso": lambda cfg: cfg.lambda_rnn,
     "actor": lambda cfg: cfg.lambda_pi,
     "critic": lambda cfg: cfg.lambda_v,
 }
+# The actor and the critic are the paper's two algorithms exactly: Intentional
+# TD over the value function's own derivative, and the intentional policy
+# gradient over the log-probability's.
+#
+# **The torso is neither, and should not be described as either.** What reaches
+# it is RTRRL's joint derivative, the actor's cotangent and the critic's summed
+# through the shared recurrence, which is not `grad V` and not `grad log pi`.
+# The step size derived from it is a real quantity -- it is `eta` divided by the
+# same denominator, over the same statistics -- but the functional reading of
+# `eta` does not survive the sum: it no longer names a fraction of a TD error
+# the step sets out to spend, because the sum is not the derivative of any one
+# thing the TD error is measured on. Call this what it is, an IU-style step over
+# RTRRL's joint torso signal, and do not read the torso's `eta` on the same axis
+# as the actor's and the critic's.
 BLOCK_SIGNALS = {"torso": TD, "actor": ADVANTAGE, "critic": TD}
 
 
-def _group_rule(step, *, cfg: RTRRLConfig, blocks: dict[str, str], clip: float):
-    """Whichever rule a group's optimizer names, over that group's blocks.
+def _block_rule(step, *, cfg: RTRRLConfig, name: str, clip: float):
+    """Whichever rule a block's optimizer names, over that one block.
 
-    A group's entries are its blocks, which is the grouping the D-RTRRL rule
-    normalizes over: the torso is its own unit, and the two readouts step
-    together but are two units, so a large actor trace cannot spend the critic's
-    step. What they share under one selection is ``c``, not a unit ball.
-
-    The intentional rule reads the same grouping one level further in. Each
-    block gets its own optimizer, so the two readouts share ``eta`` and nothing
-    else -- not a trace, not a second moment, not a step size -- because an
-    intended outcome is measured against the parameters it is spent on.
-    ``blocks`` says which signal each block's step is proportional to, and its
-    decay is whichever of the algorithm's three lambdas that block answers to.
+    A rule is handed ``{name: tree}`` rather than the bare tree, because that
+    is the shape the D-RTRRL rule's normalization units are cut from and the
+    shape the intentional rule keys its per-block optimizers by. With one block
+    per rule the two D-RTRRL scopes name the same unit; see :class:`DRTRRL`.
     """
 
     if isinstance(step, IntentionalUpdate):
@@ -538,8 +532,8 @@ def _group_rule(step, *, cfg: RTRRLConfig, blocks: dict[str, str], clip: float):
             )
         return make_intentional_rule(
             step,
-            signals=blocks,
-            decays={name: cfg.gamma * BLOCK_DECAYS[name](cfg) for name in blocks},
+            signals={name: BLOCK_SIGNALS[name]},
+            decays={name: cfg.gamma * BLOCK_DECAYS[name](cfg)},
             streams=cfg.num_envs,
         )
     if isinstance(step, DRTRRL):
@@ -548,74 +542,87 @@ def _group_rule(step, *, cfg: RTRRLConfig, blocks: dict[str, str], clip: float):
 
 
 def make_rules(cfg: RTRRLConfig):
-    """One rule per group, both answering the same contract."""
+    """One rule per block, all three answering the same contract."""
 
+    optimizers = {
+        "torso": cfg.torso_optimizer,
+        "actor": cfg.actor_optimizer,
+        "critic": cfg.critic_optimizer,
+    }
+    clips = {"torso": cfg.torso_grad_clip, "actor": 0.0, "critic": 0.0}
     return {
-        TORSO_GROUP: _group_rule(
-            cfg.torso_optimizer,
-            cfg=cfg,
-            blocks={name: BLOCK_SIGNALS[name] for name in ("torso",)},
-            clip=cfg.torso_grad_clip,
-        ),
-        HEAD_GROUP: _group_rule(
-            cfg.heads_optimizer,
-            cfg=cfg,
-            blocks={name: BLOCK_SIGNALS[name] for name in ("actor", "critic")},
-            clip=0.0,
-        ),
+        name: _block_rule(optimizers[name], cfg=cfg, name=name, clip=clips[name])
+        for name in BLOCKS
     }
 
 
-# ------------------------------------------------------------ shared algebra
-def _initial_traces(params, num_envs):
-    """One trace per parameter per stream, which is what online means."""
+def make_traces(cfg: RTRRLConfig):
+    """One eligibility recurrence per block, paired with its optimizer.
 
-    return jax.tree.map(
-        lambda parameter: jnp.zeros((num_envs, *parameter.shape)), params
-    )
+    Which recurrence a block runs is not a free setting. An intentional update
+    is derived against ``z_t = gamma*lambda*z_{t-1} + p_t`` read *after* this
+    step's derivative has joined it, and against no emphasis; RTRRL's own rules
+    are written over the trace as it stood, weighted by the followed-trace
+    emphasis. Pairing them the other way round would leave the step size
+    dividing by a trace the step was not taken along, so the algorithm --
+    which owns both -- constructs the one that goes with what was selected.
 
-
-def _advance_trace(incoming, gradient, *, decay, reset_before, emphasis):
-    """RTRRL's post-transition trace recurrence for one semantic block."""
-
-    return jax.tree.map(
-        lambda old, grad: (
-            decay * (1 - broadcast_stream(reset_before, old)) * old
-            + broadcast_stream(emphasis, grad) * grad
-        ),
-        incoming,
-        gradient,
-    )
-
-
-class Traced:
-    """Whether this block accumulates its own trace, and the decay if it does.
-
-    A block whose rule owns the trace keeps none here -- not an empty one, but
-    the absence of one. Two traces under one block, only one of which any
-    update reads, is the state a reader of a checkpoint cannot tell apart from
-    a trace that stopped being advanced.
+    The optimizer never sees this choice. It is handed a trace and told nothing
+    about where in the transition it was read.
     """
 
-    def __init__(self, cfg: RTRRLConfig, decay: float, *, keeps: bool) -> None:
+    optimizers = {
+        "torso": cfg.torso_optimizer,
+        "actor": cfg.actor_optimizer,
+        "critic": cfg.critic_optimizer,
+    }
+    return {
+        name: (
+            Trace(
+                decay=cfg.gamma * BLOCK_DECAYS[name](cfg),
+                reads=CURRENT,
+                emphasized=False,
+            )
+            if isinstance(optimizers[name], IntentionalUpdate)
+            else Trace(
+                decay=cfg.gamma * BLOCK_DECAYS[name](cfg),
+                reads=CARRIED,
+                emphasized=True,
+            )
+        )
+        for name in BLOCKS
+    }
+
+
+class Block:
+    """What every one of the three has: a stream count, a decay and a trace.
+
+    The trace is a component rather than a method here. What it does is one
+    recurrence and one reading decision, both of which two of these blocks
+    would otherwise have to spell identically, and both of which an algorithm
+    has to be able to swap without the block noticing.
+
+    Left unsaid it is RTRRL's own -- emphasis-weighted, and read as it stood
+    before this transition's derivative joined it. That is the recurrence this
+    algorithm has always run and the one every rule but the intentional update
+    is written over, so it is the default rather than something each caller
+    has to know to ask for.
+    """
+
+    def __init__(
+        self, cfg: RTRRLConfig, decay: float, *, trace: Trace | None = None
+    ) -> None:
         self.cfg = cfg
-        self._decay = decay
-        self.keeps_trace = keeps
+        self.trace = trace or Trace(decay=decay, reads=CARRIED, emphasized=True)
 
     def initial_traces(self, params):
-        if not self.keeps_trace:
-            return None
-        return _initial_traces(params, self.cfg.num_envs)
+        return self.trace.initial(params, self.cfg.num_envs)
 
-    def advance_trace(self, incoming, gradient, *, reset_before, emphasis):
-        if not self.keeps_trace:
-            return None
-        return _advance_trace(
-            incoming,
-            gradient,
-            decay=self._decay,
-            reset_before=reset_before,
-            emphasis=emphasis,
+    def stepped_trace(self, carried, derivative, *, reset_before, emphasis):
+        """What this update steps along, and what the next transition carries."""
+
+        return self.trace.stepped(
+            carried, derivative, reset=reset_before, emphasis=emphasis
         )
 
 
@@ -633,7 +640,7 @@ def _head_gradient_norm(tree):
 
 
 # ------------------------------------------------------------ the shared block
-class Torso(Traced):
+class Torso(Block):
     """The recurrent representation shared by both heads."""
 
     def __init__(
@@ -642,9 +649,9 @@ class Torso(Traced):
         network: Any,
         differentiation: Any,
         *,
-        keeps_trace: bool = True,
+        trace: Trace | None = None,
     ) -> None:
-        super().__init__(cfg, cfg.gamma * cfg.lambda_rnn, keeps=keeps_trace)
+        super().__init__(cfg, cfg.gamma * cfg.lambda_rnn, trace=trace)
         self._network = network
         self._differentiation = differentiation
 
@@ -738,13 +745,13 @@ class Torso(Traced):
 
 
 # ------------------------------------------------------------ the two readouts
-class Actor(Traced):
+class Actor(Block):
     """The policy. It chooses, and it names the two directions it ascends."""
 
     def __init__(
-        self, cfg: RTRRLConfig, head: Any, *, keeps_trace: bool = True
+        self, cfg: RTRRLConfig, head: Any, *, trace: Trace | None = None
     ) -> None:
-        super().__init__(cfg, cfg.gamma * cfg.lambda_pi, keeps=keeps_trace)
+        super().__init__(cfg, cfg.gamma * cfg.lambda_pi, trace=trace)
         self._head = head
 
     def init(self, key, hidden, timestep: Timestep) -> BlockState:
@@ -765,7 +772,19 @@ class Actor(Traced):
         return _head_gradient_norm(tree)
 
     def traced_objective(self, params, hidden, timestep: Timestep, action):
-        """What ascends through the trace: the log-probability of what was done."""
+        """What ascends through the trace: the log-probability of what was done.
+
+        ``eta_pi`` scales it, which is RTRRL's own dial and is not the paper's
+        ``eta``. Under an intentional step the two compose in a way worth
+        saying out loud: the intentional step size is derived to move this
+        objective by a fixed fraction, so scaling the objective by ``eta_pi``
+        rescales what "the objective" means, and the entropy coefficient rides
+        along at ``entropy_rate / eta_pi`` relative to it. Neither is a defect;
+        both make ``eta`` stop being the paper's "about five percent of the
+        log-probability". A formal intentional run should pin ``eta_pi`` at 1
+        and search ``eta`` alone rather than searching both, which would be two
+        dials over one quantity.
+        """
 
         dist = self.apply(params, hidden, timestep)
         return self.cfg.eta_pi * remove_time_axis(dist.log_prob(action))[0]
@@ -777,13 +796,13 @@ class Actor(Traced):
         return self.cfg.entropy_rate * remove_time_axis(dist.entropy())[0]
 
 
-class Critic(Traced):
+class Critic(Block):
     """The value. It reads, and it ascends its own reading."""
 
     def __init__(
-        self, cfg: RTRRLConfig, head: Any, *, keeps_trace: bool = True
+        self, cfg: RTRRLConfig, head: Any, *, trace: Trace | None = None
     ) -> None:
-        super().__init__(cfg, cfg.gamma * cfg.lambda_v, keeps=keeps_trace)
+        super().__init__(cfg, cfg.gamma * cfg.lambda_v, trace=trace)
         self._head = head
 
     def init(self, key, hidden, timestep: Timestep) -> BlockState:
@@ -826,38 +845,27 @@ class Core:
         self.reports = reports
         self.td0 = make_td0()
         self.rules = make_rules(cfg)
-        self.group_of = {
-            "torso": TORSO_GROUP,
-            "actor": HEAD_GROUP,
-            "critic": HEAD_GROUP,
-        }
-        # Which blocks still hold a trace, which the rules decide: one that
-        # accumulates its own leaves the algorithm nothing to carry.
-        keeps = {
-            name: not self.rules[group].owns_trace
-            for name, group in self.group_of.items()
-        }
+        traces = make_traces(cfg)
+        # Which blocks trace the entropy direction instead of adding it on the
+        # step it arises. It is the same fact as which trace they run, and it
+        # is the algorithm's: the intentional policy gradient is the derivative
+        # of the log-probability and the entropy together, signed by the TD
+        # error, and it is that sum the trace accumulates. RTRRL's own rules
+        # take the entropy untraced, as the published implementation does.
+        self.folds_entropy = {name: traces[name].reads == CURRENT for name in BLOCKS}
         self.torso = Torso(
-            cfg, torso_network, torso_differentiation, keeps_trace=keeps["torso"]
+            cfg, torso_network, torso_differentiation, trace=traces["torso"]
         )
-        self.actor = Actor(cfg, actor_head, keeps_trace=keeps["actor"])
-        self.critic = Critic(cfg, critic_head, keeps_trace=keeps["critic"])
+        self.actor = Actor(cfg, actor_head, trace=traces["actor"])
+        self.critic = Critic(cfg, critic_head, trace=traces["critic"])
         self.blocks = {
             "torso": self.torso,
             "actor": self.actor,
             "critic": self.critic,
         }
 
-    def _grouped(self, by_name):
-        """Gather the per-block trees into the groups a rule steps over."""
-
-        groups: dict[str, dict] = {group: {} for group in self.rules}
-        for name, tree in by_name.items():
-            groups[self.group_of[name]][name] = tree
-        return groups
-
     def init(self, keys, timestep: Timestep) -> CoreState:
-        """Fresh online state for all three blocks and both rules."""
+        """Fresh online state for all three blocks and all three rules."""
 
         torso_keys, actor_key, critic_key = keys
         torso = self.torso.init(torso_keys, timestep)
@@ -865,19 +873,25 @@ class Core:
         actor = self.actor.init(actor_key, hidden, timestep)
         critic = self.critic.init(critic_key, hidden, timestep)
 
-        params = self._grouped(
-            {"torso": torso.params, "actor": actor.params, "critic": critic.params}
-        )
-        traces = self._grouped(
-            {"torso": torso.traces, "actor": actor.traces, "critic": critic.traces}
-        )
+        params = {
+            "torso": torso.params,
+            "actor": actor.params,
+            "critic": critic.params,
+        }
+        traces = {
+            "torso": torso.traces,
+            "actor": actor.traces,
+            "critic": critic.traces,
+        }
         return CoreState(
             torso=torso,
             actor=actor,
             critic=critic,
             rule={
-                group: rule.init(params=params[group], traces=traces[group])
-                for group, rule in self.rules.items()
+                name: rule.init(
+                    params={name: params[name]}, traces={name: traces[name]}
+                )
+                for name, rule in self.rules.items()
             },
             value=jnp.zeros((self.cfg.num_envs,), dtype=jnp.float32),
             emphasis=jnp.ones((self.cfg.num_envs,), dtype=jnp.float32),
@@ -978,101 +992,108 @@ class Core:
             gamma=self.cfg.gamma,
         )
 
-    def _take_updates(self, state, traced, direct, delta, step, reset_before):
-        """Apply the torso rule once and the joint readout rule once.
+    def _emphasis(self, state, reset_before):
+        """RTRRL's followed-trace weight on this transition's derivative.
 
-        A rule that owns its trace is handed this transition's derivative and
-        the reset flag instead of the trace the algorithm kept, because it is
-        the thing that decides what a trace of them is.
+        Advanced whatever the rules are, because it is the algorithm's own
+        quantity and something reads it. Whether it reaches a trace is the
+        trace component's to say: the paper's recurrence has no emphasis in it.
         """
 
-        direct = {**direct, "critic": jax.tree.map(jnp.zeros_like, traced["critic"])}
+        return (
+            self.cfg.gamma * state.emphasis * (1 - reset_before) + reset_before
+        ).astype(jnp.float32)
+
+    def _derivatives(self, traced, direct, delta):
+        """What each block's trace accumulates, and what stays untraced.
+
+        For a block folding the entropy in, the traced derivative is the sum
+        the paper differentiates as one objective. The sign is the TD error's
+        rather than the normalized advantage's, and they are the same sign: the
+        clip preserves it and the running scale it is divided by is never
+        negative. Taking it here is what lets the optimizer stay ignorant of
+        the entropy entirely.
+        """
+
+        sign = jnp.sign(delta)
+        derivative, untraced = {}, {}
+        for name in BLOCKS:
+            immediate = direct.get(name)
+            if immediate is None or not self.folds_entropy[name]:
+                derivative[name] = traced[name]
+                untraced[name] = immediate
+                continue
+            derivative[name] = jax.tree.map(
+                lambda leaf, term: leaf + broadcast_stream(sign, term) * term,
+                traced[name],
+                immediate,
+            )
+            untraced[name] = None
+        return derivative, untraced
+
+    def _take_updates(self, state, traced, direct, delta, step, reset_before):
+        """Advance each block's trace, then take each block's step along it.
+
+        The trace moves first and hands back both readings; which one this
+        update steps along is the trace component's decision and not visible
+        here. What is visible is that the algorithm keeps every trace it had,
+        whichever rule is downstream.
+        """
+
         params = {
             "torso": state.torso.params,
             "actor": state.actor.params,
             "critic": state.critic.params,
         }
-        grouped_params = self._grouped(params)
-        grouped_traces = self._grouped(
-            {
-                "torso": state.torso.traces,
-                "actor": state.actor.traces,
-                "critic": state.critic.traces,
-            }
-        )
-        grouped_derivatives = self._grouped(traced)
-        grouped_direct = self._grouped(direct)
-        deltas = {TORSO_GROUP: delta * self.cfg.eta_f, HEAD_GROUP: delta}
-        taken = {
-            group: rule.apply(
-                (
-                    grouped_derivatives[group]
-                    if rule.owns_trace
-                    else grouped_traces[group]
-                ),
-                grouped_direct[group],
-                state.rule[group],
-                delta=deltas[group],
-                step=step,
-                params=grouped_params[group],
-                **({"reset": reset_before} if rule.owns_trace else {}),
-            )
-            for group, rule in self.rules.items()
+        carried = {
+            "torso": state.torso.traces,
+            "actor": state.actor.traces,
+            "critic": state.critic.traces,
         }
-        stepped = {
-            name: jax.tree.map(
-                lambda parameter, update: parameter + update,
-                params[name],
-                taken[self.group_of[name]].updates[name],
-            )
-            for name in params
-        }
-        return stepped, taken, grouped_traces
-
-    def _advance_traces(self, state, grouped_traces, traced, reset_before):
-        """Advance each block's trace after the current update has used it.
-
-        The emphasis is advanced whatever the rules are, because it is the
-        algorithm's own quantity and something reads it. What it weights is the
-        trace this keeps -- a block whose rule accumulates its own is handed
-        back nothing here, and the paper's recurrence has no emphasis in it.
-        """
-
-        emphasis = (
-            self.cfg.gamma * state.emphasis * (1 - reset_before) + reset_before
-        ).astype(jnp.float32)
-        advanced = {
-            name: block.advance_trace(
-                grouped_traces[self.group_of[name]][name],
-                traced[name],
+        emphasis = self._emphasis(state, reset_before)
+        derivative, untraced = self._derivatives(traced, direct, delta)
+        stepped_traces = {
+            name: block.stepped_trace(
+                carried[name],
+                derivative[name],
                 reset_before=reset_before,
                 emphasis=emphasis,
             )
             for name, block in self.blocks.items()
         }
-        return emphasis, advanced
-
-    def _traces_read(self, advanced, taken):
-        """The trace to measure per block, from whichever side is holding one.
-
-        A block under a rule that owns its trace has none of its own, and the
-        trace worth reading is the one the step was actually taken along.
-        """
-
-        return {
-            name: (
-                trace
-                if trace is not None
-                else taken[self.group_of[name]].metrics["trace"][name]
-            )
-            for name, trace in advanced.items()
+        deltas = {
+            "torso": delta * self.cfg.eta_f,
+            "actor": delta,
+            "critic": delta,
         }
+        taken = {
+            name: rule.apply(
+                {name: stepped_traces[name][0]},
+                None if untraced[name] is None else {name: untraced[name]},
+                state.rule[name],
+                delta=deltas[name],
+                derivative={name: derivative[name]},
+                step=step,
+                params={name: params[name]},
+            )
+            for name, rule in self.rules.items()
+        }
+        stepped = {
+            name: jax.tree.map(
+                lambda parameter, update: parameter + update,
+                params[name],
+                taken[name].updates[name],
+            )
+            for name in params
+        }
+        advanced = {name: pair[1] for name, pair in stepped_traces.items()}
+        return stepped, taken, emphasis, advanced, derivative
 
     def _intentional_reading(self, name, taken):
         """One block's intentional readings, gated by what this graph declares."""
 
         reports = getattr(self.reports, name).intentional
-        produced = taken[self.group_of[name]].metrics.get("intentional")
+        produced = taken[name].metrics.get("intentional")
         if produced is None:
             return IntentionalReading()
         reading = produced[name]
@@ -1085,10 +1106,21 @@ class Core:
             }
         )
 
+    def _step_size(self, name, taken):
+        """The step this block took, under the one name every rule reports it by.
+
+        A rule serving several blocks reports one per block; a rule serving one
+        reports the number. Both are the same reading, and the caller asking
+        for it should not have to know which kind of rule answered.
+        """
+
+        size = taken[name].metrics.get("step_size")
+        if isinstance(size, Mapping):
+            return size[name]
+        return size
+
     def _update_reading(self, delta, emphasis, traced, advanced, taken):
         """Project update products onto the readings this graph declares."""
-
-        traces = self._traces_read(advanced, taken)
 
         def block_reading(name):
             reports = getattr(self.reports, name)
@@ -1098,8 +1130,9 @@ class Core:
                     block.gradient_norms(traced[name]) if reports.grad_norm else None
                 ),
                 trace_norm=(
-                    block.gradient_norms(traces[name]) if reports.trace_norm else None
+                    block.gradient_norms(advanced[name]) if reports.trace_norm else None
                 ),
+                step_size=self._step_size(name, taken) if reports.step_size else None,
                 intentional=self._intentional_reading(name, taken),
             )
 
@@ -1109,20 +1142,6 @@ class Core:
             torso=block_reading("torso"),
             actor=block_reading("actor"),
             critic=block_reading("critic"),
-            torso_step=GroupUpdate(
-                step_size=(
-                    taken[TORSO_GROUP].metrics.get("step_size")
-                    if self.reports.torso_step.step_size
-                    else None
-                )
-            ),
-            heads_step=GroupUpdate(
-                step_size=(
-                    taken[HEAD_GROUP].metrics.get("step_size")
-                    if self.reports.heads_step.step_size
-                    else None
-                )
-            ),
         )
 
     def update_parameters(
@@ -1142,11 +1161,8 @@ class Core:
         )
 
         delta = self._td_error(state, timestep, value, terminal)
-        stepped, taken, grouped_traces = self._take_updates(
+        stepped, taken, emphasis, advanced, derivative = self._take_updates(
             state, traced, direct, delta, step, reset_before
-        )
-        emphasis, advanced = self._advance_traces(
-            state, grouped_traces, traced, reset_before
         )
 
         return (
@@ -1161,7 +1177,7 @@ class Core:
                 ),
                 actor=BlockState(params=stepped["actor"], traces=advanced["actor"]),
                 critic=BlockState(params=stepped["critic"], traces=advanced["critic"]),
-                rule={group: result.state for group, result in taken.items()},
+                rule={name: result.state for name, result in taken.items()},
                 value=value,
                 emphasis=emphasis,
             ),
@@ -1170,7 +1186,7 @@ class Core:
                 actor=actor_reading,
                 critic=CriticForward(value=value if self.reports.value else None),
             ),
-            self._update_reading(delta, emphasis, traced, advanced, taken),
+            self._update_reading(delta, emphasis, derivative, advanced, taken),
         )
 
 
@@ -1249,7 +1265,8 @@ class RTRRL:
         if meta_rl:
             features += action_dim(context.action_space) + 1
         torso_optimizer = components.build(RTRRL_OPTIMIZERS, "torso.optimizer")
-        heads_optimizer = components.build(RTRRL_OPTIMIZERS, "heads.optimizer")
+        actor_optimizer = components.build(RTRRL_OPTIMIZERS, "actor.optimizer")
+        critic_optimizer = components.build(RTRRL_OPTIMIZERS, "critic.optimizer")
         torso_network, torso_differentiation = components.build(
             RTRRL_TORSO_FAMILY, "torso.backbone", features=features
         )
@@ -1268,7 +1285,8 @@ class RTRRL:
                 meta_rl=meta_rl,
                 action_classes=classes,
                 torso_optimizer=torso_optimizer,
-                heads_optimizer=heads_optimizer,
+                actor_optimizer=actor_optimizer,
+                critic_optimizer=critic_optimizer,
             ),
             context.environment,
             context.environment_parameters,
@@ -1292,7 +1310,8 @@ class RTRRL:
             record=record,
             reports=_reports(
                 torso=isinstance(torso_optimizer, IntentionalUpdate),
-                heads=isinstance(heads_optimizer, IntentionalUpdate),
+                actor=isinstance(actor_optimizer, IntentionalUpdate),
+                critic=isinstance(critic_optimizer, IntentionalUpdate),
             ),
         )
 

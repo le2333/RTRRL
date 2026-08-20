@@ -35,6 +35,8 @@ env:
   # so the numbers our rules answer to cannot change under us.
   STREAMING_DRL_COMMIT: 407dca7a8b584c1c20bc649053557f66e270b1e6
   RTRRL_AAAI25_COMMIT: 4301943c349171d828d0fcf3e40944c286451415
+  # sharifnassab/Intentional_RL, the code behind the intentional-update paper.
+  INTENTIONAL_RL_COMMIT: e86e26fd8613ac212e9a52c3fed8a01d0a31f685
 
 jobs:
   static:
@@ -111,6 +113,11 @@ jobs:
           git clone --quiet https://github.com/FranzKnut/RTRRL-AAAI25.git "$RUNNER_TEMP/RTRRL-AAAI25"
           git -C "$RUNNER_TEMP/RTRRL-AAAI25" checkout --quiet $RTRRL_AAAI25_COMMIT
           echo "RTRRL_AAAI25=$RUNNER_TEMP/RTRRL-AAAI25" >> "$GITHUB_ENV"
+      - name: Fetch the published intentional-update optimizer
+        run: |
+          git clone --quiet https://github.com/sharifnassab/Intentional_RL.git "$RUNNER_TEMP/Intentional_RL"
+          git -C "$RUNNER_TEMP/Intentional_RL" checkout --quiet $INTENTIONAL_RL_COMMIT
+          echo "INTENTIONAL_RL=$RUNNER_TEMP/Intentional_RL" >> "$GITHUB_ENV"
       - name: Run fast and local-parity suites
         run: uv run pytest tests -m "not external and not service and not container" -v
       - name: Run service integrations

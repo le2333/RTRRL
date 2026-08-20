@@ -248,6 +248,10 @@ def mine(rule_name: str, scale: float):
             None,
             moment,
             delta=jnp.asarray([delta], dtype=jnp.float32),
+            # The instantaneous derivative every rule is handed beside the
+            # trace. The bounded rule reads the trace alone, which is why
+            # passing the trace here changes nothing it computes.
+            derivative=trace,
             step=index,
             params=None,
         )

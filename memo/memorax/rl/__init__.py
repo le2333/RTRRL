@@ -34,6 +34,7 @@ from .normalization import (
 from .spaces import action_classes, action_dim, encode_feedback
 from .targets import delayed_update, periodic_incremental_update
 from .td import make_td0
+from .traces import CARRIED, CURRENT, Trace
 from .updates import (
     DRTRRL,
     ObjectiveDirections,
@@ -55,7 +56,9 @@ __all__ = [
     "ObjectiveDirections",
     "RuleOutput",
     "Statistics",
+    "CARRIED",
     "COLD_STARTS",
+    "CURRENT",
     "VARIANCES",
     "ADVANTAGE",
     "DRTRRL",
@@ -64,6 +67,7 @@ __all__ = [
     "IntentionalState",
     "IntentionalUpdate",
     "TD",
+    "Trace",
     "UpdateRule",
     "action_classes",
     "action_dim",

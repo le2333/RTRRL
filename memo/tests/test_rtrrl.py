@@ -75,7 +75,8 @@ def build(head: str = "state_std", reports=None, **overrides) -> RTRRL:
         "lambda_v": 0.7,
         "lambda_rnn": 0.6,
         "torso_optimizer": Adam(lr=1e-3),
-        "heads_optimizer": Adam(lr=1e-3),
+        "actor_optimizer": Adam(lr=1e-3),
+        "critic_optimizer": Adam(lr=1e-3),
         "eta_pi": 0.5,
         "eta_f": 0.5,
         "entropy_rate": 1e-3,
@@ -216,12 +217,22 @@ def test_the_torso_still_hears_what_is_not_traced():
             ("torso",),
         ),
         (
-            "the head rate",
+            "the head rates",
             (
-                {"heads_optimizer": Adam(lr=1e-3)},
-                {"heads_optimizer": Adam(lr=1e-5)},
+                {"actor_optimizer": Adam(lr=1e-3), "critic_optimizer": Adam(lr=1e-3)},
+                {"actor_optimizer": Adam(lr=1e-5), "critic_optimizer": Adam(lr=1e-5)},
             ),
             ("actor", "critic"),
+        ),
+        (
+            "the actor rate alone",
+            ({"actor_optimizer": Adam(lr=1e-3)}, {"actor_optimizer": Adam(lr=1e-5)}),
+            ("actor",),
+        ),
+        (
+            "the critic rate alone",
+            ({"critic_optimizer": Adam(lr=1e-3)}, {"critic_optimizer": Adam(lr=1e-5)}),
+            ("critic",),
         ),
     ],
 )
@@ -240,8 +251,8 @@ def test_a_dial_moves_its_own_group_and_no_other(dial, overrides, expected):
     [
         (
             (
-                {"heads_optimizer": Adam(lr=1e-3)},
-                {"heads_optimizer": Adam(lr=1e-5)},
+                {"actor_optimizer": Adam(lr=1e-3), "critic_optimizer": Adam(lr=1e-3)},
+                {"actor_optimizer": Adam(lr=1e-5), "critic_optimizer": Adam(lr=1e-5)},
             ),
             ("torso",),
         ),
@@ -412,7 +423,7 @@ def test_a_reading_nobody_declared_is_absent():
             log_prob=False,
             emphasis=False,
             torso=rtrrl.BlockReports(grad_norm=False, trace_norm=True),
-            heads_step=rtrrl.GroupReports(step_size=False),
+            actor=rtrrl.HeadReports(step_size=False),
         )
     )
     state = agent.init(jax.random.key(0))
@@ -421,11 +432,12 @@ def test_a_reading_nobody_declared_is_absent():
     assert metrics.forward.actor.log_prob is None
     assert metrics.update.emphasis is None
     assert metrics.update.torso.grad_norm is None
-    assert metrics.update.heads_step.step_size is None
+    assert metrics.update.actor.step_size is None
     # and what was declared is still there
     assert metrics.forward.actor.entropy is not None
     assert metrics.update.torso.trace_norm is not None
-    assert metrics.update.torso_step.step_size is not None
+    assert metrics.update.torso.step_size is not None
+    assert metrics.update.critic.step_size is not None
 
 
 def test_declaring_less_compiles_to_less():
@@ -448,11 +460,9 @@ def test_declaring_less_compiles_to_less():
             value=False,
             td_error=False,
             emphasis=False,
-            torso=rtrrl.BlockReports(False, False),
-            actor=rtrrl.HeadReports(False, False),
-            critic=rtrrl.HeadReports(False, False),
-            torso_step=rtrrl.GroupReports(False),
-            heads_step=rtrrl.GroupReports(False),
+            torso=rtrrl.BlockReports(False, False, False),
+            actor=rtrrl.HeadReports(False, False, False),
+            critic=rtrrl.HeadReports(False, False, False),
         )
     ).as_text()
 

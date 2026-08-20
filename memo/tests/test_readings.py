@@ -35,9 +35,11 @@ def test_a_declaration_names_what_it_can_offer():
         "forward.actor.entropy",
     )
     assert "update.actor.step_size" in declared(layered.Reports)
-    # RTRRL steps in groups, so no block offers a step size and two groups do.
-    assert "update.actor.step_size" not in declared(rtrrl.Reports)
-    assert "update.heads_step.step_size" in declared(rtrrl.Reports)
+    # RTRRL steps a block at a time now, so each of the three offers the step
+    # size it took and there is no group left to offer one instead.
+    assert "update.actor.step_size" in declared(rtrrl.Reports)
+    assert "update.critic.step_size" in declared(rtrrl.Reports)
+    assert not [name for name in declared(rtrrl.Reports) if "_step." in name]
 
 
 def test_a_split_reading_becomes_one_name_per_part():
@@ -50,7 +52,9 @@ def test_a_split_reading_becomes_one_name_per_part():
 def test_taking_less_publishes_less():
     everything = set(taken(rtrrl.Reports()))
     less = set(
-        taken(rtrrl.Reports(entropy=False, torso=rtrrl.BlockReports(False, False)))
+        taken(
+            rtrrl.Reports(entropy=False, torso=rtrrl.BlockReports(False, False, False))
+        )
     )
     assert less < everything
     assert "forward.actor.entropy" in everything - less
