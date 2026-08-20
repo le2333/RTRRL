@@ -7,9 +7,20 @@
       Torso           the shared recurrent representation and following copy
       Actor / Critic  a readout, and the objectives it names
 
-Three blocks and two rule groups: the torso is clipped alone and the two
-readouts step together. Its private recurrent subgraph selects an LRU or RTU
-and one differentiation method supported by that kernel.
+Three blocks, and each is its own parameter group: it selects its own
+optimizer, carries its own rule state, and reports its own step size. The
+torso is the one with an outer clip. Its private recurrent subgraph selects an
+LRU or RTU and one differentiation method supported by that kernel.
+
+The two readouts used to step together under one selection, which was the
+grouping the published implementation has and cost nothing while every
+optimizer here was a fixed rate. It costs something now: the intentional
+update's ``eta`` is 0.05 for a policy and 0.5 for a value function in the work
+it comes from, and one selection for both readouts could not say that.
+
+Each block also owns an eligibility trace -- a component, in ``memorax.rl.traces``,
+not a rule's private state -- and which recurrence it runs is paired with the
+optimizer that reads it. See ``make_traces``.
 
 Rebuilt from ``../RTRRL-AAAI25/rtrrl.py``. Driven against it by
 ``tests/test_rtrrl_parity.py``; behaviour in ``tests/test_rtrrl.py``.
@@ -201,6 +212,19 @@ RTRRL_TORSO_FAMILY = ComponentFamily(
 
 @dataclass(frozen=True)
 class TorsoParameters:
+    """The shared block's own settings.
+
+    ``grad_clip`` is the outer bound on the finished torso update, and it is
+    the one parameter here whose valid range depends on a sibling: the
+    intentional update derives its own step size and refuses to have a second,
+    undeclared bound placed over it, so ``optimizer.kind: iu`` requires
+    ``grad_clip: 0``. The declaration cannot say that -- a parameter tree
+    conditions on branches, not on another parameter's value -- so the build
+    refuses it with the reason rather than accepting a run that is not the
+    algorithm it names. A search space selecting ``iu`` has to pin this to
+    zero, or every trial fails at construction.
+    """
+
     backbone: str = structure(branches=RTRRL_TORSO_FAMILY.branches)
     optimizer: str = structure(branches=RTRRL_OPTIMIZERS.branches)
     grad_clip: float = param(valid=(0.0, 100.0), search=(0.0, 10.0))
@@ -472,7 +496,7 @@ def _from_batch(tree):
     return jax.tree.map(lambda leaf: leaf[0], tree)
 
 
-# --------------------------------------------------------- the two rule groups
+# ------------------------------------------------------- one rule per block
 def _adam_rule(base: Adam, *, clip: float):
     """Adam over the combined ascent, which is what the paper's RTRRL steps."""
 
@@ -1254,7 +1278,7 @@ class RTRRL:
         *,
         record: Iterable[str] = (),
     ) -> RTRRL:
-        """Declare the shared torso, two readouts, and their two rule groups."""
+        """Declare the shared torso, the two readouts, and a rule for each."""
 
         gamma = float(parameters["gamma"])
         meta_rl = bool(parameters["meta_rl"])
