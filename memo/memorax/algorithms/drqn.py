@@ -903,6 +903,7 @@ class DRQN:
                 sample_batch_size=int(parameters["replay.batch_size"]),
                 sample_sequence_length=learning.window(context.episode_length),
                 add_batch_size=context.num_envs,
+                max_episode_length=context.episode_length,
                 minimum_episode_length=learning.minimum_episode_length(
                     context.episode_length
                 ),

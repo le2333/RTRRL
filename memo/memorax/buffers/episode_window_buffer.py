@@ -40,14 +40,29 @@ instead of reporting on the buffer's length and leaving the sampler to
 discover there is nothing to draw -- the failure that a silent fall back to
 position zero turns into a run that trains, reports, and means nothing.
 
-The index is also what makes replay episode-atomic without a staging buffer.
-Transitions of an episode still being played are in the ring, but no record
-describes them, so nothing can draw from them and `committed` does not count
-them: an episode becomes replay at its ending, in one piece, which is what a
-learner that stores whole episodes does. What this does not reproduce is the
-*storage* of a staging buffer -- an open episode here occupies ring slots that
-a separate one would not, so the ring's usable depth dips by at most the length
-of one episode per stream and recovers when it commits.
+The index is also what makes replay episode-atomic without a staging buffer,
+and there are two halves to that. The easy half is that transitions of an
+episode still being played are in the ring but no record describes them, so
+nothing can draw from them and `committed` does not count them.
+
+The half that is easy to get wrong is *eviction*. An open episode's writes
+advance the ring's head, so left alone they overwrite the oldest committed
+episodes and those episodes stop being drawable -- which changes not the depth
+of storage but **which episodes an update can draw while the current one is
+being played**, and that is the replay distribution. A learner that stages an
+episode and commits it whole leaves replay untouched until the ending.
+
+So the ring reserves a `max_episode_length` slack: an episode counts as stored
+while
+
+    start >= open_start[stream] - (time_capacity - max_episode_length)
+
+rather than while `start >= written - time_capacity`. That threshold moves only
+when an episode commits, so the drawable set is fixed for the duration of an
+episode, and it is strictly inside physical presence, because an open episode
+runs at most `max_episode_length` past `open_start`. The cost is the slack
+itself -- committed episodes get `time_capacity - max_episode_length` per
+stream, which is the same room a staging array would have taken.
 
 Flashbax is storage here and nothing else. Its own `can_sample` is not called,
 because it answers for its own trajectory sampler: it will not report ready
@@ -157,6 +172,7 @@ def make_uniform_episode_window_buffer(
     sample_batch_size: int,
     sample_sequence_length: int,
     add_batch_size: int,
+    max_episode_length: int,
     minimum_episode_length: int | None = None,
 ) -> EpisodeWindowBuffer:
     """The published bootstrapped random update, as a buffer.
@@ -174,6 +190,14 @@ def make_uniform_episode_window_buffer(
     whatever length there is, padding to the declared limit and masking the
     rest -- which is the same code path, because an episode that cannot fill
     the window simply has no start to choose between.
+
+    ``max_episode_length`` is the longest an episode can run, and it is the
+    slack the ring holds back so that an episode being played cannot evict a
+    committed one. It is a declared limit rather than an observed maximum: an
+    episode that overran it would not corrupt a sample -- the eligibility test
+    takes whichever of the two bounds is stricter -- but replay would start
+    moving under the open episode again, which is the thing the slack exists to
+    prevent.
     """
 
     if add_batch_size < 1:
@@ -186,9 +210,28 @@ def make_uniform_episode_window_buffer(
             f"max_length//add_batch_size must be at least 2; it is "
             f"{max_length}//{add_batch_size} = {time_capacity}"
         )
-    if sample_sequence_length > time_capacity:
+    if max_episode_length < 1:
+        raise ValueError("an episode runs at least one transition")
+    committed_capacity = time_capacity - max_episode_length
+    if committed_capacity < 1:
         raise ValueError(
-            "sample_sequence_length must be <= max_length // add_batch_size"
+            f"a ring of {time_capacity} per stream has nothing left for finished "
+            f"episodes once {max_episode_length} is held back for the one being "
+            f"played; give the buffer more than {max_episode_length} per stream"
+        )
+    if sample_sequence_length > committed_capacity:
+        raise ValueError(
+            f"a window of {sample_sequence_length} does not fit in the "
+            f"{committed_capacity} per stream this buffer keeps finished episodes in"
+        )
+    if min_length > add_batch_size * committed_capacity:
+        # Otherwise the warmup is a threshold replay can never be holding, and
+        # the run would either never learn or -- since the count is cumulative
+        # -- start learning against a buffer that had already evicted most of
+        # what the threshold was counting.
+        raise ValueError(
+            f"a warmup of {min_length} transitions cannot be met by a buffer that "
+            f"keeps {add_batch_size * committed_capacity} finished ones"
         )
     if minimum_episode_length is None:
         minimum_episode_length = sample_sequence_length
@@ -281,18 +324,26 @@ def make_uniform_episode_window_buffer(
     def eligible_fn(state: EpisodeWindowBufferState) -> Array:
         """Completed, long enough, and still stored -- in that order. ``[E]``
 
-        The third clause is the whole of the ring's bookkeeping. An episode
-        whose first transition has been overwritten is gone, and one whose
-        first transition survives is entirely there, because logical time is
-        contiguous behind the write head.
+        The third clause is the whole of the ring's bookkeeping, and it is
+        measured from the stream's last *commit* rather than from its write
+        head. Measuring from the head would let the episode being played evict
+        the oldest committed ones as it went, so which episodes an update could
+        draw would change during an episode -- a moving replay distribution,
+        where a learner that commits whole episodes has a still one.
+
+        An episode whose first transition survives is entirely there, because
+        logical time is contiguous behind the head. The physical bound is kept
+        as well as the reserved one, so an episode that overran the declared
+        limit degrades to a moving threshold rather than to an unsound read.
         """
 
         index = state.episodes
-        oldest_stored = state.written - time_capacity
+        reserved = index.open_start[index.stream] - committed_capacity
+        physical = state.written - time_capacity
         return (
             index.live
             & (index.length >= minimum_episode_length)
-            & (index.start >= oldest_stored)
+            & (index.start >= jnp.maximum(reserved, physical))
         )
 
     def can_sample_fn(state: EpisodeWindowBufferState) -> Array:

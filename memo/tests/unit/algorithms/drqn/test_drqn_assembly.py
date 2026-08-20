@@ -393,7 +393,7 @@ def test_epsilon_anneals_on_learner_updates_and_not_on_environment_steps():
     different exploration profile, not a rescaling of the same one.
     """
 
-    warming = assembled(**{"replay.minimum_size": 10_000})
+    warming = assembled(**{"replay.capacity": 4096, "replay.minimum_size": 1000})
     learning = assembled()
 
     held, _ = warming.program.train(

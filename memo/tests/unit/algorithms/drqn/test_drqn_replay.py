@@ -77,6 +77,7 @@ def stored(
     batch_size=8,
     minimum_episode_length=None,
     window=None,
+    horizon=EPISODE_LENGTH,
 ):
     buffer = make_uniform_episode_window_buffer(
         max_length=capacity,
@@ -84,6 +85,7 @@ def stored(
         sample_batch_size=batch_size,
         sample_sequence_length=truncation if window is None else window,
         add_batch_size=1,
+        max_episode_length=horizon,
         minimum_episode_length=minimum_episode_length,
     )
     return buffer, filled(buffer, lengths)
@@ -235,6 +237,7 @@ def test_episodes_are_drawn_across_streams_without_the_stream_being_sampled():
         sample_batch_size=8,
         sample_sequence_length=TRUNCATION,
         add_batch_size=4,
+        max_episode_length=EPISODE_LENGTH,
     )
     state = filled(buffer, (4, 4), streams=4)
 
@@ -264,6 +267,7 @@ def test_a_buffer_holding_no_finished_episode_says_it_cannot_sample():
         sample_batch_size=4,
         sample_sequence_length=TRUNCATION,
         add_batch_size=1,
+        max_episode_length=EPISODE_LENGTH,
     )
     observation, episode_start, _ = stream((16,))
     state = buffer.init(
@@ -290,6 +294,7 @@ def test_the_warmup_counts_finished_episodes_and_not_written_transitions():
         sample_batch_size=2,
         sample_sequence_length=TRUNCATION,
         add_batch_size=1,
+        max_episode_length=EPISODE_LENGTH,
         minimum_episode_length=1,
     )
 
@@ -324,6 +329,7 @@ def test_only_completed_episodes_are_drawn_from():
         sample_batch_size=4,
         sample_sequence_length=TRUNCATION,
         add_batch_size=1,
+        max_episode_length=EPISODE_LENGTH,
     )
     observation, episode_start, done = stream((4, 4))
     observation += [[9.0, float(index)] for index in range(4)]
@@ -360,6 +366,7 @@ def test_the_warmup_is_the_declared_minimum_and_not_the_window_length():
             sample_batch_size=2,
             sample_sequence_length=window,
             add_batch_size=1,
+            max_episode_length=EPISODE_LENGTH,
             minimum_episode_length=1,
         )
         # Two episodes of four: eight transitions, the declared minimum, and
@@ -402,11 +409,17 @@ def wrapped(capacity=40, truncation=TRUNCATION, rounds=15):
 
     Episodes of four written round a ring of forty more than three times, so
     the newest row and the oldest sit next to each other somewhere in the
-    middle of the array and an unguarded window could span them.
+    middle of the array and an unguarded window could span them. The declared
+    horizon is four, so finished episodes get thirty-six of the forty and the
+    rest is held back for whatever is being played.
     """
 
     return stored(
-        lengths=(4,) * rounds, truncation=truncation, capacity=capacity, batch_size=4
+        lengths=(4,) * rounds,
+        truncation=truncation,
+        capacity=capacity,
+        batch_size=4,
+        horizon=4,
     )
 
 
@@ -439,17 +452,47 @@ def test_no_window_is_spliced_across_the_write_head():
 def test_an_episode_the_ring_has_overwritten_is_no_longer_drawn():
     """Named exactly, because "roughly the recent ones" is not a guarantee.
 
-    Fifteen episodes of four are sixty transitions through a ring of forty, so
-    the oldest stored transition is logical twenty -- the first of episode
-    five. Episode four begins at sixteen and is gone; episode five begins
-    exactly at the boundary and is not.
+    Fifteen episodes of four are sixty transitions, and finished episodes get
+    thirty-six of the ring's forty, so the oldest drawable transition is
+    logical twenty-four -- the first of episode six. Episode five begins at
+    twenty and is out; episode six begins exactly at the boundary and is in.
+    Episode five is still physically there, in the four slots the ring holds
+    back for whatever is played next, and is not offered.
     """
 
     buffer, state = wrapped()
 
     episode, _ = only_valid(stacked(draws(buffer, state, keys=64)))
 
-    assert set(episode.ravel().tolist()) == set(range(5, 15))
+    assert set(episode.ravel().tolist()) == set(range(6, 15))
+
+
+def test_an_episode_being_played_evicts_nothing_that_could_be_drawn():
+    """Replay holds still for the duration of an episode, which is the point.
+
+    An open episode's transitions advance the ring's head. Measuring "still
+    stored" from the head would let them push the oldest finished episodes out
+    one at a time as the episode went on, so *which* episodes an update could
+    draw would depend on how far into the current episode it happened to be --
+    a replay distribution that moves under the learner, where an agent that
+    commits whole episodes has a still one. It is not a question of how much
+    storage there is; it is a question of what gets sampled.
+
+    Measured from the last commit instead, so the reserved slack absorbs
+    exactly what the open episode writes.
+    """
+
+    buffer, state = wrapped()
+    before = set(only_valid(stacked(draws(buffer, state, keys=64)))[0].ravel().tolist())
+
+    # Four transitions of a new episode, none of them an ending: the head moves
+    # the whole of the reserved slack, and nothing else may move with it.
+    for index in range(4):
+        state = buffer.add(state, transition([99.0, float(index)], index == 0, False))
+
+    assert int(state.written) == 64
+    after = set(only_valid(stacked(draws(buffer, state, keys=64)))[0].ravel().tolist())
+    assert after == before
 
 
 # --------------------------------------------- the branch that takes the episode
@@ -488,6 +531,37 @@ def test_a_window_longer_than_an_episode_can_run_is_refused_at_build_time():
         SelectedLearning("truncated", 9).minimum_episode_length(EPISODE_LENGTH)
 
 
+def test_a_warmup_the_buffer_could_never_hold_is_refused():
+    """A threshold replay can never be at is a misconfiguration, not a long wait.
+
+    The count is cumulative, so a warmup larger than what the ring keeps would
+    be reached eventually anyway -- against a buffer that had already evicted
+    most of what the count was counting. Refused where it is declared.
+    """
+
+    with pytest.raises(ValueError, match="cannot be met by a buffer"):
+        make_uniform_episode_window_buffer(
+            max_length=64,
+            min_length=100,
+            sample_batch_size=2,
+            sample_sequence_length=TRUNCATION,
+            add_batch_size=1,
+            max_episode_length=EPISODE_LENGTH,
+        )
+
+
+def test_a_ring_with_no_room_left_for_finished_episodes_is_refused():
+    with pytest.raises(ValueError, match="nothing left for finished episodes"):
+        make_uniform_episode_window_buffer(
+            max_length=8,
+            min_length=4,
+            sample_batch_size=2,
+            sample_sequence_length=2,
+            add_batch_size=1,
+            max_episode_length=8,
+        )
+
+
 def test_a_minibatch_larger_than_the_buffer_could_hold_is_refused():
     """Without replacement is a promise, so B has to be one the buffer can keep."""
 
@@ -498,6 +572,7 @@ def test_a_minibatch_larger_than_the_buffer_could_hold_is_refused():
             sample_batch_size=16,
             sample_sequence_length=TRUNCATION,
             add_batch_size=1,
+            max_episode_length=2,
         )
 
 

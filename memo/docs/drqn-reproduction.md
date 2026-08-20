@@ -32,6 +32,7 @@ paper.
 | The rate is read once per episode | `DRQN._episode_epsilon`, held in `DRQNState.epsilon` | `test_exploration_holds_still_inside_an_episode` |
 | Truncation 10 for the acceptance arm | `learning.truncated.length`, a manifest value | `test_the_truncation_is_the_window_and_full_bptt_is_the_episode` |
 | Replay stores whole episodes | committed at the ending; the update reads replay as of before this transition | `test_an_update_cannot_draw_the_episode_it_is_still_finishing` |
+| An episode being played changes nothing in replay | the ring reserves `max_episode_length` | `test_an_episode_being_played_evicts_nothing_that_could_be_drawn` |
 | ADADELTA, lr 0.1, decay 0.95, gradient clip 10 | `optimizer.adadelta`, `grad_clip` | `test_the_published_solver_is_adadelta_over_a_clipped_gradient` |
 
 R2D2's additions are absent rather than disabled: there is no priority
@@ -94,6 +95,29 @@ declared replay settings, the window length reaching out of the sampler and
 into the schedule. A replay warmup is how much experience has been collected
 before learning starts, so readiness here counts transitions and nothing else
 (`test_the_warmup_is_the_declared_minimum_and_not_the_window_length`).
+
+Replay is episode-atomic, and the half of that which is easy to miss is
+eviction rather than visibility. Transitions of an episode still being played
+are in the ring but no record describes them, so nothing can draw them and the
+warmup does not count them — that much is the index doing its job. But their
+writes still advance the ring's head, and left alone they would push the oldest
+finished episodes out one at a time as the episode went on, so *which* episodes
+an update could draw would depend on how far into the current episode it was.
+That is not a difference in how much storage there is; it is a replay
+distribution that moves under the learner, where an agent that commits whole
+episodes has a still one.
+
+So the ring reserves a `max_episode_length` slack and measures presence from
+each stream's last commit rather than from its write head:
+
+    start >= open_start[stream] - (capacity - max_episode_length)
+
+The threshold moves only when an episode commits, and it is strictly inside
+physical presence because an open episode runs at most `max_episode_length`
+past `open_start`. Finished episodes get `capacity - max_episode_length` per
+stream, which is the room a staging array would have taken anyway. A warmup
+larger than that is refused where it is declared, since a cumulative count
+would otherwise reach a threshold the buffer can never be holding.
 
 Padding is zeroed rather than left as whatever the ring held. A step past the
 end of a short episode does not enter the loss, but it is still unrolled
