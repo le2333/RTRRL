@@ -10,7 +10,12 @@ ENV UV_PYTHON_DOWNLOADS=never \
     UV_LINK_MODE=copy
 WORKDIR /workspace/memo
 COPY memo /workspace/memo
-RUN uv sync --frozen --no-dev --no-editable --extra cuda12 && uv cache clean
+# The CUDA plugin, and the same environment the CPU image carries: an image
+# that cannot build the environment its experiments name is an image that
+# reaches Batch and raises ModuleNotFoundError once an instance is already
+# paid for. Carrying only cuda12 here went unnoticed for as long as the gpu
+# variant went unbuilt, which was its whole life until now.
+RUN uv sync --frozen --no-dev --no-editable --extra cuda12 --extra popjym && uv cache clean
 
 FROM python:3.12.11-slim-bookworm@sha256:c00fc7b44d844b6da22861ec24af43968a5200eac4ec607b4725d585165d6b49 AS runtime
 
