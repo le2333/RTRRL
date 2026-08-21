@@ -1,0 +1,72 @@
+name: GPU abort probe
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  probe:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    env:
+      REGION: eu-north-1
+      IMAGE: 007122174918.dkr.ecr.eu-north-1.amazonaws.com/rtrrl@sha256:00fd2bf79b5f48b0a254e602ef920d16aba64ba21eca3ccc33f2c922a158bc60
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+
+      - uses: aws-actions/configure-aws-credentials@61815dcd50bd041e203e49132bacad1fd04d2708
+        with:
+          role-to-assume: ${{ vars.INFRA_ACCEPTANCE_AWS_ROLE_ARN }}
+          aws-region: ${{ env.REGION }}
+
+      - name: Submit the isolated g6.xlarge probe
+        id: submit
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(aws sts get-caller-identity --query Account --output text)" = 007122174918
+          BASE="$(aws batch describe-job-definitions --status ACTIVE --output json \
+            | jq -c '[.jobDefinitions[] | select(.jobDefinitionName | startswith("trainer-g6x-"))] | last')"
+          test "$BASE" != null
+          WRAPPER='import base64,os,subprocess,sys; rc=subprocess.run([sys.executable,"-c",base64.b64decode(os.environ["PROBE_SOURCE"])]).returncode; raise SystemExit(rc)'
+          DEFINITION="$(printf '%s' "$BASE" | jq -c \
+            --arg name "gpu-abort-probe-${GITHUB_RUN_ID}" \
+            --arg image "$IMAGE" \
+            --arg wrapper "$WRAPPER" \
+            'del(.jobDefinitionArn,.revision,.status,.tags) | .jobDefinitionName=$name | .containerProperties.image=$image | .containerProperties.command=["python","-c",$wrapper]')"
+          DEFINITION_ARN="$(aws batch register-job-definition --cli-input-json "$DEFINITION" --query jobDefinitionArn --output text)"
+          SOURCE="$(base64 -w 0 memo/docs/gpu-abort-probe.py)"
+          OVERRIDES="$(jq -cn --arg source "$SOURCE" '{environment:[
+            {name:"PROBE_SOURCE",value:$source},
+            {name:"PROBE_CREDIT",value:"rtrl"},
+            {name:"PROBE_BACKBONE",value:"rtu"},
+            {name:"PROBE_ENVS",value:"16"},
+            {name:"XLA_FLAGS",value:"--xla_dump_to=/tmp/hlo"}
+          ]}')"
+          JOB_ID="$(aws batch submit-job --job-name "gpu-abort-probe-${GITHUB_RUN_ID}" \
+            --job-queue dev-gpu-queue --job-definition "$DEFINITION_ARN" \
+            --timeout attemptDurationSeconds=1200 --container-overrides "$OVERRIDES" \
+            --query jobId --output text)"
+          echo "job_id=$JOB_ID" >> "$GITHUB_OUTPUT"
+
+      - name: Wait and print CloudWatch diagnostics
+        shell: bash
+        env:
+          JOB_ID: ${{ steps.submit.outputs.job_id }}
+        run: |
+          set -euo pipefail
+          while :; do
+            JOB="$(aws batch describe-jobs --jobs "$JOB_ID" --output json)"
+            STATUS="$(printf '%s' "$JOB" | jq -r '.jobs[0].status')"
+            case "$STATUS" in
+              SUCCEEDED|FAILED) break ;;
+            esac
+            sleep 15
+          done
+          STREAM="$(printf '%s' "$JOB" | jq -r '.jobs[0].container.logStreamName')"
+          aws logs get-log-events --log-group-name /trainer/jobs --log-stream-name "$STREAM" \
+            --start-from-head --query 'events[].message' --output text || true
+          test "$STATUS" = SUCCEEDED
