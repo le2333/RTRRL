@@ -6,6 +6,7 @@
     Core              a torso, two heads, and everything that couples them
       Torso           the shared recurrent representation and following copy
       Actor / Critic  a readout, and the objectives it names
+      Eligibility     what a step reads of the trace its blocks accumulate
 
 Three blocks, and each is its own parameter group: it selects its own
 optimizer, carries its own rule state, and reports its own step size. The
@@ -84,7 +85,7 @@ from memorax.utils.axes import (
     remove_feature_axis,
     remove_time_axis,
 )
-from memorax.utils.trees import subtree_norms
+from memorax.utils.trees import stream_norm, subtree_norms
 
 from .contract import (
     ActionDecision,
@@ -138,6 +139,16 @@ class RTRRLConfig:
 
 
 RTRRL_OPTIMIZERS = STEP_FAMILY.restricted("adam", "d_rtrrl", "iu")
+
+
+def block_optimizers(cfg: RTRRLConfig) -> dict[str, Any]:
+    """Which rule each block selected, by block name."""
+
+    return {
+        "torso": cfg.torso_optimizer,
+        "actor": cfg.actor_optimizer,
+        "critic": cfg.critic_optimizer,
+    }
 
 
 @dataclass(frozen=True)
@@ -210,6 +221,157 @@ RTRRL_TORSO_FAMILY = ComponentFamily(
 )
 
 
+# --------------------------------------- what a step reads of its own trace
+#: Where a block's step takes its direction from, and where it takes its size.
+#: The two candidates are the accumulated trace and the gradient of this
+#: transition alone, so naming one for each half is the whole condition:
+#: reading both from the trace is the algorithm as published, reading both from
+#: the gradient is the same algorithm with no eligibility left in the step, and
+#: the two mixtures separate what the trace contributes as a direction from what
+#: it contributes as a magnitude.
+ELIGIBILITY_SOURCES: dict[str, tuple[str, str]] = {
+    "trace": ("trace", "trace"),
+    "gradient": ("gradient", "gradient"),
+    "direction": ("trace", "gradient"),
+    "gain": ("gradient", "trace"),
+}
+
+
+@dataclass(frozen=True)
+class EligibilityReadout:
+    """What the update reads of the trace: its direction, its size, or both.
+
+    Taking the direction from one candidate and the size from the other is the
+    first rescaled to the second's norm, per block and per stream::
+
+        z_eff = (||magnitude|| / (||direction|| + eps)) * direction
+
+    The norms are taken over a whole block and per stream, once: the shared
+    torso's ascent arrives with both readouts' cotangents already summed into
+    it, and a rescaling that ran before that sum would be weighing two
+    directions the algorithm never separates.
+
+    Naming the same candidate twice is the identity rather than a rescaling, so
+    the baseline is the trace itself and no guard enters it.
+
+    Nothing here writes to a trace. Whichever condition is selected, the
+    recursion that accumulates the trace and the state it is stored in are the
+    same ones, which is what makes two conditions comparable at all.
+
+    How much of the size half survives is the group's rule to decide, not this
+    component's: a rule that exports the trace as a unit vector cannot see it
+    at all. :func:`refuse_unreadable_conditions` is where that is checked.
+    """
+
+    direction: str = "trace"
+    magnitude: str = "trace"
+    eps: float = 1e-8
+
+    def __post_init__(self) -> None:
+        for role, source in (
+            ("direction", self.direction),
+            ("magnitude", self.magnitude),
+        ):
+            if source not in ("trace", "gradient"):
+                raise ValueError(
+                    f"a step's {role} comes from the trace or from the gradient, "
+                    f"not from {source!r}"
+                )
+
+    def read(self, trace, gradient):
+        """One block's stored trace and current gradient, as one direction."""
+
+        candidates = {"trace": trace, "gradient": gradient}
+        chosen = candidates[self.direction]
+        if self.direction == self.magnitude:
+            return chosen
+        scale = stream_norm(candidates[self.magnitude]) / (
+            stream_norm(chosen) + self.eps
+        )
+        return jax.tree.map(lambda leaf: broadcast_stream(scale, leaf) * leaf, chosen)
+
+
+def reads_a_length(step) -> bool:
+    """Whether a rule's step changes when the trace it is handed is rescaled.
+
+    Two of the three do not, and neither by accident. ``d_rtrrl`` under
+    ``sign`` exports the trace as a unit vector. The intentional update divides
+    by ``sqrt(sigma_bar <rho z, z>)``, which carries exactly the factor the
+    step ``alpha * signal * rho * z`` carries, so the two cancel and every
+    positive rescaling of ``z`` gives the same update.
+
+    Adam is the one that reads a length, and reads it weakly: it normalizes per
+    coordinate, so a per-block factor reaches the parameters only through its
+    moments' transient and its epsilon. Weakly is not the same as not at all,
+    which is why the answer here is a yes and the caveat lives in the
+    experiment that has to interpret it.
+    """
+
+    if isinstance(step, DRTRRL):
+        return step.magnitude != "sign"
+    return not isinstance(step, IntentionalUpdate)
+
+
+def refuse_unreadable_conditions(cfg: RTRRLConfig, readout: EligibilityReadout) -> None:
+    """Refuse a condition the selected rules cannot tell from another one.
+
+    The two mixtures differ from the two pure conditions by one positive factor
+    per block and per stream, so a rule that cannot read a length steps
+    identically under ``direction`` and ``trace``, and identically under
+    ``gain`` and ``gradient``. The factorial would still run, at full cost, and
+    report a magnitude main effect of zero that says nothing about eligibility
+    and everything about the rule that was underneath it.
+
+    ``td_out`` is not refused: it *clips* the trace rather than normalizing it,
+    so a trace shorter than ``c`` carries its own length through and the size
+    half is still readable there.
+    """
+
+    if readout.direction == readout.magnitude:
+        return
+    blind = [
+        name for name, step in block_optimizers(cfg).items() if not reads_a_length(step)
+    ]
+    if blind:
+        raise ValueError(
+            f"{' and '.join(blind)}: the step rule cannot read the length of "
+            f"the trace it is handed, so eligibility "
+            f"{readout.direction!r}/{readout.magnitude!r} is the same step as a "
+            "pure condition there and the two cannot be compared; select "
+            "another rule for that block, or another condition"
+        )
+
+
+@dataclass(frozen=True)
+class RescaledEligibility:
+    """A condition that divides by a norm, and the guard on that division."""
+
+    eps: float = param(valid=(1e-12, 1e-2), search=[1e-8], log=True)
+
+
+ELIGIBILITY_BRANCHES = {
+    "trace": (),
+    "gradient": (),
+    "direction": RescaledEligibility,
+    "gain": RescaledEligibility,
+}
+
+
+def _construct_eligibility(selection, builder):
+    del builder
+    direction, magnitude = ELIGIBILITY_SOURCES[selection.kind]
+    # Only the two conditions that divide by a norm declare a guard, and the
+    # other two would have nowhere to put one.
+    guard = {} if selection.parameters is None else {"eps": selection.parameters.eps}
+    return EligibilityReadout(direction=direction, magnitude=magnitude, **guard)
+
+
+ELIGIBILITY_FAMILY = ComponentFamily(
+    branches=ELIGIBILITY_BRANCHES,
+    construct=_construct_eligibility,
+)
+
+
 @dataclass(frozen=True)
 class TorsoParameters:
     """The shared block's own settings.
@@ -255,6 +417,13 @@ class RTRRLParameters:
     actor: ActorParameters = group(of=ActorParameters)
     critic: CriticParameters = group(of=CriticParameters)
     normalization: NormalizationParameters = group(of=NormalizationParameters)
+    # Every branch is valid and only the published one is searched: which of
+    # the four a run is, is an experiment's statement about that run, and a
+    # sampler wandering across them would compare two conditions inside one
+    # study rather than between two.
+    eligibility: str = structure(
+        branches=ELIGIBILITY_FAMILY.branches, search=("trace",)
+    )
     gamma: float = param(valid=(0.5, 0.9999), search=(0.9, 0.9999))
     lambda_pi: float = param(valid=(0.0, 1.0), search=(0.0, 1.0))
     lambda_v: float = param(valid=(0.0, 1.0), search=(0.0, 1.0))
@@ -568,11 +737,7 @@ def _block_rule(step, *, cfg: RTRRLConfig, name: str, clip: float):
 def make_rules(cfg: RTRRLConfig):
     """One rule per block, all three answering the same contract."""
 
-    optimizers = {
-        "torso": cfg.torso_optimizer,
-        "actor": cfg.actor_optimizer,
-        "critic": cfg.critic_optimizer,
-    }
+    optimizers = block_optimizers(cfg)
     clips = {"torso": cfg.torso_grad_clip, "actor": 0.0, "critic": 0.0}
     return {
         name: _block_rule(optimizers[name], cfg=cfg, name=name, clip=clips[name])
@@ -595,11 +760,7 @@ def make_traces(cfg: RTRRLConfig):
     about where in the transition it was read.
     """
 
-    optimizers = {
-        "torso": cfg.torso_optimizer,
-        "actor": cfg.actor_optimizer,
-        "critic": cfg.critic_optimizer,
-    }
+    optimizers = block_optimizers(cfg)
     return {
         name: (
             Trace(
@@ -864,9 +1025,15 @@ class Core:
         actor_head: Any,
         critic_head: Any,
         reports: Reports = Reports(),
+        eligibility: EligibilityReadout = EligibilityReadout(),
     ) -> None:
         self.cfg = cfg
         self.reports = reports
+        # Here rather than in either component: which conditions a run can tell
+        # apart is a fact about the pair of them, and this is where the rules
+        # and the readout meet.
+        refuse_unreadable_conditions(cfg, eligibility)
+        self.eligibility = eligibility
         self.td0 = make_td0()
         self.rules = make_rules(cfg)
         traces = make_traces(cfg)
@@ -1085,6 +1252,13 @@ class Core:
             )
             for name, block in self.blocks.items()
         }
+        # What each rule ascends along, which is the trace the component handed
+        # back only under the published condition. What the next transition
+        # carries is that trace either way: this reads, and does not write.
+        read = {
+            name: self.eligibility.read(stepped[0], derivative[name])
+            for name, stepped in stepped_traces.items()
+        }
         deltas = {
             "torso": delta * self.cfg.eta_f,
             "actor": delta,
@@ -1092,7 +1266,7 @@ class Core:
         }
         taken = {
             name: rule.apply(
-                {name: stepped_traces[name][0]},
+                {name: read[name]},
                 None if untraced[name] is None else {name: untraced[name]},
                 state.rule[name],
                 delta=deltas[name],
@@ -1235,6 +1409,7 @@ class RTRRL:
         evaluation: EvaluationConfig | None = None,
         record: Iterable[str] = (),
         reports: Reports = Reports(),
+        eligibility: EligibilityReadout = EligibilityReadout(),
     ) -> None:
         self.cfg = cfg
         evaluation = evaluation or EvaluationConfig()
@@ -1254,6 +1429,7 @@ class RTRRL:
             actor_head,
             critic_head,
             reports,
+            eligibility,
         )
         self.record = frozenset(record)
         # What this configuration files, which is not always what the class
@@ -1278,7 +1454,8 @@ class RTRRL:
         *,
         record: Iterable[str] = (),
     ) -> RTRRL:
-        """Declare the shared torso, the two readouts, and a rule for each."""
+        """Declare the torso, the two readouts, a rule for each, and what
+        those rules read of the trace."""
 
         gamma = float(parameters["gamma"])
         meta_rl = bool(parameters["meta_rl"])
@@ -1337,6 +1514,7 @@ class RTRRL:
                 actor=isinstance(actor_optimizer, IntentionalUpdate),
                 critic=isinstance(critic_optimizer, IntentionalUpdate),
             ),
+            eligibility=components.build(ELIGIBILITY_FAMILY, "eligibility"),
         )
 
     def init(self, key: Any) -> RTRRLState:

@@ -26,6 +26,27 @@ def tree_cosine(left, right):
     return jnp.where(scale > 0, dot / jnp.where(scale > 0, scale, 1.0), jnp.nan)
 
 
+def stream_norm(tree):
+    """One Euclidean norm per stream over every leaf of one unit.
+
+    The env axis is axis 0 of every streamed leaf, so the sum runs over
+    everything but it, and a unit is a whole subtree rather than a leaf:
+    measuring leaf by leaf would keep only each leaf's own length and throw
+    away the direction the leaves hold between them, which is a different
+    quantity and, where something is normalized by it, a different algorithm.
+    """
+
+    leaves = jax.tree.leaves(tree)
+    if not leaves:
+        return jnp.asarray(0.0)
+    return jnp.sqrt(
+        sum(
+            jnp.sum(jnp.square(leaf.reshape(leaf.shape[0], -1)), axis=1)
+            for leaf in leaves
+        )
+    )
+
+
 def subtree_norms(tree, *, streams: bool = False) -> dict:
     """One L2 norm per top-level subtree, keyed by its name.
 
@@ -41,16 +62,9 @@ def subtree_norms(tree, *, streams: bool = False) -> dict:
     parameter_tree = tree.get("params", tree) if hasattr(tree, "get") else tree
 
     def norm(subtree):
-        leaves = jax.tree.leaves(subtree)
-        if not leaves:
+        if not jax.tree.leaves(subtree):
             return jnp.asarray(0.0)
-        if not streams:
-            return tree_norm(subtree)
-        squares = [
-            jnp.sum(jnp.square(leaf.reshape(leaf.shape[0], -1)), axis=1)
-            for leaf in leaves
-        ]
-        return jnp.sqrt(sum(squares))
+        return stream_norm(subtree) if streams else tree_norm(subtree)
 
     return {name: norm(subtree) for name, subtree in parameter_tree.items()}
 
