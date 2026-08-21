@@ -120,14 +120,23 @@ transitions of finished episodes replay keeps — and the slack is the buffer's
 own cost, paid out of its own allocation rather than deducted from the caller's
 number.
 
+The bound is **strict**, which is the published `RememberEpisode`: it pushes the
+new episode and then pops while `size >= capacity`, so what replay holds after a
+commit is always *fewer* than `capacity` transitions. On a capacity of eight
+with episodes of four, the second episode brings the total to exactly eight and
+the first is dropped, leaving four — where a non-strict bound would have kept
+both.
+
 Readiness is measured the same way: against what replay is *currently holding*,
 not against everything it has ever held. A lifetime count only rises, so it
 would go on reporting ready against a buffer that had since evicted most of
-what it counted. An episode straddling the oldest kept position is dropped
-whole, so what replay holds sits a little under capacity, and a warmup set at
-or above capacity is refused where it is declared — it would be met and then
-unmet as episodes fell off the boundary, and a run that quietly stopped
-learning is not a failure anyone would look for.
+what it counted. The comparison is strict too — `memory_size() > memory_threshold`
+in the published loop — so a buffer sitting on the threshold is still warming
+up. An episode straddling the oldest kept position is dropped whole, so what
+replay holds sits at or above `capacity - max_episode_length` and never reaches
+`capacity`; a warmup this buffer would not stay above is refused where it is
+declared, because a threshold met and then unmet stops a run learning without
+saying so.
 
 Padding is zeroed rather than left as whatever the ring held. A step past the
 end of a short episode does not enter the loss, but it is still unrolled

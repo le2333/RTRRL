@@ -66,7 +66,10 @@ runs at most `max_episode_length` past `open_start`.
 episodes replay keeps. The slack is this module's cost and is paid out of its
 own allocation, not out of the caller's number -- a buffer asked for 8192 keeps
 8192 and stores 8192 + `max_episode_length` per stream, where charging the
-slack to the caller would quietly make it 8192 - `max_episode_length`.
+slack to the caller would quietly make it 8192 - `max_episode_length`. The
+bound is strict, as the published `RememberEpisode` has it: it pushes and then
+pops while `size >= capacity`, so an episode that would bring the total to
+exactly the capacity is the one that goes.
 
 Readiness is measured the same way, against what replay is holding rather than
 against what it has ever held. A lifetime count only rises, so it would keep
@@ -229,16 +232,17 @@ def make_uniform_episode_window_buffer(
             f"{committed_capacity} per stream this buffer keeps finished episodes in"
         )
     # An episode straddling the oldest kept position is dropped whole, so what
-    # replay holds sits just above `committed_capacity - max_episode_length`
-    # once the ring has wrapped. A warmup above that could be met and then
+    # replay holds sits at or above `committed_capacity - max_episode_length`
+    # once the ring has wrapped, and never reaches `committed_capacity` itself.
+    # A warmup this buffer does not stay strictly above could be met and then
     # unmet, and a learner that stops learning because an episode fell off a
     # boundary is a failure nobody would look for.
     steady_state = add_batch_size * (committed_capacity - max_episode_length)
-    if min_length > steady_state:
+    if min_length >= steady_state:
         raise ValueError(
             f"a warmup of {min_length} transitions is not one this buffer stays "
-            f"above: with episodes of up to {max_episode_length} it keeps more "
-            f"than {steady_state} finished transitions and not reliably more"
+            f"above: with episodes of up to {max_episode_length} it holds at "
+            f"least {steady_state} finished transitions and not dependably more"
         )
     if minimum_episode_length is None:
         minimum_episode_length = sample_sequence_length
@@ -342,7 +346,12 @@ def make_uniform_episode_window_buffer(
         """
 
         index = state.episodes
-        reserved = index.open_start[index.stream] - committed_capacity
+        # Strictly inside the capacity, not up to it. The published
+        # `RememberEpisode` pushes and then pops while `size >= capacity`, so
+        # what it holds after a commit is always *fewer* than `capacity`
+        # transitions: an episode that would make the total exactly the
+        # capacity is the one that goes.
+        reserved = index.open_start[index.stream] - committed_capacity + 1
         physical = state.written - time_capacity
         return index.live & (index.start >= jnp.maximum(reserved, physical))
 
@@ -374,7 +383,10 @@ def make_uniform_episode_window_buffer(
         the warmup instead.
         """
 
-        return (retained_fn(state) >= min_length) & jnp.any(eligible_fn(state))
+        # Strictly greater, which is how the published loop spells it:
+        # `memory_size() > memory_threshold`, so a buffer holding exactly the
+        # threshold is still warming up.
+        return (retained_fn(state) > min_length) & jnp.any(eligible_fn(state))
 
     def sample_fn(state: EpisodeWindowBufferState, key: Key) -> EpisodeWindowSample:
         episode_key, offset_key = jax.random.split(key)

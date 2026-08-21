@@ -260,12 +260,13 @@ def test_the_assembled_graph_draws_episodes_and_not_stored_positions():
         )
 
     assert isinstance(graph.buffer, EpisodeWindowBuffer)
-    # Eight transitions is the declared minimum size, so a buffer that reported
-    # on length alone would call this ready. It is four episodes of two, and
-    # the truncation is three: there is nothing here to draw.
-    for _ in range(4):
+    # Ten transitions is past the declared minimum size of eight, so a buffer
+    # reporting on length alone would call this ready. It is five episodes of
+    # two, and the truncation is three: there is nothing here to draw.
+    for _ in range(5):
         state = stored(stored(state, False), True)
-    assert int(state.written) == 8
+    assert int(state.written) == 10
+    assert int(graph.buffer.retained(state)) == 10
     assert bool(graph.buffer.can_sample(state)) is False
 
     # One episode long enough to hold a window, and now there is.

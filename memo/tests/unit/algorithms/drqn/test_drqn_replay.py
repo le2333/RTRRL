@@ -318,14 +318,13 @@ def test_the_warmup_is_what_replay_holds_and_not_what_it_has_held():
     """A lifetime count only rises, and replay does not.
 
     Counting every episode ever finished would keep reporting ready against a
-    buffer that had since evicted most of what it counted. Here the ring keeps
-    eight finished transitions, so once it has wrapped, what it holds stays
-    near eight however many hundreds have gone through it.
+    buffer that had since evicted most of what it counted. Here what replay
+    holds stays at one episode however many hundreds have gone through it.
     """
 
     buffer = make_uniform_episode_window_buffer(
         max_length=8,
-        min_length=4,
+        min_length=3,
         sample_batch_size=2,
         sample_sequence_length=2,
         add_batch_size=1,
@@ -334,9 +333,9 @@ def test_the_warmup_is_what_replay_holds_and_not_what_it_has_held():
     )
     state = filled(buffer, (4,) * 10)
 
-    # Forty transitions have been finished; the ring keeps eight of them.
+    # Forty transitions have been finished; replay is holding four.
     assert int(state.written) == 40
-    assert int(buffer.retained(state)) == 8
+    assert int(buffer.retained(state)) == 4
     assert bool(buffer.can_sample(state)) is True
 
 
@@ -388,15 +387,15 @@ def test_the_warmup_is_the_declared_minimum_and_not_the_window_length():
     for window in (2, 16):
         buffer = make_uniform_episode_window_buffer(
             max_length=64,
-            min_length=8,
+            min_length=4,
             sample_batch_size=2,
             sample_sequence_length=window,
             add_batch_size=1,
             max_episode_length=EPISODE_LENGTH,
             minimum_episode_length=1,
         )
-        # Two episodes of four: eight transitions, the declared minimum, and
-        # both are complete and eligible under either window.
+        # Two episodes of four: past the declared minimum, and both complete
+        # and eligible under either window.
         ready[window] = bool(buffer.can_sample(filled(buffer, (4, 4))))
 
     assert ready == {2: True, 16: True}
@@ -478,22 +477,73 @@ def test_no_window_is_spliced_across_the_write_head():
 def test_an_episode_the_ring_has_overwritten_is_no_longer_drawn():
     """Named exactly, because "roughly the recent ones" is not a guarantee.
 
-    Fifteen episodes of four are sixty transitions, and the buffer was asked to
-    keep forty, so the oldest kept transition is logical twenty -- the first of
-    episode five. Episode four begins at sixteen and is out; episode five
-    begins exactly at the boundary and is in.
+    Fifteen episodes of four are sixty transitions and the buffer was asked to
+    keep forty, but it keeps *fewer* than forty: the published `RememberEpisode`
+    pushes and then pops while `size >= capacity`, so the episode that would
+    bring the total to exactly forty is the one that goes. Episode five begins
+    at twenty and would make it exactly forty, so it is out; episode six begins
+    at twenty-four and is the oldest kept.
 
-    Episode four is still *physically* there: the ring is forty-four, forty for
-    what replay was asked to keep and four held back for whatever is played
-    next. It is not offered, because what replay keeps is the number the caller
-    gave, not that number plus this module's slack.
+    Episodes four and five are both still *physically* there -- the ring is
+    forty-four, forty for what replay was asked to keep and four held back for
+    whatever is played next -- and neither is offered.
     """
 
     buffer, state = wrapped()
 
     episode, _ = only_valid(stacked(draws(buffer, state, keys=64)))
 
-    assert set(episode.ravel().tolist()) == set(range(5, 15))
+    assert set(episode.ravel().tolist()) == set(range(6, 15))
+
+
+def test_replay_keeps_fewer_than_its_capacity_and_not_exactly_it():
+    """The published pop runs while `size >= capacity`, so the bound is strict.
+
+    Spelled out on the smallest case that shows it: a capacity of eight and
+    episodes of four. One episode fits. The second brings the total to exactly
+    eight, so the first is dropped and replay holds four again -- never the
+    eight a non-strict bound would have kept.
+    """
+
+    buffer = make_uniform_episode_window_buffer(
+        max_length=8,
+        min_length=3,
+        sample_batch_size=2,
+        sample_sequence_length=2,
+        add_batch_size=1,
+        max_episode_length=4,
+        minimum_episode_length=1,
+    )
+
+    one = filled(buffer, (4,))
+    assert int(buffer.retained(one)) == 4
+
+    two = filled(buffer, (4, 4))
+    assert int(buffer.retained(two)) == 4
+    episode, _ = only_valid(stacked(draws(buffer, two, keys=16)))
+    assert set(episode.ravel().tolist()) == {1}
+
+
+def test_the_warmup_is_passed_and_not_merely_reached():
+    """`memory_size() > memory_threshold`, so sitting on the threshold is not it."""
+
+    buffer = make_uniform_episode_window_buffer(
+        max_length=64,
+        min_length=8,
+        sample_batch_size=2,
+        sample_sequence_length=TRUNCATION,
+        add_batch_size=1,
+        max_episode_length=EPISODE_LENGTH,
+        minimum_episode_length=1,
+    )
+
+    exactly = filled(buffer, (4, 4))
+    assert int(buffer.retained(exactly)) == 8
+    assert bool(buffer.can_sample(exactly)) is False
+
+    one_more = buffer.add(filled(buffer, (4, 4)), transition([9.0, 0.0], True, True))
+    assert int(buffer.retained(one_more)) == 9
+    assert bool(buffer.can_sample(one_more)) is True
 
 
 def test_an_episode_being_played_evicts_nothing_that_could_be_drawn():
