@@ -2,6 +2,7 @@ import memorax.networks.heads as heads
 import memorax.networks.initializers as initializers
 from memorax.networks.backbones import (
     BACKBONES,
+    BPTT_BACKBONES,
     RECURRENT_BACKBONES,
     UPSTREAM_BACKBONES,
     Lru,

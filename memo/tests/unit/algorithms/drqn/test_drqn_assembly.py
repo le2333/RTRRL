@@ -112,17 +112,24 @@ def test_drqn_declarations_live_with_its_graph_and_entry_reexports_them():
     assert drqn.OBSERVATIONS.series == drqn.TRAINING_METRICS
 
 
-def test_the_tree_declares_both_cores_both_windows_and_one_head():
+def test_the_tree_declares_every_core_both_windows_and_one_head():
     declared = flatten(drqn.PARAMETERS)
 
     for chooser, choices in (
-        ("core.kind", ("lru", "rtu")),
+        ("core.kind", ("lru", "rtu", "lstm")),
         ("learning.kind", ("truncated", "full_bptt")),
         ("optimizer.kind", ("adadelta", "adam")),
     ):
         valid = declared[chooser].valid
         assert isinstance(valid, Choice), f"{chooser} is not a choice"
         assert set(valid.values) == set(choices)
+    # Only the LRU has a readout width beside its hidden size; the RTU's output
+    # is its carries and the LSTM's is its hidden state.
+    assert "core.lru.feature_dim" in declared
+    for widthless in ("rtu", "lstm"):
+        assert [path for path in declared if path.startswith(f"core.{widthless}.")] == [
+            f"core.{widthless}.hidden_dim"
+        ]
     # The head is not a choice at all: the published one is linear.
     assert not [path for path in declared if path.startswith("head")]
     # The published solver's own settings, and the clip that goes with it.
@@ -185,7 +192,7 @@ def test_entry_projects_only_the_runtime_schedule():
     assert schedule.max_episode_steps == 7
 
 
-@pytest.mark.parametrize("core_kind", ["lru", "rtu"])
+@pytest.mark.parametrize("core_kind", ["lru", "rtu", "lstm"])
 def test_the_graph_builds_the_core_the_manifest_selected(core_kind):
     built = assembled(**{"core.kind": core_kind, f"core.{core_kind}.hidden_dim": 3})
 
@@ -217,6 +224,49 @@ def test_the_core_reads_the_observation_directly_and_normalises_after_it():
     assert type(normalization).__name__ == "LayerNorm"
     assert not normalization.use_scale
     assert not normalization.use_bias
+
+
+def test_a_manifest_selecting_the_published_cell_gets_one_lstm_and_the_head():
+    """``core.kind: lstm`` at the paper's width, assembled from a manifest.
+
+    The paper's network is an LSTM read directly by a linear Q head, so what a
+    manifest selecting it must get is one recurrent component and nothing else:
+    no readout width, and none of the normalisation the matched cores carry.
+    """
+
+    built = assembled(**{"core.kind": "lstm", "core.lstm.hidden_dim": 32})
+
+    graph = graph_of(built)
+    q_function = graph.core.q_function
+
+    assert q_function.core_kind == "lstm"
+    assert q_function.hidden_dim == 32
+    assert q_function.feature_dim is None
+    components = q_function.network.sequence().components
+    assert len(components) == 1
+    assert getattr(components[0], "recurrent", False)
+    # An LSTM carries a cell state and a hidden state, both at the declared
+    # width, and both zero where a window opens.
+    carry = jax.tree.leaves(q_function.reset(drqn.ZERO_MEMORY, 1))
+    assert [np.asarray(leaf).shape for leaf in carry] == [(1, 32), (1, 32)]
+
+
+def test_the_published_cell_trains_through_the_same_replay_and_update():
+    """The acceptance smoke: a discrete run reaches an update on ``lstm`` at 32.
+
+    Nothing below the core changes when the cell does, so what this asks is only
+    that the whole path -- replay, window, unroll, loss, step -- closes over a
+    carry that is a pair of states rather than a single array.
+    """
+
+    built = assembled(**{"core.kind": "lstm", "core.lstm.hidden_dim": 32})
+
+    state = built.program.init(jax.random.key(0))
+    trained, metrics = built.program.train(jax.random.key(1), state, 40)
+
+    assert int(trained.core.update_step) > 0
+    applied = np.asarray(metrics.update.applied)
+    assert np.all(np.isfinite(np.asarray(metrics.update.loss)[applied]))
 
 
 def test_the_truncation_is_the_window_and_full_bptt_is_the_episode():

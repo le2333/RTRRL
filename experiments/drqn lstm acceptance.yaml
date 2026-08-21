@@ -1,0 +1,130 @@
+# DRQN platform acceptance on the paper's own cell, at the paper's truncation.
+#
+# The sibling file `drqn acceptance.yaml` runs the same learner on the matched
+# core — the structured diagonal cell the online arm carries exact recurrent
+# sensitivity through — so that a pair of runs is a comparison of learners. This
+# one runs it on `core.kind: lstm`, which is a single LSTM layer read directly by
+# the linear Q head: the published network, minus only the convolutional encoder
+# a low-dimensional observation gives nothing to do.
+#
+# So the two files answer different questions and their numbers are not each
+# other's control. This one asks whether the published architecture runs on the
+# platform; the matched one is the arm a Structured RTRRL run is read against.
+# See memo/docs/drqn-reproduction.md.
+#
+# Everything below the core is the sibling file's, unchanged and deliberately
+# so: same environment, same truncation, same solver, same replay, same
+# schedule. The core is the only line that differs.
+#
+# CartPole is fully observed, so the recurrent core is not being asked to
+# remember, and a number from this run is not a result.
+#
+# What the run is read for:
+#   - the worker exits 0 and publishes result.json and metrics.jsonl
+#   - four evaluation checkpoints at 5000, 10000, 15000 and 20000, each of
+#     exactly ten eval/episode/return records
+#   - every train/episode and eval/episode value finite
+#   - train/episode/update.loss appears once replay holds a completed episode of
+#     at least ten transitions, which is at or after the minimum size of 256 and
+#     not implied by it
+
+experiment: drqn-lstm-acceptance
+name: drqn-lstm-acceptance-truncation-10
+description: "DRQN platform acceptance on the published LSTM core, hidden 32"
+
+# TODO: the contract-10 rebuild that carries the `drqn` entry. No existing image
+# has it — the entry is new — so this cannot be launched until the rebuild, and
+# the digest goes here when it exists.
+image: TBD
+entry: drqn
+storage: s3://rtrrl-artifacts-007122174918/trainer
+
+environment:
+  id: gymnax::CartPole-v1
+  backend: null # gymnax ships one implementation per environment
+  observed: null
+  seeds: [0]
+  episode_length: 32
+
+training:
+  num_envs: 1
+  total_steps: 20000
+  chunk_steps: 5000
+
+evaluation:
+  every_steps: 5000
+  episodes: 10
+  chunk_steps: 320
+  seed: 1000
+
+logging:
+  aim:
+    url: aim://172.31.62.192:53801
+    training:
+      window:
+        every_steps: 5000
+  rerun:
+    log_every_steps: 10000
+
+score:
+  metric: eval/episode/return
+  window_steps: [0, 20000]
+  reduce: auc
+  episodes_per_checkpoint: 10
+  non_finite: worst
+  direction: maximize
+
+compute:
+  instance_type: c7a.large
+  timeout_minutes: 60
+
+# No search. This run checks a path, and every leaf below is pinned.
+hpo:
+  rounds: 1
+  trials_per_round: 1
+  parallel_jobs: 1
+  startup_trials: 1
+  seed: 0
+
+space:
+  # The published recurrent layer, at the published width. There is no
+  # feature_dim to pin: an LSTM's output is its hidden state, so hidden_dim is
+  # the whole of what this core is told, and the head reads 32 numbers.
+  core:
+    kind: [lstm]
+    lstm:
+      hidden_dim: [32]
+
+  # The paper's truncation. The gradient reaches back exactly this far, and the
+  # hidden state at the window's first input is zero, so there is no burn-in
+  # length to declare.
+  learning:
+    kind: [truncated]
+    truncated:
+      length: [10]
+
+  # The published solver, at the published constants.
+  optimizer:
+    kind: [adadelta]
+    adadelta:
+      lr: [0.1]
+      rho: [0.95]
+      eps: [0.00000001]
+
+  grad_clip: [10.0]
+
+  replay:
+    capacity: [8192]
+    minimum_size: [256]
+    batch_size: [8]
+
+  target:
+    update_period: [100]
+
+  exploration:
+    epsilon_start: [1.0]
+    epsilon_end: [0.05]
+    epsilon_decay_steps: [10000]
+    evaluation_epsilon: [0.0]
+
+  gamma: [0.99]

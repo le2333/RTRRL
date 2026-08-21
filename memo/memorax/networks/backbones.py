@@ -1,8 +1,8 @@
 """Name a backbone and get the components it contributes to a sequence.
 
 Which wrapper a cell needs and which keyword it takes is knowledge about the
-cells: RTU goes in an ``RNN``, LRU in a ``Memoroid``, and only the second reads
-``output_dim``. Kept here so a caller does not hold a copy of it.
+cells: RTU and LSTM go in an ``RNN``, LRU in a ``Memoroid``, and only the LRU
+reads ``output_dim``. Kept here so a caller does not hold a copy of it.
 """
 
 from __future__ import annotations
@@ -35,6 +35,13 @@ BACKBONES = (*RECURRENT_BACKBONES, "mlp")
 # Outside ``BACKBONES`` so only the entry that asks for them by name gets them.
 # They take the same config and build the same parameter tree as ``lru``.
 UPSTREAM_BACKBONES = ("lru_published", "lru_rewritten")
+
+# Outside it for a stronger reason. A dense-gated cell has no structure for the
+# online arm to carry exact recurrent sensitivity through, so a family offering
+# one would offer a core only half of a matched comparison could be run on. Only
+# a learner that differentiates by backpropagation may name it, which today is
+# DRQN reproducing its own published network.
+BPTT_BACKBONES = ("lstm",)
 
 
 @dataclass(frozen=True)
@@ -112,6 +119,13 @@ def backbone(
                 )
             ),
         )
+    if name == "lstm":
+        # The published DRQN's cell, wrapped as the RTU is: one cell, whose
+        # hidden state is its output, so there is no readout width to size.
+        # ``OptimizedLSTMCell`` is Flax's own LSTM with the four input matmuls
+        # fused into one; the equations, the parameter names and the carry are
+        # ``LSTMCell``'s, so nothing about the network follows from the choice.
+        return (RNN(cell=nn.OptimizedLSTMCell(features=hidden_dim)),)
     if name == "mlp":
         return (
             FFN(features=hidden_dim, **drawn),
@@ -121,7 +135,7 @@ def backbone(
             LayerNorm(),
             LeakyReLU(),
         )
-    registered = ", ".join((*BACKBONES, *UPSTREAM_BACKBONES))
+    registered = ", ".join((*BACKBONES, *UPSTREAM_BACKBONES, *BPTT_BACKBONES))
     raise ValueError(f"unknown backbone {name!r}; registered: {registered}")
 
 
