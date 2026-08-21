@@ -125,6 +125,19 @@ docs = [
 [tool.uv]
 package = true
 
+# jax-cuda12-plugin asks for every CUDA library with a bare lower bound, so the
+# resolver is free to mix release trains. It did: everything else here is CUDA
+# 12.8 Update 1, while nvcc -- which had no prior entry in the lock to inherit --
+# floated to 12.9.86 on its own. That combination is out of contract. nvJitLink
+# links what ptxas emits, and NVIDIA requires the linker to be at least as new as
+# the toolkit that produced its input ("you cannot use 12.0 to link 12.1
+# objects"), so a 12.8 nvJitLink must not be handed 12.9 output. Holding nvcc on
+# the same release as nvjitlink, cublas and the runtime keeps one coherent
+# toolkit instead of two halves.
+constraint-dependencies = [
+    "nvidia-cuda-nvcc-cu12==12.8.93",
+]
+
 [[tool.uv.dependency-metadata]]
 name = "jaxmarl"
 requires-dist = []
