@@ -1,6 +1,9 @@
 name: GPU abort probe
 
 on:
+  push:
+    branches: [fix/cuda-toolkit-cohort]
+    paths: [.github/workflows/gpu-abort-probe.yml]
   workflow_dispatch:
 
 permissions:
