@@ -1,14 +1,12 @@
 # DRQN, and what the reproduction is answerable to
 
 The `drqn` entry is Hausknecht and Stone (arXiv:1507.06527) on this
-repository's structured diagonal recurrent core. It exists so that R1 can put
-exact online recurrent sensitivity against the same representation trained by
-backpropagation through time, which only means something if the replay arm
-really is the published learner and the representation really is the same one.
+repository's structured diagonal recurrent core: the published learner, on a
+recurrent cell this repository's online learner can also be run on.
 
 This document says which clause of the paper each part answers, where the
 answer is checked, and where the implementation knowingly departs from the
-paper.
+paper. What anyone does with a set of runs is not here.
 
 ## The learner, clause by clause
 
@@ -173,20 +171,19 @@ than to this one. `full_bptt` draws a completed episode and differentiates the
 whole of it in a single step, with no state carried in and no boundary for the
 gradient to stop at.
 
-It is here because #43 requires an untruncated arm for a truncation to be
-compared against, and because "the gradient crosses the entire episode" is the
-limit a truncation is a truncation *of* — which the paper's sequential scheme,
-being itself truncated, is not. It is a deliberate addition to the two
-learners this repository compares, not a second thing the paper published, and
-a write-up should call it full BPTT and never DRQN's sequential arm.
+It is here because "the gradient crosses the entire episode" is the limit a
+truncation is a truncation *of*, and the paper's sequential scheme, being
+itself truncated, is not that limit. It is a deliberate addition, not a second
+thing the paper published, and a write-up should call it full BPTT and never
+DRQN's sequential arm.
 
 ## The replacement for the convolutional encoder
 
 The paper's network is three convolutional layers over an 84x84 Atari frame,
 then an LSTM in place of DQN's first fully-connected layer, then a linear Q
-head. R1's environments — MemoryChain, StatelessCartPole, RepeatPrevious — hand
-over a short vector, so the encoder has nothing left to do: it existed to turn
-an image into a feature vector, and the observation already is one.
+head. A low-dimensional environment hands over a short vector, so the encoder
+has nothing left to do: it existed to turn an image into a feature vector, and
+the observation already is one.
 
 **Its replacement is no encoder.** The observation enters the recurrent cell
 directly, and an affine-free `LayerNorm` follows the cell. That is not a
@@ -222,14 +219,9 @@ followed from it are gone. `adam` remains declared beside `adadelta` for the
 **matched** baseline, which tunes its optimiser so that the comparison against
 the online arm is not decided by one arm having been given a worse step rule.
 The two are different claims and a run says which it is by which branch it
-named:
-
-- **DRQN reproduction** selects `adadelta` at the published constants. It
-  answers "does the published algorithm behave as published".
-- **Matched DRQN** may select either and tunes it. It answers "does replay
-  BPTT match exact online sensitivity on the same representation". It is not a
-  claim that the optimiser reproduces the paper, and should not be written up
-  as one.
+named. `adadelta` at the published constants is the published solver; anything
+else, tuned or not, is this learner under a step rule of someone's choosing and
+should not be written up as reproducing the paper's optimiser.
 
 ## Where this departs from the paper
 
@@ -251,11 +243,9 @@ preprocessing and therefore the units the published agent's Q values are in. It
 is applied on the way into replay and nowhere else: a run is scored on what the
 environment paid, and clipping that would change the number being reported
 rather than the number being learned from. It is not a parameter, because it is
-not a choice the published agent offers. On R1's tasks it is the identity —
-MemoryChain pays `±1` at the end and nothing in between, RepeatPrevious and
-StatelessCartPole pay in units — so it changes no result here; a task whose
-reward magnitudes carry information beyond their sign is not one this learner
-can be run on as published.
+not a choice the published agent offers. On a task paying in units or in
+`±1` it is the identity; a task whose reward magnitudes carry information
+beyond their sign is not one this learner can be run on as published.
 
 **One learner update per environment transition.** An earlier version of this
 document listed this as a deviation, on the grounds that the paper updates once
@@ -266,12 +256,11 @@ transition once the replay warmup has passed. One update per environment
 transition is therefore what the published agent does, and what this does.
 
 **The recurrent core.** The paper's LSTM is replaced by the structured diagonal
-cell the online arm carries exact recurrent sensitivity through. This is the
-whole point of the arm rather than an approximation of the paper: R1 compares
-two *learners* on one representation, so the representation has to be the one
-the other learner can be run on. It is an intentional architecture adaptation,
-and a write-up should say "matched DRQN on a structured diagonal core", never
-"DRQN as published" when it means the network.
+cell this repository's online learner carries exact recurrent sensitivity
+through, so that the two can be run on one representation. It is an intentional
+architecture adaptation rather than an approximation of the paper, and a
+write-up should say "DRQN on a structured diagonal core", never "DRQN as
+published" when it means the network.
 
 ## The one thing the batch size still decides
 
@@ -301,14 +290,13 @@ computes.
 
 ## What this does not contain
 
-This entry is the learner. What is done with a set of runs at different `t` —
-which candidates to launch, what counts as equivalent, and what number to
-report — is not here and not this layer's business; it lives in
-`infra/src/trainer_infra/truncation.py`, which this package neither imports nor
-knows about.
+This entry is the learner and nothing else. Which runs to launch, what counts
+as one performing the same as another, and what number to report are decisions
+about an experiment; they are not made here and this package holds none of
+their vocabulary.
 
-One thing does have to be said here, because it is about the entry: **no image
+One thing does have to be said, because it is about the entry: **no image
 carries `drqn` yet.** The entry is new, so a contract-10 rebuild has to happen
 before anything can be launched, which is why the acceptance manifest names
 `image: TBD`. Until then this entry supports diagnostic and smoke training
-only, and a number taken from it is not a paper number.
+only.

@@ -2,9 +2,7 @@
 #
 # This file answers whether the `drqn` entry runs on the platform, not whether
 # DRQN is good at anything. CartPole is fully observed, so the recurrent core is
-# not being asked to remember: a number from this run is not an R1 number, and
-# the environments R1 actually reports on are named in the issue rather than
-# here.
+# not being asked to remember, and a number from this run is not a result.
 #
 # Truncation 10 is the paper's own, which is what makes this the reproduction
 # acceptance arm rather than an arbitrary window. Everything else is the
@@ -78,9 +76,8 @@ logging:
 # ends on, so that metric is identically 1.0 for every policy. The signal is
 # entirely in how long the episode lasted.
 #
-# AUC rather than the acceptance file's `last`, because AUC is what the protocol
-# scores R1 on and this run is also where the scorer's exactness check gets
-# exercised on this entry.
+# AUC rather than the acceptance file's `last`, because this run is also where
+# the scorer's exactness check gets exercised on this entry.
 score:
   metric: eval/episode/return
   window_steps: [0, 20000]
