@@ -35,12 +35,21 @@ tuner can spend a trial discovering that it should not. The two learners share
 this repository's replay storage, target-network update and window arithmetic,
 and nothing else.
 
-The recurrent core is the one the online arm carries exact recurrent
-sensitivity through: the observation enters the structured diagonal cell
-directly and is normalised after it, with no projection in front. That is what
-makes the comparison a comparison of learners -- replay Q-learning through
+The recurrent core is a choice between two things a run can be answerable to.
+``lru`` and ``rtu`` are the *matched* cores: the ones the online arm carries
+exact recurrent sensitivity through, entered directly by the observation and
+normalised after, with no projection in front. Selecting one makes the
+comparison a comparison of learners -- replay Q-learning through
 backpropagation against online actor-critic with exact recurrent sensitivity --
 rather than of representations.
+
+``lstm`` is the paper's own cell, and selecting it makes a run answerable to the
+paper's network instead. It is a single Flax LSTM layer read directly by the
+linear Q head, with nothing before it and no normalisation behind it, which is
+what Hausknecht and Stone put after the convolutions. Nothing carries exact
+recurrent sensitivity through a dense-gated cell, so it is offered here and
+nowhere else: the online arm's core family does not list it, and a matched pair
+of runs cannot be pinned to it.
 
 For low-dimensional tasks there is nothing for the paper's convolutional
 encoder to do: it existed to turn an 84x84 Atari frame into a feature vector,
@@ -124,6 +133,21 @@ class RtuCore:
 
 
 @dataclass(frozen=True)
+class LstmCore:
+    """The published cell's width, which is all an LSTM has to be told.
+
+    Hausknecht and Stone replace DQN's first fully-connected layer with a single
+    LSTM layer that the linear Q head reads directly, so there is no readout
+    behind it and no ``feature_dim`` to declare -- the same absence the RTU has,
+    for a different reason. The bounds are the other cores' so that a hidden
+    size can be pinned to the same number on either side of an architecture
+    comparison.
+    """
+
+    hidden_dim: int = param(valid=(1, 4096), search=(32, 512))
+
+
+@dataclass(frozen=True)
 class TruncatedParameters:
     """The paper's truncation, which is the whole of what TBPTT(t) declares.
 
@@ -198,7 +222,12 @@ class Adadelta:
     eps: float = param(valid=(1e-12, 1e-2), search=[1e-8], default=1e-8, log=True)
 
 
-DRQN_CORE_BRANCHES = {"lru": LruCore, "rtu": RtuCore}
+DRQN_CORE_BRANCHES = {"lru": LruCore, "rtu": RtuCore, "lstm": LstmCore}
+# The cores this learner shares with the online arm, which are the ones an
+# affine-free normalisation follows because that is the online arm's own
+# topology. ``lstm`` is deliberately not among them: the published network
+# normalises nothing between the cell and the head.
+MATCHED_CORES = ("lru", "rtu")
 LEARNING_BRANCHES = {"truncated": TruncatedParameters, "full_bptt": ()}
 # Two, and the reproduction is the first. ``adadelta`` is the published solver,
 # so an arm claiming to reproduce the paper selects it; ``adam`` is here because
@@ -510,23 +539,25 @@ class _QGraph(nn.Module):
 
     @nn.nowrap
     def sequence(self) -> Sequence:
-        """The cell on the observation, normalised after it, and nothing before.
+        """The cell on the observation, and nothing in front of it either way.
 
-        This is the online arm's representation: no projection in front of the
-        cell, and an affine-free normalisation behind it.
+        On a matched core this is the online arm's representation: no projection
+        ahead of the cell, and an affine-free normalisation behind it. On
+        ``lstm`` there is nothing behind it either -- the published network runs
+        its LSTM output straight into the linear head, and a normalisation
+        inserted there would be this repository's addition to the paper rather
+        than the paper's network.
         """
 
-        return Sequence(
-            (
-                *backbone(
-                    self.core_kind,
-                    features=self.observation_dim,
-                    hidden_dim=self.hidden_dim,
-                    output_dim=self.feature_dim,
-                ),
-                LayerNorm(use_scale=False, use_bias=False),
-            )
+        cell = backbone(
+            self.core_kind,
+            features=self.observation_dim,
+            hidden_dim=self.hidden_dim,
+            output_dim=self.feature_dim,
         )
+        if self.core_kind in MATCHED_CORES:
+            return Sequence((*cell, LayerNorm(use_scale=False, use_bias=False)))
+        return Sequence(cell)
 
     @nn.compact
     def __call__(

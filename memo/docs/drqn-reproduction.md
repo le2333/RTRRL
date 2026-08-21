@@ -1,8 +1,11 @@
 # DRQN, and what the reproduction is answerable to
 
-The `drqn` entry is Hausknecht and Stone (arXiv:1507.06527) on this
-repository's structured diagonal recurrent core: the published learner, on a
-recurrent cell this repository's online learner can also be run on.
+The `drqn` entry is Hausknecht and Stone (arXiv:1507.06527): the published
+learner, on a recurrent core the manifest chooses. `core.kind: lru` and
+`core.kind: rtu` are the *matched* cores — cells this repository's online
+learner can also be run on, which is what makes a pair of runs a comparison of
+learners. `core.kind: lstm` is the paper's own cell, which makes a run
+answerable to the paper's network instead.
 
 This document says which clause of the paper each part answers, where the
 answer is checked, and where the implementation knowingly departs from the
@@ -25,6 +28,7 @@ paper. What anyone does with a set of runs is not here.
 | One-step target-network Q-learning | `Core._loss` with `make_td0` | `test_the_target_is_one_step_and_greedy_under_the_target_network` |
 | Not double Q-learning | `max` over the target network's own values | `test_the_greedy_action_is_the_target_networks_and_not_the_online_ones` |
 | Hard target copy on a period | `periodic_incremental_update(..., 1.0)` | `test_the_copy_is_hard_and_not_an_average` |
+| An LSTM in place of DQN's first fully-connected layer | `core.kind: lstm`, one Flax LSTM the head reads directly | `test_the_cell_is_read_by_the_head_and_by_nothing_in_between` |
 | Linear Q head | `DiscreteQNetwork`, no head branch declared | `test_the_head_is_one_linear_map_from_the_recurrent_output` |
 | Epsilon-greedy acting, annealed over solver iterations | `DRQN._epsilon` counts learner updates | `test_epsilon_anneals_on_learner_updates_and_not_on_environment_steps` |
 | The rate is read once per episode | `DRQN._episode_epsilon`, held in `DRQNState.epsilon` | `test_exploration_holds_still_inside_an_episode` |
@@ -186,9 +190,9 @@ has nothing left to do: it existed to turn an image into a feature vector, and
 the observation already is one.
 
 **Its replacement is no encoder.** The observation enters the recurrent cell
-directly, and an affine-free `LayerNorm` follows the cell. That is not a
-convenience: it is the online arm's own topology, and it is the reason the
-comparison is a comparison of learners. `exact-recurrent-sensitivity.md` states
+directly, whichever cell that is. On a matched core an affine-free `LayerNorm`
+follows it. That is not a convenience: it is the online arm's own topology, and
+it is the reason the comparison is a comparison of learners. `exact-recurrent-sensitivity.md` states
 the bound this rests on — a learned projection ahead of the cell would reach its
 own past only through a carry the phantom injection cuts, so the online arm's
 gradient could no longer be called exact, and the two arms would no longer
@@ -203,6 +207,40 @@ reverse-mode gradient over a replayed window, and Structured RTRRL carries
 exact online recurrent sensitivity. The parameter bounds are declared to the
 same numbers on both sides so a matched pair can be pinned to identical widths
 without either search space excluding a value the other allows.
+
+## `core.kind: lstm`, which is the paper's network and not a matched one
+
+The published cell is also selectable, as a single Flax LSTM layer the linear Q
+head reads directly. Everything under the core is the same code — the same
+replay, the same window arithmetic, the same loss, the same solver — so the
+only thing a run changes by naming it is the representation.
+
+Two absences are the whole of the wiring, and both are deliberate:
+
+- **No `feature_dim`.** An LSTM's output is its hidden state, so there is no
+  readout width beside `hidden_dim` to declare, and `core.lstm` has the one
+  leaf. The RTU's parameter face is the same shape for a different reason.
+- **No normalisation behind the cell.** The affine-free `LayerNorm` is the
+  online arm's topology, and the published network has nothing between the LSTM
+  and the head. One inserted here would be this repository's addition to the
+  paper rather than the paper's network.
+  `test_the_cell_is_read_by_the_head_and_by_nothing_in_between` holds both.
+
+It is offered to DRQN and to nothing else. Nothing carries exact recurrent
+sensitivity through a dense-gated cell, so the online arm's core family does not
+list it — `RTRRL_TORSO_FAMILY` names `lru` and `rtu` — and `BPTT_BACKBONES`
+keeps it out of the shared backbone family for the same reason. A matched pair
+of runs therefore cannot be pinned to it, which is the boundary this branch
+lives inside: an `lstm` run is DRQN answerable to its own paper, and an
+`lru`/`rtu` run is DRQN answerable to the online learner. A write-up must not
+read a number from one as though it came from the other.
+
+`test_drqn_lstm_core.py` checks the four places the learner reads a core — the
+zero state a window opens on, which for an LSTM is a cell state and a hidden
+state and must be zero in both; one step of acting; the loss over a drawn
+window; and the target pass from its own zero state — and that a window's
+gradient still reaches its first observation, which is what makes TBPTT(t) over
+this cell a truncation of anything.
 
 ## The optimiser is the published solver
 
@@ -255,12 +293,15 @@ rate, and DRQN's own `update_frequency` is 1 — one `UpdateRandom()` per
 transition once the replay warmup has passed. One update per environment
 transition is therefore what the published agent does, and what this does.
 
-**The recurrent core.** The paper's LSTM is replaced by the structured diagonal
-cell this repository's online learner carries exact recurrent sensitivity
-through, so that the two can be run on one representation. It is an intentional
-architecture adaptation rather than an approximation of the paper, and a
-write-up should say "DRQN on a structured diagonal core", never "DRQN as
-published" when it means the network.
+**The recurrent core, where a matched one is selected.** `lru` and `rtu` replace
+the paper's LSTM with the structured diagonal cell this repository's online
+learner carries exact recurrent sensitivity through, so that the two can be run
+on one representation. That is an intentional architecture adaptation rather
+than an approximation of the paper, and a write-up should say "DRQN on a
+structured diagonal core", never "DRQN as published" when it means the network.
+Under `core.kind: lstm` the departure is not there at all: the cell is the
+paper's, and only the absent convolutional encoder separates the network from
+the published one.
 
 ## The one thing the batch size still decides
 
