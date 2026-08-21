@@ -129,6 +129,41 @@ class SelectedBackbone:
     hidden_dim: int
 
 
+def masked_sequence_loss(
+    td_error: Array, valid: Array, weights: Array | None = None
+) -> Array:
+    """Half the squared error, averaged within a sequence and then across them.
+
+    Averaging inside the sequence first is what makes sequences of different
+    valid lengths weigh the same, and ``weights`` is where a learner that draws
+    non-uniformly hands its correction: uniform weights are the absence of a
+    correction rather than a choice of one.
+    """
+
+    mask = valid.astype(td_error.dtype)
+    per_sequence = 0.5 * jnp.sum(jnp.square(td_error) * mask, axis=1)
+    per_sequence = per_sequence / jnp.maximum(jnp.sum(mask, axis=1), 1.0)
+    if weights is None:
+        return jnp.mean(per_sequence)
+    return jnp.mean(per_sequence * weights)
+
+
+def completed_episode_starts(experience: Any, *, transition_count: int) -> Array:
+    """Episode starts whose episode also ends inside a window this long.
+
+    A full-episode learner may only begin where the whole episode is there to
+    be read. A start whose ending falls past the window would be scored on a
+    prefix and called an episode.
+    """
+
+    ending_within_window = jnp.zeros_like(experience.done, dtype=jnp.bool_)
+    for offset in range(transition_count):
+        ending_within_window = ending_within_window | jnp.roll(
+            experience.done, -offset, axis=1
+        )
+    return experience.episode_start & ending_within_window
+
+
 @dataclass(frozen=True)
 class SelectedLearning:
     """Which gradient the update constructs, and the replay window it reads.
@@ -250,17 +285,6 @@ class LearnerSequence(struct.PyTreeNode):
     probabilities: Any
     indices: Any
     buffer_size: Any
-
-
-def completed_episode_starts(
-    experience: ReplayTransition, *, transition_count: int
-) -> Array:
-    ending_within_window = jnp.zeros_like(experience.done, dtype=jnp.bool_)
-    for offset in range(transition_count):
-        ending_within_window = ending_within_window | jnp.roll(
-            experience.done, -offset, axis=1
-        )
-    return experience.episode_start & ending_within_window
 
 
 def tbptt_starts(experience: ReplayTransition, *, burn_in_length: int) -> Array:
@@ -971,15 +995,6 @@ def double_q_n_step_targets(
 
     targets = jax.vmap(target_for_start)(jnp.arange(sequence_length))
     return jax.lax.stop_gradient(targets.T)
-
-
-def masked_sequence_loss(
-    td_error: Array, valid: Array, importance_weights: Array
-) -> Array:
-    mask = valid.astype(td_error.dtype)
-    per_sequence = 0.5 * jnp.sum(jnp.square(td_error) * mask, axis=1)
-    per_sequence = per_sequence / jnp.maximum(jnp.sum(mask, axis=1), 1.0)
-    return jnp.mean(per_sequence * importance_weights)
 
 
 def sequence_priorities(td_error: Array, valid: Array, *, max_weight: float) -> Array:

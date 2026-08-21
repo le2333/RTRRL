@@ -101,5 +101,5 @@ def test_image_catalog_uses_the_deployment_contract(tmp_path: Path) -> None:
 
     assert parsed == written == build_catalog()
     assert parsed.contract == CONTRACT_VERSION
-    assert set(parsed.entries) == {"r2d2", "rtrrl", "stream_ac"}
+    assert set(parsed.entries) == {"drqn", "r2d2", "rtrrl", "stream_ac"}
     assert parsed.entries["rtrrl"].command == ("python", "-m", "entries.rtrrl")
