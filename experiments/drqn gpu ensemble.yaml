@@ -1,4 +1,4 @@
-# DRQN on a GPU instance, at half the acceptance budget.
+# DRQN's seeds on a GPU instance, as one graph.
 #
 # Two questions, in this order.
 #
@@ -25,24 +25,33 @@
 #
 # What the run is read for:
 #   - the worker exits 0, which is by itself the answer to the first question
-#   - two evaluation checkpoints at 5000 and 10000, each of exactly ten
-#     eval/episode/return records
+#   - three results, three metrics streams, three Aim runs -- one per member
+#   - two evaluation checkpoints at 5000 and 10000 per member, each of exactly
+#     ten eval/episode/return records
 #   - every train/episode and eval/episode value finite
-#   - the wall clock of the second chunk against the same chunk on c7a.large
+#   - the members differ: identical members would mean one run computed thrice
+#   - the job's wall clock against `drqn gpu smoke.yaml`'s, divided by three
 
-experiment: drqn-gpu-smoke
-name: drqn-gpu-smoke-truncation-10
-description: "DRQN on g6.xlarge: does the CUDA image compile, and what does a step cost"
+experiment: drqn-gpu-ensemble
+name: drqn-gpu-ensemble-truncation-10
+description: "DRQN's three seeds computed together: what does a member cost"
 
 image: 007122174918.dkr.ecr.eu-north-1.amazonaws.com/rtrrl@sha256:c61793b630ce46aa11217ea0a82f5da71374cb901755bc287d8c6b938d8d7ffe
-entry: drqn
+# The parallel channel. Naming an entry the image declares `grouped` is the whole
+# of how a launch asks for it: the control plane reads that from the catalog and
+# packs the round into groups instead of runs. `drqn gpu smoke.yaml` is this file
+# with `drqn` here and one seed below, which is what makes the pair comparable.
+entry: drqn_ensemble
 storage: s3://rtrrl-artifacts-007122174918/trainer
 
 environment:
   id: gymnax::CartPole-v1
   backend: null # gymnax ships one implementation per environment
   observed: null
-  seeds: [0]
+  # Three members. They differ in nothing else, so what the pair of files
+  # measures is what a member costs when three share a device against when one
+  # has it to itself.
+  seeds: [0, 1, 2]
   episode_length: 32
 
 training:

@@ -1,0 +1,129 @@
+# RTRRL through the parallel channel, on the GPU, sweeping a value.
+#
+# Three questions in one job, and none of them has been asked yet.
+#
+# Whether RTRRL runs through the parallel channel at all. Its swept path is
+# verified at the algorithm layer -- gamma, eta_pi and a learning rate across a
+# member axis, ninety-nine of a hundred and five float leaves diverging -- but
+# never through the worker, and never on a device. DRQN's was, end to end, which
+# is why this file exists rather than an assumption that the shared code carries.
+#
+# Whether a swept value survives the whole chain. `gamma` is listed twice below,
+# so the round is two trials; three seeds makes six members. The control plane
+# partitions a round by what the image marks static and gamma is not among those,
+# so all six belong to one group and one graph.
+#
+# What a member costs. RTRRL's torso carries a jacobian through a scan, which is
+# expensive to compile and cheap to hold: 0.090 MiB of state per member against
+# DRQN's 0.582. If the member count that fills an L4 is set by anything here it
+# is compile time, which vmap pays once however many members follow.
+#
+# What the run is read for:
+#   - six results, six metrics streams, six Aim runs -- one per member
+#   - the six differ from each other; two members sharing a seed and a gamma
+#     would be the sweep having been broadcast rather than carried
+#   - every train/episode and eval/episode value finite
+#   - the job's wall clock divided by six, against `protocol brax smoke.yaml`
+#     on c7a.large
+
+experiment: rtrrl-gpu-ensemble
+name: rtrrl-gpu-ensemble-halfcheetah
+description: "RTRRL on g6.xlarge: six members of one graph, sweeping gamma"
+
+image: 007122174918.dkr.ecr.eu-north-1.amazonaws.com/rtrrl@sha256:c61793b630ce46aa11217ea0a82f5da71374cb901755bc287d8c6b938d8d7ffe
+# The parallel channel; see `drqn gpu ensemble.yaml` for how an entry asks.
+entry: rtrrl_ensemble
+storage: s3://rtrrl-artifacts-007122174918/trainer
+
+environment:
+  id: brax::halfcheetah
+  backend: spring
+  seeds: [0, 1, 2]
+  episode_length: 64
+
+training:
+  num_envs: 1
+  total_steps: 1024
+  chunk_steps: 256
+
+evaluation:
+  every_steps: 256
+  episodes: 5
+  chunk_steps: 320
+  seed: 1000
+
+logging:
+  aim:
+    url: aim://172.31.62.192:53801
+
+score:
+  metric: eval/episode/return_per_step
+  window_steps: [0, 1024]
+  reduce: auc
+  episodes_per_checkpoint: 5
+  non_finite: worst
+  direction: maximize
+
+compute:
+  instance_type: g6.xlarge
+  timeout_minutes: 60
+
+hpo:
+  rounds: 1
+  # Both gammas in one round, so both are in one group and one graph. Two rounds
+  # would be two jobs, and the sweep would not be a sweep.
+  trials_per_round: 2
+  parallel_jobs: 1
+  startup_trials: 2
+  seed: 0
+
+space:
+  torso:
+    backbone:
+      kind: [lru]
+      lru:
+        feature_dim: [32]
+        hidden_dim: [32]
+        differentiation:
+          kind: [exact_rtrl]
+    optimizer:
+      kind: [adam]
+      adam:
+        lr: [0.001]
+    grad_clip: [1.0]
+    follow: [1.0]
+  actor:
+    optimizer:
+      kind: [adam]
+      adam:
+        lr: [0.001]
+    head:
+      kind: [state_std]
+      state_std:
+        initialization:
+          kind: [lecun]
+  critic:
+    optimizer:
+      kind: [adam]
+      adam:
+        lr: [0.001]
+    head:
+      kind: [value]
+      value:
+        initialization:
+          kind: [lecun]
+  normalization:
+    observation:
+      kind: [none]
+    reward:
+      kind: [none]
+  # The swept axis. Two values, so the round is two trials, and with three
+  # seeds each that is six members of one graph.
+  gamma: [0.99, 0.95]
+  lambda_pi: [0.99]
+  lambda_v: [0.99]
+  lambda_rnn: [0.99]
+  eta_pi: [1.0]
+  eta_f: [1.0]
+  entropy_rate: [0.00001]
+  meta_rl: [false]
