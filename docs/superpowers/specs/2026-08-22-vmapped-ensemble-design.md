@@ -117,6 +117,35 @@ configuration does not select would trace clean and fail later, on a
 configuration that does select it. Do both if the marking proves tedious --
 declaration for the message, the trace as the backstop.
 
+## What equivalence to ask for
+
+The obvious acceptance criterion -- a member reproduces the same seed under the
+single-member driver, digit for digit -- is unreachable, and building to it
+would have meant chasing a bug that is not there.
+
+`jax.vmap` rewrites a computation into batched operations; XLA compiles those to
+different kernels; different kernels reduce in a different order. On DRQN the
+divergence shows up as an episode one step longer than the driver's, about a
+hundred and fifty steps in, once the accumulated last-place difference flips an
+action. A **one-member** ensemble diverges too, at the same episode and in the
+same direction as a three-member one, which is what rules out the batching of
+several members as the cause.
+
+The property to hold instead is that a member is a function of its seed and of
+nothing else about the round -- not its size, not the member's index in it, not
+which other seeds it travelled with. That one is testable, and it holds: seed 3
+reports identical episodes alone, in a pair, in a round of three, and at index 2
+of a round of five.
+
+It is also the property that matters. Bit-identity with the driver buys a
+comparison nobody needs to make; independence from the round is what keeps a
+reported number from depending on how its sweep happened to be packed.
+
+The consequence to write down: **an ensemble run is not comparable digit-for-digit
+with an acceptance number taken on the driver.** Comparisons across the two
+paths are statistical, and a re-run of an acceptance file under the ensemble
+will not reproduce its recorded score exactly.
+
 ## The shape of the change
 
 ### Untouched
