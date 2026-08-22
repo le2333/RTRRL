@@ -211,17 +211,35 @@ but nothing here measures it. `experiments/drqn gpu smoke.yaml` prices a single
 member against CPU and is the baseline the ensemble has to beat; the comparison
 is per-member wall clock at a given member count, not the job's own.
 
-**Memory.** N members hold N replay buffers. DRQN's `capacity: 8192` on CartPole
-is small, but the member count that fills an L4's compute is not obviously the
-one that fits its memory, and replay is the term that grows fastest. Worth
-measuring before choosing a default.
+**Memory** is settled, and it is not the constraint. One member's initial state,
+measured on the configurations the acceptance files describe:
+
+| entry | one member | largest leaf | members per 24 GiB |
+| --- | --- | --- | --- |
+| DRQN | 0.582 MiB | replay `observation` `(1, 8224, 4)` | ~42,000 |
+| RTRRL | 0.090 MiB | LRU `C_real` / `C_imag` `(32, 32)` | ~273,000 |
+
+RTRRL is the smaller of the two, against the expectation that carrying a
+jacobian would make it the larger. Its torso is a single-layer LRU at hidden 32,
+so the influence it carries is `(1, 32, 32)` -- four kilobytes -- and the
+recurrent kernel it multiplies is the same size. DRQN is bigger only because
+replay holds 8224 transitions of a four-dimensional observation.
+
+At these sizes the member count is set by when the device saturates, not by when
+it runs out of room, and choosing it is a throughput measurement rather than a
+memory budget. What remains unmeasured is the per-step chunk: `train` stacks its
+observations over `chunk_steps`, so a 5000-step chunk is the term that actually
+scales with the member axis. It is still small -- tens of scalars per step -- but
+it is the one to watch, not replay.
 
 **Failure granularity.** One member diverging to NaN does not stop the others,
 which is good, but they also cannot be retried separately -- the job is the
 round. `non_finite: worst` already gives such a member a score rather than an
 error, so this is a cost to accept rather than a bug to fix.
 
-**RTRRL specifically.** Its torso carries a jacobian through a scan, so its
-per-member memory is larger than DRQN's by more than the parameter count
-suggests. Whether a useful member count fits is an open question, and it is the
-entry the dissertation is actually about.
+**RTRRL's compile time**, rather than its memory. On CPU it takes 20 seconds to
+assemble and 32 to reach the end of an evaluation, against DRQN's 14 -- the
+jacobian-in-scan is expensive to compile even where it is cheap to hold. vmap
+compiles once for any member count, so this is a fixed cost rather than a
+growing one, but it is paid on every job and it is the reason a round should be
+large rather than a sweep be many rounds.
