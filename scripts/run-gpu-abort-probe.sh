@@ -20,10 +20,17 @@
 # says so instead of quietly compiling the graph on the host and exiting zero.
 # Set PROBE_ALLOW_CPU=1 only if compiling on the CPU is what you wanted.
 #
-# Bisecting: PROBE_BATCH, PROBE_TRUNCATION and PROBE_CORE move one axis each.
-# Batch size and truncation are the shape of the differentiated window, which is
-# both the arithmetic a GPU is here for and the arithmetic an emitter has to
-# fuse, so those are the two worth walking.
+# PROBE_ENTRY picks the graph: `drqn` (default) or `rtrrl`. RTRRL is the one the
+# July abort was read on, so it is the one that answers whether that defect is
+# gone; DRQN compiling says nothing about it.
+#
+# Bisecting, forwarded only when set:
+#   rtrrl  PROBE_DIFFERENTIATION=exact_rtrl|tbptt  PROBE_HIDDEN  PROBE_FEATURE
+#   drqn   PROBE_BATCH  PROBE_TRUNCATION  PROBE_HIDDEN
+#
+# PROBE_DIFFERENTIATION is the first axis worth walking: exact_rtrl carries a
+# jacobian through the scan and tbptt does not, so a crash on one and not the
+# other names the defect instead of guessing at it.
 
 set -euo pipefail
 
@@ -89,22 +96,23 @@ SOURCE="$(gzip -9 -c "$PROBE" | base64 -w 0)"
 echo "probe override is ${#SOURCE} characters of the 8192 ECS allows"
 test "${#SOURCE}" -lt 7000
 
-OVERRIDES="$(jq -cn \
-  --arg source "$SOURCE" \
-  --arg batch "${PROBE_BATCH:-8}" \
-  --arg truncation "${PROBE_TRUNCATION:-10}" \
-  --arg core "${PROBE_CORE:-lru}" \
-  --arg envs "${PROBE_ENVS:-1}" \
-  --arg steps "${PROBE_STEPS:-512}" \
-  '{environment:[
-    {name:"PROBE_SOURCE",value:$source},
-    {name:"PROBE_BATCH",value:$batch},
-    {name:"PROBE_TRUNCATION",value:$truncation},
-    {name:"PROBE_CORE",value:$core},
-    {name:"PROBE_ENVS",value:$envs},
-    {name:"PROBE_STEPS",value:$steps},
-    {name:"XLA_FLAGS",value:"--xla_dump_to=/tmp/hlo"}
-  ]}')"
+# Only what the caller actually set is forwarded. Passing this script's own
+# defaults instead would silently overwrite a subject's configuration: both
+# subjects declare PROBE_HIDDEN and PROBE_CORE, at different paths and with
+# different values, so a default meant for one is a change to the other.
+OVERRIDES="$(jq -cn --arg source "$SOURCE" '{environment:[
+  {name:"PROBE_SOURCE",value:$source},
+  {name:"XLA_FLAGS",value:"--xla_dump_to=/tmp/hlo"}
+]}')"
+for VARIABLE in PROBE_ENTRY PROBE_ENVS PROBE_STEPS PROBE_ALLOW_CPU \
+  PROBE_BATCH PROBE_TRUNCATION PROBE_CORE PROBE_HIDDEN PROBE_FEATURE \
+  PROBE_DIFFERENTIATION; do
+  [ -n "${!VARIABLE+set}" ] || continue
+  echo "  forwarding $VARIABLE=${!VARIABLE}"
+  OVERRIDES="$(printf '%s' "$OVERRIDES" \
+    | jq -c --arg n "$VARIABLE" --arg v "${!VARIABLE}" \
+        '.environment += [{name:$n,value:$v}]')"
+done
 
 JOB_ID="$(aws batch submit-job --job-name "$NAME" \
   --job-queue "$QUEUE" --job-definition "$DEFINITION_ARN" \
