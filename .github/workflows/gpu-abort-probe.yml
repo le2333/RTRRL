@@ -1,9 +1,14 @@
 name: GPU abort probe
 
+# Dispatch only. The push trigger fired twice and both runs died on their first
+# AWS call: `rtrrl-github-actions-role` exists to push images to ECR and has no
+# batch:DescribeJobDefinitions, let alone RegisterJobDefinition, SubmitJob or the
+# iam:PassRole that registering a definition with a job role needs. Until that
+# role is widened this workflow cannot submit anything, and a trigger that fires
+# a guaranteed failure on every edit to the probe is worse than no trigger.
+# `scripts/run-gpu-abort-probe.sh` does the same work from a host whose own
+# credentials already reach Batch.
 on:
-  push:
-    branches: [fix/cuda-toolkit-cohort]
-    paths: [.github/workflows/gpu-abort-probe.yml, memo/docs/gpu-abort-probe.py]
   workflow_dispatch:
 
 permissions:
