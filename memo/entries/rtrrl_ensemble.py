@@ -19,6 +19,7 @@ from memorax.algorithms.rtrrl_aaai import METRICS as METRICS
 from memorax.algorithms.rtrrl_aaai import PARAMETERS as PARAMETERS
 from memorax.algorithms.rtrrl_aaai import RTRRL
 
+from ._ensemble import GROUPED as GROUPED
 from ._ensemble import main_for
 from .rtrrl import build_request, runtime_config
 

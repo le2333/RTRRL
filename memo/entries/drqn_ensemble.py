@@ -19,6 +19,7 @@ from memorax.algorithms.drqn import METRICS as METRICS
 from memorax.algorithms.drqn import PARAMETERS as PARAMETERS
 from memorax.algorithms.drqn import DRQN
 
+from ._ensemble import GROUPED as GROUPED
 from ._ensemble import main_for
 from .drqn import build_request, runtime_config
 

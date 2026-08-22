@@ -9,7 +9,7 @@ from pydantic import BaseModel, ConfigDict, model_validator
 # The version is written once, as the type. ``Literal`` will not take a name,
 # so the constant is read back out of it rather than spelled a second time
 # where the two could drift apart.
-ContractVersion: TypeAlias = Literal[12]
+ContractVersion: TypeAlias = Literal[13]
 CONTRACT_VERSION: ContractVersion = get_args(ContractVersion)[0]
 
 
@@ -18,9 +18,19 @@ class _Frozen(BaseModel):
 
 
 class EntryDescriptor(_Frozen):
+    """What an image can be asked to run, and how it must be asked.
+
+    ``grouped`` says this entry takes a whole group of run documents at once
+    rather than one, so the control plane writes them under ``groups`` and the
+    worker hands them to a single process. It is declared here rather than
+    inferred from the entry's name, because the control plane reads this to
+    decide what it may send and a convention is a thing to get wrong quietly.
+    """
+
     command: tuple[str, ...]
     metrics: tuple[str, ...]
     parameters: dict[str, Any]
+    grouped: bool = False
 
     @model_validator(mode="after")
     def _non_empty(self) -> "EntryDescriptor":

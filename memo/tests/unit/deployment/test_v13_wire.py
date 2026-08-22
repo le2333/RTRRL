@@ -1,4 +1,4 @@
-"""Every image-side consumer projects the same serialized version-12 run."""
+"""Every image-side consumer projects the same serialized version-13 run."""
 
 from __future__ import annotations
 
@@ -13,7 +13,7 @@ from deployment.contract import CONTRACT_VERSION, Catalog
 from entries._contract import RunSpec
 from worker.envelope import WorkerEnvelope
 
-FIXTURES = Path(__file__).resolve().parents[4] / "tests" / "contracts" / "v12"
+FIXTURES = Path(__file__).resolve().parents[4] / "tests" / "contracts" / "v13"
 
 
 def read_json(name: str) -> dict:
@@ -26,7 +26,7 @@ def test_one_serialized_run_has_worker_and_entry_projections() -> None:
     worker = WorkerEnvelope.model_validate(payload)
     entry = RunSpec.model_validate(payload)
 
-    assert worker.contract == entry.contract == CONTRACT_VERSION == 12
+    assert worker.contract == entry.contract == CONTRACT_VERSION == 13
     assert worker.identity.model_dump() == entry.identity.model_dump()
     assert worker.artifacts.model_dump() == entry.artifacts.model_dump()
     assert worker.algorithm == payload["algorithm"]
@@ -130,6 +130,18 @@ def test_image_catalog_uses_the_deployment_contract(tmp_path: Path) -> None:
         "-m",
         "entries.drqn_ensemble",
     )
+    # Which entries take a group is what the control plane reads to decide
+    # whether a round's runs go into a manifest as `runs` or as `groups`. An
+    # entry that predates groups says so rather than being absent, so nothing
+    # downstream has to treat a missing key as an answer.
+    assert {name: entry.grouped for name, entry in sorted(parsed.entries.items())} == {
+        "drqn": False,
+        "drqn_ensemble": True,
+        "r2d2": False,
+        "rtrrl": False,
+        "rtrrl_ensemble": True,
+        "stream_ac": False,
+    }
     for algorithm in ("drqn", "rtrrl"):
         alone = parsed.entries[algorithm]
         grouped = parsed.entries[f"{algorithm}_ensemble"]

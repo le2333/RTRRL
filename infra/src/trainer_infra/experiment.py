@@ -9,7 +9,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
-from trainer_infra.adapter import resolve_parameter_ranges
+from trainer_infra.adapter import resolve_parameter_ranges, static_names
 from trainer_infra.hpo import HPO
 from trainer_infra.scoring import ScoreSpec
 
@@ -177,6 +177,10 @@ class ExperimentRunner:
         # Echoed, not asserted: what the run configurations must claim is
         # whatever the image that will read them implements.
         self.contract = catalog["contract"]
+        # An entry that takes a whole group is asked for one; naming it in the
+        # experiment is the whole of how a grouped round is requested.
+        self.grouped = bool(descriptor.get("grouped", False))
+        self.static_parameters = static_names(descriptor["parameters"])
         self.score = ScoreSpec.from_mapping(experiment["score"])
         self._formal_is_measured()
 

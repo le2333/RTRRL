@@ -35,6 +35,8 @@ def discover() -> dict[str, Any]:
             for name in ("PARAMETERS", "METRICS", "main")
             if getattr(imported, name, None) is None
         ]
+        # `GROUPED` is optional, and absent means one run per process, which is
+        # what every entry did before any of them took a group.
         if missing:
             raise ValueError(
                 f"{imported.__name__} declares no {', '.join(missing)}; "
@@ -54,6 +56,7 @@ def build_catalog() -> Catalog:
                 command=("python", "-m", module.__name__),
                 metrics=tuple(module.METRICS),
                 parameters=describe(module.PARAMETERS),
+                grouped=bool(getattr(module, "GROUPED", False)),
             )
             for name, module in discover().items()
         },

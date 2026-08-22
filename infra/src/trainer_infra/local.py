@@ -61,7 +61,7 @@ class LocalRoundExecutor:
 
         manifest_path = directory / "manifest.json"
         manifest_path.write_text(
-            json.dumps({"runs": config_uris}, sort_keys=True),
+            json.dumps(self._manifest(configurations, config_uris), sort_keys=True),
             encoding="utf-8",
         )
         self.workspace.mkdir(parents=True, exist_ok=True)
@@ -89,6 +89,21 @@ class LocalRoundExecutor:
             )
 
         return self.score(configurations, score)
+
+    def _manifest(
+        self,
+        configurations: tuple[dict[str, Any], ...],
+        config_uris: list[str],
+    ) -> dict[str, Any]:
+        """The manifest this round's single worker is given.
+
+        The seam an ensemble executor overrides, and the only one: one worker
+        runs whatever the manifest names, so the difference between the two
+        channels is entirely in what it names.
+        """
+
+        del configurations
+        return {"runs": config_uris}
 
     def log_path(self, round_index: int) -> Path:
         return self.exchange / f"round-{round_index:03d}" / "worker.log"

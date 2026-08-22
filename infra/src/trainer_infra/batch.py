@@ -93,10 +93,10 @@ class BatchRoundExecutor:
             self._publish_configuration(configuration, round_index)
             for configuration in configurations
         )
-        groups = _groups(config_uris, self.parallel_jobs)
+        bodies = self._manifests(configurations, config_uris)
         job_ids = []
-        for job_index, group in enumerate(groups):
-            manifest_uri = self._publish_manifest(group, round_index, job_index)
+        for job_index, body in enumerate(bodies):
+            manifest_uri = self._publish_manifest(body, round_index, job_index)
             response = self.batch.submit_job(
                 jobName=f"{self.job_name}-r{round_index:03d}-j{job_index}",
                 jobQueue=self.job_queue,
@@ -121,11 +121,30 @@ class BatchRoundExecutor:
         self._put(uri, json.dumps(configuration, sort_keys=True).encode())
         return uri
 
+    def _manifests(
+        self,
+        configurations: tuple[dict[str, Any], ...],
+        config_uris: tuple[str, ...],
+    ) -> tuple[dict[str, Any], ...]:
+        """One manifest body per job: this round's runs, split across the jobs.
+
+        The seam an ensemble executor overrides. Nothing else about running a
+        round differs between the two channels -- the same configurations are
+        published, the same jobs submitted, the same scores read back -- so this
+        is the only thing a subclass has to say.
+        """
+
+        del configurations
+        return tuple(
+            {"runs": list(uris)}
+            for uris in _groups(config_uris, self.parallel_jobs)
+        )
+
     def _publish_manifest(
-        self, config_uris: tuple[str, ...], round_index: int, job_index: int
+        self, body: dict[str, Any], round_index: int, job_index: int
     ) -> str:
         uri = f"{self.exchange}/round-{round_index:03d}/job-{job_index:03d}.json"
-        self._put(uri, json.dumps({"runs": config_uris}, sort_keys=True).encode())
+        self._put(uri, json.dumps(body, sort_keys=True).encode())
         return uri
 
     def _wait(self, job_ids: list[str]) -> None:

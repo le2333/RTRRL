@@ -21,6 +21,27 @@ from typing import Any
 # The parameter a group selects its branch with. Written here rather than
 # imported, because the worker's copy of this word lives in a package this side
 # does not install; the two are kept equal by the round-trip test.
+def static_names(declared, prefix: str = "") -> frozenset[str]:
+    """Every leaf the image says must be known while its graph is built.
+
+    A width that sizes an array, a choice that selects a branch. The image
+    decides which, because only it knows what its graph does with a value, and
+    the catalog is where it says so.
+    """
+
+    found: set[str] = set()
+    for name, node in declared.items():
+        path = f"{prefix}{name}"
+        if not isinstance(node, dict):
+            continue
+        if "valid" in node:
+            if node.get("static"):
+                found.add(path)
+            continue
+        found |= static_names(node, f"{path}.")
+    return frozenset(found)
+
+
 KIND = "kind"
 
 

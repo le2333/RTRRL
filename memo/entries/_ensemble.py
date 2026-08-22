@@ -42,6 +42,11 @@ from ._observability import build_reporter
 
 GROUP_VARIABLE = "TRAINER_RUN_GROUP"
 
+# Read by the catalog, and through it by the control plane, which is what
+# decides whether a round's runs go into a manifest as `runs` or as `groups`.
+# An entry importing this is an entry that takes a group.
+GROUPED = True
+
 # What a member carries of its own, outside the parameters. Everything else at
 # this level has to match, because everything else went into the one graph and
 # the one schedule they share. The artifact root is here because it *must*
