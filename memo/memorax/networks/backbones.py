@@ -46,20 +46,20 @@ BPTT_BACKBONES = ("lstm",)
 
 @dataclass(frozen=True)
 class Rtu:
-    hidden_dim: int = param(valid=(1, 4096), search=(32, 512))
+    hidden_dim: int = param(valid=(1, 4096), search=(32, 512), static=True)
     differentiation: str = structure(branches=RTU_DIFFERENTIATION_FAMILY.branches)
 
 
 @dataclass(frozen=True)
 class Lru:
-    hidden_dim: int = param(valid=(1, 4096), search=(32, 512))
-    feature_dim: int = param(valid=(1, 4096), search=(16, 256))
+    hidden_dim: int = param(valid=(1, 4096), search=(32, 512), static=True)
+    feature_dim: int = param(valid=(1, 4096), search=(16, 256), static=True)
     differentiation: str = structure(branches=LRU_DIFFERENTIATION_FAMILY.branches)
 
 
 @dataclass(frozen=True)
 class Mlp:
-    hidden_dim: int = param(valid=(1, 4096), search=(32, 512))
+    hidden_dim: int = param(valid=(1, 4096), search=(32, 512), static=True)
     initialization: str = initialization()
 
 

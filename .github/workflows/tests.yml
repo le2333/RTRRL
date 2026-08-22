@@ -4,15 +4,28 @@ name: Tests
 # running out of memory, so this workflow is the only place tests execute.
 
 on:
+  # On the pull request as well as on main. This suite is the only place infra's
+  # tests run, so without this a branch that changes nothing but the control
+  # plane merges on a green tick that never executed any of it.
+  pull_request:
+    paths:
+      - .github/workflows/tests.yml
+      - infra/**
+      # infra's round-trip test validates against the deployment contract and
+      # the shipped experiment template. The path said `memo/worker/contract.py`
+      # until the module moved, which meant a contract change alone stopped
+      # triggering this suite -- silently, since a filter that matches nothing
+      # looks exactly like a change that touched nothing.
+      - memo/deployment/contract.py
+      - memo/memorax/parameters.py
+      - experiments/**
   push:
     branches:
       - main
     paths:
       - .github/workflows/tests.yml
       - infra/**
-      # infra's round-trip test validates against the worker's own contract
-      # module and the shipped experiment template.
-      - memo/worker/contract.py
+      - memo/deployment/contract.py
       - memo/memorax/parameters.py
       - experiments/**
   workflow_dispatch:

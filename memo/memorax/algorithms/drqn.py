@@ -78,7 +78,13 @@ from memorax.building import BuildContext, ComponentBuilder, ComponentFamily
 from memorax.networks import LayerNorm, Sequence, backbone
 from memorax.networks.heads import DiscreteQNetwork
 from memorax.observability.metrics import metric_names
-from memorax.parameters import describe_parameters, group, param, structure
+from memorax.parameters import (
+    describe_parameters,
+    group,
+    numeric,
+    param,
+    structure,
+)
 from memorax.readings import reading, taken
 from memorax.rl import (
     EnvironmentStreams,
@@ -121,15 +127,15 @@ class LruCore:
     excluding a value the other allows.
     """
 
-    hidden_dim: int = param(valid=(1, 4096), search=(32, 512))
-    feature_dim: int = param(valid=(1, 4096), search=(16, 256))
+    hidden_dim: int = param(valid=(1, 4096), search=(32, 512), static=True)
+    feature_dim: int = param(valid=(1, 4096), search=(16, 256), static=True)
 
 
 @dataclass(frozen=True)
 class RtuCore:
     """The RTU's width. It has no readout to size: its output is its carries."""
 
-    hidden_dim: int = param(valid=(1, 4096), search=(32, 512))
+    hidden_dim: int = param(valid=(1, 4096), search=(32, 512), static=True)
 
 
 @dataclass(frozen=True)
@@ -144,7 +150,7 @@ class LstmCore:
     comparison.
     """
 
-    hidden_dim: int = param(valid=(1, 4096), search=(32, 512))
+    hidden_dim: int = param(valid=(1, 4096), search=(32, 512), static=True)
 
 
 @dataclass(frozen=True)
@@ -157,7 +163,7 @@ class TruncatedParameters:
     and how far back its gradient reaches, which here are the same number.
     """
 
-    length: int = param(valid=(1, 4096), search=(1, 64))
+    length: int = param(valid=(1, 4096), search=(1, 64), static=True)
 
 
 @dataclass(frozen=True)
@@ -171,9 +177,15 @@ class ReplayParameters:
     episode it was drawn from, not by a parameter.
     """
 
-    capacity: int = param(valid=(1, 10_000_000), search=(1024, 1_000_000), log=True)
-    minimum_size: int = param(valid=(1, 10_000_000), search=(32, 100_000), log=True)
-    batch_size: int = param(valid=(1, 4096), search=(4, 256), log=True)
+    capacity: int = param(
+        valid=(1, 10_000_000), search=(1024, 1_000_000), log=True, static=True
+    )
+    minimum_size: int = param(
+        valid=(1, 10_000_000), search=(32, 100_000), log=True, static=True
+    )
+    batch_size: int = param(
+        valid=(1, 4096), search=(4, 256), log=True, static=True
+    )
 
 
 @dataclass(frozen=True)
@@ -904,10 +916,14 @@ class DRQN:
         return cls(
             cfg=DRQNConfig(
                 num_envs=context.num_envs,
-                epsilon_start=float(parameters["exploration.epsilon_start"]),
-                epsilon_end=float(parameters["exploration.epsilon_end"]),
-                epsilon_decay_steps=int(parameters["exploration.epsilon_decay_steps"]),
-                evaluation_epsilon=float(parameters["exploration.evaluation_epsilon"]),
+                epsilon_start=numeric(parameters["exploration.epsilon_start"]),
+                epsilon_end=numeric(parameters["exploration.epsilon_end"]),
+                epsilon_decay_steps=numeric(
+                    parameters["exploration.epsilon_decay_steps"], int
+                ),
+                evaluation_epsilon=numeric(
+                    parameters["exploration.evaluation_epsilon"]
+                ),
             ),
             env=context.environment,
             env_params=context.environment_parameters,
@@ -923,11 +939,15 @@ class DRQN:
                 ),
                 optimizer=step_transform(
                     components.build(DRQN_OPTIMIZERS, "optimizer"),
-                    grad_clip=float(parameters["grad_clip"]),
+                    grad_clip=numeric(parameters["grad_clip"]),
                 ),
-                gamma=float(parameters["gamma"]),
-                target_update_period=int(parameters["target.update_period"]),
+                gamma=numeric(parameters["gamma"]),
+                target_update_period=numeric(
+                    parameters["target.update_period"], int
+                ),
             ),
+            # Replay's three sizes keep their coercion: each of them declares
+            # `static=True`, and a member axis cannot vary what sizes an array.
             buffer=make_uniform_episode_window_buffer(
                 max_length=int(parameters["replay.capacity"]),
                 min_length=int(parameters["replay.minimum_size"]),

@@ -10,6 +10,7 @@ from typing import Any
 import yaml
 
 from trainer_infra.batch import REGION, BatchRoundExecutor, batch_target
+from trainer_infra.ensemble import BatchEnsembleExecutor, LocalEnsembleExecutor
 from trainer_infra.experiment import ExperimentRunner
 from trainer_infra.local import LocalRoundExecutor
 
@@ -45,14 +46,21 @@ def _executor(
     experiment: dict[str, Any],
     runner: ExperimentRunner,
 ) -> LocalRoundExecutor | BatchRoundExecutor:
+    # Which channel runs the round is the entry's own declaration, read off the
+    # image's catalog. An experiment asks for the parallel one by naming an
+    # entry that takes a group, and nothing else in the file has a say -- two
+    # places to ask would be two places to disagree.
+    parallel = {"static": runner.static_parameters} if runner.grouped else {}
     if arguments.backend == "local":
         if arguments.exchange is None or arguments.workspace is None:
             parser.error("local backend requires --exchange and --workspace")
-        return LocalRoundExecutor(
+        local = LocalEnsembleExecutor if runner.grouped else LocalRoundExecutor
+        return local(
             catalog=arguments.catalog,
             exchange=arguments.exchange,
             workspace=arguments.workspace,
             worker_command=arguments.worker_command,
+            **parallel,
         )
     target = batch_target(
         experiment["compute"]["instance_type"],
@@ -60,7 +68,8 @@ def _executor(
         runner.digest,
     )
     session = _batch_session()
-    return BatchRoundExecutor(
+    batch = BatchEnsembleExecutor if runner.grouped else BatchRoundExecutor
+    return batch(
         s3=session.client("s3"),
         batch=session.client("batch"),
         logs=session.client("logs"),
@@ -74,6 +83,7 @@ def _executor(
         timeout_seconds=int(experiment["compute"]["timeout_minutes"]) * 60,
         parallel_jobs=int(experiment["hpo"]["parallel_jobs"]),
         poll_seconds=arguments.poll_seconds,
+        **parallel,
     )
 
 

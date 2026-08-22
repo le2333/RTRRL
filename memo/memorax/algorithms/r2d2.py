@@ -55,21 +55,25 @@ class RecurrentParameters:
     sequence, which is differentiated by ordinary reverse mode either way.
     """
 
-    feature_dim: int = param(valid=(1, 4096), search=(16, 256))
-    hidden_dim: int = param(valid=(1, 4096), search=(32, 512))
+    feature_dim: int = param(valid=(1, 4096), search=(16, 256), static=True)
+    hidden_dim: int = param(valid=(1, 4096), search=(32, 512), static=True)
 
 
 @dataclass(frozen=True)
 class TbpttParameters:
-    burn_in_length: int = param(valid=(0, 4096), search=(0, 80))
-    unroll_length: int = param(valid=(1, 4096), search=(8, 160))
+    burn_in_length: int = param(valid=(0, 4096), search=(0, 80), static=True)
+    unroll_length: int = param(valid=(1, 4096), search=(8, 160), static=True)
 
 
 @dataclass(frozen=True)
 class ReplayParameters:
-    capacity: int = param(valid=(1, 10_000_000), search=(1024, 1_000_000), log=True)
-    minimum_size: int = param(valid=(1, 10_000_000), search=(32, 100_000), log=True)
-    batch_size: int = param(valid=(1, 4096), search=(4, 256), log=True)
+    capacity: int = param(
+        valid=(1, 10_000_000), search=(1024, 1_000_000), log=True, static=True
+    )
+    minimum_size: int = param(
+        valid=(1, 10_000_000), search=(32, 100_000), log=True, static=True
+    )
+    batch_size: int = param(valid=(1, 4096), search=(4, 256), log=True, static=True)
     priority_exponent: float = param(valid=(0.0, 1.0), search=(0.0, 1.0))
     importance_sampling_exponent: float = param(valid=(0.0, 1.0), search=(0.0, 1.0))
     max_priority_weight: float = param(valid=(0.0, 1.0), search=(0.0, 1.0))

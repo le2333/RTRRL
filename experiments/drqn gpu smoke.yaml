@@ -1,0 +1,125 @@
+# DRQN on a GPU instance, at half the acceptance budget.
+#
+# Two questions, in this order.
+#
+# First: does the CUDA image compile at all. The last GPU image aborted on a
+# double free inside XLA before it finished compiling `train`, which is why
+# every run since has been on CPU. That image is gone -- it was built by a
+# superseded Dockerfile, against an algorithm that has since been rewritten --
+# so the abort is not so much unfixed as unasked. This file is the asking, and
+# it is a DRQN file rather than a stream_ac one because DRQN is the entry whose
+# shape a GPU could actually pay for: it draws a batch of windows from replay
+# and updates on all of them at once, where stream_ac's sixteen streams make
+# kernels too small to fill a GPU.
+#
+# Second, and only if the first is yes: what a step costs here. Everything below
+# the compute block is `drqn acceptance.yaml` unchanged, so this run's seconds
+# per step are comparable with that run's on c7a.large. Nothing about the
+# learner is varied to suit the instance -- a GPU that needs different settings
+# to win has not won at this configuration.
+#
+# Half the acceptance budget rather than a tenth, because two evaluation
+# intervals is the smallest shape that separates startup from steady state: the
+# first chunk pays for compilation and the second does not. A single-chunk run
+# would price the compile and call it throughput.
+#
+# What the run is read for:
+#   - the worker exits 0, which is by itself the answer to the first question
+#   - two evaluation checkpoints at 5000 and 10000, each of exactly ten
+#     eval/episode/return records
+#   - every train/episode and eval/episode value finite
+#   - the wall clock of the second chunk against the same chunk on c7a.large
+
+experiment: drqn-gpu-smoke
+name: drqn-gpu-smoke-truncation-10
+description: "DRQN on g6.xlarge: does the CUDA image compile, and what does a step cost"
+
+image: 007122174918.dkr.ecr.eu-north-1.amazonaws.com/rtrrl@sha256:73ff0adce076ab3cd549e1c6472bfe25967e9718ac52a4e27e8162c7a1273ac4
+entry: drqn
+storage: s3://rtrrl-artifacts-007122174918/trainer
+
+environment:
+  id: gymnax::CartPole-v1
+  backend: null # gymnax ships one implementation per environment
+  observed: null
+  seeds: [0]
+  episode_length: 32
+
+training:
+  num_envs: 1
+  total_steps: 10000
+  chunk_steps: 5000
+
+evaluation:
+  every_steps: 5000
+  episodes: 10
+  chunk_steps: 320
+  seed: 1000
+
+logging:
+  aim:
+    url: aim://172.31.62.192:53801
+    training:
+      window:
+        every_steps: 5000
+
+score:
+  metric: eval/episode/return
+  window_steps: [0, 10000]
+  reduce: auc
+  episodes_per_checkpoint: 10
+  non_finite: worst
+  direction: maximize
+
+compute:
+  instance_type: g6.xlarge
+  timeout_minutes: 60
+
+# No search. This run checks a path, and every leaf below is pinned.
+hpo:
+  rounds: 1
+  trials_per_round: 1
+  parallel_jobs: 1
+  startup_trials: 1
+  seed: 0
+
+# Everything from here down is `drqn acceptance.yaml` verbatim. It is duplicated
+# rather than shared because a comparison against that run is only worth making
+# if the learner is bit-for-bit the same one, and a file that inherits can have
+# that changed underneath it.
+space:
+  core:
+    kind: [lru]
+    lru:
+      hidden_dim: [64]
+      feature_dim: [64]
+
+  learning:
+    kind: [truncated]
+    truncated:
+      length: [10]
+
+  optimizer:
+    kind: [adadelta]
+    adadelta:
+      lr: [0.1]
+      rho: [0.95]
+      eps: [0.00000001]
+
+  grad_clip: [10.0]
+
+  replay:
+    capacity: [8192]
+    minimum_size: [256]
+    batch_size: [8]
+
+  target:
+    update_period: [100]
+
+  exploration:
+    epsilon_start: [1.0]
+    epsilon_end: [0.05]
+    epsilon_decay_steps: [10000]
+    evaluation_epsilon: [0.0]
+
+  gamma: [0.99]
