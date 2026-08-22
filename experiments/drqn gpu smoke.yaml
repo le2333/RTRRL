@@ -34,7 +34,7 @@ experiment: drqn-gpu-smoke
 name: drqn-gpu-smoke-truncation-10
 description: "DRQN on g6.xlarge: does the CUDA image compile, and what does a step cost"
 
-image: 007122174918.dkr.ecr.eu-north-1.amazonaws.com/rtrrl@sha256:c61793b630ce46aa11217ea0a82f5da71374cb901755bc287d8c6b938d8d7ffe
+image: 007122174918.dkr.ecr.eu-north-1.amazonaws.com/rtrrl@sha256:73ff0adce076ab3cd549e1c6472bfe25967e9718ac52a4e27e8162c7a1273ac4
 entry: drqn
 storage: s3://rtrrl-artifacts-007122174918/trainer
 

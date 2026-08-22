@@ -30,7 +30,7 @@ experiment: rtrrl-gpu-ensemble
 name: rtrrl-gpu-ensemble-halfcheetah
 description: "RTRRL on g6.xlarge: six members of one graph, sweeping gamma"
 
-image: 007122174918.dkr.ecr.eu-north-1.amazonaws.com/rtrrl@sha256:c61793b630ce46aa11217ea0a82f5da71374cb901755bc287d8c6b938d8d7ffe
+image: 007122174918.dkr.ecr.eu-north-1.amazonaws.com/rtrrl@sha256:73ff0adce076ab3cd549e1c6472bfe25967e9718ac52a4e27e8162c7a1273ac4
 # The parallel channel; see `drqn gpu ensemble.yaml` for how an entry asks.
 entry: rtrrl_ensemble
 storage: s3://rtrrl-artifacts-007122174918/trainer
