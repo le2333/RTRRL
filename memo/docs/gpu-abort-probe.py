@@ -101,7 +101,19 @@ def main() -> int:
     num_envs = int(os.environ.get("PROBE_ENVS", "1"))
     steps = int(os.environ.get("PROBE_STEPS", "512"))
 
-    mark(f"jax {jax.__version__} on {jax.default_backend()} {jax.devices()}")
+    backend = jax.default_backend()
+    devices = jax.devices()
+    mark(f"jax {jax.__version__} on {backend} {devices}")
+    # A CUDA plugin that failed to initialize does not stop the process: it
+    # falls back, and this runs to completion on the CPU of a GPU instance
+    # while reporting that nothing aborted. That reading is worse than a
+    # crash, because it is wrong and it looks like an answer. The only run
+    # worth paying an instance for is one that reached the device.
+    if backend != "gpu" and not os.environ.get("PROBE_ALLOW_CPU"):
+        raise SystemExit(
+            f"probe landed on {backend!r}, not a GPU: {devices}. "
+            "Set PROBE_ALLOW_CPU=1 to compile this graph on the CPU on purpose."
+        )
     mark(
         f"batch={parameters['replay.batch_size']} "
         f"truncation={parameters['learning.truncated.length']} "

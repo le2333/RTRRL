@@ -34,14 +34,19 @@ jobs:
           BASE="$(aws batch describe-job-definitions --status ACTIVE --output json \
             | jq -c '[.jobDefinitions[] | select(.jobDefinitionName | startswith("trainer-g6x-"))] | last')"
           test "$BASE" != null
-          WRAPPER='import base64,os,subprocess,sys; rc=subprocess.run([sys.executable,"-c",base64.b64decode(os.environ["PROBE_SOURCE"])]).returncode; raise SystemExit(rc)'
+          # Compressed, because ECS caps a container override at 8192 characters
+          # and the plain base64 of the probe is already near it. gzip wrapping
+          # is what `zlib.decompress(..., 31)` reads.
+          WRAPPER='import base64,os,subprocess,sys,zlib; rc=subprocess.run([sys.executable,"-c",zlib.decompress(base64.b64decode(os.environ["PROBE_SOURCE"]),31)]).returncode; raise SystemExit(rc)'
           DEFINITION="$(printf '%s' "$BASE" | jq -c \
             --arg name "gpu-abort-probe-${GITHUB_RUN_ID}" \
             --arg image "$IMAGE" \
             --arg wrapper "$WRAPPER" \
             'del(.jobDefinitionArn,.revision,.status,.tags) | .jobDefinitionName=$name | .containerProperties.image=$image | .containerProperties.command=["python","-c",$wrapper]')"
           DEFINITION_ARN="$(aws batch register-job-definition --cli-input-json "$DEFINITION" --query jobDefinitionArn --output text)"
-          SOURCE="$(base64 -w 0 memo/docs/gpu-abort-probe.py)"
+          SOURCE="$(gzip -9 -c memo/docs/gpu-abort-probe.py | base64 -w 0)"
+          echo "probe override is ${#SOURCE} characters of the 8192 ECS allows"
+          test "${#SOURCE}" -lt 7000
           OVERRIDES="$(jq -cn --arg source "$SOURCE" '{environment:[
             {name:"PROBE_SOURCE",value:$source},
             {name:"PROBE_BATCH",value:"8"},
