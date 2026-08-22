@@ -18,6 +18,7 @@ from __future__ import annotations
 from collections.abc import Iterator, Mapping
 from typing import Any
 
+
 # The parameter a group selects its branch with. Written here rather than
 # imported, because the worker's copy of this word lives in a package this side
 # does not install; the two are kept equal by the round-trip test.

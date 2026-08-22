@@ -9,8 +9,8 @@ from typing import Any
 
 import yaml
 
-from trainer_infra.ensemble import BatchEnsembleExecutor, LocalEnsembleExecutor
 from trainer_infra.batch import REGION, BatchRoundExecutor, batch_target
+from trainer_infra.ensemble import BatchEnsembleExecutor, LocalEnsembleExecutor
 from trainer_infra.experiment import ExperimentRunner
 from trainer_infra.local import LocalRoundExecutor
 

@@ -227,7 +227,11 @@ def run_group(
             config=runtime_config(shared),
             seeds=tuple(spec.training.seed for spec, _ in members),
             build=(
-                (lambda parameters: assemble(definition, replace(request, parameters=parameters)))
+                (
+                    lambda parameters: assemble(
+                        definition, replace(request, parameters=parameters)
+                    )
+                )
                 if swept
                 else None
             ),
@@ -242,7 +246,7 @@ def main_for(
     build_request: Callable[[RunSpec], Any],
     runtime_config: Callable[[RunSpec], RuntimeConfig],
     declared: Any,
-) -> Callable[[list[str] | None], int]:
+) -> Callable[..., int]:
     """The ``main`` an algorithm's ensemble entry exposes to the catalog."""
 
     def main(argv: list[str] | None = None) -> int:

@@ -174,7 +174,7 @@ def describe(tree: ParameterTree) -> dict[str, Any]:
 
 
 def _describe_parameter(parameter: Parameter) -> dict[str, Any]:
-    described = {
+    described: dict[str, Any] = {
         "valid": _describe_range(parameter.valid),
         "search": _describe_range(parameter.search),
     }

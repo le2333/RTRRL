@@ -15,9 +15,9 @@ from __future__ import annotations
 
 import sys
 
+from memorax.algorithms.drqn import DRQN
 from memorax.algorithms.drqn import METRICS as METRICS
 from memorax.algorithms.drqn import PARAMETERS as PARAMETERS
-from memorax.algorithms.drqn import DRQN
 
 from ._ensemble import GROUPED as GROUPED
 from ._ensemble import main_for

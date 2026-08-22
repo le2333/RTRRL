@@ -166,9 +166,7 @@ def test_worker_runs_a_group_and_publishes_every_member(
             .decode()
             .splitlines()
         ]
-        values = [
-            row["metrics"][METRIC] for row in records if METRIC in row["metrics"]
-        ]
+        values = [row["metrics"][METRIC] for row in records if METRIC in row["metrics"]]
         assert values
         assert all(math.isfinite(value) for value in values)
         series[spec.identity.seed] = values
@@ -228,9 +226,7 @@ def test_worker_runs_a_group_that_sweeps_a_value(
 
     series = {}
     for spec in specs:
-        result = json.loads(
-            objects.get_bytes(f"{spec.artifacts.root}/result.json")
-        )
+        result = json.loads(objects.get_bytes(f"{spec.artifacts.root}/result.json"))
         assert result["identity"]["run_id"] == spec.identity.run_id
         assert result["identity"]["trial"] == spec.identity.trial
         assert result["success"] is True

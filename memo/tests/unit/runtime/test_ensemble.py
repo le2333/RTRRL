@@ -133,9 +133,7 @@ def summarize(recorder: EpisodeRecorder) -> list[tuple]:
     ]
 
 
-@pytest.mark.parametrize(
-    "round_", [(3,), (3, 4), (9, 3, 4), (4, 1, 3, 8, 6)]
-)
+@pytest.mark.parametrize("round_", [(3,), (3, 4), (9, 3, 4), (4, 1, 3, 8, 6)])
 def test_a_member_does_not_depend_on_the_round_it_travelled_in(round_):
     """Seed 3 gets the same episodes whoever else is in the job.
 
@@ -234,9 +232,9 @@ def test_one_seed_under_two_swept_values_is_two_members():
 
 def test_a_destination_is_required_for_every_member():
     with pytest.raises(ValueError, match="2 destinations for 3 members"):
-        EnsembleRuntime(
-            algorithm=algorithm(), config=config(), seeds=(3, 4, 5)
-        ).run([EpisodeRecorder(), EpisodeRecorder()])
+        EnsembleRuntime(algorithm=algorithm(), config=config(), seeds=(3, 4, 5)).run(
+            [EpisodeRecorder(), EpisodeRecorder()]
+        )
 
 
 # --------------------------------------------------------------- swept values

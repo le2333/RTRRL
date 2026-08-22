@@ -73,9 +73,7 @@ class ReplayParameters:
     minimum_size: int = param(
         valid=(1, 10_000_000), search=(32, 100_000), log=True, static=True
     )
-    batch_size: int = param(
-        valid=(1, 4096), search=(4, 256), log=True, static=True
-    )
+    batch_size: int = param(valid=(1, 4096), search=(4, 256), log=True, static=True)
     priority_exponent: float = param(valid=(0.0, 1.0), search=(0.0, 1.0))
     importance_sampling_exponent: float = param(valid=(0.0, 1.0), search=(0.0, 1.0))
     max_priority_weight: float = param(valid=(0.0, 1.0), search=(0.0, 1.0))

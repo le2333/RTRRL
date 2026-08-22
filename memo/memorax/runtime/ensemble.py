@@ -86,8 +86,7 @@ class EnsembleRuntime:
         for path, values in self.swept.items():
             if len(values) != len(self.seeds):
                 raise ValueError(
-                    f"{path} has {len(values)} values for "
-                    f"{len(self.seeds)} members"
+                    f"{path} has {len(values)} values for " f"{len(self.seeds)} members"
                 )
 
         # A member is its seed *and* the values it was handed. Two members on
@@ -141,9 +140,7 @@ class EnsembleRuntime:
                 steps = min(config.chunk_steps, boundary - trained_steps)
                 keys, chunk_keys = _split(keys)
                 state, chunk = train(*varied, chunk_keys, state, steps)
-                for member, (tracker, reporter) in enumerate(
-                    zip(trackers, reporters)
-                ):
+                for member, (tracker, reporter) in enumerate(zip(trackers, reporters)):
                     _publish(
                         reporter,
                         tracker.consume(
@@ -197,28 +194,28 @@ class EnsembleRuntime:
             )
 
         build = self.build
+        if build is None:  # pragma: no cover - __post_init__ rules this out
+            raise ValueError("a swept ensemble reached its arrows with no build")
         shared = dict(self.parameters)
 
-        def program(overrides):
+        def arrows_of(overrides: Mapping[str, Any]):
             return build({**shared, **overrides}).program
 
         return (
-            jax.jit(jax.vmap(lambda o, key: program(o).init(key))),
+            jax.jit(jax.vmap(lambda o, key: arrows_of(o).init(key))),
             jax.jit(
                 jax.vmap(
-                    lambda o, key, state, steps: program(o).train(key, state, steps),
+                    lambda o, key, state, steps: arrows_of(o).train(key, state, steps),
                     in_axes=(0, 0, 0, None),
                 ),
                 static_argnums=3,
             ),
             jax.jit(
-                jax.vmap(
-                    lambda o, key, state: program(o).open_evaluation(key, state)
-                )
+                jax.vmap(lambda o, key, state: arrows_of(o).open_evaluation(key, state))
             ),
             jax.jit(
                 jax.vmap(
-                    lambda o, key, run, steps: program(o).evaluate(key, run, steps),
+                    lambda o, key, run, steps: arrows_of(o).evaluate(key, run, steps),
                     in_axes=(0, 0, 0, None),
                 ),
                 static_argnums=3,

@@ -67,9 +67,7 @@ def _run_group(config_uris, catalog: Catalog, workspace: Path) -> None:
     ]
     if not configs:
         raise WorkerError("a group in this manifest names no runs")
-    scratches = [
-        Path(tempfile.mkdtemp(prefix="run-", dir=workspace)) for _ in configs
-    ]
+    scratches = [Path(tempfile.mkdtemp(prefix="run-", dir=workspace)) for _ in configs]
     index = Path(tempfile.mkdtemp(prefix="group-", dir=workspace))
     try:
         _execute_group(configs, catalog, scratches, index)
@@ -91,9 +89,7 @@ def _execute_group(
         raise WorkerError(f"a group names more than one entry: {sorted(named)}")
     entry = catalog.entries.get(configs[0].entry)
     if entry is None:
-        raise WorkerError(
-            f"image catalog does not declare entry {configs[0].entry!r}"
-        )
+        raise WorkerError(f"image catalog does not declare entry {configs[0].entry!r}")
 
     members = []
     for config, scratch in zip(configs, scratches, strict=True):
