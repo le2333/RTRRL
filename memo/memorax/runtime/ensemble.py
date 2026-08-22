@@ -5,12 +5,20 @@ one graph and a device can be filled by the sweep rather than by enlarging any
 single run. This is :mod:`~memorax.runtime.driver` with a member axis: the same
 five arrows, the same episode tracking, the same reported episodes, mapped.
 
-Seeds only. The arrows are vmapped over their key argument and the algorithm is
-built exactly once, because members that differ only in a seed share their
-graph down to the constant. Members that differ in a *value* -- a learning rate,
-a discount -- need the build itself inside the map, which is a larger change and
-is not this one. Nothing here forecloses it: the member axis and the per-member
-reporting it needs are the same either way.
+Two ways to differ. Members that differ only in a seed share their graph down
+to the constant, so it is built once and the arrows are vmapped over their key.
+Members that differ in a *value* -- a learning rate, a discount -- need the
+build inside the map, because vmap maps over arguments and a value closed into
+a graph is not one.
+
+Which of the two is in use is the only branch, and it is at the arrows. The
+schedule below them is one loop either way, so a round of seeds runs exactly the
+compiled graph it ran before this could sweep anything.
+
+A swept leaf has to be one the graph reads arithmetically. One that sizes an
+array or selects a branch cannot vary across members, who share both, and those
+are declared ``static`` where they are declared -- the entry refuses them before
+a job compiles anything.
 
 Members are not streams. ``num_envs`` streams inside a member share a policy and
 a set of parameters; two members share nothing but their shapes, and folding one
@@ -21,10 +29,12 @@ and the only place they meet is the compiled graph.
 
 from __future__ import annotations
 
-from collections.abc import Sequence
-from dataclasses import dataclass, replace
+from collections.abc import Mapping, Sequence
+from dataclasses import dataclass, field, replace
+from typing import Any, Callable
 
 import jax
+import jax.numpy as jnp
 
 from memorax.runtime.driver import (
     Destination,
@@ -57,12 +67,30 @@ class EnsembleRuntime:
     algorithm: BuiltAlgorithm
     config: RuntimeConfig
     seeds: tuple[int, ...]
+    # Set both or neither. `build` turns one member's parameters into its graph
+    # and `swept` gives each member its own values; `algorithm` is still
+    # required, because the observation schema is read from it and a schema does
+    # not depend on the values a sweep varies.
+    build: Callable[[Mapping[str, Any]], BuiltAlgorithm] | None = None
+    parameters: Mapping[str, Any] = field(default_factory=dict)
+    swept: Mapping[str, Sequence[Any]] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
         if not self.seeds:
             raise ValueError("an ensemble needs at least one member")
         if len(set(self.seeds)) != len(self.seeds):
             raise ValueError(f"the seeds repeat: {self.seeds}")
+        if bool(self.swept) != (self.build is not None):
+            raise ValueError(
+                "a swept ensemble needs both a build and the values to sweep; "
+                f"got build={self.build is not None} swept={sorted(self.swept)}"
+            )
+        for path, values in self.swept.items():
+            if len(values) != len(self.seeds):
+                raise ValueError(
+                    f"{path} has {len(values)} values for "
+                    f"{len(self.seeds)} members"
+                )
 
     @property
     def members(self) -> int:
@@ -83,18 +111,12 @@ class EnsembleRuntime:
             num_envs=config.num_envs,
         )
 
-        program = self.algorithm.program
-        # `steps` stays static, as it is in the driver: it is a scan length.
-        # Every other argument carries the member axis.
-        train = jax.jit(jax.vmap(program.train, in_axes=(0, 0, None)), static_argnums=2)
-        open_evaluation = jax.jit(jax.vmap(program.open_evaluation))
-        evaluate = jax.jit(
-            jax.vmap(program.evaluate, in_axes=(0, 0, None)), static_argnums=2
-        )
+        init, train, open_evaluation, evaluate = self._arrows()
+        varied = self._varied()
 
         keys = jax.numpy.stack([jax.random.key(seed) for seed in self.seeds])
         keys, init_keys = _split(keys)
-        state = jax.jit(jax.vmap(program.init))(init_keys)
+        state = init(*varied, init_keys)
         # Never split from `keys`: whether a member was measured must not change
         # what it then learned, exactly as in the single-member driver.
         evaluation_key = jax.random.key(config.evaluation_seed)
@@ -107,7 +129,7 @@ class EnsembleRuntime:
             while trained_steps < boundary:
                 steps = min(config.chunk_steps, boundary - trained_steps)
                 keys, chunk_keys = _split(keys)
-                state, chunk = train(chunk_keys, state, steps)
+                state, chunk = train(*varied, chunk_keys, state, steps)
                 for member, (tracker, reporter) in enumerate(
                     zip(trackers, reporters)
                 ):
@@ -125,11 +147,72 @@ class EnsembleRuntime:
                 reporters,
                 open_evaluation,
                 evaluate,
+                varied,
                 jax.random.fold_in(evaluation_key, boundary),
                 state,
                 boundary=boundary,
                 first_number=eval_number,
             )
+
+    def _varied(self) -> tuple:
+        """The swept values as one mapped argument, or nothing to map."""
+
+        if not self.swept:
+            return ()
+        return ({path: jnp.asarray(values) for path, values in self.swept.items()},)
+
+    def _arrows(self):
+        """The four arrows, mapped, and built where the members require.
+
+        Seeds alone: one graph, built here, and the arrows are its own methods.
+        A sweep: the graph is built inside each arrow from that member's leaves,
+        which costs a build per trace -- four of them for a job -- and buys the
+        only thing that makes a value mappable at all.
+        """
+
+        if not self.swept:
+            program = self.algorithm.program
+            # `steps` stays static, as in the driver: it is a scan length.
+            return (
+                jax.jit(jax.vmap(program.init)),
+                jax.jit(
+                    jax.vmap(program.train, in_axes=(0, 0, None)), static_argnums=2
+                ),
+                jax.jit(jax.vmap(program.open_evaluation)),
+                jax.jit(
+                    jax.vmap(program.evaluate, in_axes=(0, 0, None)),
+                    static_argnums=2,
+                ),
+            )
+
+        build = self.build
+        shared = dict(self.parameters)
+
+        def program(overrides):
+            return build({**shared, **overrides}).program
+
+        return (
+            jax.jit(jax.vmap(lambda o, key: program(o).init(key))),
+            jax.jit(
+                jax.vmap(
+                    lambda o, key, state, steps: program(o).train(key, state, steps),
+                    in_axes=(0, 0, 0, None),
+                ),
+                static_argnums=3,
+            ),
+            jax.jit(
+                jax.vmap(
+                    lambda o, key, state: program(o).open_evaluation(key, state)
+                )
+            ),
+            jax.jit(
+                jax.vmap(
+                    lambda o, key, run, steps: program(o).evaluate(key, run, steps),
+                    in_axes=(0, 0, 0, None),
+                ),
+                static_argnums=3,
+            ),
+        )
 
     def _tracker(self) -> EpisodeTracker:
         config = self.config
@@ -145,6 +228,7 @@ class EnsembleRuntime:
         reporters: Sequence[Destination],
         open_evaluation,
         evaluate,
+        varied: tuple,
         key,
         state,
         *,
@@ -177,7 +261,7 @@ class EnsembleRuntime:
         # than merely both measured. It is also what makes a member's evaluation
         # identical to the one the single-member driver would have given it.
         member_keys = jax.numpy.stack([open_key] * self.members)
-        evaluation = open_evaluation(member_keys, state)
+        evaluation = open_evaluation(*varied, member_keys, state)
         spent = 0
         while not all(
             len(found) >= wanted
@@ -197,7 +281,7 @@ class EnsembleRuntime:
                 )
             steps = min(config.evaluation_chunk_steps, budget - spent)
             member_keys, chunk_keys = _split(member_keys)
-            evaluation, chunk = evaluate(chunk_keys, evaluation, steps)
+            evaluation, chunk = evaluate(*varied, chunk_keys, evaluation, steps)
             for member in range(self.members):
                 result = trackers[member].consume(
                     _member(chunk, member), start_env_steps=boundary

@@ -83,13 +83,34 @@ class Parameter:
     outside [0, 1] is not a bad idea, it is not a discount. ``search`` is a
     suggestion an experiment may narrow, so it has to be bounded on both sides
     even where ``valid`` is not: a sampler cannot draw from an open interval.
+
+    ``static`` says the value has to be known while the graph is built, rather
+    than only while it runs. Two kinds of leaf are: one that sizes an array -- a
+    width, a window, a buffer -- and one that selects which code runs at all. It
+    is not a third domain, since every value in ``valid`` is still a value the
+    component accepts. What it rules out is *varying* the leaf across the
+    members of one vmapped round, because the members share both their shapes
+    and their graph. A sweep that named one would otherwise fail several frames
+    inside a trace, on a machine already paid for, under an error naming a jax
+    internal rather than the leaf.
+
+    A choice sets this for itself. It is declared for numbers, because nothing
+    about a width's domain tells it apart from a discount's.
     """
 
     valid: Range
     search: Range
+    static: bool = False
 
     def __post_init__(self) -> None:
         _within(self.valid, self.search)
+        # A choice is static whether or not anyone said so. Its values are
+        # strings and booleans, which no trace can carry, and what a component
+        # does with one is pick -- `if meta_rl`, `sample - mean if center`. A
+        # declaration is still needed for the numbers that size arrays, because
+        # nothing about a width's domain distinguishes it from a discount's.
+        if isinstance(self.valid, Choice):
+            object.__setattr__(self, "static", True)
 
 
 ParameterNode: TypeAlias = "Parameter | Mapping[str, ParameterNode]"
@@ -153,10 +174,16 @@ def describe(tree: ParameterTree) -> dict[str, Any]:
 
 
 def _describe_parameter(parameter: Parameter) -> dict[str, Any]:
-    return {
+    described = {
         "valid": _describe_range(parameter.valid),
         "search": _describe_range(parameter.search),
     }
+    # Written only where it is true, so a leaf a sweep may vary describes
+    # exactly as it always did, and the control plane reads the constraint
+    # rather than inferring it from a type.
+    if parameter.static:
+        described["static"] = True
+    return described
 
 
 def _describe_range(domain: Range) -> dict[str, Any]:
@@ -188,6 +215,7 @@ def param(
     default: Any = MISSING,
     log: bool = False,
     step: int = 1,
+    static: bool = False,
 ) -> Any:
     """Declare one parameter as a dataclass field.
 
@@ -208,6 +236,7 @@ def param(
         "parameter": Parameter(
             valid=_domain(valid, log=log, step=step, open_ended=True),
             search=_domain(search, log=log, step=step, open_ended=False),
+            static=static,
         )
     }
     if default is MISSING:
@@ -312,6 +341,31 @@ def _branches(item: DataclassField) -> dict[str, ParameterNode]:
 
 
 # ------------------------------------------------------------------- reading
+
+
+def numeric(value: Any, cast: Callable[[Any], Any] = float) -> Any:
+    """A leaf as a graph should read it, whether or not a sweep is varying it.
+
+    The manifest is JSON, so a discount written ``1`` arrives as an int, and
+    coercing is what keeps the arithmetic in the type the component meant. A
+    leaf a sweep is varying arrives as a tracer and has no Python number to
+    become -- that its value is unknown while the graph is built is the whole
+    point of a member axis. So coerce what can be coerced and pass through what
+    cannot, rather than making each call site ask which case it is in.
+
+    A leaf that decides a *shape* must not come through here. Those are declared
+    ``shapes=True`` and keep their own ``int(...)``, so a sweep that named one
+    fails where the value is read, naming the leaf, instead of failing several
+    frames deep in a trace on a machine already paid for.
+
+    ``jax.errors.ConcretizationTypeError`` is a ``TypeError``, which is why this
+    needs no import of jax to tell the two cases apart.
+    """
+
+    try:
+        return cast(value)
+    except TypeError:
+        return value
 
 
 def read_parameters(model: type, params: Mapping[str, Any], prefix: str = "") -> Any:

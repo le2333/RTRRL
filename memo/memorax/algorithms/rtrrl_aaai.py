@@ -45,7 +45,13 @@ from memorax.networks.sequence import PLACES, Sequence
 from memorax.networks.sequence_models.lru import LRU_DIFFERENTIATION_FAMILY
 from memorax.networks.sequence_models.rtu import RTU_DIFFERENTIATION_FAMILY
 from memorax.observability.metrics import metric_names
-from memorax.parameters import describe_parameters, group, param, structure
+from memorax.parameters import (
+    describe_parameters,
+    group,
+    numeric,
+    param,
+    structure,
+)
 from memorax.readings import reading, readings, taken
 from memorax.rl import (
     EnvironmentStreams,
@@ -144,8 +150,8 @@ RTRRL_OPTIMIZERS = STEP_FAMILY.restricted("adam", "d_rtrrl", "iu")
 class LruTorso:
     """RTRRL's projection width and LRU-specific recurrent choices."""
 
-    hidden_dim: int = param(valid=(1, 4096), search=(32, 512))
-    feature_dim: int = param(valid=(1, 4096), search=(16, 256))
+    hidden_dim: int = param(valid=(1, 4096), search=(32, 512), static=True)
+    feature_dim: int = param(valid=(1, 4096), search=(16, 256), static=True)
     differentiation: str = structure(branches=LRU_DIFFERENTIATION_FAMILY.branches)
 
 
@@ -157,7 +163,7 @@ class RtuTorso:
     carries concatenated, so ``hidden_dim`` fixes it.
     """
 
-    hidden_dim: int = param(valid=(1, 4096), search=(32, 512))
+    hidden_dim: int = param(valid=(1, 4096), search=(32, 512), static=True)
     differentiation: str = structure(branches=RTU_DIFFERENTIATION_FAMILY.branches)
 
 
@@ -1280,7 +1286,7 @@ class RTRRL:
     ) -> RTRRL:
         """Declare the shared torso, the two readouts, and a rule for each."""
 
-        gamma = float(parameters["gamma"])
+        gamma = numeric(parameters["gamma"])
         meta_rl = bool(parameters["meta_rl"])
         classes = action_classes(context.action_space)
         # What the cell reads, now that nothing widens it first: the observation,
@@ -1298,14 +1304,14 @@ class RTRRL:
             RTRRLConfig(
                 num_envs=context.num_envs,
                 gamma=gamma,
-                lambda_pi=float(parameters["lambda_pi"]),
-                lambda_v=float(parameters["lambda_v"]),
-                lambda_rnn=float(parameters["lambda_rnn"]),
-                eta_pi=float(parameters["eta_pi"]),
-                eta_f=float(parameters["eta_f"]),
-                entropy_rate=float(parameters["entropy_rate"]),
-                torso_grad_clip=float(parameters["torso.grad_clip"]),
-                torso_follow=float(parameters["torso.follow"]),
+                lambda_pi=numeric(parameters["lambda_pi"]),
+                lambda_v=numeric(parameters["lambda_v"]),
+                lambda_rnn=numeric(parameters["lambda_rnn"]),
+                eta_pi=numeric(parameters["eta_pi"]),
+                eta_f=numeric(parameters["eta_f"]),
+                entropy_rate=numeric(parameters["entropy_rate"]),
+                torso_grad_clip=numeric(parameters["torso.grad_clip"]),
+                torso_follow=numeric(parameters["torso.follow"]),
                 meta_rl=meta_rl,
                 action_classes=classes,
                 torso_optimizer=torso_optimizer,

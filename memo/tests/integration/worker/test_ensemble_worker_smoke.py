@@ -31,12 +31,12 @@ SEEDS = (0, 1)
 METRIC = "train/episode/return"
 
 
-def drqn_parameters(lr: float = 0.1) -> dict:
+def drqn_parameters(lr: float = 0.1, hidden: int = 2) -> dict:
     return expand(
         DRQN_PARAMETERS,
         {
             "core.kind": "lru",
-            "core.lru.hidden_dim": 2,
+            "core.lru.hidden_dim": hidden,
             "core.lru.feature_dim": 2,
             "learning.kind": "truncated",
             "learning.truncated.length": 2,
@@ -176,14 +176,56 @@ def test_worker_runs_a_group_and_publishes_every_member(
     assert series[SEEDS[0]] != series[SEEDS[1]]
 
 
-def test_a_group_that_disagrees_about_anything_but_its_seed_is_refused(
+def test_worker_runs_a_group_that_sweeps_a_value(
     image: None, s3_base: str, tmp_path: Path
 ) -> None:
-    """The graph is built from the first member and used for all of them.
+    """Members may differ in a leaf the graph reads arithmetically.
 
-    So a member that differs elsewhere would be run under its neighbour's
-    parameters and reported under its own -- a wrong number on a run nobody
-    would think to doubt, which is worse than a job that fails.
+    Which is the whole point of a sweep, and the rule that changed once the
+    algorithms stopped coercing those leaves. Under seeds alone this was a
+    refusal: the graph came from one member and a difference could only have
+    been dropped without saying so.
+
+    The wiring is what is checked here -- that a differing learning rate
+    survives the manifest, the worker, the entry's agreement check and the
+    member axis, and that both members still publish separately. That the value
+    is what separates them is isolated in the unit tests, which can hold the
+    seeds still and afford to run twice.
+    """
+
+    aim_path = tmp_path / "aim"
+    Repo.from_path(str(aim_path), init=True)
+    root = f"{s3_base}/swept"
+    specs = [
+        member(
+            root=root,
+            aim_path=aim_path,
+            seed=seed,
+            parameters=drqn_parameters(lr=lr),
+        )
+        for seed, lr in zip(SEEDS, (0.1, 0.02))
+    ]
+
+    run_manifest(submit(s3_base, tmp_path, specs), tmp_path / "worker")
+
+    for spec in specs:
+        result = json.loads(
+            objects.get_bytes(f"{spec.artifacts.root}/result.json")
+        )
+        assert result["identity"]["run_id"] == spec.identity.run_id
+        assert result["success"] is True
+    assert len(list(Repo.from_path(str(aim_path)).iter_runs())) == len(SEEDS)
+
+
+def test_a_group_that_varies_a_static_parameter_is_refused(
+    image: None, s3_base: str, tmp_path: Path
+) -> None:
+    """A width sizes an array, and the members of one map share their shapes.
+
+    The refusal is what keeps the relaxation from becoming a trap: `hidden_dim`
+    is a `param` exactly as `lr` is, and only its declaration separates them.
+    Without the check this would fail somewhere inside a trace, on an instance
+    already paid for.
     """
 
     aim_path = tmp_path / "aim"
@@ -194,9 +236,9 @@ def test_a_group_that_disagrees_about_anything_but_its_seed_is_refused(
             root=root,
             aim_path=aim_path,
             seed=seed,
-            parameters=drqn_parameters(lr=lr),
+            parameters=drqn_parameters(hidden=hidden),
         )
-        for seed, lr in zip(SEEDS, (0.1, 0.02))
+        for seed, hidden in zip(SEEDS, (2, 4))
     ]
 
     with pytest.raises(WorkerError, match="exited with exit code"):

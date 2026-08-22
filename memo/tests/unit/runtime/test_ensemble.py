@@ -215,3 +215,101 @@ def test_a_destination_is_required_for_every_member():
         EnsembleRuntime(
             algorithm=algorithm(), config=config(), seeds=(3, 4, 5)
         ).run([EpisodeRecorder(), EpisodeRecorder()])
+
+
+# --------------------------------------------------------------- swept values
+
+
+def scaled(parameters) -> BuiltAlgorithm:
+    """A graph whose episodes end at a rate its parameters decide.
+
+    The value is read where a real algorithm reads a discount: while the graph
+    is being built, closed into it, and never seen again. That is what makes it
+    the thing a member axis has to carry rather than pass.
+    """
+
+    scale = parameters["scale"]
+
+    def train(key, state, num_steps):
+        rows = num_steps // NUM_ENVS
+        draws = jax.random.uniform(key, (rows, NUM_ENVS)) * scale
+        done = draws < 0.5
+        return state + num_steps, Metrics(
+            interaction=Interaction(reward=draws, done=done, terminal=done)
+        )
+
+    return BuiltAlgorithm(
+        program=Program(
+            init=lambda key: jax.random.randint(key, (), 0, 1000, dtype=jnp.int32),
+            train=train,
+            open_evaluation=lambda key, state: jnp.asarray(0, jnp.int32),
+            evaluate=evaluate,
+            interact=lambda key, state: None,
+        ),
+        observations=OBSERVATIONS,
+    )
+
+
+def run_swept(seeds, scales) -> list[EpisodeRecorder]:
+    recorders = [EpisodeRecorder() for _ in seeds]
+    EnsembleRuntime(
+        algorithm=scaled({"scale": scales[0]}),
+        config=config(),
+        seeds=seeds,
+        build=scaled,
+        parameters={"scale": scales[0]},
+        swept={"scale": list(scales)},
+    ).run(recorders)
+    return recorders
+
+
+def test_a_swept_value_reaches_each_member():
+    """Hold the seeds and move only the value.
+
+    Two members with different seeds always differ, so a sweep that did nothing
+    at all would still pass that comparison. What isolates the value is running
+    the same two seeds twice: once where the members share a value and once
+    where the second member's differs. The first member is the control -- its
+    value never moved, so it must not move -- and the second is the reading.
+    """
+
+    same = run_swept((3, 4), (1.0, 1.0))
+    moved = run_swept((3, 4), (1.0, 4.0))
+
+    assert summarize(moved[0]) == summarize(same[0])
+    assert summarize(moved[1]) != summarize(same[1])
+
+
+def test_a_swept_member_does_not_depend_on_the_round_it_travelled_in():
+    """Same seed, same value, same result, whatever else was in the job."""
+
+    alone = summarize(run_swept((3,), (2.0,))[0])
+    among = summarize(run_swept((9, 3, 4), (5.0, 2.0, 0.5))[1])
+    assert among == alone
+
+
+def test_a_sweep_needs_both_a_build_and_its_values():
+    with pytest.raises(ValueError, match="needs both a build"):
+        EnsembleRuntime(
+            algorithm=algorithm(),
+            config=config(),
+            seeds=(3, 4),
+            swept={"scale": [1.0, 2.0]},
+        )
+    with pytest.raises(ValueError, match="needs both a build"):
+        EnsembleRuntime(
+            algorithm=algorithm(), config=config(), seeds=(3, 4), build=scaled
+        )
+
+
+def test_every_member_needs_a_value_of_its_own():
+    """A sweep short of a value would silently broadcast somebody else's."""
+
+    with pytest.raises(ValueError, match="2 values for 3 members"):
+        EnsembleRuntime(
+            algorithm=algorithm(),
+            config=config(),
+            seeds=(3, 4, 5),
+            build=scaled,
+            swept={"scale": [1.0, 2.0]},
+        )

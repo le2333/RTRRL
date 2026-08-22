@@ -23,7 +23,10 @@ from ._ensemble import main_for
 from .drqn import build_request, runtime_config
 
 main = main_for(
-    DRQN, build_request=build_request, runtime_config=runtime_config
+    DRQN,
+    build_request=build_request,
+    runtime_config=runtime_config,
+    declared=PARAMETERS,
 )
 
 

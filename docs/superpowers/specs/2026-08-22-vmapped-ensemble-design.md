@@ -100,22 +100,26 @@ swept.
 
 ### Saying which is which
 
-Two ways to keep a shape-determining leaf out of a sweep.
+Declared, as `param(..., static=True)`, and refused where the group is read.
 
-*Declare it.* Add `param(..., shapes=True)` and have the launcher refuse a sweep
-that names one. Backward compatible -- the flag defaults false -- and it costs
-marking roughly eight leaves across four algorithms. The error arrives before a
-job is submitted and can say which leaf and why.
+The flag was almost called `shapes`, for the one reason that was visible before
+the algorithms were read closely. There is a second: `meta_rl` sizes nothing and
+still cannot be swept, because `if meta_rl` selects which graph gets built. What
+the two have in common is that the value has to be known while the graph is
+built, which is what `static` says and `shapes` did not.
 
-*Discover it.* Trace once at launch with tracers in every swept position and let
-JAX raise. The error names the leaf too, and nothing has to be declared or kept
-in sync.
+Most of the marking then turned out to be unnecessary. **A choice is static
+without being declared** -- its values are strings and booleans, which no trace
+carries -- so the rule lives in `Parameter.__post_init__` and covers `meta_rl`,
+`center`, `cold_start`, `variance`, and every `kind` in every algorithm at once.
+What still needs declaring is the numbers that size arrays: 23 of them, because
+nothing about a width's domain tells it apart from a discount's.
 
-Declaring is better here, because the second is only as good as the reachability
-of the code path that reads the leaf: a leaf read inside a branch this
-configuration does not select would trace clean and fail later, on a
-configuration that does select it. Do both if the marking proves tedious --
-declaration for the message, the trace as the backstop.
+That the `kind` leaves are static for free is worth more than the tidiness. It
+means a round whose members chose different backbones is refused by the same
+check, naming the leaf and saying to split the group -- so partitioning a round
+by structure is a control-plane duty with a guard behind it, rather than an
+invariant nobody enforces.
 
 ## What equivalence to ask for
 
@@ -213,25 +217,29 @@ space includes a `kind`. Those cannot share a graph. Partition a round by its
 structural signature and vmap each partition; a space with no structural choice
 -- which is what a seed and non-structural sweep is -- is one partition.
 
-## Staging
+## Staging, and what each stage turned out to be
 
-Each stage is useful alone and leaves the tree working.
+1. **Seeds only.** Done, and verified on an L4. The graph is built once and the
+   arrows are vmapped over their key, so none of the 36 call sites were touched.
+2. **Declare what must stay concrete.** Done, and smaller than planned: a choice
+   declares itself, leaving 23 numeric widths and buffers to mark by hand.
+3. **Stop coercing the value-only leaves.** Done for DRQN and RTRRL, which are
+   the two entries this work is for. Their `float(parameters[...])` became
+   `numeric(...)`, which coerces what can be coerced and passes a tracer
+   through, so a leaf nobody sweeps behaves exactly as it did. DRQN went from
+   ten coercions to three and RTRRL from ten to one, and what remains in each is
+   what `static` says must remain. `r2d2` and `stream_ac` are untouched: they
+   still run, and they cannot yet be swept.
+4. **Partition a round by structure.** Not a stage of its own after all. The
+   choice rule makes a mixed round an error that names itself, so what is left
+   is for the control plane to group by signature rather than for the runtime to
+   discover it.
 
-1. **Seeds only, no coercion changes.** Seeds need nothing from the parameter
-   layer: the graph is bit-identical and only the key varies. This is the whole
-   mechanism -- vmapped build, per-member tracking, N results from one job --
-   with none of the 36 call sites touched. It is also most of the win, since a
-   sweep is usually seeds times a handful of settings.
-2. **Mark the shape-determining leaves.** Mechanical, and it makes stage 3 safe
-   to do incrementally.
-3. **Uncoerce the value-only leaves, one algorithm at a time.** DRQN first: it
-   is the entry a GPU pays for, and it has a working acceptance file to compare
-   against.
-4. **Partition a round by structural signature.** Only needed when a space that
-   picks a `kind` is swept.
-
-Stop after 1 and the infrastructure is strictly better than today. Stop after 3
-and the original goal is met.
+What none of them needed was a manifest change. Each member already arrives as
+its own run document carrying its own parameters -- that is how two trials have
+always differed -- so a swept round is an existing shape with the members
+grouped. The control plane change is to put a round's runs under `groups`
+instead of `runs`, and that is the piece still outstanding.
 
 ## What this does not settle
 

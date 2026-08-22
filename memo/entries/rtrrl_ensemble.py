@@ -23,7 +23,10 @@ from ._ensemble import main_for
 from .rtrrl import build_request, runtime_config
 
 main = main_for(
-    RTRRL, build_request=build_request, runtime_config=runtime_config
+    RTRRL,
+    build_request=build_request,
+    runtime_config=runtime_config,
+    declared=PARAMETERS,
 )
 
 

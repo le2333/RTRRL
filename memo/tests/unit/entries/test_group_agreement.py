@@ -15,7 +15,8 @@ import pytest
 
 from deployment.contract import CONTRACT_VERSION
 from entries._contract import RunSpec
-from entries._ensemble import GroupError, one_configuration
+from entries._ensemble import GroupError, one_configuration, swept_parameters
+from memorax.algorithms.drqn import PARAMETERS as DECLARED
 
 
 def spec(
@@ -23,7 +24,7 @@ def spec(
     seed: int,
     label: int | None = None,
     root: str | None = None,
-    gamma: float = 0.9,
+    parameters: dict | None = None,
     total_steps: int = 8,
 ) -> RunSpec:
     labelled = seed if label is None else label
@@ -49,7 +50,7 @@ def spec(
                     "observed": None,
                 },
                 "num_envs": 1,
-                "parameters": {"gamma": gamma},
+                "parameters": parameters or {"gamma": 0.9},
             },
             "training": {"seed": seed, "total_steps": total_steps, "chunk_steps": 4},
             "evaluation": {
@@ -72,9 +73,71 @@ def test_seeds_and_the_names_that_follow_them_may_differ():
     assert shared.training.seed == 0
 
 
-def test_a_parameter_that_differs_is_refused():
-    with pytest.raises(GroupError, match="differs from .*in algorithm"):
-        one_configuration(group(spec(seed=0), spec(seed=1, gamma=0.5)))
+def test_a_value_that_differs_is_what_the_group_sweeps():
+    """A discount the members disagree about is the sweep, not an error.
+
+    This is the rule that changed once the algorithms stopped coercing their
+    value-only leaves. Under seeds alone it was a refusal, because the graph was
+    built from one member and a difference could only have been silently
+    dropped; now the difference is carried on the member axis.
+    """
+
+    members = group(
+        spec(seed=0, parameters={"gamma": 0.9}),
+        spec(seed=1, parameters={"gamma": 0.5}),
+    )
+    one_configuration(members)
+    assert swept_parameters(members, DECLARED) == {"gamma": [0.9, 0.5]}
+
+
+def test_what_the_members_agree_about_is_not_swept():
+    members = group(
+        spec(seed=0, parameters={"gamma": 0.9, "grad_clip": 1.0}),
+        spec(seed=1, parameters={"gamma": 0.5, "grad_clip": 1.0}),
+    )
+    assert swept_parameters(members, DECLARED) == {"gamma": [0.9, 0.5]}
+
+
+def test_a_static_value_that_differs_is_refused():
+    """A width sizes an array, and the members of one map share their shapes.
+
+    Nothing about `hidden_dim`'s domain tells it apart from `gamma`'s -- both
+    are numbers a search may draw -- so this is the declaration doing the work,
+    and doing it before a job compiles rather than several frames into a trace.
+    """
+
+    members = group(
+        spec(seed=0, parameters={"core.lru.hidden_dim": 32}),
+        spec(seed=1, parameters={"core.lru.hidden_dim": 64}),
+    )
+    with pytest.raises(GroupError, match="core.lru.hidden_dim, which is static"):
+        swept_parameters(members, DECLARED)
+
+
+def test_a_branch_that_differs_is_refused():
+    """Two cores is two graphs, and a graph is what a group shares.
+
+    No declaration was needed: a choice's values are strings, which no trace
+    carries, so the domain settles it.
+    """
+
+    members = group(
+        spec(seed=0, parameters={"core.kind": "lru"}),
+        spec(seed=1, parameters={"core.kind": "rtu"}),
+    )
+    with pytest.raises(GroupError, match="core.kind, which is static"):
+        swept_parameters(members, DECLARED)
+
+
+def test_a_name_the_algorithm_does_not_declare_is_refused():
+    """Nothing can say whether an undeclared name may be swept, so nothing does."""
+
+    members = group(
+        spec(seed=0, parameters={"invented": 1.0}),
+        spec(seed=1, parameters={"invented": 2.0}),
+    )
+    with pytest.raises(GroupError, match="does not declare"):
+        swept_parameters(members, DECLARED)
 
 
 def test_a_budget_that_differs_is_refused():
