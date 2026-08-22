@@ -1,4 +1,4 @@
-"""Every image-side consumer projects the same serialized version-11 run."""
+"""Every image-side consumer projects the same serialized version-12 run."""
 
 from __future__ import annotations
 
@@ -13,7 +13,7 @@ from deployment.contract import CONTRACT_VERSION, Catalog
 from entries._contract import RunSpec
 from worker.envelope import WorkerEnvelope
 
-FIXTURES = Path(__file__).resolve().parents[4] / "tests" / "contracts" / "v11"
+FIXTURES = Path(__file__).resolve().parents[4] / "tests" / "contracts" / "v12"
 
 
 def read_json(name: str) -> dict:
@@ -26,7 +26,7 @@ def test_one_serialized_run_has_worker_and_entry_projections() -> None:
     worker = WorkerEnvelope.model_validate(payload)
     entry = RunSpec.model_validate(payload)
 
-    assert worker.contract == entry.contract == CONTRACT_VERSION == 11
+    assert worker.contract == entry.contract == CONTRACT_VERSION == 12
     assert worker.identity.model_dump() == entry.identity.model_dump()
     assert worker.artifacts.model_dump() == entry.artifacts.model_dump()
     assert worker.algorithm == payload["algorithm"]
@@ -90,7 +90,17 @@ def test_entry_owns_schedule_and_graph_width_validation() -> None:
 
 def test_manifest_names_serialized_run_documents() -> None:
     assert read_json("manifest.json") == {
-        "runs": ["s3://artifacts/trainer/configs/stream-ac-t0.json"]
+        "runs": ["s3://artifacts/trainer/configs/stream-ac-t0.json"],
+        # A group is several configurations handed to one entry at once, so a
+        # trial's seeds are computed as one graph. It is a list of lists rather
+        # than a flat list because a manifest may carry more than one group, and
+        # which members belong together is the whole of what it says.
+        "groups": [
+            [
+                "s3://artifacts/trainer/configs/drqn-t0-s0.json",
+                "s3://artifacts/trainer/configs/drqn-t0-s1.json",
+            ]
+        ],
     }
 
 
@@ -101,5 +111,27 @@ def test_image_catalog_uses_the_deployment_contract(tmp_path: Path) -> None:
 
     assert parsed == written == build_catalog()
     assert parsed.contract == CONTRACT_VERSION
-    assert set(parsed.entries) == {"drqn", "r2d2", "rtrrl", "stream_ac"}
+    assert set(parsed.entries) == {
+        "drqn",
+        "drqn_ensemble",
+        "r2d2",
+        "rtrrl",
+        "rtrrl_ensemble",
+        "stream_ac",
+    }
     assert parsed.entries["rtrrl"].command == ("python", "-m", "entries.rtrrl")
+    # An ensemble entry is its algorithm's, so it declares the same metrics and
+    # the same parameters. What the catalog says about it is only that this
+    # image can be asked to run a group -- which is why it is an entry rather
+    # than a flag on the other one, and why the control plane can read the
+    # capability instead of inferring it from a version.
+    assert parsed.entries["drqn_ensemble"].command == (
+        "python",
+        "-m",
+        "entries.drqn_ensemble",
+    )
+    for algorithm in ("drqn", "rtrrl"):
+        alone = parsed.entries[algorithm]
+        grouped = parsed.entries[f"{algorithm}_ensemble"]
+        assert grouped.metrics == alone.metrics
+        assert grouped.parameters == alone.parameters
