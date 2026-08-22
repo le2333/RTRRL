@@ -3,7 +3,7 @@ name: GPU abort probe
 on:
   push:
     branches: [fix/cuda-toolkit-cohort]
-    paths: [.github/workflows/gpu-abort-probe.yml]
+    paths: [.github/workflows/gpu-abort-probe.yml, memo/docs/gpu-abort-probe.py]
   workflow_dispatch:
 
 permissions:
@@ -44,9 +44,9 @@ jobs:
           SOURCE="$(base64 -w 0 memo/docs/gpu-abort-probe.py)"
           OVERRIDES="$(jq -cn --arg source "$SOURCE" '{environment:[
             {name:"PROBE_SOURCE",value:$source},
-            {name:"PROBE_CREDIT",value:"rtrl"},
-            {name:"PROBE_BACKBONE",value:"rtu"},
-            {name:"PROBE_ENVS",value:"16"},
+            {name:"PROBE_BATCH",value:"8"},
+            {name:"PROBE_TRUNCATION",value:"10"},
+            {name:"PROBE_ENVS",value:"1"},
             {name:"XLA_FLAGS",value:"--xla_dump_to=/tmp/hlo"}
           ]}')"
           JOB_ID="$(aws batch submit-job --job-name "gpu-abort-probe-${GITHUB_RUN_ID}" \
