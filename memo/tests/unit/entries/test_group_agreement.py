@@ -26,22 +26,23 @@ def spec(
     root: str | None = None,
     parameters: dict | None = None,
     total_steps: int = 8,
+    trial: int = 0,
 ) -> RunSpec:
     labelled = seed if label is None else label
     return RunSpec.model_validate(
         {
             "contract": CONTRACT_VERSION,
             "identity": {
-                "run_id": f"group-t0-s{labelled}",
+                "run_id": f"group-t{trial}-s{labelled}",
                 "experiment": "group",
                 "launch_id": "20260822-000000",
-                "trial": 0,
+                "trial": trial,
                 "seed": labelled,
                 "role": "tuning",
                 "digest": "local@sha256:" + "a" * 64,
             },
             "entry": "drqn_ensemble",
-            "artifacts": {"root": root or f"s3://bucket/seed-{labelled}"},
+            "artifacts": {"root": root or f"s3://bucket/t{trial}-seed-{labelled}"},
             "algorithm": {
                 "environment": {
                     "id": "gymnax::CartPole-v1",
@@ -158,9 +159,24 @@ def test_a_label_that_does_not_match_what_ran_is_refused():
         one_configuration(group(spec(seed=0), spec(seed=1, label=9)))
 
 
-def test_a_repeated_seed_is_refused():
-    with pytest.raises(GroupError, match="repeats a seed"):
+def test_a_repeated_run_is_refused():
+    """A run, not a seed.
+
+    A swept round puts every seed under every trial, so a seed appearing twice
+    is ordinary; the same run appearing twice is one computation billed twice
+    and indistinguishable from a second sample in the results.
+    """
+
+    with pytest.raises(GroupError, match="repeats a run"):
         one_configuration(group(spec(seed=0), spec(seed=0, root="s3://bucket/b")))
+
+
+def test_one_seed_under_two_trials_is_two_runs():
+    """Which is what a sweep is made of, and what used to be refused."""
+
+    members = a_round((0.9, 0.5), (0,))
+    one_configuration(members)
+    assert swept_parameters(members, DECLARED) == {"gamma": [0.9, 0.5]}
 
 
 def test_a_repeated_artifact_root_is_refused():
@@ -177,3 +193,74 @@ def test_a_repeated_artifact_root_is_refused():
                 spec(seed=1, root="s3://bucket/same/"),
             )
         )
+
+
+# ------------------------------------------- the two sides of one agreement
+
+
+def a_round(trials, seeds):
+    """A round as the control plane emits one: every trial on every seed.
+
+    A trial is one combination of the swept parameters, so a member's trial
+    number and its parameters move together. Constructing them apart -- which is
+    what the first version of these tests did -- makes a group nothing upstream
+    would ever produce, and the disagreement that let a launch fail was exactly
+    in the gap between the two.
+    """
+
+    return tuple(
+        (
+            spec(
+                seed=seed,
+                trial=trial,
+                parameters={"gamma": gamma},
+                root=f"s3://bucket/t{trial}-s{seed}",
+            ),
+            Path("/tmp/scratch"),
+        )
+        for trial, gamma in enumerate(trials)
+        for seed in seeds
+    )
+
+
+def test_a_group_the_control_plane_would_pack_is_accepted():
+    """Two trials on three seeds, which is a sweep of one value.
+
+    The members differ in gamma, in trial, in seed, in run id and in artifact
+    root, and every one of those has to be allowed for the group to be the group
+    a swept round produces.
+    """
+
+    members = a_round((0.9, 0.5), (0, 1, 2))
+    shared = one_configuration(members)
+    assert shared.identity.trial == 0
+    assert swept_parameters(members, DECLARED) == {
+        "gamma": [0.9, 0.9, 0.9, 0.5, 0.5, 0.5]
+    }
+
+
+def test_the_entry_accepts_exactly_what_the_control_plane_groups():
+    """The two sides are asked the same question and must give one answer.
+
+    They disagreed once: the control plane grouped by what the image marks
+    static, correctly putting two trials together, while the entry still
+    insisted a group differ only in its seed. Both were defensible alone. What
+    was missing was a test that made them meet, which is this one.
+    """
+
+    from trainer_infra.rounds import partition
+
+    members = a_round((0.9, 0.5), (0, 1))
+    documents = [
+        {"algorithm": {"parameters": dict(spec.algorithm.parameters)}}
+        for spec, _ in members
+    ]
+    uris = [spec.identity.run_id for spec, _ in members]
+    static = {name for name in DECLARED if False}  # gamma is not static
+
+    groups = partition(documents, uris, static)
+    assert len(groups) == 1, "the control plane packs this round as one group"
+
+    # And the entry accepts that one group whole.
+    one_configuration(members)
+    assert swept_parameters(members, DECLARED)

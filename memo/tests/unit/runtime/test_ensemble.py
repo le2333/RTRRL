@@ -199,15 +199,37 @@ def test_an_ensemble_needs_a_member():
         EnsembleRuntime(algorithm=algorithm(), config=config(), seeds=())
 
 
-def test_repeated_seeds_are_refused():
-    """Two members on one seed are one run billed twice.
+def test_two_members_that_are_the_same_run_are_refused():
+    """One run billed twice, and indistinguishable in the results.
 
-    They are also indistinguishable in the results, which is the worse half:
-    nothing downstream could tell the duplicate from a real second sample.
+    Which is the worse half: nothing downstream could tell the duplicate from a
+    real second sample.
     """
 
-    with pytest.raises(ValueError, match="the seeds repeat"):
+    with pytest.raises(ValueError, match="the same run"):
         EnsembleRuntime(algorithm=algorithm(), config=config(), seeds=(3, 4, 3))
+
+
+def test_one_seed_under_two_swept_values_is_two_members():
+    """A round runs every seed under every trial, so seeds repeat across it.
+
+    Refusing that was right while only seeds could differ and became wrong the
+    moment values could: seed 3 at one gamma and seed 3 at another are the same
+    start under different parameters, which is the shape of a sweep rather than
+    a duplicate. This is the second invariant that had quietly outlived its
+    reason, and it blocked the first swept launch that reached a device.
+    """
+
+    recorders = [EpisodeRecorder(), EpisodeRecorder()]
+    EnsembleRuntime(
+        algorithm=scaled({"scale": 1.0}),
+        config=config(),
+        seeds=(3, 3),
+        build=scaled,
+        parameters={"scale": 1.0},
+        swept={"scale": [1.0, 4.0]},
+    ).run(recorders)
+    assert summarize(recorders[0]) != summarize(recorders[1])
 
 
 def test_a_destination_is_required_for_every_member():

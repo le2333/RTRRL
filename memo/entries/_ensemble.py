@@ -55,6 +55,12 @@ GROUPED = True
 PERSONAL = (
     ("identity", "run_id"),
     ("identity", "seed"),
+    # A group spans trials whenever it sweeps a value, because a trial *is* one
+    # combination of the parameters being swept. Holding this fixed was right
+    # while only seeds could differ and became wrong the moment they could not:
+    # the control plane groups by what the image marks static, and a trial
+    # number is not among those.
+    ("identity", "trial"),
     ("training", "seed"),
     ("artifacts", "root"),
 )
@@ -146,10 +152,9 @@ def swept_parameters(
 def one_configuration(members: tuple[tuple[RunSpec, Path], ...]) -> RunSpec:
     """The configuration they share, or an error naming what they do not.
 
-    The seeds are checked for repetition here as well as in the runtime. Two
-    members on one seed is one run billed twice, and downstream nothing could
-    tell the duplicate from a real second sample -- the artifacts would differ
-    only in a run id.
+    Two members that are the same run is one run billed twice, and downstream
+    nothing could tell the duplicate from a second sample, so the run ids are
+    checked here and the runtime checks what it can see of the same thing.
     """
 
     first, _ = members[0]
@@ -174,9 +179,14 @@ def one_configuration(members: tuple[tuple[RunSpec, Path], ...]) -> RunSpec:
                 f"run {spec.identity.run_id} is labelled seed "
                 f"{spec.identity.seed} but trains on {spec.training.seed}"
             )
-    seeds = [spec.training.seed for spec, _ in members]
-    if len(set(seeds)) != len(seeds):
-        raise GroupError(f"the group repeats a seed: {seeds}")
+    # Not the seeds. A swept round runs every seed under every trial, so seed 0
+    # appears once per trial and those members are not duplicates of each other
+    # -- they are the same start under different parameters, which is the whole
+    # shape of a sweep. What must be unique is the run, and a run id is what
+    # names one.
+    names = [spec.identity.run_id for spec, _ in members]
+    if len(set(names)) != len(names):
+        raise GroupError(f"the group repeats a run: {sorted(names)}")
 
     # Two members publishing to one root is one member's results, silently.
     # Whichever wrote last would be the run that appears to have happened.

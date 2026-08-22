@@ -29,6 +29,11 @@ pytestmark = [pytest.mark.integration, pytest.mark.service]
 
 SEEDS = (0, 1)
 METRIC = "train/episode/return"
+# A learning rate cannot show in a return here: exploration starts at epsilon
+# 1.0 and this run is far too short to anneal, so the behaviour policy is a
+# random walk and its episodes are the key's, not the network's. What a rate
+# does change immediately is the network, and this is the reading that sees it.
+NETWORK_METRIC = "train/episode/update.q_value"
 
 
 def drqn_parameters(lr: float = 0.1, hidden: int = 2) -> dict:
@@ -56,21 +61,23 @@ def drqn_parameters(lr: float = 0.1, hidden: int = 2) -> dict:
     )
 
 
-def member(*, root: str, aim_path: Path, seed: int, parameters: dict) -> RunSpec:
+def member(
+    *, root: str, aim_path: Path, seed: int, parameters: dict, trial: int = 0
+) -> RunSpec:
     return RunSpec.model_validate(
         {
             "contract": CONTRACT_VERSION,
             "identity": {
-                "run_id": f"drqn-group-smoke-t0-s{seed}",
+                "run_id": f"drqn-group-smoke-t{trial}-s{seed}",
                 "experiment": "drqn-group-smoke",
                 "launch_id": "20260822-000000",
-                "trial": 0,
+                "trial": trial,
                 "seed": seed,
                 "role": "tuning",
                 "digest": "local@sha256:" + "a" * 64,
             },
             "entry": "drqn_ensemble",
-            "artifacts": {"root": f"{root}/seed-{seed}"},
+            "artifacts": {"root": f"{root}/t{trial}-seed-{seed}"},
             "algorithm": {
                 "environment": {
                     "id": "gymnax::CartPole-v1",
@@ -109,7 +116,10 @@ def member(*, root: str, aim_path: Path, seed: int, parameters: dict) -> RunSpec
 def submit(s3_base: str, tmp_path: Path, specs: list[RunSpec]) -> str:
     uris = []
     for spec in specs:
-        uri = f"{s3_base}/group/config-s{spec.identity.seed}.json"
+        uri = (
+            f"{s3_base}/group/config-t{spec.identity.trial}"
+            f"-s{spec.identity.seed}.json"
+        )
         objects.put_bytes(uri, spec.model_dump_json().encode())
         uris.append(uri)
     manifest_uri = f"{s3_base}/group/manifest.json"
@@ -165,7 +175,7 @@ def test_worker_runs_a_group_and_publishes_every_member(
 
     # Every member is its own run in Aim too, not one run reported twice.
     runs = list(Repo.from_path(str(aim_path)).iter_runs())
-    assert len(runs) == len(SEEDS)
+    assert len(runs) == len(specs)
 
     # And the seeds reached the members. A vmap that broadcast one member's key
     # would publish two complete, plausible, identical runs -- the failure this
@@ -196,25 +206,56 @@ def test_worker_runs_a_group_that_sweeps_a_value(
     aim_path = tmp_path / "aim"
     Repo.from_path(str(aim_path), init=True)
     root = f"{s3_base}/swept"
+    # Two trials on two seeds, which is the shape the control plane emits: a
+    # trial is one combination of the swept parameters, so a member's trial
+    # number and its parameters move together and every seed appears once per
+    # trial. Built any other way -- one trial, one seed each -- this passes
+    # while the group a real launch produces is refused, which is exactly what
+    # happened the first time a swept round reached a device.
     specs = [
         member(
             root=root,
             aim_path=aim_path,
             seed=seed,
+            trial=trial,
             parameters=drqn_parameters(lr=lr),
         )
-        for seed, lr in zip(SEEDS, (0.1, 0.02))
+        for trial, lr in enumerate((0.1, 0.02))
+        for seed in SEEDS
     ]
 
     run_manifest(submit(s3_base, tmp_path, specs), tmp_path / "worker")
 
+    series = {}
     for spec in specs:
         result = json.loads(
             objects.get_bytes(f"{spec.artifacts.root}/result.json")
         )
         assert result["identity"]["run_id"] == spec.identity.run_id
+        assert result["identity"]["trial"] == spec.identity.trial
         assert result["success"] is True
-    assert len(list(Repo.from_path(str(aim_path)).iter_runs())) == len(SEEDS)
+        records = [
+            json.loads(line)
+            for line in objects.get_bytes(f"{spec.artifacts.root}/metrics.jsonl")
+            .decode()
+            .splitlines()
+        ]
+        series[(spec.identity.trial, spec.identity.seed)] = [
+            row["metrics"][NETWORK_METRIC]
+            for row in records
+            if NETWORK_METRIC in row["metrics"]
+        ]
+
+    assert len(list(Repo.from_path(str(aim_path)).iter_runs())) == len(specs)
+
+    # The value reached the members, isolated the way only a swept round lets
+    # this test isolate it: a seed appears once per trial, so these two members
+    # share their start and differ in the learning rate alone.
+    for seed in SEEDS:
+        # Asserted non-empty first, so a reading that never arrived fails here
+        # rather than making the comparison below trivially true.
+        assert series[(0, seed)], f"no {NETWORK_METRIC} for seed {seed}"
+        assert series[(0, seed)] != series[(1, seed)]
 
 
 def test_a_group_that_varies_a_static_parameter_is_refused(

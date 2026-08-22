@@ -78,8 +78,6 @@ class EnsembleRuntime:
     def __post_init__(self) -> None:
         if not self.seeds:
             raise ValueError("an ensemble needs at least one member")
-        if len(set(self.seeds)) != len(self.seeds):
-            raise ValueError(f"the seeds repeat: {self.seeds}")
         if bool(self.swept) != (self.build is not None):
             raise ValueError(
                 "a swept ensemble needs both a build and the values to sweep; "
@@ -91,6 +89,19 @@ class EnsembleRuntime:
                     f"{path} has {len(values)} values for "
                     f"{len(self.seeds)} members"
                 )
+
+        # A member is its seed *and* the values it was handed. Two members on
+        # one seed are distinct runs when a sweep gave them different values,
+        # which is what a round of several trials over several seeds is made of.
+        # With nothing swept this is the seeds being distinct, as it was.
+        members = [
+            (seed, *(tuple(values)[index] for values in self.swept.values()))
+            for index, seed in enumerate(self.seeds)
+        ]
+        if len(set(members)) != len(members):
+            raise ValueError(
+                f"two members are the same run: {sorted(map(str, members))}"
+            )
 
     @property
     def members(self) -> int:
