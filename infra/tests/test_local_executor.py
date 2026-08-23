@@ -95,7 +95,7 @@ def test_local_executor_serializes_invokes_worker_and_scores_results(
     assert all(uri.startswith("file:") for uri in manifest["runs"])
     assert (
         json.loads(
-            (exchange / "round-000" / "trial-000000-seed-000000.json").read_text()
+            (exchange / "round-000" / "stream-ac-test-run1-seed1.json").read_text()
         )
         == (configurations[0])
     )

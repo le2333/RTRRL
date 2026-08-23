@@ -98,7 +98,7 @@ class BatchRoundExecutor:
         for job_index, body in enumerate(bodies):
             manifest_uri = self._publish_manifest(body, round_index, job_index)
             response = self.batch.submit_job(
-                jobName=f"{self.job_name}-r{round_index:03d}-j{job_index}",
+                jobName=self.job_name,
                 jobQueue=self.job_queue,
                 jobDefinition=self.job_definition,
                 timeout={"attemptDurationSeconds": self.timeout_seconds},

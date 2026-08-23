@@ -43,11 +43,7 @@ def build_reporter(config: RunSpec, scratch: Path) -> Reporter:
     # training only in the scopes the document asked for.
     scalar_sinks = [MetricsSink(artifacts / METRICS_FILENAME)]
     sampled_sinks = [
-        AimSink(
-            config.logging.aim.url,
-            metadata,
-            parameters=config.algorithm.parameters,
-        )
+        AimSink(config.logging.aim.url, metadata)
     ]
     trajectory_sinks = []
     if config.logging.rerun is not None:

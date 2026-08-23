@@ -40,7 +40,7 @@ def test_a_configuration_is_partitioned_by_its_consumers(
     assert first["entry"] == "stream_ac"
     assert first["identity"]["digest"] == DIGEST
     assert (first["identity"]["trial"], second["identity"]["trial"]) == (0, 1)
-    assert first["identity"]["run_id"] == f"stream-ac-test-{LAUNCH}-t0-s0"
+    assert first["identity"]["run_id"] == "stream-ac-test-run1-seed1"
     assert first["identity"]["launch_id"] == LAUNCH
 
 
@@ -67,8 +67,8 @@ def test_each_run_has_one_artifact_root(experiment: Any, catalog: Any, tmp_path:
     first, second = runner(experiment, catalog, tmp_path).next_round()
     root = f"s3://artifacts/trainer/streamac-test/{LAUNCH}"
 
-    assert first["artifacts"]["root"] == f"{root}/stream-ac-test-{LAUNCH}-t0-s0"
-    assert second["artifacts"]["root"] == f"{root}/stream-ac-test-{LAUNCH}-t1-s0"
+    assert first["artifacts"]["root"] == f"{root}/stream-ac-test-run1-seed1"
+    assert second["artifacts"]["root"] == f"{root}/stream-ac-test-run2-seed1"
     assert "score" not in first
     assert first["logging"]["rerun"] == {"log_every_steps": 100}
 

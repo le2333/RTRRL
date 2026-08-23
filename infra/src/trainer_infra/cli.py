@@ -77,7 +77,7 @@ def _executor(
             f"{str(experiment['storage']).rstrip('/')}"
             f"/{experiment['experiment']}/{runner.launch_id}/control"
         ),
-        job_name=f"{experiment['name']}-{runner.launch_id}",
+        job_name=str(experiment["name"]),
         job_queue=target.queue,
         job_definition=target.job_definition,
         timeout_seconds=int(experiment["compute"]["timeout_minutes"]) * 60,

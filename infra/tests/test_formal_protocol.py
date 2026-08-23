@@ -67,8 +67,8 @@ def test_a_run_is_named_and_stored_by_its_configuration_and_its_seed(
 
     names = [run["identity"]["run_id"] for run in configurations[:2]]
     assert names == [
-        f"stream-ac-test-{LAUNCH}-t0-s0",
-        f"stream-ac-test-{LAUNCH}-t0-s7",
+        "stream-ac-test-run1-seed1",
+        "stream-ac-test-run1-seed2",
     ]
     assert len({run["artifacts"]["root"] for run in configurations}) == 4
 

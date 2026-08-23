@@ -97,6 +97,7 @@ def test_batch_executor_packs_submits_collects_and_scores_a_round() -> None:
     )
     assert len(batch.submitted) == 2
     for request in batch.submitted:
+        assert request["jobName"] == "experiment-launch"
         assert request["jobQueue"] == "dev-cpu-c7al-queue"
         assert request["jobDefinition"] == "trainer-c7al-digest"
         assert request["timeout"] == {"attemptDurationSeconds": 5400}

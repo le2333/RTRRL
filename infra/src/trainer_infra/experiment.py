@@ -56,16 +56,15 @@ class ExperimentError(ValueError):
 
 
 def run_name(configuration: Mapping[str, Any]) -> str:
-    """What names one run in an exchange: a configuration and the seed it ran.
+    """The configured display name for one run.
 
-    The trial alone stopped being unique when a configuration began running on
-    a list of seeds, and two runs writing to one name is one run's result
-    reported twice. Padded rather than bare so a directory listing is in the
-    order the runs were asked for.
+    identity.run_id is deliberately the only name exposed to Aim and the
+    exchange.  It is the handwritten experiment name plus runN-seedM;
+    neither an implementation parameter nor the seed's numeric value belongs
+    in a user-facing name.
     """
 
-    identity = configuration["identity"]
-    return f"trial-{int(identity['trial']):06d}-seed-{int(identity['seed']):06d}"
+    return str(configuration["identity"]["run_id"])
 
 
 @dataclass(frozen=True)
@@ -335,12 +334,14 @@ class ExperimentRunner:
         """One run per configuration per seed, in the order they were named."""
 
         return tuple(
-            self._configuration(trial, seed) for trial in trials for seed in self.seeds
+            self._configuration(trial, seed, ordinal)
+            for trial in trials
+            for ordinal, seed in enumerate(self.seeds, start=1)
         )
 
-    def _configuration(self, trial: Any, seed: int) -> dict[str, Any]:
+    def _configuration(self, trial: Any, seed: int, ordinal: int) -> dict[str, Any]:
         experiment = self.experiment
-        run_id = f"{experiment['name']}-{self.launch_id}-t{trial.number}-s{seed}"
+        run_id = f"{experiment['name']}-run{trial.number + 1}-seed{ordinal}"
         artifacts = "/".join(
             (
                 str(experiment["storage"]).rstrip("/"),
