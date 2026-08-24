@@ -1,4 +1,4 @@
-"""Every image-side consumer projects the same serialized version-13 run."""
+"""Every image-side consumer projects the same serialized version-14 run."""
 
 from __future__ import annotations
 
@@ -13,7 +13,7 @@ from deployment.contract import CONTRACT_VERSION, Catalog
 from entries._contract import RunSpec
 from worker.envelope import WorkerEnvelope
 
-FIXTURES = Path(__file__).resolve().parents[4] / "tests" / "contracts" / "v13"
+FIXTURES = Path(__file__).resolve().parents[4] / "tests" / "contracts" / "v14"
 
 
 def read_json(name: str) -> dict:
@@ -26,7 +26,7 @@ def test_one_serialized_run_has_worker_and_entry_projections() -> None:
     worker = WorkerEnvelope.model_validate(payload)
     entry = RunSpec.model_validate(payload)
 
-    assert worker.contract == entry.contract == CONTRACT_VERSION == 13
+    assert worker.contract == entry.contract == CONTRACT_VERSION == 14
     assert worker.identity.model_dump() == entry.identity.model_dump()
     assert worker.artifacts.model_dump() == entry.artifacts.model_dump()
     assert worker.algorithm == payload["algorithm"]
@@ -77,6 +77,39 @@ def test_an_environment_with_one_implementation_names_no_backend() -> None:
     payload["algorithm"]["environment"]["backend"] = None
 
     assert RunSpec.model_validate(payload).algorithm.environment.backend is None
+
+
+def test_a_run_may_name_the_arguments_its_environment_is_built_with() -> None:
+    """Some tasks are a constructor argument rather than a name.
+
+    An UmbrellaChain of length 10 and one of length 40 are different tasks and
+    bsuite's sweep is over exactly that number, so a document that could only
+    name the family could not name the member. Version 14 is this field.
+    """
+
+    payload = read_json("run.json")
+    payload["algorithm"]["environment"] = {
+        "id": "gymnax::UmbrellaChain-bsuite",
+        "backend": None,
+        "episode_length": 40,
+        "kwargs": {"chain_length": 40, "n_distractor": 5},
+    }
+
+    environment = RunSpec.model_validate(payload).algorithm.environment
+
+    assert environment.kwargs == {"chain_length": 40, "n_distractor": 5}
+    # The worker does not read it: which arguments an environment takes is the
+    # entry's business, and the worker carries the block it does not interpret.
+    assert WorkerEnvelope.model_validate(payload).algorithm == payload["algorithm"]
+
+
+def test_an_environment_built_from_its_name_alone_carries_no_arguments() -> None:
+    """The field is absent from a document that has nothing to say with it."""
+
+    payload = read_json("run.json")
+    del payload["algorithm"]["environment"]["kwargs"]
+
+    assert RunSpec.model_validate(payload).algorithm.environment.kwargs == {}
 
 
 def test_entry_owns_schedule_and_graph_width_validation() -> None:

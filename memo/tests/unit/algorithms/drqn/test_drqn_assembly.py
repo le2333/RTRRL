@@ -97,6 +97,7 @@ def run_document(*, every_steps=None, total_steps=50, episode_length=7):
                 backend="test",
                 observed=[0, 1],
                 episode_length=episode_length,
+                kwargs={},
             ),
             num_envs=2,
         ),
