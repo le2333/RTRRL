@@ -182,6 +182,109 @@ def selecting(draw, argument, steps: int):
     )[0]
 
 
+class Stored(struct.PyTreeNode):
+    """DRQN's stored transition, in shape if not in meaning.
+
+    The order below is paid in bytes of ring, so what the ring holds per
+    transition has to be what DRQN's ring holds.
+    """
+
+    observation: Array
+    next_observation: Array
+    action: Array
+    reward: Array
+    done: Array
+    terminal: Array
+    episode_start: Array
+
+
+def transitions_of(count: int | None) -> Stored:
+    """One blank transition, or a stream of them with an ending every episode."""
+
+    shape = () if count is None else (count, 1)
+    ending = (
+        jnp.zeros(shape, bool)
+        if count is None
+        else ((jnp.arange(count, dtype=jnp.int32) + 1) % EPISODE_LENGTH == 0)[:, None]
+    )
+    return Stored(
+        observation=jnp.zeros(shape + (4,), jnp.float32),
+        next_observation=jnp.zeros(shape + (4,), jnp.float32),
+        action=jnp.zeros(shape, jnp.int32),
+        reward=jnp.zeros(shape, jnp.float32),
+        done=ending,
+        terminal=ending,
+        episode_start=jnp.zeros(shape, bool),
+    )
+
+
+def order_report(capacities: list[int], steps: int) -> None:
+    """What it costs to read replay as it stood *before* this transition.
+
+    DRQN's step reads replay and only then adds, because a learner that stores
+    whole episodes may not draw the episode it has just finished. That leaves
+    the pre-add ring live across the add, and a ring that is still live cannot
+    be written in place -- so the transition costs a copy of every transition
+    stored. Nothing else differs between the two columns.
+
+    Not a property of the sampler, and not what issue 62 was about; measured
+    here because this is where the instrument already is.
+    """
+
+    def drawn(buffer, state, key):
+        return jax.lax.cond(
+            buffer.can_sample(state),
+            lambda: jnp.sum(buffer.sample(state, key).experience.reward),
+            lambda: jnp.asarray(0.0),
+        )
+
+    def pass_of(buffer, order):
+        def run(state, stream, keys):
+            return jax.lax.scan(
+                lambda carry, item: (order(buffer, drawn, carry, item), None),
+                (state, jnp.asarray(0.0)),
+                (stream, keys),
+            )[0][1]
+
+        return run
+
+    def add_then_read(buffer, draw, carry, item):
+        state, total = carry
+        transition, key = item
+        state = buffer.add(state, transition)
+        return state, total + draw(buffer, state, key)
+
+    def read_then_add(buffer, draw, carry, item):
+        state, total = carry
+        transition, key = item
+        return buffer.add(state, transition), total + draw(buffer, state, key)
+
+    print(f"device: {jax.devices()[0].platform}, {steps} transitions per pass\n")
+    print("| capacity | add, then read us/step | read, then add us/step |")
+    print("| ---: | ---: | ---: |")
+    for capacity in capacities:
+        buffer = make_uniform_episode_window_buffer(
+            max_length=capacity,
+            min_length=capacity // 4,
+            sample_batch_size=BATCH,
+            sample_sequence_length=WINDOW,
+            add_batch_size=1,
+            max_episode_length=EPISODE_LENGTH,
+        )
+        state = jax.lax.scan(
+            lambda carry, step: (buffer.add(carry, step), None),
+            buffer.init(transitions_of(None)),
+            transitions_of(capacity + 2 * EPISODE_LENGTH),
+        )[0]
+        stream = transitions_of(steps)
+        keys = jax.random.split(jax.random.key(0), steps)
+        cells = " | ".join(
+            f"{timed(lambda s: pass_of(buffer, order)(s, stream, keys), state, steps=steps).step_microseconds:.1f}"
+            for order in (add_then_read, read_then_add)
+        )
+        print(f"| {capacity} | {cells} |")
+
+
 def report(capacities: list[int], steps: int) -> None:
     rows = []
     for capacity in capacities:
@@ -241,7 +344,8 @@ def report(capacities: list[int], steps: int) -> None:
 
 if __name__ == "__main__":
     declared = os.environ.get("SAMPLING_CAPACITIES", "8192,65536,400000")
-    report(
+    chosen = report if not os.environ.get("SAMPLING_ORDER") else order_report
+    chosen(
         [int(capacity) for capacity in declared.split(",")],
         int(os.environ.get("SAMPLING_STEPS", "2000")),
     )

@@ -116,11 +116,65 @@ over the same index, as did every `can_sample` on every warmup step.
   against the jaxpr in
   `tests/unit/buffers/test_episode_window_sampling.py::test_a_draw_costs_the_minibatch_and_not_the_buffer`,
   which needs no clock. The absolute microseconds are this machine's.
-- It measures replay, not DRQN. How much of the 5M run's wall clock this
-  returns depends on what the rest of an update costs, which at
-  `StatelessCartPoleEasy`'s network sizes is not large enough to hide 2.9 ms.
+- The tables measure replay, not DRQN. What the learner's step costs with them
+  in it is the last section, and it does not come out flat: a second term
+  linear in the capacity is left, outside the sampler.
 - **The R1.1 benchmark has not been rerun.** The issue asks for the 100k
   five-seed `StatelessCartPoleEasy` DRQN run *after this lands*; it is an AWS
   Batch job and is not reachable from a development checkout. Until it has
   run, the claim here is about the sampler's cost and not about the
   benchmark's throughput.
+
+## End to end, and the term that is left
+
+The tables above are replay on its own. Running the whole learner says how much
+of a step that was, and it says something the buffer's own numbers cannot: this
+is `drqn` assembled through `memorax.assembly`, LSTM-32, TBPTT-10, minibatch 8,
+one environment, `gymnax::CartPole-v1` at `episode_length: 200` — the sweep's
+`StatelessCartPoleEasy` needs the `popjym` extra, which is not installed here,
+and the two differ only in the observation the network reads. 3000 steps per
+pass, timed on the second pass so replay is warm and the graph is compiled. Two
+readings of each, because the spread between them is about a quarter.
+`docs/drqn-throughput.py` is what produced them, run once from each checkout.
+
+| capacity | `origin/main` us/step | this branch us/step | steps/s, before → after |
+| ---: | ---: | ---: | --- |
+| 8192 | 690 | 374 | 1449 → 2672 |
+| 400000 | 6769, 6099 | 2451, 3253 | ~155 → ~355 |
+
+So the learner is a little under twice as fast at the sweep's capacity, and the
+whole of that is replay: the graph is otherwise identical.
+
+It is also not the end of it. At 8192 a step costs 374 µs and at 400000 it
+costs about 2900 — 7x, on a change of capacity alone, with a sampler that the
+tables above show is flat. The rest is not in the buffer's own functions; it is
+in how the learner's step reads them:
+
+```python
+core_state, update = self._maybe_update(update_key, ..., state.buffer_state)
+buffer_state = self.buffer.add(state.buffer_state, transition)
+```
+
+The update must read replay as it stood *before* this transition — a learner
+that stores whole episodes may not draw the episode it has just finished — so
+the pre-add ring is still live when the add runs, and XLA cannot write the new
+transition into it in place. It copies the whole ring, every step. Isolated on
+the same buffer, same transition shape, and nothing else changed but the order:
+
+| capacity | add, then read us/step | read, then add us/step |
+| ---: | ---: | ---: |
+| 8192 | 14.1 | 25.7 |
+| 400000 | 39.0 | 315.4 |
+
+(`SAMPLING_ORDER=1 python docs/episode-sampling-throughput.py`.)
+
+This is not what issue 62 is about and it predates this change, which is why it
+is reported rather than fixed here. It is worth naming precisely, though,
+because the index this change introduces is what makes it cheap to fix:
+"replay as of before this transition" used to be a property of the arrays and
+is now a property of four counters. Adding first and handing the update the
+same rings with the pre-add `committed`, `drawable`, `open_start` and `written`
+is the same view exactly — the record an add overwrites is at logical position
+`count - capacity`, which is older than any episode still stored, since the
+index ring is `committed_capacity + max_episode_length` long and no more than
+`committed_capacity` records can be stored at once.
