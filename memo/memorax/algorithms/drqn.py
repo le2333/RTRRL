@@ -183,9 +183,7 @@ class ReplayParameters:
     minimum_size: int = param(
         valid=(1, 10_000_000), search=(32, 100_000), log=True, static=True
     )
-    batch_size: int = param(
-        valid=(1, 4096), search=(4, 256), log=True, static=True
-    )
+    batch_size: int = param(valid=(1, 4096), search=(4, 256), log=True, static=True)
 
 
 @dataclass(frozen=True)
@@ -942,9 +940,7 @@ class DRQN:
                     grad_clip=numeric(parameters["grad_clip"]),
                 ),
                 gamma=numeric(parameters["gamma"]),
-                target_update_period=numeric(
-                    parameters["target.update_period"], int
-                ),
+                target_update_period=numeric(parameters["target.update_period"], int),
             ),
             # Replay's three sizes keep their coercion: each of them declares
             # `static=True`, and a member axis cannot vary what sizes an array.
@@ -1146,14 +1142,22 @@ class DRQN:
         # what a learner that stores whole episodes does: the published loop
         # accumulates the episode locally, updates once per frame against the
         # episodes it has already remembered, and remembers the current one at
-        # its ending. Adding first would let the update on an episode's last
-        # frame draw the episode it has just finished playing.
+        # its ending. Drawing from replay with this transition already in it
+        # would let the update on an episode's last frame draw the episode it
+        # has just finished playing.
+        #
+        # Which is a statement about what the update may *see*, and reading it
+        # off the pre-add state is only the most direct way to arrange that --
+        # and the most expensive, because a state that is still going to be
+        # read cannot be written in place, so the add would copy the whole ring
+        # on every step of the run. `as_before` is the same view with none of
+        # that: the ring as it is now, under the counters as they were.
+        buffer_state = self.buffer.add(state.buffer_state, transition)
         core_state, update = self._maybe_update(
             update_key,
             state.core.replace(recurrence=recurrence),
-            state.buffer_state,
+            self.buffer.as_before(buffer_state, state.buffer_state),
         )
-        buffer_state = self.buffer.add(state.buffer_state, transition)
         next_timestep = self.environment.persisted(
             Timestep(obs=next_obs, action=action, reward=reward, done=done)
         )
