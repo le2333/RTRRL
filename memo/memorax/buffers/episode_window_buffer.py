@@ -105,6 +105,15 @@ What is *not* kept is which records are still stored. That changes with every
 add, depends on nothing the index knows, and is a binary search when asked;
 maintaining it would spend a write per step to save a search per step.
 
+Counters are also what makes *time* cheap to talk about. A learner that stores
+whole episodes updates against the episodes it had already remembered, so it
+has to read replay as of before the transition it is storing — and holding the
+pre-add state to read it is the one thing that stops the ring being written in
+place, which costs a copy of every stored transition on every step. Everything
+an add changes that such a reader can see is four counters, so `as_before` is
+the arrays as they are now under the counters as they were, and the state it
+replaces is dead as soon as the add has run.
+
 Flashbax is storage here and nothing else. Its own `can_sample` is not called,
 because it answers for its own trajectory sampler: it will not report ready
 until a whole `sample_sequence_length` has been written, which is the right
@@ -215,6 +224,16 @@ class EpisodeWindowBuffer:
     The quantity the warmup is a threshold on, exposed because a caller
     checking whether replay is full should not have to infer it from
     ``can_sample`` saying no.
+    """
+
+    as_before: Callable[
+        [EpisodeWindowBufferState, EpisodeWindowBufferState], EpisodeWindowBufferState
+    ]
+    """Replay as of before the last add, taken from the state after it.
+
+    For a learner that must not draw the episode it has just finished: it adds
+    the transition first and reads this, rather than holding the pre-add state
+    across the add and paying a copy of the ring for it.
     """
 
 
@@ -426,6 +445,16 @@ def make_uniform_episode_window_buffer(
         episodes the index has since overwritten; they are excluded from the
         range rather than probed, and no episode still stored is among them,
         because a stream stores no more episodes than it has transitions.
+
+        One slot further back than that is excluded as well, and it is the
+        slot the *next* commit will overwrite. Holding it back is what lets
+        ``as_before`` be a view of the current arrays rather than a copy of
+        the previous ones: a search that reached into it would read a record
+        written after the moment it is answering for, and out of order at
+        that, since the ring's records are sorted only where they are still
+        the ones written. Replay never stores that many episodes anyway --
+        stored episodes span at most ``committed_capacity`` starts, and the
+        ring is ``max_episode_length`` longer than that.
         """
 
         def halve(_: Any, bounds: tuple[Array, Array]) -> tuple[Array, Array]:
@@ -441,7 +470,7 @@ def make_uniform_episode_window_buffer(
                 jnp.where(searching & reaches, middle, high),
             )
 
-        low = jnp.maximum(count - episodes_per_stream, 0)
+        low = jnp.maximum(count - episodes_per_stream + 1, 0)
         return jax.lax.fori_loop(0, halvings, halve, (low, count))[0]
 
     first_stored = jax.vmap(first_stored_fn)
@@ -460,6 +489,40 @@ def make_uniform_episode_window_buffer(
         first = first_stored(index.start, index.committed, oldest_stored_fn(state))
         oldest = index.start[stream, first % episodes_per_stream]
         return jnp.sum(jnp.where(first < index.committed, index.open_start - oldest, 0))
+
+    def as_before_fn(
+        state: EpisodeWindowBufferState, previous: EpisodeWindowBufferState
+    ) -> EpisodeWindowBufferState:
+        """What replay held before the add, read out of what it holds now.
+
+        A learner that stores whole episodes updates against the episodes it
+        had already remembered: on an episode's last frame it may not draw the
+        episode it has just finished playing. Holding on to the pre-add state
+        says that in the plainest way and is the most expensive way to say it
+        -- a value that is still going to be read cannot be written in place,
+        so the add copies the entire ring, on every step of the run.
+
+        None of the pre-add *contents* are needed to say it. Everything an add
+        changes that a reader could see is four counters: the records it writes
+        are one position past the ones a pre-add reader searches, the
+        transitions it writes are past the ones a pre-add window can reach --
+        that is what the ring's ``max_episode_length`` of slack is for -- and
+        the one record it overwrites is the slot each stream's index holds
+        back. So the view is the arrays as they are now under the counters as
+        they were, and the arrays it replaces are dead the moment it is taken.
+
+        ``state`` is the state after the add and ``previous`` the one it was
+        added to.
+        """
+
+        return state.replace(
+            episodes=state.episodes.replace(
+                committed=previous.episodes.committed,
+                drawable=previous.episodes.drawable,
+                open_start=previous.episodes.open_start,
+            ),
+            written=previous.written,
+        )
 
     def eligible_fn(state: EpisodeWindowBufferState) -> tuple[Array, Array]:
         """Per stream, where the episodes an update may draw begin, and how many.
@@ -611,4 +674,5 @@ def make_uniform_episode_window_buffer(
         sample=sample_fn,
         can_sample=can_sample_fn,
         retained=retained_fn,
+        as_before=as_before_fn,
     )

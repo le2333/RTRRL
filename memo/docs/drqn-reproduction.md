@@ -33,7 +33,7 @@ paper. What anyone does with a set of runs is not here.
 | Epsilon-greedy acting, annealed over solver iterations | `DRQN._epsilon` counts learner updates | `test_epsilon_anneals_on_learner_updates_and_not_on_environment_steps` |
 | The rate is read once per episode | `DRQN._episode_epsilon`, held in `DRQNState.epsilon` | `test_exploration_holds_still_inside_an_episode` |
 | Truncation 10 for the acceptance arm | `learning.truncated.length`, a manifest value | `test_the_truncation_is_the_window_and_full_bptt_is_the_episode` |
-| Replay stores whole episodes | committed at the ending; the update reads replay as of before this transition | `test_an_update_cannot_draw_the_episode_it_is_still_finishing` |
+| Replay stores whole episodes | committed at the ending; the update reads `buffer.as_before`, which is replay as of before this transition | `test_an_update_cannot_draw_the_episode_it_is_still_finishing`, `test_the_view_of_before_the_add_answers_what_before_the_add_answered` |
 | An episode being played changes nothing in replay | the ring reserves `max_episode_length` | `test_an_episode_being_played_evicts_nothing_that_could_be_drawn` |
 | ADADELTA, lr 0.1, decay 0.95, gradient clip 10 | `optimizer.adadelta`, `grad_clip` | `test_the_published_solver_is_adadelta_over_a_clipped_gradient` |
 

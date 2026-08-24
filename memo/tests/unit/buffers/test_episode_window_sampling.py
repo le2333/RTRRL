@@ -524,3 +524,122 @@ def test_membership_matches_the_rule_worked_out_by_hand():
         # Nothing outside the eligible set is ever offered, and given enough
         # draws nothing inside it is withheld.
         assert set(rows.ravel().tolist()) - {-1} == offered, shape
+
+
+# ------------------------------------------- replay as of before the transition
+def added(buffer, state, mark, done, streams=1):
+    return buffer.add(
+        state,
+        Step(
+            mark=jnp.full((streams,), mark, dtype=jnp.int32),
+            done=jnp.full((streams,), done),
+        ),
+    )
+
+
+def answers(buffer, state, keys=8):
+    """Everything a learner can read out of replay, for comparing two states."""
+
+    sample = minibatches(buffer, state, keys=keys)
+    return (
+        int(buffer.retained(state)),
+        bool(buffer.can_sample(state)),
+        np.asarray(sample.experience.mark),
+        np.asarray(sample.valid),
+        np.asarray(sample.batch_valid),
+    )
+
+
+def same(one, other):
+    return (
+        one[0] == other[0]
+        and one[1] == other[1]
+        and all(np.array_equal(a, b) for a, b in zip(one[2:], other[2:]))
+    )
+
+
+def test_the_view_of_before_the_add_answers_what_before_the_add_answered():
+    """Not approximately the pre-add state: the same draw, to the transition.
+
+    A learner that stores whole episodes may not draw the episode it has just
+    finished, and the cheap way to arrange that is to add first and read a view
+    rather than to hold the pre-add state across the add. The view is only
+    worth having if it is exact, so this compares it against the state it
+    stands for -- the same key drawing the same windows, the same warmup, the
+    same answer to whether a draw is possible -- with the add being every kind
+    of add there is: one that ends an episode, one that does not, and one that
+    ends an episode too short to draw from.
+    """
+
+    for length, ending in ((4, True), (4, False), (1, True)):
+        buffer = buffer_of(capacity=64, horizon=8, window=2, batch=4)
+        before = filled(buffer, (4,) * 5)
+        after = (
+            added(buffer, before, 9, ending)
+            if length == 4
+            else added(buffer, added(buffer, before, 9, False), 9, ending)
+        )
+
+        assert same(
+            answers(buffer, buffer.as_before(after, before)),
+            answers(buffer, before),
+        ), (length, ending)
+        # And the view is not the post-add state either, or it would be saying
+        # nothing: an ending makes an episode drawable that was not.
+        if ending:
+            assert not same(answers(buffer, after), answers(buffer, before))
+
+
+def test_the_view_holds_where_the_add_overwrites_the_oldest_record():
+    """The case the index holds a slot back for.
+
+    A commit writes at logical `count`, which lands on the ring slot of
+    `count - capacity` -- the oldest position a search could otherwise reach.
+    Nothing still stored is that old, but a search that read the slot would
+    read a record from *after* the moment it is answering for, and one that
+    breaks the ordering the search depends on: the newest start sitting where
+    the oldest belongs would make the first probe say "already past the
+    threshold" and hand back the whole ring.
+    """
+
+    buffer = buffer_of(
+        capacity=8, horizon=4, window=1, batch=4, warmup=3, minimum_episode_length=1
+    )
+    before = filled(buffer, (1,) * 40)
+    # Forty episodes through an index sized for twelve, so the next commit
+    # overwrites a slot inside what a naive search would have covered.
+    assert int(before.episodes.committed[0]) == 40
+    after = added(buffer, before, 40, True)
+
+    assert same(
+        answers(buffer, buffer.as_before(after, before)), answers(buffer, before)
+    )
+    assert set(
+        episodes_drawn(minibatches(buffer, after, keys=64)).ravel().tolist()
+    ) == set(range(34, 41))
+
+
+def test_the_view_is_the_ring_it_was_handed_and_not_a_copy_of_the_one_before():
+    """Which is the whole point: a state still being read cannot be written in place.
+
+    The arrays are the post-add ones, so nothing keeps the pre-add ring alive
+    past the add; only the counters come from before it. Asserted on identity
+    rather than on values, because equal contents would prove nothing -- a copy
+    is equal to what it copies, and a copy per step is the cost this exists to
+    avoid.
+    """
+
+    buffer = buffer_of(capacity=64, horizon=8, window=2, batch=4)
+    before = filled(buffer, (4,) * 5)
+    after = added(buffer, before, 9, True)
+
+    view = buffer.as_before(after, before)
+
+    assert view.trajectory.experience.mark is after.trajectory.experience.mark
+    assert view.episodes.start is after.episodes.start
+    assert view.episodes.drawable_start is after.episodes.drawable_start
+    assert view.episodes.drawable_length is after.episodes.drawable_length
+    assert view.episodes.committed is before.episodes.committed
+    assert view.episodes.drawable is before.episodes.drawable
+    assert view.episodes.open_start is before.episodes.open_start
+    assert view.written is before.written
