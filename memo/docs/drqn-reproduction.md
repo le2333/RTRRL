@@ -18,7 +18,7 @@ paper. What anyone does with a set of runs is not here.
 | Uniform replay | `make_uniform_episode_window_buffer`, no priority declared | `test_uniform_replay_keeps_no_priority_to_update` |
 | Caffe's Euclidean loss over the unroll length | `published_loss` sums the batch, averages time | `test_the_loss_sums_over_the_batch_and_averages_over_time` |
 | Rewards clipped to their sign | `clipped_reward`, on the way into replay only | `test_replay_stores_the_clipped_reward_and_the_metric_keeps_the_raw_one` |
-| A random update draws completed episodes without replacement | Gumbel top-k over the eligible episodes | `test_an_episode_is_not_drawn_more_often_for_being_longer`, `test_a_minibatch_draws_each_episode_at_most_once` |
+| A random update draws completed episodes without replacement | Floyd's algorithm over the eligible episodes | `test_an_episode_is_not_drawn_more_often_for_being_longer`, `test_a_minibatch_draws_each_episode_at_most_once`, `test_a_minibatch_is_a_uniform_subset_of_the_eligible_episodes` |
 | then a point uniformly inside each | `r ~ U{0..L-t}` inside the drawn episode | `test_a_start_is_uniform_over_the_places_a_window_fits` |
 | The window unrolls `t` transitions from that point | the episode must be at least `t` long | `test_an_episode_shorter_than_the_truncation_is_never_drawn`, `test_every_drawn_window_carries_the_full_truncation` |
 | A minibatch holds `min(episodes, batch_size)` windows | `batch_valid`, and the loss divides by it | `test_the_minibatch_shrinks_to_the_episodes_there_are` |
@@ -81,11 +81,18 @@ because each replaces a patch that was there before:
   episode says so instead of leaving the sampler to invent a window
   (`test_a_buffer_holding_no_finished_episode_says_it_cannot_sample`).
 
-Episode selection is Gumbel top-k: perturb each eligible episode's equal
-log-weight by an independent Gumbel and take the largest `B`. That is a uniform
-subset without replacement in one fixed-shape operation, and the rows it could
-not fill come back marked in `batch_valid` — which is how a shrinking minibatch
-survives JIT, and what the loss divides by.
+Episode selection is Floyd's algorithm over the count of eligible episodes:
+`B` draws for `B` episodes, uniform over subsets and without replacement, and
+the rows it could not fill come back marked in `batch_valid` — which is how a
+shrinking minibatch survives JIT, and what the loss divides by. It replaced a
+Gumbel top-k over the whole index, which is the same distribution and a pass
+over replay's capacity per update; at the 400k capacity the throughput sweep
+asks for, that pass alone was about 3 ms per transition, on a learner that
+updates once per transition. `docs/episode-sampling-throughput.md` reports
+what it cost and what is left, and
+`tests/unit/buffers/test_episode_window_sampling.py` holds both halves — that
+the draws are the same distribution the scored sampler drew, and that no part
+of a draw grows with the buffer.
 
 Flashbax is storage here and nothing else; its own `can_sample` is not called.
 It answers for its own trajectory sampler and will not report ready until a
