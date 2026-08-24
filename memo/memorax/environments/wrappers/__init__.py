@@ -1,6 +1,12 @@
 from gymnax.wrappers.purerl import GymnaxWrapper
 
-from .bsuite import BSuiteEnvState, BSuiteWrapper
+from .bsuite import (
+    BSuiteEnvState,
+    BSuiteWrapper,
+    DiscountingChainWrapper,
+    UmbrellaChainWrapper,
+    bsuite_wrapper_for,
+)
 from .clip_action import ClipActionWrapper
 from .delayed_observation import (
     DelayedObservationWrapper,
