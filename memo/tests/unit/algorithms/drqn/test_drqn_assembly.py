@@ -85,7 +85,9 @@ def assembled(record=None, **overrides):
     )
 
 
-def run_document(*, every_steps=None, total_steps=50, episode_length=7):
+def run_document(
+    *, every_steps=None, total_steps=50, episode_length=7, snapshot_every_steps=0
+):
     rerun = (
         None if every_steps is None else SimpleNamespace(log_every_steps=every_steps)
     )
@@ -100,7 +102,12 @@ def run_document(*, every_steps=None, total_steps=50, episode_length=7):
             ),
             num_envs=2,
         ),
-        training=SimpleNamespace(seed=7, total_steps=total_steps, chunk_steps=10),
+        training=SimpleNamespace(
+            seed=7,
+            total_steps=total_steps,
+            chunk_steps=10,
+            snapshot_every_steps=snapshot_every_steps,
+        ),
         evaluation=SimpleNamespace(every_steps=10, episodes=3, chunk_steps=4, seed=11),
         logging=SimpleNamespace(aim=SimpleNamespace(training=None), rerun=rerun),
     )
@@ -190,6 +197,14 @@ def test_entry_projects_only_the_runtime_schedule():
     assert schedule.evaluation_seed == 11
     assert schedule.trajectory_at_steps == (10, 20, 30, 40, 50)
     assert schedule.max_episode_steps == 7
+    # Off unless the document asks, and carried straight through when it does.
+    assert schedule.snapshot_every_steps == 0
+    assert (
+        entry.runtime_config(
+            run_document(every_steps=10, snapshot_every_steps=10)
+        ).snapshot_every_steps
+        == 10
+    )
 
 
 @pytest.mark.parametrize("core_kind", ["lru", "rtu", "lstm"])

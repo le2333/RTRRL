@@ -13,6 +13,7 @@ from memorax.runtime import Runtime, RuntimeConfig
 
 from ._observability import build_reporter, load_run
 from ._schedule import trajectory_at_steps, trajectory_record
+from ._snapshot import resuming
 
 
 def build_request(config) -> BuildRequest:
@@ -48,19 +49,26 @@ def runtime_config(config) -> RuntimeConfig:
         num_envs=config.algorithm.num_envs,
         seed=training.seed,
         trajectory_at_steps=trajectory_at_steps(config),
+        snapshot_every_steps=training.snapshot_every_steps,
     )
 
 
-def run(reporter, config) -> None:
+def run(reporter, config, snapshots=None) -> None:
     algorithm = assemble(R2D2, build_request(config))
-    Runtime(algorithm=algorithm, config=runtime_config(config)).run(reporter)
+    Runtime(
+        algorithm=algorithm, config=runtime_config(config), snapshots=snapshots
+    ).run(reporter)
 
 
 def main(argv: list[str] | None = None) -> int:
     del argv
     config, scratch = load_run()
-    with build_reporter(config, scratch) as reporter:
-        run(reporter, config)
+    # Outside the reporter, and first: the archive brings back the artifact
+    # directory the reporter is about to append to, and a sink that had
+    # already opened a file would be holding the one this replaces.
+    with resuming([(config, scratch)]) as snapshots:
+        with build_reporter(config, scratch) as reporter:
+            run(reporter, config, snapshots)
     return 0
 
 

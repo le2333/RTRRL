@@ -19,7 +19,7 @@ Each scope below selects among objects of one size:
 from __future__ import annotations
 
 from collections.abc import Mapping
-from typing import Protocol
+from typing import Any, Protocol
 
 from memorax.runtime.episode import Episode
 
@@ -37,6 +37,14 @@ class Scope(Protocol):
 
     def close(self) -> tuple[Reading, ...]:
         """Whatever the end of the run brought due, possibly nothing."""
+        ...
+
+    def suspend(self) -> Any:
+        """Whatever this scope is in the middle of, or ``None``."""
+        ...
+
+    def resume(self, state: Any) -> None:
+        """Take back what ``suspend`` returned in the interrupted process."""
         ...
 
 
@@ -75,6 +83,14 @@ class StepScope:
     def close(self) -> tuple[Reading, ...]:
         return ()
 
+    def suspend(self) -> None:
+        """Nothing: this scope decides from the episode in front of it."""
+
+        return None
+
+    def resume(self, state: Any) -> None:
+        del state
+
 
 class EpisodeScope:
     """What a typical episode's statistic is, every ``every_episodes``.
@@ -95,6 +111,14 @@ class EpisodeScope:
 
     def close(self) -> tuple[Reading, ...]:
         return ()
+
+    def suspend(self) -> None:
+        """Nothing: this scope decides from the episode in front of it."""
+
+        return None
+
+    def resume(self, state: Any) -> None:
+        del state
 
 
 class WindowScope:
@@ -147,3 +171,19 @@ class WindowScope:
         self._closes_at = None
         self._window = WindowStatistics()
         return (reading,)
+
+    def suspend(self) -> dict[str, Any]:
+        """The window that was open, and the close it was waiting for.
+
+        A window spans an interruption exactly as it spans a chunk, and the
+        episodes that fell in it before the stop are as much part of the
+        stretch as the ones after.
+        """
+
+        return {"closes_at": self._closes_at, "window": self._window.suspend()}
+
+    def resume(self, state: Mapping[str, Any]) -> None:
+        closes_at = state["closes_at"]
+        self._closes_at = None if closes_at is None else int(closes_at)
+        self._window = WindowStatistics()
+        self._window.resume(state["window"])

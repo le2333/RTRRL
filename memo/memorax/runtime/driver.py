@@ -8,6 +8,9 @@ from typing import Protocol
 import jax
 
 from memorax.runtime.episode import Episode, SampledTrajectory
+from memorax.runtime.snapshot import RunSnapshot, SnapshotStore
+from memorax.runtime.snapshot import resume as resume_destination
+from memorax.runtime.snapshot import suspend as suspend_destination
 from memorax.runtime.tracker import EpisodeTracker, TrackingResult
 
 from .program import BuiltAlgorithm
@@ -37,6 +40,31 @@ def evaluation_boundaries(
             f"total_steps {total_steps} is not whole intervals of {every_steps}"
         )
     return range(every_steps, total_steps + 1, every_steps)
+
+
+def snapshot_interval(*, snapshot_every_steps: int, evaluate_every_steps: int) -> int:
+    """How often a run is written down, in the units the schedule allows.
+
+    A snapshot is taken at an evaluation boundary and nowhere else. Between
+    two boundaries a training chunk is in flight, and how far into one an
+    interruption fell is not a place any schedule can be restarted from; at a
+    boundary the run is quiet, its evaluation has been taken, and what comes
+    next is decided by the budget rather than by where the machine stopped.
+
+    So an interval that is not whole evaluation intervals names moments that
+    do not exist. It is refused here rather than rounded to a moment that
+    does, because a run that snapshots at a different cadence from the one it
+    was given is a run whose cost nobody stated.
+    """
+
+    if snapshot_every_steps < 0:
+        raise ValueError("snapshot_every_steps must not be negative")
+    if snapshot_every_steps % evaluate_every_steps:
+        raise ValueError(
+            f"snapshot_every_steps {snapshot_every_steps} is not whole "
+            f"evaluation intervals of {evaluate_every_steps}"
+        )
+    return snapshot_every_steps
 
 
 def evaluation_quota(*, episodes: int, num_envs: int) -> tuple[int, ...]:
@@ -82,6 +110,11 @@ class RuntimeConfig:
 
     ``trajectory_at_steps`` names the environment steps whose training episode
     is to be kept whole.
+
+    ``snapshot_every_steps`` is how often the run is written down so that a
+    second process can carry it on; zero never writes it down. It has to be
+    whole evaluation intervals, because a boundary is the only place a run is
+    quiet enough to be restarted from -- see :func:`snapshot_interval`.
     """
 
     total_steps: int
@@ -94,14 +127,21 @@ class RuntimeConfig:
     num_envs: int
     seed: int
     trajectory_at_steps: tuple[int, ...] = ()
+    snapshot_every_steps: int = 0
 
 
 @dataclass(frozen=True)
 class Runtime:
-    """One run: a closed algorithm, an execution budget, and episode output."""
+    """One run: a closed algorithm, an execution budget, and episode output.
+
+    ``snapshots`` is where the run is written down and where a second process
+    looks for it. With none the run is what it always was: one process, from
+    step zero to the budget, and an interruption costs all of it.
+    """
 
     algorithm: BuiltAlgorithm
     config: RuntimeConfig
+    snapshots: SnapshotStore | None = None
 
     def run(self, reporter: Destination) -> None:
         """Run the algorithm to its budget, reporting every complete episode."""
@@ -112,6 +152,16 @@ class Runtime:
             every_steps=config.evaluate_every_steps,
             num_envs=config.num_envs,
         )
+        interval = snapshot_interval(
+            snapshot_every_steps=config.snapshot_every_steps,
+            evaluate_every_steps=config.evaluate_every_steps,
+        )
+        if interval and self.snapshots is None:
+            raise ValueError(
+                f"this run asks to be written down every {interval} steps and "
+                "was given nowhere to write it; a run that says it can be "
+                "resumed and cannot is worse than one that never claimed to"
+            )
 
         program = self.algorithm.program
         train = jax.jit(program.train, static_argnums=2)
@@ -119,9 +169,6 @@ class Runtime:
         evaluate = jax.jit(program.evaluate, static_argnums=2)
         interact = jax.jit(program.interact)
 
-        key = jax.random.key(config.seed)
-        key, init_key = jax.random.split(key)
-        state = jax.jit(program.init)(init_key)
         # Never split from ``key``: the training stream must run identically
         # whether or not the policy was measured along the way.
         evaluation_key = jax.random.key(config.evaluation_seed)
@@ -132,10 +179,14 @@ class Runtime:
             max_episode_steps=config.max_episode_steps,
             sample_steps=tuple(config.trajectory_at_steps),
         )
-        trained_steps = 0
-        eval_number = 1
+        key, state, trained_steps, eval_number = self._begin(program, reporter, tracker)
 
         for boundary in boundaries:
+            # An interval a snapshot already holds. Its episodes were reported
+            # and its evaluation was taken by the process that ran it, and the
+            # state resumed here is what running it produced.
+            if boundary <= trained_steps:
+                continue
             while trained_steps < boundary:
                 # The last call before a boundary is short if the interval is
                 # not a whole number of chunks. Nothing else varies its size.
@@ -147,20 +198,81 @@ class Runtime:
                 )
                 trained_steps += steps
 
-            if not config.evaluation_episodes:
-                continue
-            eval_number = self._measure(
-                reporter,
-                open_evaluation,
-                evaluate,
-                jax.random.fold_in(evaluation_key, boundary),
-                state,
-                boundary=boundary,
-                first_number=eval_number,
-            )
+            if config.evaluation_episodes:
+                eval_number = self._measure(
+                    reporter,
+                    open_evaluation,
+                    evaluate,
+                    jax.random.fold_in(evaluation_key, boundary),
+                    state,
+                    boundary=boundary,
+                    first_number=eval_number,
+                )
+            # After the evaluation, so a resumed run does not measure the same
+            # checkpoint twice, and not at the last boundary, where what comes
+            # next is the end of the run.
+            if interval and boundary < config.total_steps and not boundary % interval:
+                self._suspend(
+                    reporter,
+                    tracker,
+                    state=state,
+                    key=key,
+                    step=boundary,
+                    eval_number=eval_number,
+                )
 
         key, tail_key = jax.random.split(key)
         self._finish_samples(reporter, tracker, interact, tail_key, state)
+
+    def _begin(self, program, reporter: Destination, tracker: EpisodeTracker):
+        """Start the run, or take back the one that was interrupted.
+
+        Resuming reaches past ``program.init`` entirely: the key stream is the
+        one the stopped process had arrived at rather than one rebuilt from
+        the seed, and the tracker and the reporter are handed back what they
+        were in the middle of. Rebuilding any of the three from the run
+        document would replay transitions that have already been taken.
+        """
+
+        resumed = None if self.snapshots is None else self.snapshots.latest()
+        if resumed is None:
+            key = jax.random.key(self.config.seed)
+            key, init_key = jax.random.split(key)
+            return key, jax.jit(program.init)(init_key), 0, 1
+
+        tracker.resume(_single(resumed.trackers, "trackers"))
+        resume_destination(reporter, _single(resumed.destinations, "destinations"))
+        return (
+            resumed.key(),
+            resumed.algorithm_state(),
+            resumed.step,
+            resumed.eval_number,
+        )
+
+    def _suspend(
+        self,
+        reporter: Destination,
+        tracker: EpisodeTracker,
+        *,
+        state,
+        key,
+        step: int,
+        eval_number: int,
+    ) -> None:
+        """Write the run down at a boundary, where it is briefly quiet."""
+
+        if self.snapshots is None:  # pragma: no cover - the caller checks first
+            return
+        self.snapshots.save(
+            RunSnapshot.taken(
+                step=step,
+                eval_number=eval_number,
+                state=state,
+                key=key,
+                trackers=(tracker.suspend(),),
+                destinations=(suspend_destination(reporter),),
+            )
+        )
 
     def _measure(
         self,
@@ -279,3 +391,18 @@ class Runtime:
             reporter.log_episode(episode)
         for trajectory in result.sampled:
             reporter.log_trajectory(trajectory)
+
+
+def _single(values: tuple, what: str):
+    """The one member's worth of a snapshot this driver knows how to take.
+
+    A snapshot written by the ensemble scheduler holds one entry per member,
+    and handing a member's open episodes to a single-member run would report
+    another run's episodes under this one's name.
+    """
+
+    if len(values) != 1:
+        raise ValueError(
+            f"the snapshot holds {len(values)} members' {what} and this run has one"
+        )
+    return values[0]

@@ -61,6 +61,27 @@ def test_experiment_fields_are_projected_to_their_consumers(
     assert configuration["evaluation"] == experiment["evaluation"]
 
 
+def test_a_snapshot_interval_reaches_the_run_only_when_it_is_asked_for(
+    experiment: Any, catalog: Any, tmp_path: Path
+) -> None:
+    """Omitted rather than defaulted, because the image's default is off.
+
+    A field this side always wrote would be a field an older image rejects for
+    saying something it already agreed with, and it would put a number in
+    every run document that most runs have no use for.
+    """
+
+    experiment["training"]["snapshot_every_steps"] = 100
+    configuration = runner(experiment, catalog, tmp_path).next_round()[0]
+
+    assert configuration["training"]["snapshot_every_steps"] == 100
+
+    del experiment["training"]["snapshot_every_steps"]
+    quiet = runner(experiment, catalog, tmp_path).next_round()[0]
+
+    assert "snapshot_every_steps" not in quiet["training"]
+
+
 def test_each_run_has_one_artifact_root(experiment: Any, catalog: Any, tmp_path: Path) -> None:
     """The experiment says a storage root; which run writes where is ours."""
 

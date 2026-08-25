@@ -39,6 +39,7 @@ from memorax.runtime.ensemble import EnsembleRuntime
 
 from ._contract import RunSpec
 from ._observability import build_reporter
+from ._snapshot import resuming
 
 GROUP_VARIABLE = "TRAINER_RUN_GROUP"
 
@@ -218,6 +219,9 @@ def run_group(
     algorithm = assemble(definition, request)
 
     with ExitStack() as stack:
+        # Before any reporter: one archive holds every member's artifacts, and
+        # it is what the sinks are about to append to.
+        snapshots = stack.enter_context(resuming(members))
         reporters = [
             stack.enter_context(build_reporter(spec, scratch))
             for spec, scratch in members
@@ -237,6 +241,7 @@ def run_group(
             ),
             parameters=dict(shared.algorithm.parameters),
             swept=swept,
+            snapshots=snapshots,
         ).run(reporters)
 
 

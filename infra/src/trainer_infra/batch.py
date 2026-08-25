@@ -69,6 +69,7 @@ class BatchRoundExecutor:
         timeout_seconds: int,
         parallel_jobs: int,
         poll_seconds: float = 20.0,
+        attempts: int = 1,
     ) -> None:
         self.s3 = s3
         self.batch = batch
@@ -80,6 +81,9 @@ class BatchRoundExecutor:
         self.timeout_seconds = timeout_seconds
         self.parallel_jobs = parallel_jobs
         self.poll_seconds = poll_seconds
+        if attempts < 1:
+            raise BatchExecutionError("attempts must be at least one")
+        self.attempts = attempts
         self._round = 0
 
     def __call__(
@@ -102,6 +106,7 @@ class BatchRoundExecutor:
                 jobQueue=self.job_queue,
                 jobDefinition=self.job_definition,
                 timeout={"attemptDurationSeconds": self.timeout_seconds},
+                retryStrategy=self._retries(),
                 containerOverrides={
                     "environment": [
                         {"name": "TRAINER_MANIFEST", "value": manifest_uri},
@@ -114,6 +119,32 @@ class BatchRoundExecutor:
             job_ids.append(response["jobId"])
         self._wait(job_ids)
         return self.score(configurations, score)
+
+    def _retries(self) -> dict[str, Any]:
+        """When Batch may start the manifest again, and when it may not.
+
+        A second attempt is only worth anything to a run that wrote itself
+        down: without ``snapshot_every_steps`` it repeats the whole budget and
+        arrives at the same place, having paid twice. With one it continues
+        from the last boundary, which is what makes an interrupted long run
+        finishable at all.
+
+        Only the machine's failures are retried. A host that went away and an
+        attempt that ran out of time are conditions the same manifest can
+        succeed under; a worker that exited non-zero has met a fault in the
+        run, and starting it again meets the same fault with the wall clock
+        spent. ``EXIT`` on everything else is what keeps that distinction --
+        Batch's default is to retry on any exit at all.
+        """
+
+        return {
+            "attempts": self.attempts,
+            "evaluateOnExit": [
+                {"onStatusReason": "Host EC2*", "action": "RETRY"},
+                {"onStatusReason": "*duration exceeded*", "action": "RETRY"},
+                {"onReason": "*", "action": "EXIT"},
+            ],
+        }
 
     def _publish_configuration(self, configuration: dict[str, Any], round_index: int) -> str:
         name = run_name(configuration)

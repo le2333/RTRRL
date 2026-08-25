@@ -81,6 +81,9 @@ def _executor(
         job_queue=target.queue,
         job_definition=target.job_definition,
         timeout_seconds=int(experiment["compute"]["timeout_minutes"]) * 60,
+        # One attempt unless the file asks for more. More is only useful to a
+        # round whose runs snapshot; see `BatchRoundExecutor._retries`.
+        attempts=int(experiment["compute"].get("attempts", 1)),
         parallel_jobs=int(experiment["hpo"]["parallel_jobs"]),
         poll_seconds=arguments.poll_seconds,
         **parallel,

@@ -371,6 +371,17 @@ class ExperimentRunner:
         if "rerun" in declared:
             logging["rerun"] = dict(declared["rerun"])
 
+        budget: dict[str, Any] = {
+            "seed": seed,
+            "total_steps": training["total_steps"],
+            "chunk_steps": training["chunk_steps"],
+        }
+        # Omitted rather than defaulted to zero here: the image's own default
+        # is off, and a field this side always writes is a field an older
+        # image would reject for saying something it already agreed with.
+        if "snapshot_every_steps" in training:
+            budget["snapshot_every_steps"] = training["snapshot_every_steps"]
+
         return {
             "contract": self.contract,
             "identity": {
@@ -389,11 +400,7 @@ class ExperimentRunner:
                 "num_envs": training["num_envs"],
                 "parameters": dict(trial.parameters),
             },
-            "training": {
-                "seed": seed,
-                "total_steps": training["total_steps"],
-                "chunk_steps": training["chunk_steps"],
-            },
+            "training": budget,
             "evaluation": {
                 "every_steps": evaluation["every_steps"],
                 "episodes": evaluation["episodes"],

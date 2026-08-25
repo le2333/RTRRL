@@ -91,11 +91,20 @@ class TrainingSpec(_Frozen):
     episode limit: how long an episode runs is decided while the run is going
     and changes as the policy improves, so sizing a buffer from it would tie a
     memory budget to a number that has nothing to do with memory.
+
+    ``snapshot_every_steps`` is how often the run is written somewhere that
+    outlives the machine, so that a job which was preempted, timed out or lost
+    its host is continued rather than started again. Zero writes nothing down,
+    which is the right answer for a run short enough that losing it costs less
+    than carrying it: every snapshot is the whole state of the run over the
+    network, and taking one every interval of a long run is a real share of
+    what the run costs.
     """
 
     seed: int
     total_steps: int
     chunk_steps: int
+    snapshot_every_steps: int = 0
 
     @model_validator(mode="after")
     def _usable(self) -> "TrainingSpec":
@@ -103,6 +112,8 @@ class TrainingSpec(_Frozen):
             raise ValueError("seed must not be negative")
         if self.total_steps < 1 or self.chunk_steps < 1:
             raise ValueError("training step budgets must be positive")
+        if self.snapshot_every_steps < 0:
+            raise ValueError("snapshot_every_steps must not be negative")
         return self
 
 
@@ -265,4 +276,13 @@ class RunSpec(_Frozen):
             )
         if self.training.total_steps % self.evaluation.every_steps:
             raise ValueError("total_steps must consist of whole evaluation intervals")
+        # A snapshot is taken at an evaluation boundary, which is the only
+        # moment a run is quiet enough to be restarted from. An interval that
+        # is not whole boundaries names moments that will never arrive, and a
+        # run configured that way would write nothing down while appearing to.
+        snapshot = self.training.snapshot_every_steps
+        if snapshot and snapshot % self.evaluation.every_steps:
+            raise ValueError(
+                "snapshot_every_steps must consist of whole evaluation intervals"
+            )
         return self

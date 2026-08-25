@@ -57,6 +57,9 @@ class FakeStore:
             raise RuntimeError(f"upload failed for {uri}")
         self.data[uri] = path.read_bytes()
 
+    def exists(self, uri: str) -> bool:
+        return uri in self.data
+
 
 @pytest.fixture
 def store(monkeypatch: pytest.MonkeyPatch) -> FakeStore:
@@ -64,6 +67,7 @@ def store(monkeypatch: pytest.MonkeyPatch) -> FakeStore:
     monkeypatch.setattr(objects, "get_bytes", fake.get_bytes)
     monkeypatch.setattr(objects, "put_bytes", fake.put_bytes)
     monkeypatch.setattr(objects, "put_file", fake.put_file)
+    monkeypatch.setattr(objects, "exists", fake.exists)
     return fake
 
 
@@ -246,3 +250,46 @@ def test_main_reports_a_missing_manifest_variable(
 
     assert main() == 1
     assert "TRAINER_MANIFEST is not set" in capsys.readouterr().err
+
+
+def test_a_second_attempt_does_not_repeat_a_run_that_finished(
+    store: FakeStore,
+    tmp_path: Path,
+    catalog: tuple[Path, Path],
+) -> None:
+    """A retried job carries the same manifest, not the part still owing.
+
+    Batch starts the manifest again, and the runs it had already carried to
+    the end have published their artifacts and their result. Running one of
+    those again spends its whole budget to overwrite what is there with a
+    second sample of it -- and, on a job that was retried because it ran out
+    of time, spends the time the run still owing needed.
+    """
+
+    _, child_log = catalog
+    manifest = write_manifest(store, [publish(store, 0), publish(store, 1)])
+    run_manifest(manifest, tmp_path / "first")
+
+    del store.data["memory://runs/t1/result.json"]
+    run_manifest(manifest, tmp_path / "second")
+
+    started = [json.loads(line)["trial"] for line in child_log.read_text().splitlines()]
+    assert started == [0, 1, 1]
+
+
+def test_artifacts_without_a_result_are_an_attempt_that_did_not_finish(
+    store: FakeStore,
+    tmp_path: Path,
+    catalog: tuple[Path, Path],
+) -> None:
+    """The result object is written last, and is what says a run is done."""
+
+    _, child_log = catalog
+    manifest = write_manifest(store, [publish(store, 0)])
+    store.put_bytes("memory://runs/t0/metrics.jsonl", b"{}\n")
+
+    run_manifest(manifest, tmp_path / "worker")
+
+    assert [
+        json.loads(line)["trial"] for line in child_log.read_text().splitlines()
+    ] == [0]
