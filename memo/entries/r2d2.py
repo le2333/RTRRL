@@ -28,6 +28,7 @@ def build_request(config) -> BuildRequest:
             backend=environment.backend,
             observed=environment.observed,
             episode_length=environment.episode_length,
+            kwargs=environment.kwargs,
         ),
         num_envs=algorithm.num_envs,
         record=trajectory_record(config, OBSERVATIONS),

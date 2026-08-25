@@ -82,6 +82,7 @@ def run_document(
                 backend="test",
                 observed=[0, 1],
                 episode_length=episode_length,
+                kwargs={},
             ),
             num_envs=2,
         ),

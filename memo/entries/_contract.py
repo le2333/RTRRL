@@ -51,12 +51,23 @@ class EnvironmentSpec(_Frozen):
     ``backend`` is null wherever the namespace has only one implementation to
     choose between. Brax names a physics backend; Gymnax has none, and saying
     so is not the same as omitting a field that means something.
+
+    ``kwargs`` is what the environment is constructed with, as opposed to what
+    the deployment does to it afterwards. Some tasks are defined by a
+    constructor argument rather than by their name -- an UmbrellaChain of
+    length 10 and one of length 40 are different tasks, and bsuite's own sweep
+    is over exactly that number -- and without this a run document could name
+    the family but never the member. It is passed through untouched: every
+    namespace adapter already forwards ``**kwargs`` to the library it wraps, so
+    what is legal here is whatever that library's constructor accepts, and a
+    key it does not is that library's error to raise.
     """
 
     id: str
     backend: str | None = None
     observed: tuple[int, ...] | None = None
     episode_length: int = 1000
+    kwargs: dict[str, Scalar] = {}
 
     @model_validator(mode="after")
     def _usable(self) -> "EnvironmentSpec":

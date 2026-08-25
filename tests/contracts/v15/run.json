@@ -1,5 +1,5 @@
 {
-  "contract": 14,
+  "contract": 15,
   "identity": {
     "run_id": "stream-ac-baseline-t0-s0",
     "experiment": "stream-ac-baseline",
@@ -35,7 +35,8 @@
   "training": {
     "seed": 0,
     "total_steps": 100,
-    "chunk_steps": 100
+    "chunk_steps": 100,
+    "snapshot_every_steps": 100
   },
   "evaluation": {
     "every_steps": 100,

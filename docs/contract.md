@@ -1,6 +1,8 @@
 # 训练部署契约 v11
 
-Infra、训练镜像中的 Worker 和 Entry 不共享 Python 类型。跨环境接口是版本化 JSON，当前版本为 `11`。同一份序列化 fixture 位于 `tests/contracts/v11/`，各接收方只解析自己消费的投影。
+Infra、训练镜像中的 Worker 和 Entry 不共享 Python 类型。跨环境接口是版本化 JSON。各接收方只解析自己消费的投影。
+
+> **本文档落后于代码。** 权威版本号是 `memo/deployment/contract.py` 里的 `ContractVersion`，当前为 `15`，对应 fixture 在 `tests/contracts/v15/`。下文的示例仍是 v11 的形状：v12 给 Catalog 条目加的 `grouped`、v13 给 manifest 加的 `groups` 都没有写进来。v14 新增的 `algorithm.environment.kwargs` 记在下面的环境一节，v15 新增的 `training.snapshot_every_steps` 记在训练一节。
 
 ## Catalog
 
@@ -60,12 +62,14 @@ algorithm:
     backend: spring
     observed: [0, 2, 4]
     episode_length: 1000
+    kwargs: {}
   num_envs: 16
   parameters: {}
 training:
   seed: 0
   total_steps: 2000000
   chunk_steps: 10000
+  snapshot_every_steps: 0
 evaluation:
   every_steps: 10000
   episodes: 5
@@ -84,7 +88,13 @@ logging:
 
 `environment.backend` 在该命名空间只有一种实现可选时为 `null`：brax 要选物理后端，gymnax 没有可选的。`observed` 同理，`null` 表示不裁剪观测。两者表达的都是"不适用"，与字段缺失不是一回事。
 
+`environment.kwargs`（v14 起）是**构造环境所用的参数**，与前三个字段的区别是：前三个说的是"对造好的环境做什么"，它说的是"造出来的是哪一个"。有些任务的身份就是一个构造参数——长度 10 的 UmbrellaChain 和长度 40 的是两个任务，bsuite 自己的 sweep 扫的正是这个数——没有它，运行配置只能点出任务族，点不出其中的成员。内容原样透传给命名空间适配器的 `make`：各适配器本来就把 `**kwargs` 转发给它包的库，所以这里合法的键就是那个库的构造函数接受的键，写错的键由那个库报错。默认 `{}`，即"这个环境由名字本身唯一确定"。
+
+gymnax 一侧还要再分一次：有些参数属于环境构造函数（UmbrellaChain 的 `n_distractor`、DiscountingChain 的 `mapping_seed`），有些属于 `EnvParams`（UmbrellaChain 的 `chain_length`）。运行配置不必知道哪个是哪个，`memorax/environments/gymnax.py` 按 `EnvParams` 自己声明的字段名来分。`max_steps_in_episode` 被明确拒绝：那是 `episode_length` 的另一种写法，一个数只在一处声明。
+
 `identity.trial` 命名配置，`identity.seed` 命名它的这一次重复，两者合起来才唯一；`identity.role` 说明这次运行属于哪个协议（`tuning` 选配置，`formal` 量已选定的配置，只有后者可被报告）。
+
+`training.snapshot_every_steps`（v15 起）是**每隔多少步把整个 run 写到能比机器活得久的地方**，让被抢占、超时或丢了主机的作业续跑而不是重来。必须是 `evaluation.every_steps` 的整数倍：边界是 run 唯一安静到可以从中重启的时刻，两个边界之间有 chunk 在飞，中断落在其中哪一点不是任何调度能恢复的位置。写下去的是整个 run——参数、优化器、环境、训练 key 流、tracker 里还没闭合的 episode，以及 metrics 制品已经写了多少字节——连同制品本身打成 `resume.tar.gz` 放在该 run 的制品前缀下，一个对象，覆盖写。下一次尝试取回来，把 metrics 按那个字节数截断，从那个边界接着跑，报出来的与一次没被打断的进程报的相同。默认 `0`，即不写：每份快照都是整个 run 的状态过一遍网络，短到重跑不心疼的 run 不该为它付钱。最后一个边界不写——预算末尾的快照恢复出来是一个无事可做的循环——run 正常结束时对象被删除。
 
 `evaluation.episodes` 是**恰好**多少条完整 episode，不是步数预算——跑多久由策略决定，按步数给会让 episode 数随任务和策略变。`evaluation.chunk_steps` 只是一次评估调用的内存上界，`evaluation.seed` 独立于训练种子，使"测没测"不改变训练的 key 流。
 

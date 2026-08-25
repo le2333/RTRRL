@@ -1,0 +1,160 @@
+# The two bsuite chains, at smoke size, on the entry that will run them.
+#
+# This file exists to be run, not to produce a number. It is the first run
+# document to name `environment.kwargs`, which contract 14 adds, and the point
+# of running it is that the field survives the whole path: experiment YAML ->
+# Infra's run configuration -> the Entry's projection -> the gymnax adapter's
+# split into constructor arguments and EnvParams.
+#
+# UmbrellaChain is the arm that exercises the field. Its `chain_length` is the
+# number bsuite's own sweep varies and the number the task's difficulty *is*:
+# one decision at the first step, paid at the last, with uninformative rewards
+# in between. `n_distractor` widens the observation with coins that say
+# nothing, so the memory has to survive noise as well as delay. Neither was
+# reachable from a run document before this contract, so neither had ever been
+# swept here.
+#
+# DiscountingChain is the arm that exercises the horizon rule. Its five actions
+# pay at t=1, 3, 10, 30 and 100, and the whole task is that a discount rate has
+# to choose between them. `episode_length` is therefore the task rather than a
+# budget applied to it, and the adapter refuses anything below 100 -- at 20 the
+# last two payments never arrive and two of the five actions become worth
+# nothing, which would be a different task under this one's name. It is run
+# here at exactly 100 for that reason and should not be lowered to make the
+# smoke faster.
+#
+# Both are diagnostic tasks and neither is a claim about the algorithm. What
+# the run is read for:
+#   - the worker exits 0 and publishes result.json and metrics.jsonl
+#   - four evaluation checkpoints, each of exactly ten eval/episode/return
+#     records
+#   - every train/episode and eval/episode value finite, and a finite AUC
+#
+# Only one environment can be named per file, so the UmbrellaChain arm is the
+# one written out; the DiscountingChain arm is the commented block below it and
+# is run by copying this file with those four lines swapped in.
+
+experiment: rtrrl-bsuite-chains-smoke
+name: rtrrl-bsuite-chains-smoke
+description: "The bsuite chains at smoke size: the first run to name environment.kwargs"
+
+# TODO: the contract-14 rebuild of the RTRRL image. Nothing about this file can
+# be dispatched until an image that validates contract 14 exists; the digest it
+# reports goes here.
+image: TBD
+entry: rtrrl
+storage: s3://rtrrl-artifacts-007122174918/trainer
+
+environment:
+  id: gymnax::UmbrellaChain-bsuite
+  backend: null
+  observed: null
+  # The chain is the task. Twenty steps between the decision and its payment,
+  # with three coins per observation that carry nothing.
+  kwargs:
+    chain_length: 20
+    n_distractor: 3
+  # The chain ends the episode at twenty, so this is the cap rather than the
+  # horizon; it is set to the chain length because there is no reason for the
+  # clock to be able to cut the task off.
+  episode_length: 20
+  seeds: [0]
+
+# The DiscountingChain arm:
+#
+# environment:
+#   id: gymnax::DiscountingChain-bsuite
+#   backend: null
+#   observed: null
+#   kwargs:
+#     mapping_seed: 0
+#   # Not lower: see the note at the top of this file.
+#   episode_length: 100
+#   seeds: [0]
+
+training:
+  num_envs: 1
+  total_steps: 4000
+  chunk_steps: 1000
+
+evaluation:
+  every_steps: 1000
+  episodes: 10
+  # Ten episodes cannot exceed ten times the environment's own limit, so one
+  # call holds the rollout even in the worst case.
+  chunk_steps: 200
+  seed: 1000
+
+logging:
+  aim:
+    url: aim://172.31.62.192:53801
+    training:
+      log_every_steps: 1000
+
+score:
+  metric: eval/episode/return
+  window_steps: [0, 4000]
+  reduce: auc
+  episodes_per_checkpoint: 10
+  non_finite: worst
+  direction: maximize
+
+compute:
+  instance_type: c7a.large
+  timeout_minutes: 60
+
+hpo:
+  rounds: 1
+  trials_per_round: 1
+  parallel_jobs: 1
+  startup_trials: 1
+  seed: 0
+
+space:
+  torso:
+    backbone:
+      kind: [lru]
+      lru:
+        feature_dim: [32]
+        hidden_dim: [32]
+        differentiation:
+          kind: [exact_rtrl]
+    optimizer:
+      kind: [adam]
+      adam:
+        lr: [0.0001]
+    grad_clip: [1.0]
+    follow: [1.0]
+  actor:
+    optimizer:
+      kind: [adam]
+      adam:
+        lr: [0.0001]
+    head:
+      kind: [categorical]
+      categorical:
+        initialization:
+          kind: [lecun]
+  critic:
+    optimizer:
+      kind: [adam]
+      adam:
+        lr: [0.0001]
+    head:
+      kind: [value]
+      value:
+        initialization:
+          kind: [lecun]
+  normalization:
+    observation:
+      kind: [none]
+    reward:
+      kind: [none]
+  gamma: [0.99]
+  lambda_pi: [0.9]
+  lambda_v: [0.9]
+  lambda_rnn: [0.9]
+  eta_pi: [1.0]
+  eta_f: [1.0]
+  entropy_rate: [0.00001]
+  meta_rl: [true]
