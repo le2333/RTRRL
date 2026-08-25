@@ -59,9 +59,7 @@ def test_the_backend_a_gymnax_run_declares_reaches_no_constructor():
 
 
 def test_discounting_chain_rejects_a_horizon_before_its_last_reward():
-    with pytest.raises(
-        ValueError, match="shorter than DiscountingChain's last reward"
-    ):
+    with pytest.raises(ValueError, match="shorter than DiscountingChain's last reward"):
         make(
             DISCOUNTING_CHAIN,
             observed=None,
@@ -69,6 +67,7 @@ def test_discounting_chain_rejects_a_horizon_before_its_last_reward():
             episode_length=20,
             mapping_seed=0,
         )
+
 
 def test_discounting_chain_horizon_validation_is_safe_inside_jit():
     """The ensemble rebuilds swept members while JAX traces their graph."""
