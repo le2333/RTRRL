@@ -193,6 +193,7 @@ class ExperimentRunner:
             startup_trials=hpo["startup_trials"],
             seed=hpo["seed"],
             parameters=resolve_parameter_ranges(descriptor["parameters"], experiment["space"]),
+            distinct_candidates=self.grouped and int(hpo["trials_per_round"]) > 1,
             metadata={
                 "role": self.role,
                 "seeds": list(self.seeds),
@@ -341,7 +342,14 @@ class ExperimentRunner:
 
     def _configuration(self, trial: Any, seed: int, ordinal: int) -> dict[str, Any]:
         experiment = self.experiment
-        run_id = f"{experiment['name']}-run{trial.number + 1}-seed{ordinal}"
+        # A run number belongs to an experiment/framework series, not to a
+        # particular environment or cell. A configuration therefore carries
+        # the hand-assigned first number when it takes part in an existing
+        # series; unnumbered one-off experiments retain run-1 behaviour.
+        first_run = int(experiment.get("run_number", 1))
+        if first_run < 1:
+            raise ExperimentError("run_number must be a positive integer")
+        run_id = f"{experiment['name']}-run{first_run + trial.number}-seed{ordinal}"
         artifacts = "/".join(
             (
                 str(experiment["storage"]).rstrip("/"),

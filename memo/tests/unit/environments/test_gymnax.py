@@ -54,3 +54,17 @@ def test_the_backend_a_gymnax_run_declares_reaches_no_constructor():
     unnamed, _ = make(CARTPOLE, observed=None, backend=None, episode_length=9)
 
     assert type(named) is type(unnamed)
+
+
+def test_environment_constructor_options_reach_gymnax():
+    """Task-defined Gymnax options survive the deployment factory boundary."""
+
+    _, parameters = make(
+        "gymnax::DiscountingChain-bsuite",
+        observed=None,
+        backend=None,
+        episode_length=17,
+        mapping_seed=3,
+    )
+
+    assert parameters.max_steps_in_episode == 17

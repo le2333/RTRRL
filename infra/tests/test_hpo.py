@@ -151,3 +151,29 @@ def test_a_failed_round_marks_every_asked_trial_failed_and_starts_no_next_round(
         optuna.trial.TrialState.FAIL,
         optuna.trial.TrialState.FAIL,
     ]
+
+
+def test_a_post_startup_batch_does_not_repeat_one_candidate(tmp_path: Path) -> None:
+    """Pending trials occupy points while a parallel round is being formed."""
+
+    hpo = HPO(
+        name="streamac-batch",
+        database=tmp_path / "batch.db",
+        direction="maximize",
+        rounds=2,
+        trials_per_round=5,
+        startup_trials=5,
+        seed=0,
+        distinct_candidates=True,
+        parameters={
+            "lr": {"type": "choice", "values": [3e-5, 1e-4, 3e-4]},
+            "lambda": {"type": "choice", "values": [0.9, 0.95, 0.99]},
+        },
+    )
+
+    first = hpo.ask()
+    hpo.tell(first, tuple(float(trial.number) for trial in first))
+    second = hpo.ask()
+
+    points = {tuple(sorted(trial.parameters.items())) for trial in second}
+    assert len(points) == len(second)

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, model_validator
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from deployment.contract import ContractVersion
 from memorax.parameters import Scalar
@@ -57,6 +57,7 @@ class EnvironmentSpec(_Frozen):
     backend: str | None = None
     observed: tuple[int, ...] | None = None
     episode_length: int = 1000
+    kwargs: dict[str, Scalar] = Field(default_factory=dict)
 
     @model_validator(mode="after")
     def _usable(self) -> "EnvironmentSpec":

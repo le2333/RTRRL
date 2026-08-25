@@ -9,7 +9,7 @@ names and no graph topology.
 from __future__ import annotations
 
 from collections.abc import Callable, Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any
 
 from memorax.building import BuildContext, ComponentBuilder
@@ -23,6 +23,7 @@ class EnvironmentSpec:
     backend: str | None
     observed: Any
     episode_length: int
+    kwargs: Mapping[str, Any] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)
@@ -50,6 +51,7 @@ def assemble(
         observed=specification.observed,
         backend=specification.backend,
         episode_length=specification.episode_length,
+        **specification.kwargs,
     )
     context = BuildContext(
         environment=environment,

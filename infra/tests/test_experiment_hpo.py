@@ -73,6 +73,17 @@ def test_each_run_has_one_artifact_root(experiment: Any, catalog: Any, tmp_path:
     assert first["logging"]["rerun"] == {"log_every_steps": 100}
 
 
+def test_explicit_series_run_number_offsets_trials(
+    experiment: Any, catalog: Any, tmp_path: Path
+) -> None:
+    experiment["run_number"] = 7
+
+    first, second = runner(experiment, catalog, tmp_path).next_round()
+
+    assert first["identity"]["run_id"] == "stream-ac-test-run7-seed1"
+    assert second["identity"]["run_id"] == "stream-ac-test-run8-seed1"
+
+
 def test_rerun_gets_no_destination_when_it_is_off(
     experiment: Any, catalog: Any, tmp_path: Path
 ) -> None:

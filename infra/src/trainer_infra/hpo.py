@@ -105,6 +105,7 @@ class HPO:
         parameters: Mapping[str, Any],
         seed: int | None = None,
         metadata: Mapping[str, object] | None = None,
+        distinct_candidates: bool = False,
     ) -> None:
         self.name = name
         self.database = Path(database)
@@ -115,18 +116,29 @@ class HPO:
         self.parameters = dict(parameters)
         self.seed = seed
         self.metadata = {} if metadata is None else dict(metadata)
+        self.distinct_candidates = distinct_candidates
         self._study: optuna.Study | None = None
 
     def ask(self) -> tuple[SampledTrial, ...]:
         study = self._open()
-        trials = tuple(study.ask() for _ in range(self.trials_per_round))
-        return tuple(
-            SampledTrial(
-                number=trial.number,
-                parameters=sample_parameters(trial, self.parameters),
-            )
-            for trial in trials
-        )
+        sampled: list[SampledTrial] = []
+        seen: set[tuple[tuple[str, Scalar], ...]] = set()
+        rejected = 0
+        while len(sampled) < self.trials_per_round:
+            trial = study.ask()
+            parameters = sample_parameters(trial, self.parameters)
+            point = tuple(sorted(parameters.items()))
+            if self.distinct_candidates and point in seen:
+                study.tell(trial.number, state=optuna.trial.TrialState.PRUNED)
+                rejected += 1
+                if rejected > max(100, self.trials_per_round * 100):
+                    raise RuntimeError(
+                        "could not draw enough distinct candidates for one grouped round"
+                    )
+                continue
+            seen.add(point)
+            sampled.append(SampledTrial(number=trial.number, parameters=parameters))
+        return tuple(sampled)
 
     def running(self) -> tuple[SampledTrial, ...]:
         """The trials this study asked for and never heard an answer to.
@@ -187,6 +199,10 @@ class HPO:
             sampler=optuna.samplers.TPESampler(
                 n_startup_trials=self.startup_trials,
                 seed=self.seed,
+                # A round asks several trials before any of them can be told.
+                # Treat pending trials as occupied so TPE does not emit one
+                # point repeatedly for the workers in the next batch.
+                constant_liar=True,
             ),
             direction=self.direction,
             load_if_exists=True,

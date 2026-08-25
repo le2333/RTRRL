@@ -79,6 +79,13 @@ def test_an_environment_with_one_implementation_names_no_backend() -> None:
     assert RunSpec.model_validate(payload).algorithm.environment.backend is None
 
 
+def test_environment_constructor_kwargs_survive_the_entry_contract() -> None:
+    payload = read_json("run.json")
+    payload["algorithm"]["environment"]["kwargs"] = {"mapping_seed": 3}
+
+    assert RunSpec.model_validate(payload).algorithm.environment.kwargs == {"mapping_seed": 3}
+
+
 def test_entry_owns_schedule_and_graph_width_validation() -> None:
     payload = read_json("run.json")
     payload["algorithm"]["num_envs"] = 3
