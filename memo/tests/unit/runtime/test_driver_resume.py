@@ -123,7 +123,7 @@ ALGORITHM = BuiltAlgorithm(
 )
 
 
-def config(snapshot_every_steps: int) -> RuntimeConfig:
+def config(snapshot_every_evaluations: int) -> RuntimeConfig:
     return RuntimeConfig(
         total_steps=TOTAL_STEPS,
         chunk_steps=CHUNK_STEPS,
@@ -134,7 +134,7 @@ def config(snapshot_every_steps: int) -> RuntimeConfig:
         evaluation_seed=11,
         num_envs=NUM_ENVS,
         seed=3,
-        snapshot_every_steps=snapshot_every_steps,
+        snapshot_every_evaluations=snapshot_every_evaluations,
     )
 
 
@@ -171,9 +171,7 @@ def reduced(recorder: ResumableRecorder) -> list[tuple[Any, ...]]:
 
 
 def run_once(store: FileSnapshotStore | None, recorder: ResumableRecorder) -> None:
-    Runtime(algorithm=ALGORITHM, config=config(EVERY_STEPS), snapshots=store).run(
-        recorder
-    )
+    Runtime(algorithm=ALGORITHM, config=config(1), snapshots=store).run(recorder)
 
 
 def test_a_resumed_run_reports_what_one_uninterrupted_run_would_have(
@@ -258,9 +256,7 @@ def test_a_run_that_asks_to_be_written_down_needs_somewhere_to_write(
 
     del tmp_path
     with pytest.raises(ValueError, match="nowhere to write"):
-        Runtime(algorithm=ALGORITHM, config=config(EVERY_STEPS)).run(
-            ResumableRecorder()
-        )
+        Runtime(algorithm=ALGORITHM, config=config(1)).run(ResumableRecorder())
 
 
 def test_taking_no_snapshots_writes_nothing(tmp_path: Path) -> None:
@@ -272,20 +268,6 @@ def test_taking_no_snapshots_writes_nothing(tmp_path: Path) -> None:
     )
 
     assert store.latest() is None
-
-
-def test_the_last_boundary_is_not_written_down(tmp_path: Path) -> None:
-    """A snapshot at the end of the budget resumes to a run with nothing to do.
-
-    The store still holds the boundary before it, which is what a job killed
-    during the final interval would need.
-    """
-
-    store = FileSnapshotStore(tmp_path)
-    run_once(store, ResumableRecorder())
-
-    resumed = store.latest()
-    assert resumed is not None and resumed.step == TOTAL_STEPS - EVERY_STEPS
 
 
 def test_an_ensemble_snapshot_is_refused_by_the_single_member_driver(
@@ -311,3 +293,67 @@ def test_an_ensemble_snapshot_is_refused_by_the_single_member_driver(
 
     with pytest.raises(ValueError, match="2 members' trackers"):
         run_once(store, ResumableRecorder())
+
+
+def test_a_boundary_is_written_down_before_it_is_measured(tmp_path: Path) -> None:
+    """Which is what makes an interruption during a measurement cheap.
+
+    Most of what a boundary costs is its evaluation. A snapshot taken after
+    one would mean a machine that dies measuring loses the whole training
+    interval behind it as well; taken before, the evaluation is the only
+    thing the next attempt redoes.
+
+    The evidence is the eval numbering: the snapshot at the first boundary
+    holds the number the *next* evaluation episode will take, and if the
+    measurement had already happened that number would be past this
+    boundary's episodes.
+    """
+
+    store = FileSnapshotStore(tmp_path, keep=16)
+    run_once(store, ResumableRecorder())
+
+    first = FileSnapshotStore(tmp_path, keep=16)._load(
+        tmp_path / f"{EVERY_STEPS}.snapshot"
+    )
+    assert first is not None
+    assert first.step == EVERY_STEPS
+    assert first.eval_number == 1
+
+
+def test_the_last_boundary_is_written_down_too(tmp_path: Path) -> None:
+    """Its measurement is still ahead of it, so it is worth insuring.
+
+    Under the old ordering the final boundary was skipped, because a snapshot
+    taken after the last evaluation resumes to a loop with nothing left to do.
+    Taken before, it is what a machine that dies in the final measurement
+    needs.
+    """
+
+    store = FileSnapshotStore(tmp_path, keep=16)
+    run_once(store, ResumableRecorder())
+
+    resumed = store.latest()
+    assert resumed is not None and resumed.step == TOTAL_STEPS
+
+
+def test_a_resumed_boundary_is_not_immediately_written_back_out(
+    tmp_path: Path,
+) -> None:
+    """The archive it was just read from is the archive it would produce."""
+
+    store = FileSnapshotStore(tmp_path)
+    stopped = Interrupted(after=6)
+    with pytest.raises(Interruption):
+        run_once(store, stopped)
+    at = store.latest()
+    assert at is not None
+
+    writes = []
+    watched = FileSnapshotStore(tmp_path)
+    original = watched.save
+    watched.save = lambda snapshot: (writes.append(snapshot.step), original(snapshot))[
+        1
+    ]
+    run_once(watched, ResumableRecorder(episodes=list(stopped.episodes)))
+
+    assert at.step not in writes

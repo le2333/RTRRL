@@ -124,7 +124,7 @@ class BatchRoundExecutor:
         """When Batch may start the manifest again, and when it may not.
 
         A second attempt is only worth anything to a run that wrote itself
-        down: without ``snapshot_every_steps`` it repeats the whole budget and
+        down: without ``snapshot_every_evaluations`` it repeats the whole budget and
         arrives at the same place, having paid twice. With one it continues
         from the last boundary, which is what makes an interrupted long run
         finishable at all.

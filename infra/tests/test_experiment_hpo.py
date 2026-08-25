@@ -91,7 +91,7 @@ def test_the_arguments_an_environment_is_built_with_reach_the_run(
     }
 
 
-def test_a_snapshot_interval_reaches_the_run_only_when_it_is_asked_for(
+def test_a_snapshot_count_reaches_the_run_only_when_it_is_asked_for(
     experiment: Any, catalog: Any, tmp_path: Path
 ) -> None:
     """Omitted rather than defaulted, because the image's default is off.
@@ -101,15 +101,15 @@ def test_a_snapshot_interval_reaches_the_run_only_when_it_is_asked_for(
     every run document that most runs have no use for.
     """
 
-    experiment["training"]["snapshot_every_steps"] = 100
+    experiment["training"]["snapshot_every_evaluations"] = 100
     configuration = runner(experiment, catalog, tmp_path).next_round()[0]
 
-    assert configuration["training"]["snapshot_every_steps"] == 100
+    assert configuration["training"]["snapshot_every_evaluations"] == 100
 
-    del experiment["training"]["snapshot_every_steps"]
+    del experiment["training"]["snapshot_every_evaluations"]
     quiet = runner(experiment, catalog, tmp_path).next_round()[0]
 
-    assert "snapshot_every_steps" not in quiet["training"]
+    assert "snapshot_every_evaluations" not in quiet["training"]
 
 
 def test_each_run_has_one_artifact_root(experiment: Any, catalog: Any, tmp_path: Path) -> None:

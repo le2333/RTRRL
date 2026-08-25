@@ -379,8 +379,8 @@ class ExperimentRunner:
         # Omitted rather than defaulted to zero here: the image's own default
         # is off, and a field this side always writes is a field an older
         # image would reject for saying something it already agreed with.
-        if "snapshot_every_steps" in training:
-            budget["snapshot_every_steps"] = training["snapshot_every_steps"]
+        if "snapshot_every_evaluations" in training:
+            budget["snapshot_every_evaluations"] = training["snapshot_every_evaluations"]
 
         return {
             "contract": self.contract,

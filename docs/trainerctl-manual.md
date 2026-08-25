@@ -115,7 +115,7 @@ training:
   num_envs: 16
   total_steps: 2000000
   chunk_steps: 10000
-  snapshot_every_steps: 100000        # optional; omit for a run that cannot be resumed
+  snapshot_every_evaluations: 1       # optional; omit for a run that cannot be resumed
 
 evaluation:
   every_steps: 10000
@@ -126,7 +126,7 @@ evaluation:
 compute:
   instance_type: c7a.large
   timeout_minutes: 240
-  attempts: 3                         # optional; only useful with snapshot_every_steps
+  attempts: 3                         # optional; only useful with snapshot_every_evaluations
 
 hpo:
   rounds: 2
@@ -201,30 +201,39 @@ derives from another.
 | `num_envs` | Number of parallel training streams; must be positive |
 | `total_steps` | Total training budget; must be positive |
 | `chunk_steps` | How much one training call may hold — the run's memory cost |
-| `snapshot_every_steps` | Optional. How often the run is written somewhere a second attempt can pick it up. Omit, or zero, to write nothing |
+| `snapshot_every_evaluations` | Optional. How many evaluation boundaries between snapshots — `1` writes the run down at every one. Omit, or zero, to write nothing |
 
 `chunk_steps` is deliberately unrelated to `episode_length`: how long an episode runs is
 decided while the run is going and grows as the policy improves, so sizing a buffer from
 it would tie a memory budget to a number that has nothing to do with memory.
 
-`snapshot_every_steps` is what makes an interrupted job continuable. At each interval the
-run writes its whole state — parameters, optimiser, environment, the training key stream,
-the episodes still open, and how much of the metrics artifact it had written — into
-`resume.tar.gz` beside its artifacts, together with the artifacts themselves. A later
+`snapshot_every_evaluations` is what makes an interrupted job continuable. At each
+snapshot the run writes its whole state — parameters, optimiser, environment, the training
+key stream, the episodes still open, and how much of the metrics artifact it had written —
+into `resume.tar.gz` beside its artifacts, together with the artifacts themselves. A later
 attempt on the same manifest finds it, restores it, cuts the metrics artifact back to the
 byte the snapshot named, and carries on from that boundary. What it then reports is what
 one uninterrupted process would have reported.
 
-It must be a whole number of `evaluation.every_steps`, because a boundary is the only
-moment a run is quiet enough to be restarted from: between two of them a training chunk is
-in flight and how far into one an interruption fell is not a place any schedule can be
-resumed at. The last boundary is not written — a snapshot at the end of the budget resumes
-to a loop with nothing left to do — and the object is deleted when the run finishes.
+It is counted in evaluation boundaries because a boundary is the only moment a run is quiet
+enough to be restarted from: between two of them a training chunk is in flight and how far
+into one an interruption fell is not a place any schedule can resume at. Counting them is
+also what makes the setting impossible to malform — an interval in steps could name a
+moment that never arrives.
 
-The cost is one upload of the run's state and its artifacts per interval, so the interval
-is a real choice: often enough that losing one is cheap, rarely enough that the uploads
-are not a share of the run. A tenth or a twentieth of `total_steps` is the usual answer. A
-run short enough to simply repeat should leave the field out.
+The snapshot is taken *before* the boundary's evaluation. Most of what a boundary costs is
+its evaluation, so a snapshot after one would mean a machine that dies measuring loses the
+whole training interval behind it as well. Taken before, the evaluation is the only thing a
+resume redoes, and redoing it is exact: evaluation reads the training state without
+touching it and draws its keys from the evaluation seed and the boundary, so one boundary
+measured twice reports the same episodes both times.
+
+The cost is one upload of the run's whole state per snapshot, so the count is a real
+choice. For a streaming method that carries no replay buffer the state is a fraction of a
+mebibyte and `1` is close to free; for DRQN or R2D2 it is the replay buffer, every time,
+and a larger count is worth having. A run short enough to simply repeat should leave the
+field out.
+
 
 **`evaluation`.**
 
@@ -277,7 +286,7 @@ evaluation intervals. These are checked when the run starts, not by the control 
 `timeout_minutes` is the only thing bounding a wedged run: the worker starts a run and
 waits for it, without judging how often it reports.
 
-`attempts` above 1 is only worth asking for alongside `training.snapshot_every_steps`.
+`attempts` above 1 is only worth asking for alongside `training.snapshot_every_evaluations`.
 Without one, a second attempt repeats the whole budget and arrives where the first did,
 having paid twice. With one, it continues from the last boundary, which is what makes a
 run longer than `timeout_minutes` — or one on a reclaimable instance — finishable at all.

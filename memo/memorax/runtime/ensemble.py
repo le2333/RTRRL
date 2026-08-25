@@ -41,7 +41,6 @@ from memorax.runtime.driver import (
     RuntimeConfig,
     evaluation_boundaries,
     evaluation_quota,
-    snapshot_interval,
 )
 from memorax.runtime.episode import Episode
 from memorax.runtime.program import BuiltAlgorithm
@@ -128,14 +127,13 @@ class EnsembleRuntime:
             every_steps=config.evaluate_every_steps,
             num_envs=config.num_envs,
         )
-        interval = snapshot_interval(
-            snapshot_every_steps=config.snapshot_every_steps,
-            evaluate_every_steps=config.evaluate_every_steps,
-        )
-        if interval and self.snapshots is None:
+        every = config.snapshot_every_evaluations
+        if every < 0:
+            raise ValueError("snapshot_every_evaluations must not be negative")
+        if every and self.snapshots is None:
             raise ValueError(
-                f"this run asks to be written down every {interval} steps and "
-                "was given nowhere to write it; a run that says it can be "
+                f"this run asks to be written down every {every} evaluations "
+                "and was given nowhere to write it; a run that says it can be "
                 "resumed and cannot is worse than one that never claimed to"
             )
 
@@ -150,10 +148,13 @@ class EnsembleRuntime:
         keys, state, trained_steps, eval_number = self._begin(
             init, varied, reporters, trackers
         )
+        resumed_at = trained_steps
 
-        for boundary in boundaries:
-            # An interval a snapshot already holds, for every member at once.
-            if boundary <= trained_steps:
+        for measurement, boundary in enumerate(boundaries, start=1):
+            # An interval a snapshot already holds whole, for every member at
+            # once. The boundary the round was resumed at is not one of them:
+            # its measurement is still owing.
+            if boundary < trained_steps:
                 continue
             while trained_steps < boundary:
                 steps = min(config.chunk_steps, boundary - trained_steps)
@@ -168,6 +169,18 @@ class EnsembleRuntime:
                     )
                 trained_steps += steps
 
+            # Before the measurement, for the reason the single-member driver
+            # gives: an evaluation is what a boundary mostly costs, and it is
+            # the one part of a boundary that can be redone exactly.
+            if every and not measurement % every and boundary != resumed_at:
+                self._suspend(
+                    reporters,
+                    trackers,
+                    state=state,
+                    keys=keys,
+                    step=boundary,
+                    eval_number=eval_number,
+                )
             if config.evaluation_episodes:
                 eval_number = self._measure(
                     reporters,
@@ -178,15 +191,6 @@ class EnsembleRuntime:
                     state,
                     boundary=boundary,
                     first_number=eval_number,
-                )
-            if interval and boundary < config.total_steps and not boundary % interval:
-                self._suspend(
-                    reporters,
-                    trackers,
-                    state=state,
-                    keys=keys,
-                    step=boundary,
-                    eval_number=eval_number,
                 )
 
     def _begin(self, init, varied: tuple, reporters, trackers):

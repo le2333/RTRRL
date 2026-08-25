@@ -17,7 +17,6 @@ import numpy as np
 import pytest
 
 from memorax.runtime import FileSnapshotStore, RunSnapshot
-from memorax.runtime.driver import snapshot_interval
 from memorax.runtime.snapshot import attach, detach
 
 
@@ -128,14 +127,3 @@ def test_a_key_inside_the_state_survives_being_written(tmp_path: Path) -> None:
         jax.random.key_data(resumed["stream"]),
         jax.random.key_data(state["stream"]),
     )
-
-
-def test_a_snapshot_interval_is_whole_evaluation_intervals() -> None:
-    """A boundary is the only moment the schedule can be restarted from."""
-
-    assert snapshot_interval(snapshot_every_steps=0, evaluate_every_steps=16) == 0
-    assert snapshot_interval(snapshot_every_steps=32, evaluate_every_steps=16) == 32
-    with pytest.raises(ValueError, match="whole evaluation intervals"):
-        snapshot_interval(snapshot_every_steps=24, evaluate_every_steps=16)
-    with pytest.raises(ValueError, match="must not be negative"):
-        snapshot_interval(snapshot_every_steps=-16, evaluate_every_steps=16)

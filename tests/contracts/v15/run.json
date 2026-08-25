@@ -36,7 +36,7 @@
     "seed": 0,
     "total_steps": 100,
     "chunk_steps": 100,
-    "snapshot_every_steps": 100
+    "snapshot_every_evaluations": 1
   },
   "evaluation": {
     "every_steps": 100,

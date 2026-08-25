@@ -50,7 +50,7 @@ def runtime_config(config) -> RuntimeConfig:
         num_envs=config.algorithm.num_envs,
         seed=training.seed,
         trajectory_at_steps=trajectory_at_steps(config),
-        snapshot_every_steps=training.snapshot_every_steps,
+        snapshot_every_evaluations=training.snapshot_every_evaluations,
     )
 
 

@@ -131,26 +131,31 @@ def test_a_run_says_how_often_it_writes_itself_down() -> None:
 
     entry = RunSpec.model_validate(read_json("run.json"))
 
-    assert entry.training.snapshot_every_steps == 100
+    assert entry.training.snapshot_every_evaluations == 1
 
 
 def test_a_run_that_says_nothing_writes_nothing_down() -> None:
     """Off is the default, because a snapshot is a cost a run has to ask for."""
 
     payload = read_json("run.json")
-    payload["training"].pop("snapshot_every_steps")
+    payload["training"].pop("snapshot_every_evaluations")
 
-    assert RunSpec.model_validate(payload).training.snapshot_every_steps == 0
+    assert RunSpec.model_validate(payload).training.snapshot_every_evaluations == 0
 
 
-def test_a_snapshot_interval_must_land_on_an_evaluation_boundary() -> None:
-    """The only moment a run is quiet enough to be restarted from."""
+def test_a_snapshot_count_must_not_be_negative() -> None:
+    """A count of evaluations cannot name a moment that will not arrive.
+
+    Which is the whole reason it is counted in evaluations: the interval this
+    replaced was in steps, and one that was not whole boundaries described a
+    run that wrote nothing down while appearing to.
+    """
 
     payload = read_json("run.json")
-    payload["training"]["snapshot_every_steps"] = 60
+    payload["training"]["snapshot_every_evaluations"] = -1
 
     WorkerEnvelope.model_validate(payload)
-    with pytest.raises(ValidationError, match="whole evaluation intervals"):
+    with pytest.raises(ValueError, match="must not be negative"):
         RunSpec.model_validate(payload)
 
 

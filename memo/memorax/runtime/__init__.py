@@ -1,12 +1,6 @@
 """Runtime scheduling and the closed algorithm contract it executes."""
 
-from .driver import (
-    Destination,
-    Runtime,
-    RuntimeConfig,
-    evaluation_boundaries,
-    snapshot_interval,
-)
+from .driver import Destination, Runtime, RuntimeConfig, evaluation_boundaries
 from .episode import SampledTrajectory
 from .program import BuiltAlgorithm, ObservationSchema, Program
 from .snapshot import FileSnapshotStore, Resumable, RunSnapshot, SnapshotStore
@@ -27,5 +21,4 @@ __all__ = [
     "SnapshotStore",
     "TrackingResult",
     "evaluation_boundaries",
-    "snapshot_interval",
 ]

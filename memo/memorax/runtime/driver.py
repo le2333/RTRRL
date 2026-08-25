@@ -42,31 +42,6 @@ def evaluation_boundaries(
     return range(every_steps, total_steps + 1, every_steps)
 
 
-def snapshot_interval(*, snapshot_every_steps: int, evaluate_every_steps: int) -> int:
-    """How often a run is written down, in the units the schedule allows.
-
-    A snapshot is taken at an evaluation boundary and nowhere else. Between
-    two boundaries a training chunk is in flight, and how far into one an
-    interruption fell is not a place any schedule can be restarted from; at a
-    boundary the run is quiet, its evaluation has been taken, and what comes
-    next is decided by the budget rather than by where the machine stopped.
-
-    So an interval that is not whole evaluation intervals names moments that
-    do not exist. It is refused here rather than rounded to a moment that
-    does, because a run that snapshots at a different cadence from the one it
-    was given is a run whose cost nobody stated.
-    """
-
-    if snapshot_every_steps < 0:
-        raise ValueError("snapshot_every_steps must not be negative")
-    if snapshot_every_steps % evaluate_every_steps:
-        raise ValueError(
-            f"snapshot_every_steps {snapshot_every_steps} is not whole "
-            f"evaluation intervals of {evaluate_every_steps}"
-        )
-    return snapshot_every_steps
-
-
 def evaluation_quota(*, episodes: int, num_envs: int) -> tuple[int, ...]:
     """How many episodes each stream contributes to one checkpoint's score.
 
@@ -111,10 +86,13 @@ class RuntimeConfig:
     ``trajectory_at_steps`` names the environment steps whose training episode
     is to be kept whole.
 
-    ``snapshot_every_steps`` is how often the run is written down so that a
-    second process can carry it on; zero never writes it down. It has to be
-    whole evaluation intervals, because a boundary is the only place a run is
-    quiet enough to be restarted from -- see :func:`snapshot_interval`.
+    ``snapshot_every_evaluations`` is how often the run is written down so
+    that a second process can carry it on, counted in the boundaries it is
+    taken at; zero never writes it down. Counted in evaluations and not in
+    steps because a boundary is the only moment a run is quiet enough to be
+    restarted from -- between two of them a chunk is in flight -- and an
+    interval stated in steps can name a moment that will never arrive, which
+    is a run that writes nothing down while appearing to.
     """
 
     total_steps: int
@@ -127,7 +105,7 @@ class RuntimeConfig:
     num_envs: int
     seed: int
     trajectory_at_steps: tuple[int, ...] = ()
-    snapshot_every_steps: int = 0
+    snapshot_every_evaluations: int = 0
 
 
 @dataclass(frozen=True)
@@ -152,14 +130,13 @@ class Runtime:
             every_steps=config.evaluate_every_steps,
             num_envs=config.num_envs,
         )
-        interval = snapshot_interval(
-            snapshot_every_steps=config.snapshot_every_steps,
-            evaluate_every_steps=config.evaluate_every_steps,
-        )
-        if interval and self.snapshots is None:
+        every = config.snapshot_every_evaluations
+        if every < 0:
+            raise ValueError("snapshot_every_evaluations must not be negative")
+        if every and self.snapshots is None:
             raise ValueError(
-                f"this run asks to be written down every {interval} steps and "
-                "was given nowhere to write it; a run that says it can be "
+                f"this run asks to be written down every {every} evaluations "
+                "and was given nowhere to write it; a run that says it can be "
                 "resumed and cannot is worse than one that never claimed to"
             )
 
@@ -180,12 +157,18 @@ class Runtime:
             sample_steps=tuple(config.trajectory_at_steps),
         )
         key, state, trained_steps, eval_number = self._begin(program, reporter, tracker)
+        # Where this process took the run over, so the boundary it resumed at
+        # is not immediately written back out. Zero for a run that started at
+        # the beginning, which names no boundary.
+        resumed_at = trained_steps
 
-        for boundary in boundaries:
-            # An interval a snapshot already holds. Its episodes were reported
-            # and its evaluation was taken by the process that ran it, and the
-            # state resumed here is what running it produced.
-            if boundary <= trained_steps:
+        for measurement, boundary in enumerate(boundaries, start=1):
+            # An interval whose training and whose evaluation a snapshot both
+            # already hold. The boundary the run was resumed *at* is not one
+            # of them: its training is in the snapshot and its evaluation is
+            # not, so the loop below runs no chunks and the measurement is
+            # taken again.
+            if boundary < trained_steps:
                 continue
             while trained_steps < boundary:
                 # The last call before a boundary is short if the interval is
@@ -198,6 +181,23 @@ class Runtime:
                 )
                 trained_steps += steps
 
+            # Before the measurement rather than after it. Most of what a
+            # boundary costs is its evaluation, and a snapshot taken after one
+            # means a machine that dies measuring loses the whole training
+            # interval behind it as well. Taken before, the evaluation is the
+            # only thing a resume redoes -- and redoing it is exact, because
+            # ``_measure`` reads the state without touching it and draws its
+            # keys from the evaluation seed and the boundary, so one boundary
+            # measured twice reports the same episodes both times.
+            if every and not measurement % every and boundary != resumed_at:
+                self._suspend(
+                    reporter,
+                    tracker,
+                    state=state,
+                    key=key,
+                    step=boundary,
+                    eval_number=eval_number,
+                )
             if config.evaluation_episodes:
                 eval_number = self._measure(
                     reporter,
@@ -207,18 +207,6 @@ class Runtime:
                     state,
                     boundary=boundary,
                     first_number=eval_number,
-                )
-            # After the evaluation, so a resumed run does not measure the same
-            # checkpoint twice, and not at the last boundary, where what comes
-            # next is the end of the run.
-            if interval and boundary < config.total_steps and not boundary % interval:
-                self._suspend(
-                    reporter,
-                    tracker,
-                    state=state,
-                    key=key,
-                    step=boundary,
-                    eval_number=eval_number,
                 )
 
         key, tail_key = jax.random.split(key)

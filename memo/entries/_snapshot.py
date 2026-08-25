@@ -30,6 +30,7 @@ from __future__ import annotations
 import io
 import json
 import tarfile
+import tempfile
 from collections.abc import Iterator, Mapping, Sequence
 from contextlib import contextmanager
 from dataclasses import dataclass
@@ -101,17 +102,26 @@ class Resumption:
         return True
 
     def publish(self) -> None:
-        """Write every member's carried directories out as one object."""
+        """Write every member's carried directories out as one object.
 
-        buffer = io.BytesIO()
-        with tarfile.open(fileobj=buffer, mode="w:gz") as archive:
-            _add_members(archive, sorted(self.directories))
-            for run_id, directory in self.directories.items():
-                for carried in CARRIED:
-                    source = Path(directory) / carried
-                    if source.is_dir():
-                        archive.add(source, arcname=f"{run_id}/{carried}")
-        objects.put_bytes(self.uri, buffer.getvalue())
+        Through a file rather than through memory. What travels here is the
+        run's whole state, which for a replay-based algorithm is its buffer;
+        building the archive in a ``BytesIO`` and then handing
+        ``getvalue()`` to the upload would hold two copies of that at the one
+        moment the run can least afford it.
+        """
+
+        anchor = Path(self.directories[self.anchor])
+        with tempfile.TemporaryDirectory(dir=anchor.parent) as staging:
+            path = Path(staging) / RESUME_FILENAME
+            with tarfile.open(path, mode="w:gz") as archive:
+                _add_members(archive, sorted(self.directories))
+                for run_id, directory in self.directories.items():
+                    for carried in CARRIED:
+                        source = Path(directory) / carried
+                        if source.is_dir():
+                            archive.add(source, arcname=f"{run_id}/{carried}")
+            objects.put_file(self.uri, path)
 
     def discard(self) -> None:
         """Drop the object once the run it was insuring has finished.
@@ -148,10 +158,11 @@ def resumption_of(members: Sequence[tuple[RunSpec, Path]]) -> Resumption | None:
 
     if not members:
         raise ValueError("a resumption needs at least one run")
-    declared = {spec.training.snapshot_every_steps for spec, _ in members}
+    declared = {spec.training.snapshot_every_evaluations for spec, _ in members}
     if len(declared) != 1:
         raise ValueError(
-            f"the group disagrees about snapshot_every_steps: {sorted(declared)}"
+            f"the group disagrees about snapshot_every_evaluations: "
+            f"{sorted(declared)}"
         )
     if not declared.pop():
         return None

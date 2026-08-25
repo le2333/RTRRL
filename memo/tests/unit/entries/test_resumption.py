@@ -55,7 +55,7 @@ def test_a_run_that_asks_for_nothing_gets_no_store(tmp_path: Path) -> None:
 def test_the_directory_travels_with_the_snapshot(tmp_path: Path) -> None:
     """Saving publishes; a later attempt gets the artifacts back too."""
 
-    config, scratch = a_run(tmp_path, snapshot_every_steps=100)
+    config, scratch = a_run(tmp_path, snapshot_every_evaluations=100)
     (scratch / "artifacts" / "metrics.jsonl").write_text("row\n", encoding="utf-8")
 
     resumption = resumption_of([(config, scratch)])
@@ -66,7 +66,7 @@ def test_the_directory_travels_with_the_snapshot(tmp_path: Path) -> None:
 
     second = tmp_path / "second-attempt"
     (second / "artifacts").mkdir(parents=True)
-    later, _ = a_run(tmp_path, snapshot_every_steps=100)
+    later, _ = a_run(tmp_path, snapshot_every_evaluations=100)
     moved = resumption_of([(later, second)])
     assert moved is not None
     assert moved.restore() is True
@@ -79,7 +79,7 @@ def test_the_directory_travels_with_the_snapshot(tmp_path: Path) -> None:
 
 
 def test_a_first_attempt_finds_nothing_and_says_so(tmp_path: Path) -> None:
-    config, scratch = a_run(tmp_path, snapshot_every_steps=100)
+    config, scratch = a_run(tmp_path, snapshot_every_evaluations=100)
     resumption = resumption_of([(config, scratch)])
 
     assert resumption is not None
@@ -90,7 +90,7 @@ def test_a_first_attempt_finds_nothing_and_says_so(tmp_path: Path) -> None:
 def test_an_archive_of_other_runs_is_refused(tmp_path: Path) -> None:
     """One run's record continued under another run's name."""
 
-    config, scratch = a_run(tmp_path, snapshot_every_steps=100)
+    config, scratch = a_run(tmp_path, snapshot_every_evaluations=100)
     resumption = resumption_of([(config, scratch)])
     assert resumption is not None
     resumption.store().save(snapshot(100))
@@ -105,7 +105,7 @@ def test_an_archive_of_other_runs_is_refused(tmp_path: Path) -> None:
 def test_a_finished_run_drops_what_was_insuring_it(tmp_path: Path) -> None:
     """Otherwise storage keeps a second copy of every artifact of every run."""
 
-    config, scratch = a_run(tmp_path, snapshot_every_steps=100)
+    config, scratch = a_run(tmp_path, snapshot_every_evaluations=100)
     uri = f"{config.artifacts.root.rstrip('/')}/{RESUME_FILENAME}"
 
     with resuming([(config, scratch)]) as store:
@@ -119,7 +119,7 @@ def test_a_finished_run_drops_what_was_insuring_it(tmp_path: Path) -> None:
 def test_an_attempt_that_failed_leaves_its_snapshot_alone(tmp_path: Path) -> None:
     """It is exactly the snapshot the next attempt needs."""
 
-    config, scratch = a_run(tmp_path, snapshot_every_steps=100)
+    config, scratch = a_run(tmp_path, snapshot_every_evaluations=100)
     uri = f"{config.artifacts.root.rstrip('/')}/{RESUME_FILENAME}"
 
     with pytest.raises(RuntimeError, match="the machine went away"):
@@ -140,7 +140,7 @@ def test_a_group_is_one_object_under_its_lowest_run(tmp_path: Path) -> None:
 
     members = []
     for name in ("b-run", "a-run", "c-run"):
-        config, scratch = a_run(tmp_path / name, snapshot_every_steps=100)
+        config, scratch = a_run(tmp_path / name, snapshot_every_evaluations=100)
         document = config.model_dump(mode="json")
         document["identity"]["run_id"] = name
         members.append((type(config).model_validate(document), scratch))
@@ -158,8 +158,8 @@ def test_a_group_that_disagrees_about_the_interval_is_refused(
 ) -> None:
     """Members share the schedule, this included: they share one loop."""
 
-    first, one = a_run(tmp_path / "one", snapshot_every_steps=100)
+    first, one = a_run(tmp_path / "one", snapshot_every_evaluations=100)
     second, two = a_run(tmp_path / "two")
 
-    with pytest.raises(ValueError, match="disagrees about snapshot_every_steps"):
+    with pytest.raises(ValueError, match="disagrees about snapshot_every_evaluations"):
         resumption_of([(first, one), (second, two)])

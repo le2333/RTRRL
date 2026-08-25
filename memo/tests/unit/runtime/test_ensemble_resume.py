@@ -102,7 +102,7 @@ def config() -> RuntimeConfig:
         evaluation_seed=1000,
         num_envs=NUM_ENVS,
         seed=-1,
-        snapshot_every_steps=EVERY_STEPS,
+        snapshot_every_evaluations=1,
     )
 
 

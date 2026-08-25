@@ -35,10 +35,11 @@ training:
   num_envs: 16
   total_steps: 2000000
   chunk_steps: 10000
-  # [可选] 每隔多少步把整个 run 写到 artifacts 旁的 resume.tar.gz。必须是
-  # evaluation.every_steps 的整数倍——边界是 run 唯一安静到可以从中续跑的时刻。
-  # 省略或填 0 表示不写：被中断就只能从头再来。短到重跑不心疼的 run 就别开。
-  # snapshot_every_steps: 200000
+  # [可选] 每隔几个评估边界把整个 run 写到 artifacts 旁的 resume.tar.gz。
+  # 1 = 每个边界都写；省略或 0 = 不写，被中断就只能从头再来。
+  # 快照取在该边界的评估之前，所以续跑只重做那一次评估。
+  # 代价是每次一份完整状态的上传：流式方法几乎免费，带回放缓冲区的要调大。
+  # snapshot_every_evaluations: 1
 
 # [透传] 流数不在这里：评估复用训练时那张图的宽度
 evaluation:
@@ -76,7 +77,7 @@ score:
 compute:
   instance_type: c7a.large
   timeout_minutes: 90
-  # [可选] Batch 最多起几次这个 job，默认 1。只有配合 snapshot_every_steps 才有意义：
+  # [可选] Batch 最多起几次这个 job，默认 1。只有配合 snapshot_every_evaluations 才有意义：
   # 没有快照的第二次尝试会把整个预算重跑一遍，最后落在第一次的同一个地方。
   # attempts: 3
 
