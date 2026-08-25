@@ -42,9 +42,7 @@ def build_reporter(config: RunSpec, scratch: Path) -> Reporter:
     # optional nor sampled. Aim is the dashboard: every evaluation, and
     # training only in the scopes the document asked for.
     scalar_sinks = [MetricsSink(artifacts / METRICS_FILENAME)]
-    sampled_sinks = [
-        AimSink(config.logging.aim.url, metadata)
-    ]
+    sampled_sinks = [AimSink(config.logging.aim.url, metadata)]
     trajectory_sinks = []
     if config.logging.rerun is not None:
         trajectory_sinks.append(RerunSink(artifacts / "rerun", metadata=metadata))
