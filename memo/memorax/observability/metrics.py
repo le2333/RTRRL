@@ -2,7 +2,8 @@
 
 from __future__ import annotations
 
-from collections.abc import Iterable, Sequence
+from collections.abc import Iterable, Mapping, Sequence
+from typing import Any
 
 from memorax.runtime.episode import Episode
 
@@ -135,6 +136,32 @@ class WindowStatistics:
         self._counts[name] = count
         self._means[name] = mean
         self._squares[name] = square
+
+    def suspend(self) -> dict[str, Any]:
+        """The accumulator mid-window, which an interruption falls inside.
+
+        Welford's recurrence has no closed form to recompute from, and the
+        episodes it pooled are gone by now, so the counts, means and squares
+        are what has to travel. A window that lost them would report the
+        stretch after the interruption under the stretch's name.
+        """
+
+        return {
+            "phase": self._phase,
+            "episodes": self._episodes,
+            "totals": dict(self._totals),
+            "counts": dict(self._counts),
+            "means": dict(self._means),
+            "squares": dict(self._squares),
+        }
+
+    def resume(self, state: Mapping[str, Any]) -> None:
+        self._phase = str(state["phase"])
+        self._episodes = int(state["episodes"])
+        self._totals = {str(k): float(v) for k, v in state["totals"].items()}
+        self._counts = {str(k): int(v) for k, v in state["counts"].items()}
+        self._means = {str(k): float(v) for k, v in state["means"].items()}
+        self._squares = {str(k): float(v) for k, v in state["squares"].items()}
 
     def statistics(self) -> dict[str, float]:
         if not self._episodes:

@@ -74,3 +74,19 @@ def exists(uri: str) -> bool:
             return False
         raise
     return True
+
+
+def delete(uri: str) -> None:
+    """Remove an object, if it is still there.
+
+    Absence is the desired state rather than an error: the caller is dropping
+    something it no longer needs, and two processes arriving at that
+    conclusion is not a failure of either.
+    """
+
+    path = file_path(uri)
+    if path is not None:
+        path.unlink(missing_ok=True)
+        return
+    bucket, key = split_uri(uri)
+    client().delete_object(Bucket=bucket, Key=key)

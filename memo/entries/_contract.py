@@ -102,11 +102,26 @@ class TrainingSpec(_Frozen):
     episode limit: how long an episode runs is decided while the run is going
     and changes as the policy improves, so sizing a buffer from it would tie a
     memory budget to a number that has nothing to do with memory.
+
+    ``snapshot_every_evaluations`` is how often the run is written somewhere
+    that outlives the machine, so that a job which was preempted, timed out or
+    lost its host is continued rather than started again. It is counted in
+    evaluations because an evaluation boundary is the only moment a run is
+    quiet enough to be restarted from, and a count of them cannot name a
+    moment that will never arrive the way an interval in steps can.
+
+    ``1`` writes the run down at every boundary. Larger values trade how much
+    an interruption costs against what carrying the run costs, which is one
+    upload of its whole state per snapshot -- for a replay-based algorithm
+    that is the buffer, every time. Zero writes nothing down, which is the
+    right answer for a run short enough that losing it costs less than
+    carrying it.
     """
 
     seed: int
     total_steps: int
     chunk_steps: int
+    snapshot_every_evaluations: int = 0
 
     @model_validator(mode="after")
     def _usable(self) -> "TrainingSpec":
@@ -114,6 +129,8 @@ class TrainingSpec(_Frozen):
             raise ValueError("seed must not be negative")
         if self.total_steps < 1 or self.chunk_steps < 1:
             raise ValueError("training step budgets must be positive")
+        if self.snapshot_every_evaluations < 0:
+            raise ValueError("snapshot_every_evaluations must not be negative")
         return self
 
 

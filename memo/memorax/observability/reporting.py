@@ -3,8 +3,11 @@
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
+from typing import Any
 
 from memorax.runtime.episode import Episode, SampledTrajectory
+from memorax.runtime.snapshot import resume as resume_subject
+from memorax.runtime.snapshot import suspend as suspend_subject
 
 from .metrics import statistics
 from .protocols import EpisodeSink, ScalarSink, TrajectorySink
@@ -84,6 +87,45 @@ class Reporter:
 
         for sink in self._trajectory_sinks:
             sink.log_trajectory(trajectory)
+
+    def _carried(self) -> tuple[tuple[str, tuple[object, ...]], ...]:
+        """Everything under this reporter that a run leaves mid-way through."""
+
+        return (
+            ("scalar", self._scalar_sinks),
+            ("sampled", self._sampled_sinks),
+            ("episode", self._episode_sinks),
+            ("trajectory", self._trajectory_sinks),
+            ("scopes", self._training_scopes),
+        )
+
+    def suspend(self) -> dict[str, tuple[Any, ...]]:
+        """What each destination and scope had already made of the run.
+
+        Position is the identity here: a reporter is rebuilt from the same run
+        document, so its third scalar sink is the same backend as before. That
+        is checked on the way back in rather than assumed, because a document
+        that changed between the two processes would otherwise hand one sink's
+        state to another.
+        """
+
+        return {
+            name: tuple(suspend_subject(subject) for subject in subjects)
+            for name, subjects in self._carried()
+        }
+
+    def resume(self, state: Mapping[str, Sequence[Any]]) -> None:
+        """Put the run's own record back before a single row is added to it."""
+
+        for name, subjects in self._carried():
+            carried = state.get(name, ())
+            if len(carried) != len(subjects):
+                raise ValueError(
+                    f"the snapshot holds {len(carried)} {name} destinations and "
+                    f"this run has {len(subjects)}"
+                )
+            for subject, one in zip(subjects, carried, strict=True):
+                resume_subject(subject, one)
 
     def close(self) -> None:
         for scope in self._training_scopes:

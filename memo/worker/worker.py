@@ -44,6 +44,8 @@ def run_manifest(manifest_uri: str, workspace: Path) -> None:
         config = WorkerEnvelope.model_validate(
             json.loads(objects.get_bytes(config_uri))
         )
+        if _published(config):
+            continue
         scratch = Path(tempfile.mkdtemp(prefix="run-", dir=workspace))
         _execute(config, catalog, scratch)
         artifacts = _upload_artifacts(config, scratch)
@@ -67,6 +69,11 @@ def _run_group(config_uris, catalog: Catalog, workspace: Path) -> None:
     ]
     if not configs:
         raise WorkerError("a group in this manifest names no runs")
+    # A group is one process, so it is finished or it is not. A member that
+    # published while its neighbours did not cannot happen: publishing is the
+    # last thing the group does, and it does it for every member at once.
+    if all(_published(config) for config in configs):
+        return
     scratches = [Path(tempfile.mkdtemp(prefix="run-", dir=workspace)) for _ in configs]
     index = Path(tempfile.mkdtemp(prefix="group-", dir=workspace))
     try:
@@ -76,6 +83,24 @@ def _run_group(config_uris, catalog: Catalog, workspace: Path) -> None:
     finally:
         for directory in (*scratches, index):
             shutil.rmtree(directory, ignore_errors=True)
+
+
+def _published(config: WorkerEnvelope) -> bool:
+    """Whether this run already finished, on an attempt that then stopped.
+
+    A job may be started more than once -- the host went away, the attempt ran
+    out of time -- and its manifest is the same manifest. The runs it had
+    already carried to the end have published their artifacts and their
+    result, and running one again would spend its whole budget to overwrite
+    what is already there with a second sample of it.
+
+    The result object is what says so, because it is written last: artifacts
+    without it are the leavings of an attempt that did not finish, and the run
+    that produced them is one this attempt does have to run.
+    """
+
+    uri = f"{config.artifacts.root.rstrip('/')}/{RESULT_FILENAME}"
+    return objects.exists(uri)
 
 
 def _execute_group(

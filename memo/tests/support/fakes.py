@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -27,6 +28,27 @@ class EpisodeRecorder:
 
 
 @dataclass
+class ResumableRecorder(EpisodeRecorder):
+    """A destination that can be cut back to a snapshot, as an artifact is.
+
+    The metrics artifact is truncated to the byte offset the snapshot named,
+    so that the interval the interrupted process reported after its last
+    snapshot is reported once rather than twice. This is the same rule in
+    memory: what a resumed run adds is compared against what one uninterrupted
+    run would have written, and that only means anything if the replayed
+    interval is dropped here too.
+    """
+
+    def suspend(self) -> tuple[int, int]:
+        return len(self.episodes), len(self.trajectories)
+
+    def resume(self, state: tuple[int, int]) -> None:
+        episodes, trajectories = state
+        del self.episodes[episodes:]
+        del self.trajectories[trajectories:]
+
+
+@dataclass
 class TrajectoryRecorder:
     trajectories: list[Any] = field(default_factory=list)
     closed: bool = False
@@ -43,7 +65,7 @@ class ScalarRecorder:
     reports: list[tuple[int, dict[str, float]]] = field(default_factory=list)
     closed: bool = False
 
-    def report(self, step: int, metrics: dict[str, float]) -> None:
+    def report(self, step: int, metrics: Mapping[str, float]) -> None:
         self.reports.append((step, dict(metrics)))
 
     def close(self) -> None:

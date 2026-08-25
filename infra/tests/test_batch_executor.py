@@ -172,3 +172,72 @@ def test_scoring_finished_artifacts_submits_no_job() -> None:
         {"trial": trial, "seed": 0, "value": float(trial + 1)} for trial in range(2)
     )
     assert batch.submitted == []
+
+
+def test_one_attempt_unless_the_experiment_asks_for_more() -> None:
+    """A second attempt is only worth anything to a run that snapshots.
+
+    Without one it repeats the whole budget and arrives where the first
+    attempt did, having paid twice; so the default stays at what a job has
+    always had, and more is something a file asks for.
+    """
+
+    s3 = FakeS3()
+    batch = FakeBatch(s3)
+
+    executor(s3, batch)((configuration(0), configuration(1)), score())
+
+    for request in batch.submitted:
+        assert request["retryStrategy"]["attempts"] == 1
+
+
+def test_only_the_machine_s_failures_are_retried() -> None:
+    """A worker that exited non-zero met a fault in the run, not in the host.
+
+    Batch retries on any exit by default, which would run every genuinely
+    broken configuration to its attempt limit. The rules here retry a host
+    that went away and an attempt that ran out of time, and exit on the rest.
+    """
+
+    s3 = FakeS3()
+    batch = FakeBatch(s3)
+    executor = BatchRoundExecutor(
+        s3=s3,
+        batch=batch,
+        logs=FakeLogs(),
+        exchange="s3://bucket/control/launch",
+        job_name="experiment-launch",
+        job_queue="dev-cpu-c7al-queue",
+        job_definition="trainer-c7al-digest",
+        timeout_seconds=5400,
+        parallel_jobs=1,
+        poll_seconds=0,
+        attempts=3,
+    )
+
+    executor((configuration(0),), score())
+
+    (request,) = batch.submitted
+    strategy = request["retryStrategy"]
+    assert strategy["attempts"] == 3
+    assert strategy["evaluateOnExit"] == [
+        {"onStatusReason": "Host EC2*", "action": "RETRY"},
+        {"onStatusReason": "*duration exceeded*", "action": "RETRY"},
+        {"onReason": "*", "action": "EXIT"},
+    ]
+
+
+def test_a_job_gets_at_least_one_attempt() -> None:
+    with pytest.raises(BatchExecutionError, match="at least one"):
+        BatchRoundExecutor(
+            s3=FakeS3(),
+            batch=FakeBatch(FakeS3()),
+            logs=FakeLogs(),
+            exchange="s3://bucket/control/launch",
+            job_name="experiment-launch",
+            job_queue="dev-cpu-c7al-queue",
+            job_definition="trainer-c7al-digest",
+            timeout_seconds=5400,
+            parallel_jobs=1,
+            attempts=0,
+        )

@@ -1,4 +1,4 @@
-"""Every image-side consumer projects the same serialized version-14 run."""
+"""Every image-side consumer projects the same serialized version-15 run."""
 
 from __future__ import annotations
 
@@ -13,7 +13,7 @@ from deployment.contract import CONTRACT_VERSION, Catalog
 from entries._contract import RunSpec
 from worker.envelope import WorkerEnvelope
 
-FIXTURES = Path(__file__).resolve().parents[4] / "tests" / "contracts" / "v14"
+FIXTURES = Path(__file__).resolve().parents[4] / "tests" / "contracts" / "v15"
 
 
 def read_json(name: str) -> dict:
@@ -26,7 +26,7 @@ def test_one_serialized_run_has_worker_and_entry_projections() -> None:
     worker = WorkerEnvelope.model_validate(payload)
     entry = RunSpec.model_validate(payload)
 
-    assert worker.contract == entry.contract == CONTRACT_VERSION == 14
+    assert worker.contract == entry.contract == CONTRACT_VERSION == 15
     assert worker.identity.model_dump() == entry.identity.model_dump()
     assert worker.artifacts.model_dump() == entry.artifacts.model_dump()
     assert worker.algorithm == payload["algorithm"]
@@ -118,6 +118,44 @@ def test_entry_owns_schedule_and_graph_width_validation() -> None:
 
     WorkerEnvelope.model_validate(payload)
     with pytest.raises(ValidationError, match="whole environment steps"):
+        RunSpec.model_validate(payload)
+
+
+def test_a_run_says_how_often_it_writes_itself_down() -> None:
+    """The field a second attempt depends on, carried on the wire.
+
+    The worker does not read it -- it hands the document to the entry -- but
+    it is the entry's, and it is what decides whether an interrupted job can
+    be continued at all.
+    """
+
+    entry = RunSpec.model_validate(read_json("run.json"))
+
+    assert entry.training.snapshot_every_evaluations == 1
+
+
+def test_a_run_that_says_nothing_writes_nothing_down() -> None:
+    """Off is the default, because a snapshot is a cost a run has to ask for."""
+
+    payload = read_json("run.json")
+    payload["training"].pop("snapshot_every_evaluations")
+
+    assert RunSpec.model_validate(payload).training.snapshot_every_evaluations == 0
+
+
+def test_a_snapshot_count_must_not_be_negative() -> None:
+    """A count of evaluations cannot name a moment that will not arrive.
+
+    Which is the whole reason it is counted in evaluations: the interval this
+    replaced was in steps, and one that was not whole boundaries described a
+    run that wrote nothing down while appearing to.
+    """
+
+    payload = read_json("run.json")
+    payload["training"]["snapshot_every_evaluations"] = -1
+
+    WorkerEnvelope.model_validate(payload)
+    with pytest.raises(ValueError, match="must not be negative"):
         RunSpec.model_validate(payload)
 
 

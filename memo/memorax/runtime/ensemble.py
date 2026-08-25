@@ -44,6 +44,9 @@ from memorax.runtime.driver import (
 )
 from memorax.runtime.episode import Episode
 from memorax.runtime.program import BuiltAlgorithm
+from memorax.runtime.snapshot import RunSnapshot, SnapshotStore
+from memorax.runtime.snapshot import resume as resume_destination
+from memorax.runtime.snapshot import suspend as suspend_destination
 from memorax.runtime.tracker import EpisodeTracker, TrackingResult
 
 
@@ -74,6 +77,10 @@ class EnsembleRuntime:
     build: Callable[[Mapping[str, Any]], BuiltAlgorithm] | None = None
     parameters: Mapping[str, Any] = field(default_factory=dict)
     swept: Mapping[str, Sequence[Any]] = field(default_factory=dict)
+    # One store for the round, holding one snapshot: the members are one graph
+    # and one key array, and a member cannot be resumed without its neighbours
+    # -- the arrays they are all leaves of were written together.
+    snapshots: SnapshotStore | None = None
 
     def __post_init__(self) -> None:
         if not self.seeds:
@@ -120,22 +127,35 @@ class EnsembleRuntime:
             every_steps=config.evaluate_every_steps,
             num_envs=config.num_envs,
         )
+        every = config.snapshot_every_evaluations
+        if every < 0:
+            raise ValueError("snapshot_every_evaluations must not be negative")
+        if every and self.snapshots is None:
+            raise ValueError(
+                f"this run asks to be written down every {every} evaluations "
+                "and was given nowhere to write it; a run that says it can be "
+                "resumed and cannot is worse than one that never claimed to"
+            )
 
         init, train, open_evaluation, evaluate = self._arrows()
         varied = self._varied()
 
-        keys = jax.numpy.stack([jax.random.key(seed) for seed in self.seeds])
-        keys, init_keys = _split(keys)
-        state = init(*varied, init_keys)
         # Never split from `keys`: whether a member was measured must not change
         # what it then learned, exactly as in the single-member driver.
         evaluation_key = jax.random.key(config.evaluation_seed)
 
         trackers = [self._tracker() for _ in range(self.members)]
-        trained_steps = 0
-        eval_number = 1
+        keys, state, trained_steps, eval_number = self._begin(
+            init, varied, reporters, trackers
+        )
+        resumed_at = trained_steps
 
-        for boundary in boundaries:
+        for measurement, boundary in enumerate(boundaries, start=1):
+            # An interval a snapshot already holds whole, for every member at
+            # once. The boundary the round was resumed at is not one of them:
+            # its measurement is still owing.
+            if boundary < trained_steps:
+                continue
             while trained_steps < boundary:
                 steps = min(config.chunk_steps, boundary - trained_steps)
                 keys, chunk_keys = _split(keys)
@@ -149,18 +169,91 @@ class EnsembleRuntime:
                     )
                 trained_steps += steps
 
-            if not config.evaluation_episodes:
-                continue
-            eval_number = self._measure(
-                reporters,
-                open_evaluation,
-                evaluate,
-                varied,
-                jax.random.fold_in(evaluation_key, boundary),
-                state,
-                boundary=boundary,
-                first_number=eval_number,
+            # Before the measurement, for the reason the single-member driver
+            # gives: an evaluation is what a boundary mostly costs, and it is
+            # the one part of a boundary that can be redone exactly.
+            if every and not measurement % every and boundary != resumed_at:
+                self._suspend(
+                    reporters,
+                    trackers,
+                    state=state,
+                    keys=keys,
+                    step=boundary,
+                    eval_number=eval_number,
+                )
+            if config.evaluation_episodes:
+                eval_number = self._measure(
+                    reporters,
+                    open_evaluation,
+                    evaluate,
+                    varied,
+                    jax.random.fold_in(evaluation_key, boundary),
+                    state,
+                    boundary=boundary,
+                    first_number=eval_number,
+                )
+
+    def _begin(self, init, varied: tuple, reporters, trackers):
+        """Start the round, or take back the one that was interrupted.
+
+        A round is one graph, so it is one snapshot: the members' parameters
+        are leaves of the same arrays and their keys are rows of the same key
+        array. Resuming a subset would mean splitting those arrays and running
+        a different graph from the one that was interrupted.
+        """
+
+        resumed = None if self.snapshots is None else self.snapshots.latest()
+        if resumed is None:
+            keys = jax.numpy.stack([jax.random.key(seed) for seed in self.seeds])
+            keys, init_keys = _split(keys)
+            return keys, init(*varied, init_keys), 0, 1
+
+        self._members_of(resumed.trackers, "trackers")
+        self._members_of(resumed.destinations, "destinations")
+        for tracker, carried in zip(trackers, resumed.trackers, strict=True):
+            tracker.resume(carried)
+        for reporter, carried in zip(reporters, resumed.destinations, strict=True):
+            resume_destination(reporter, carried)
+        return (
+            resumed.key(),
+            resumed.algorithm_state(),
+            resumed.step,
+            resumed.eval_number,
+        )
+
+    def _members_of(self, values: tuple, what: str) -> None:
+        if len(values) != self.members:
+            raise ValueError(
+                f"the snapshot holds {len(values)} members' {what} and this "
+                f"round has {self.members}"
             )
+
+    def _suspend(
+        self,
+        reporters: Sequence[Destination],
+        trackers: Sequence[EpisodeTracker],
+        *,
+        state,
+        keys,
+        step: int,
+        eval_number: int,
+    ) -> None:
+        """Write the whole round down at a boundary, members and all."""
+
+        if self.snapshots is None:  # pragma: no cover - the caller checks first
+            return
+        self.snapshots.save(
+            RunSnapshot.taken(
+                step=step,
+                eval_number=eval_number,
+                state=state,
+                key=keys,
+                trackers=tuple(tracker.suspend() for tracker in trackers),
+                destinations=tuple(
+                    suspend_destination(reporter) for reporter in reporters
+                ),
+            )
+        )
 
     def _varied(self) -> tuple:
         """The swept values as one mapped argument, or nothing to map."""

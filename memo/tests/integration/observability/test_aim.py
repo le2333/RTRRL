@@ -57,3 +57,66 @@ def test_aim_keeps_every_scalar_report_and_same_step_names(tmp_path):
     steps, _ = metrics["train/episode/return"].data.items_list()
     assert list(steps) == [0, 300, 600, 1200]
     assert "eval/episode/return" in metrics
+
+
+def test_a_resumed_sink_continues_the_run_it_was_given(tmp_path):
+    """One job is one Aim run, whether or not the machine survived it.
+
+    A second run standing beside the first would divide every curve in the
+    dashboard at the point of the interruption, and would give the launch a
+    member that is not a member. So the run hash travels in the snapshot and
+    the next process writes into the same run.
+    """
+
+    endpoint = str(tmp_path / "aim")
+    Repo.from_path(endpoint, init=True)
+    metadata = RunMetadata(
+        run_id="run-t0",
+        experiment="experiment",
+        launch_id="launch",
+        trial=0,
+        seed=0,
+        role="tuning",
+        entry="stream_ac",
+        digest="local@sha256:" + "a" * 64,
+    )
+
+    first = AimSink(endpoint, metadata, parameters={"gamma": 0.9})
+    first.report(100, {"train/episode/return": 1.0})
+    carried = first.suspend()
+    first.close()
+
+    second = AimSink(endpoint, metadata, parameters={"gamma": 0.9})
+    second.resume(carried)
+    second.report(200, {"train/episode/return": 2.0})
+    second.close()
+
+    runs = list(Repo.from_path(endpoint).iter_runs())
+    assert len(runs) == 1
+    steps, _ = next(
+        metric for metric in runs[0].metrics() if metric.name == "train/episode/return"
+    ).data.items_list()
+    assert list(steps) == [100, 200]
+
+
+def test_a_sink_with_no_run_yet_carries_nothing(tmp_path):
+    """A job interrupted before its first report has no run to continue."""
+
+    endpoint = str(tmp_path / "aim")
+    Repo.from_path(endpoint, init=True)
+    metadata = RunMetadata(
+        run_id="run-t0",
+        experiment="experiment",
+        launch_id="launch",
+        trial=0,
+        seed=0,
+        role="tuning",
+        entry="stream_ac",
+        digest="local@sha256:" + "a" * 64,
+    )
+
+    sink = AimSink(endpoint, metadata, parameters={})
+
+    assert sink.suspend() is None
+    sink.close()
+    assert list(Repo.from_path(endpoint).iter_runs()) == []

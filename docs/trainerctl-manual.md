@@ -115,6 +115,7 @@ training:
   num_envs: 16
   total_steps: 2000000
   chunk_steps: 10000
+  snapshot_every_evaluations: 1       # optional; omit for a run that cannot be resumed
 
 evaluation:
   every_steps: 10000
@@ -125,6 +126,7 @@ evaluation:
 compute:
   instance_type: c7a.large
   timeout_minutes: 240
+  attempts: 3                         # optional; only useful with snapshot_every_evaluations
 
 hpo:
   rounds: 2
@@ -199,10 +201,39 @@ derives from another.
 | `num_envs` | Number of parallel training streams; must be positive |
 | `total_steps` | Total training budget; must be positive |
 | `chunk_steps` | How much one training call may hold — the run's memory cost |
+| `snapshot_every_evaluations` | Optional. How many evaluation boundaries between snapshots — `1` writes the run down at every one. Omit, or zero, to write nothing |
 
 `chunk_steps` is deliberately unrelated to `episode_length`: how long an episode runs is
 decided while the run is going and grows as the policy improves, so sizing a buffer from
 it would tie a memory budget to a number that has nothing to do with memory.
+
+`snapshot_every_evaluations` is what makes an interrupted job continuable. At each
+snapshot the run writes its whole state — parameters, optimiser, environment, the training
+key stream, the episodes still open, and how much of the metrics artifact it had written —
+into `resume.tar.gz` beside its artifacts, together with the artifacts themselves. A later
+attempt on the same manifest finds it, restores it, cuts the metrics artifact back to the
+byte the snapshot named, and carries on from that boundary. What it then reports is what
+one uninterrupted process would have reported.
+
+It is counted in evaluation boundaries because a boundary is the only moment a run is quiet
+enough to be restarted from: between two of them a training chunk is in flight and how far
+into one an interruption fell is not a place any schedule can resume at. Counting them is
+also what makes the setting impossible to malform — an interval in steps could name a
+moment that never arrives.
+
+The snapshot is taken *before* the boundary's evaluation. Most of what a boundary costs is
+its evaluation, so a snapshot after one would mean a machine that dies measuring loses the
+whole training interval behind it as well. Taken before, the evaluation is the only thing a
+resume redoes, and redoing it is exact: evaluation reads the training state without
+touching it and draws its keys from the evaluation seed and the boundary, so one boundary
+measured twice reports the same episodes both times.
+
+The cost is one upload of the run's whole state per snapshot, so the count is a real
+choice. For a streaming method that carries no replay buffer the state is a fraction of a
+mebibyte and `1` is close to free; for DRQN or R2D2 it is the replay buffer, every time,
+and a larger count is worth having. A run short enough to simply repeat should leave the
+field out.
+
 
 **`evaluation`.**
 
@@ -250,9 +281,25 @@ evaluation intervals. These are checked when the run starts, not by the control 
 | --- | --- |
 | `instance_type` | Selects the queue. One of `c7a.medium`, `c7a.large`, `c7a.xlarge`, `g6.xlarge` |
 | `timeout_minutes` | Batch kills the job after this. It covers every trial packed into that job |
+| `attempts` | Optional, default 1. How many times Batch may start the job |
 
 `timeout_minutes` is the only thing bounding a wedged run: the worker starts a run and
 waits for it, without judging how often it reports.
+
+`attempts` above 1 is only worth asking for alongside `training.snapshot_every_evaluations`.
+Without one, a second attempt repeats the whole budget and arrives where the first did,
+having paid twice. With one, it continues from the last boundary, which is what makes a
+run longer than `timeout_minutes` — or one on a reclaimable instance — finishable at all.
+
+Only the machine's failures are retried: a host that went away and an attempt that ran out
+of time. A worker that exited non-zero met a fault in the run, and starting it again meets
+the same fault with the wall clock spent, so that exits.
+
+A retried attempt is handed the same manifest, which names every run the job was packed
+with. The runs that had already finished are skipped: a run has published its `result.json`
+last of all, so that object is what says it is done, and artifacts without one are the
+leavings of an attempt that did not finish. So a job of four runs interrupted during the
+third repeats nothing of the first two, and the third continues from its last snapshot.
 
 **`hpo`.**
 

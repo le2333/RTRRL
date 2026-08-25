@@ -20,7 +20,8 @@ whichever trainer needed it first.
 from __future__ import annotations
 
 from collections.abc import Mapping
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
+from typing import Any
 
 import numpy as np
 
@@ -117,6 +118,40 @@ class EpisodeTracker:
     @property
     def next_number(self) -> int:
         return self._next_number
+
+    def suspend(self) -> dict[str, Any]:
+        """The episodes this tracker is in the middle of, as plain data.
+
+        A chunk boundary is the middle of an episode for as many streams as
+        happened to be running, and the whole reason this object survives from
+        one chunk to the next. An interruption is a longer gap of the same
+        kind: drop what is open and the episodes that spanned it are lost,
+        their returns never reported and every later episode misnumbered.
+
+        The schedule -- which sample steps are still to come, what the next
+        episode's number is -- is here for the same reason. Nothing that was
+        fixed at construction is: a resumed tracker is built from the same
+        configuration and only needs back what running changed.
+        """
+
+        return {
+            "sample_index": self._sample_index,
+            "next_number": self._next_number,
+            "slots": [None if slot is None else asdict(slot) for slot in self._slots],
+        }
+
+    def resume(self, state: Mapping[str, Any]) -> None:
+        """Take back the open episodes and the schedule position."""
+
+        slots = state["slots"]
+        if len(slots) != self._num_envs:
+            raise ValueError(
+                f"snapshot holds {len(slots)} streams and this run has "
+                f"{self._num_envs}"
+            )
+        self._sample_index = int(state["sample_index"])
+        self._next_number = int(state["next_number"])
+        self._slots = [None if slot is None else _OpenEpisode(**slot) for slot in slots]
 
     def consume(
         self,
