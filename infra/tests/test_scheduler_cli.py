@@ -5,7 +5,6 @@ from pathlib import Path
 from typing import Any
 
 import yaml
-
 from trainer_infra.scheduler_cli import main
 
 
