@@ -33,8 +33,8 @@ def test_add_then_list_reports_human_readable_task(
     assert main(["--state", str(state), "list"]) == 0
 
     output = json.loads(capsys.readouterr().out)
-    assert output[0]["name"] == "R1-1-Minesweeper-DRQN-LSTM"
-    assert output[0]["state"] == "queued"
+    assert output["tasks"][0]["name"] == "R1-1-Minesweeper-DRQN-LSTM"
+    assert output["tasks"][0]["state"] == "queued"
 
 
 def test_add_rejects_missing_config(tmp_path: Path) -> None:

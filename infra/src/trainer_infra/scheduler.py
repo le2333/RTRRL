@@ -63,6 +63,9 @@ class TaskStore:
                 )
                 """
             )
+            connection.execute(
+                "CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, value TEXT NOT NULL)"
+            )
 
     def add(self, config: Path, catalog: Path, database: Path) -> StudyTask:
         values = (
@@ -88,6 +91,35 @@ class TaskStore:
         with self._connect() as connection:
             rows = connection.execute("SELECT * FROM tasks ORDER BY id").fetchall()
         return tuple(_task(row) for row in rows)
+
+    def ensure_capacity(self, default: int) -> int:
+        if default < 1:
+            raise ValueError("capacity must be positive")
+        with self._connect() as connection:
+            connection.execute(
+                "INSERT OR IGNORE INTO settings(key, value) VALUES (?, ?)",
+                ("capacity", str(default)),
+            )
+        return self.capacity()
+
+    def set_capacity(self, capacity: int) -> None:
+        if capacity < 1:
+            raise ValueError("capacity must be positive")
+        with self._connect() as connection:
+            connection.execute(
+                "INSERT INTO settings(key, value) VALUES (?, ?) "
+                "ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+                ("capacity", str(capacity)),
+            )
+
+    def capacity(self) -> int:
+        with self._connect() as connection:
+            row = connection.execute(
+                "SELECT value FROM settings WHERE key = ?", ("capacity",)
+            ).fetchone()
+        if row is None:
+            raise RuntimeError("scheduler capacity is not initialized")
+        return int(row["value"])
 
     def claim(self, limit: int) -> tuple[StudyTask, ...]:
         if limit < 1:
@@ -150,7 +182,7 @@ class Scheduler:
             raise ValueError("max_concurrent must be positive")
         self.store = store
         self.launch = launch
-        self.max_concurrent = max_concurrent
+        self.store.ensure_capacity(max_concurrent)
         self.poll_seconds = poll_seconds
         self.processes: dict[int, Process] = {}
 
@@ -162,7 +194,7 @@ class Scheduler:
             reason = None if exit_code == 0 else f"trainerctl exited with code {exit_code}"
             self.store.finish(task_id, exit_code, reason)
             del self.processes[task_id]
-        open_slots = self.max_concurrent - len(self.processes)
+        open_slots = self.store.capacity() - len(self.processes)
         for task in self.store.claim(open_slots):
             try:
                 process = self.launch(task)

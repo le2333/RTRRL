@@ -23,6 +23,8 @@ def _parser() -> argparse.ArgumentParser:
     add.add_argument("--catalog", type=Path, required=True)
     add.add_argument("--database", type=Path, required=True)
     commands.add_parser("list")
+    capacity = commands.add_parser("capacity")
+    capacity.add_argument("value", type=int)
     run = commands.add_parser("run")
     run.add_argument("--max-concurrent", type=int, default=4)
     run.add_argument("--poll-seconds", type=float, default=5.0)
@@ -87,7 +89,18 @@ def main(argv: Sequence[str] | None = None) -> int:
             print(json.dumps(_payload(store.add(arguments.config, arguments.catalog, arguments.database))))
             return 0
         if arguments.command == "list":
-            print(json.dumps([_payload(task) for task in store.list()]))
+            tasks = store.list()
+            states = [task.state.value for task in tasks]
+            print(json.dumps({
+                "capacity": store.ensure_capacity(4),
+                "running": states.count("running"),
+                "queued": states.count("queued"),
+                "tasks": [_payload(task) for task in tasks],
+            }))
+            return 0
+        if arguments.command == "capacity":
+            store.set_capacity(arguments.value)
+            print(json.dumps({"capacity": store.capacity()}))
             return 0
         Scheduler(
             store,
