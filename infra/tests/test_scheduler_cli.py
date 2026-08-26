@@ -56,3 +56,18 @@ def test_add_rejects_missing_config(tmp_path: Path) -> None:
         )
         == 2
     )
+
+
+
+def test_capacity_command_updates_list_summary(tmp_path: Path, capsys: Any) -> None:
+    state = tmp_path / "queue.sqlite"
+    assert main(["--state", str(state), "capacity", "4"]) == 0
+    capsys.readouterr()
+
+    assert main(["--state", str(state), "list"]) == 0
+
+    output = json.loads(capsys.readouterr().out)
+    assert output["capacity"] == 4
+    assert output["running"] == 0
+    assert output["queued"] == 0
+    assert output["tasks"] == []

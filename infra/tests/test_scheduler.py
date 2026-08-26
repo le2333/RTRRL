@@ -111,3 +111,19 @@ def test_failed_child_does_not_block_next_task(tmp_path: Path) -> None:
     states = [task.state for task in scheduler.store.list()]
     assert states.count(TaskState.FAILED) == 1
     assert len(processes.running) == 4
+
+
+
+def test_capacity_change_fills_an_extra_slot_without_restarting(tmp_path: Path) -> None:
+    store = store_with_tasks(tmp_path, 5)
+    store.set_capacity(3)
+    processes = FakeProcessFactory()
+    scheduler = Scheduler(store, processes.start, max_concurrent=3)
+    scheduler.tick()
+    assert len(processes.running) == 3
+
+    store.set_capacity(4)
+    scheduler.tick()
+
+    assert store.capacity() == 4
+    assert len(processes.running) == 4
