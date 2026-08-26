@@ -101,8 +101,24 @@ zero for both cores, so the two recurrences produce the same numbers and exact
 RTRL costs no more than the approximation would. A deliberately non-diagonal
 `tanh` recurrence, defined in that test and registered nowhere, is used to show
 the two recurrences can disagree, and their gap there is held to exactly the
-dropped term. No RFLO implementation, catalog branch or alias exists; the
-differentiation families offer `exact_rtrl` and `tbptt` and nothing else.
+dropped term.
+
+That argument bounds the *declared* cores of this document — the LRU and the
+RTU, whose `LRU_DIFFERENTIATION_FAMILY` and `RTU_DIFFERENTIATION_FAMILY` offer
+`exact_rtrl` and `tbptt` and nothing else, because on them RFLO would be a
+second name for `exact_rtrl` at the same cost. It does not bound every core in
+the repository. `memorax/networks/sequence_models/ctrnn.py` carries a CTRNN,
+whose unit reads every other unit's previous state through one weight matrix:
+the cross-unit block there is not small but present, and `RFLO` is a real
+approximation rather than an identity. So `CTRNN_DIFFERENTIATION_FAMILY` offers
+`rflo` and `tbptt`, and offers no `exact_rtrl` — exact sensitivity on a dense
+recurrence costs a factor of the hidden width, and RFLO is what the published
+`RTRRL-CTRNN-RFLO` spends instead. `tests/test_ctrnn_rflo.py` holds that gap to
+the dropped term from the other side: there the two recurrences must *not*
+agree, and their difference is the same expression this section names.
+
+Which is the same statement, said twice. RFLO exists exactly where the
+cross-unit block does, and the two families say so by what each offers.
 
 ## What the claim covers, and what bounds it
 

@@ -14,9 +14,17 @@ it is identically zero, because unit ``h``'s next state is a function of unit
 ``h``'s own previous state and of the input. So there is nothing for RFLO to
 drop, the two recurrences coincide, and exact RTRL is available at RFLO's cost
 rather than as an upgrade over it. That is the whole argument for running exact
-RTRL directly, and it is the reason RFLO appears nowhere in the implementation:
-these are tests *about* an approximation, not an implementation of one, and no
-entry, catalog branch or alias offers it.
+RTRL directly, and it is the reason neither of these two cores offers RFLO:
+these are tests *about* an approximation, not an implementation of one, and
+`LRU_DIFFERENTIATION_FAMILY` and `RTU_DIFFERENTIATION_FAMILY` offer
+`exact_rtrl` and `tbptt` and nothing else.
+
+The CTRNN is where that stops holding, which is why it is a separate core with a
+family of its own. Its unit reads every other unit's previous state, the block
+below is genuinely there, and `CTRNN_DIFFERENTIATION_FAMILY` offers `rflo`
+because the published `RTRRL-CTRNN-RFLO` runs it. `tests/test_ctrnn_rflo.py`
+holds that gap from the other side: there RFLO and exact credit must disagree,
+and by the same term.
 
 A unit here is one complex mode: two real coordinates for both cores, since each
 keeps a real and an imaginary part per mode. Within a unit the recurrent

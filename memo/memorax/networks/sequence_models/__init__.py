@@ -1,3 +1,4 @@
+from .ctrnn import CTRNNCell, CTRNNConfig, CTRNNRflo
 from .ffm import FFMCarry, FFMCell, FFMConfig
 from .linear_attention import LinearAttentionCarry, LinearAttentionCell, LinearAttentionConfig
 from .lru import LRUCarry, LRUCell, LRUConfig
