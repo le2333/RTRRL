@@ -1,11 +1,13 @@
 from __future__ import annotations
 
 import sqlite3
+import time
 from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from enum import Enum
 from pathlib import Path
+from typing import Protocol
 
 
 class TaskState(str, Enum):
@@ -28,6 +30,12 @@ class StudyTask:
     finished_at: str | None
     exit_code: int | None
     reason: str | None
+
+
+class Process(Protocol):
+    pid: int
+
+    def poll(self) -> int | None: ...
 
 
 class TaskStore:
@@ -114,6 +122,10 @@ class TaskStore:
                 (state.value, _now(), exit_code, reason, task_id),
             )
 
+    def record_pid(self, task_id: int, pid: int) -> None:
+        with self._connect() as connection:
+            connection.execute("UPDATE tasks SET pid = ? WHERE id = ?", (pid, task_id))
+
     def interrupt_orphans(
         self, live: Callable[[StudyTask], bool]
     ) -> tuple[StudyTask, ...]:
@@ -128,6 +140,43 @@ class TaskStore:
         connection = sqlite3.connect(self.database, timeout=5.0)
         connection.row_factory = sqlite3.Row
         return connection
+
+
+class Scheduler:
+    """Keep a bounded set of independent study controllers alive."""
+
+    def __init__(self, store: TaskStore, launch: Callable[[StudyTask], Process], *, max_concurrent: int = 4, poll_seconds: float = 5.0) -> None:
+        if max_concurrent < 1:
+            raise ValueError("max_concurrent must be positive")
+        self.store = store
+        self.launch = launch
+        self.max_concurrent = max_concurrent
+        self.poll_seconds = poll_seconds
+        self.processes: dict[int, Process] = {}
+
+    def tick(self) -> None:
+        for task_id, process in tuple(self.processes.items()):
+            exit_code = process.poll()
+            if exit_code is None:
+                continue
+            reason = None if exit_code == 0 else f"trainerctl exited with code {exit_code}"
+            self.store.finish(task_id, exit_code, reason)
+            del self.processes[task_id]
+        open_slots = self.max_concurrent - len(self.processes)
+        for task in self.store.claim(open_slots):
+            try:
+                process = self.launch(task)
+            except OSError as error:
+                self.store.finish(task.id, -1, f"controller launch failed: {error}")
+                continue
+            self.store.record_pid(task.id, process.pid)
+            self.processes[task.id] = process
+
+    def run(self) -> None:
+        self.store.interrupt_orphans(lambda task: task.id in self.processes)
+        while True:
+            self.tick()
+            time.sleep(self.poll_seconds)
 
 
 def _now() -> str:
