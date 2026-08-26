@@ -4,7 +4,7 @@ import json
 import sys
 from pathlib import Path
 
-from trainer_infra.local import LocalRoundExecutor
+from trainer_infra.local import LocalRoundExecutor, file_path
 from trainer_infra.scoring import ScoreSpec
 
 WORKER = """
@@ -93,12 +93,7 @@ def test_local_executor_serializes_invokes_worker_and_scores_results(
     manifest = json.loads((exchange / "round-000" / "manifest.json").read_text())
     assert len(manifest["runs"]) == 2
     assert all(uri.startswith("file:") for uri in manifest["runs"])
-    assert (
-        json.loads(
-            (exchange / "round-000" / "stream-ac-test-run1-seed1.json").read_text()
-        )
-        == (configurations[0])
-    )
+    assert json.loads(file_path(manifest["runs"][0]).read_text()) == configurations[0]
     assert executor.log_path(0).is_file()
 
 
