@@ -1,0 +1,17 @@
+[Unit]
+Description=Persistent R1 study scheduler
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=/home/ubuntu/trainer/streaming-rtrrl-names-deploy
+Environment=PYTHONPATH=/home/ubuntu/trainer/streaming-rtrrl-names-deploy/infra/src
+Environment=AWS_CONFIG_FILE=/dev/null
+Environment=AWS_SHARED_CREDENTIALS_FILE=/dev/null
+ExecStart=/home/ubuntu/trainer/streaming-rtrrl/rtrrl/infra/control-plane/.venv/bin/python -m trainer_infra.scheduler_cli --state /home/ubuntu/trainer/streaming-rtrrl-names-deploy/runs/study-scheduler.sqlite run --max-concurrent 4 --poll-seconds 5
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=default.target
