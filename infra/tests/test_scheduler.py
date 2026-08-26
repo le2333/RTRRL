@@ -23,7 +23,7 @@ class FakeProcessFactory:
         self.started.append(process)
         return process
 
-
+    @property
     def running(self) -> list[FakeProcess]:
         return [process for process in self.started if process.poll() is None]
 
