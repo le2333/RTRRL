@@ -152,6 +152,10 @@ def test_image_catalog_uses_the_deployment_contract(tmp_path: Path) -> None:
         "rtrrl_ctrnn_rflo",
         "rtrrl_ctrnn_rflo_ensemble",
         "rtrrl_ensemble",
+        "rtrrl_lstm_rflo",
+        "rtrrl_lstm_rflo_ensemble",
+        "rtrrl_ssm_rflo",
+        "rtrrl_ssm_rflo_ensemble",
         "stream_ac",
     }
     assert parsed.entries["rtrrl"].command == ("python", "-m", "entries.rtrrl")
@@ -177,9 +181,19 @@ def test_image_catalog_uses_the_deployment_contract(tmp_path: Path) -> None:
         "rtrrl_ctrnn_rflo": False,
         "rtrrl_ctrnn_rflo_ensemble": True,
         "rtrrl_ensemble": True,
+        "rtrrl_lstm_rflo": False,
+        "rtrrl_lstm_rflo_ensemble": True,
+        "rtrrl_ssm_rflo": False,
+        "rtrrl_ssm_rflo_ensemble": True,
         "stream_ac": False,
     }
-    for algorithm in ("drqn", "rtrrl", "rtrrl_ctrnn_rflo"):
+    for algorithm in (
+        "drqn",
+        "rtrrl",
+        "rtrrl_ctrnn_rflo",
+        "rtrrl_lstm_rflo",
+        "rtrrl_ssm_rflo",
+    ):
         alone = parsed.entries[algorithm]
         grouped = parsed.entries[f"{algorithm}_ensemble"]
         assert grouped.metrics == alone.metrics
@@ -195,3 +209,23 @@ def test_image_catalog_uses_the_deployment_contract(tmp_path: Path) -> None:
     assert "hidden_dim" in ctrnn["torso"]
     assert "backbone" not in ctrnn["torso"]
     assert "backbone" in parsed.entries["rtrrl"].parameters["torso"]
+
+    # And a third, for the same reason one more time: the LSTM torso's leak is
+    # its forget gate, the CTRNN's is `1 - dt/tau`, and neither declaration
+    # accepts the other's leaves. Three RTRRL graphs, three schemas, and the
+    # catalog is where the control plane reads that they are not one.
+    lstm = parsed.entries["rtrrl_lstm_rflo"].parameters
+    assert lstm != ctrnn != parsed.entries["rtrrl"].parameters
+    assert "forget_bias" in lstm["torso"]
+    assert "tau_floor" not in lstm["torso"]
+    assert "forget_bias" not in ctrnn["torso"]
+
+    # And a fourth, which is the one the distinction is easiest to lose on: a
+    # dense state-space recurrence is `rtrrl`'s LRU with one constraint lifted,
+    # and a `backbone` value could not have said which of the two a result came
+    # from -- or which gradient it spent, since the diagonal one takes exact
+    # RTRL and this one takes RFLO.
+    ssm = parsed.entries["rtrrl_ssm_rflo"].parameters
+    assert ssm not in (ctrnn, lstm, parsed.entries["rtrrl"].parameters)
+    assert "spectral_bound" in ssm["torso"]
+    assert "backbone" not in ssm["torso"]

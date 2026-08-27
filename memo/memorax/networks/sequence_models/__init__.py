@@ -1,8 +1,10 @@
 from .ctrnn import CTRNNCell, CTRNNConfig, CTRNNRflo
+from .dense_ssm import DenseSSMCell, DenseSSMConfig, DenseSSMRflo
 from .ffm import FFMCarry, FFMCell, FFMConfig
 from .linear_attention import LinearAttentionCarry, LinearAttentionCell, LinearAttentionConfig
 from .lru import LRUCarry, LRUCell, LRUConfig
 from .lru_upstream import PublishedLRUCell, RewrittenLRUCell
+from .lstm import LSTMCarry, LSTMCell, LSTMConfig, LSTMRflo
 from .mamba2 import Mamba2Carry, Mamba2Cell, Mamba2Config
 from .mamba3 import Mamba3Carry, Mamba3Cell, Mamba3Config
 from .memoroid import Memoroid, MemoroidCellBase

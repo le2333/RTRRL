@@ -1,18 +1,16 @@
-"""RTRRL-CTRNN-RFLO as a whole: what it selects, what it steps, what it refuses.
+"""RTRRL-LSTM-RFLO as a whole: what it selects, what it steps, what it refuses.
 
-``tests/test_ctrnn_rflo.py`` holds the cell and its sensitivity against the
-equations, and ``tests/test_ctrnn_rflo_parity.py`` holds both against the
-published implementation. Neither says the algorithm is wired to them. These do:
-every claim below is about the graph an entry builds and the state one
+``tests/test_lstm_rflo.py`` holds the cell and its three traces against the
+equations and against autodiff. It does not say the algorithm is wired to them.
+These do: every claim below is about the graph an entry builds and the state one
 transition leaves behind.
 
-The claims are the ones the algorithm is answerable for beyond its torso -- the
+The claims are the ones this algorithm is answerable for beyond its torso -- the
 transition inside a real step, the sensitivity the torso carries, each block's
-eligibility trace at its own decay, the TD error, the constrained parameter,
-what an ending restarts, and what a member of a vmapped round is owed. The
-update *order* is checked where it has content: the first step of a run with no
-immediate objective moves nothing, because the step is taken along the trace as
-it stood before this transition's derivative joined it.
+eligibility trace at its own decay, the TD error, what an ending restarts, and
+what a member of a vmapped round is owed. One is this torso's alone: the output
+gate holds a quarter of the recurrence's parameters and carries no trace, so
+whether it learns is a question about the graph and not about the cell.
 """
 
 from __future__ import annotations
@@ -27,17 +25,15 @@ import pytest
 import yaml
 
 from entries._ensemble import GroupError, swept_parameters
-from memorax.algorithms import rtrrl_ctrnn_rflo as ctrnn_rflo
-from memorax.algorithms.rtrrl_aaai import Recurrence, kernel_constraint
-from memorax.algorithms.rtrrl_ctrnn_rflo import RTRRLCtrnnRflo
+from memorax.algorithms import rtrrl_lstm_rflo as lstm_rflo
+from memorax.algorithms.rtrrl_aaai import Recurrence
+from memorax.algorithms.rtrrl_lstm_rflo import RTRRLLstmRflo
 from memorax.assembly import BuildRequest, EnvironmentSpec, assemble
-from memorax.networks.sequence import Sequence
-from memorax.networks.sequence_models import RNN, RTUCell, RTUConfig
-from memorax.networks.sequence_models.ctrnn import (
-    CTRNN_DIFFERENTIATION_FAMILY,
-    CTRNNCell,
-    CTRNNConfig,
-    CTRNNRflo,
+from memorax.networks.sequence_models.lstm import (
+    LSTM_DIFFERENTIATION_FAMILY,
+    TRACED,
+    LSTMCell,
+    LSTMRflo,
 )
 from memorax.parameters import expand, flatten
 from tests.support.builders import graph_of
@@ -49,6 +45,7 @@ OBSERVATION = 2  # TinyContinuousEnv's, and its action is as wide again
 ACTION = 2
 HIDDEN = 4
 CELL = "components_0"
+GATES = ("W_f", "W_g", "W_i", "W_o")
 
 # Every decay live, so a claim about one of them is not a claim about zero.
 LIVE = {
@@ -64,12 +61,10 @@ LIVE = {
 
 def parameters(**overrides):
     return expand(
-        ctrnn_rflo.PARAMETERS,
+        lstm_rflo.PARAMETERS,
         {
             "torso.hidden_dim": HIDDEN,
-            "torso.dt": 1.0,
-            "torso.tau_floor": 1.0,
-            "torso.wiring": "fully_connected",
+            "torso.forget_bias": 1.0,
             "torso.layer_norm": False,
             "torso.differentiation.kind": "rflo",
             "torso.optimizer.kind": "adam",
@@ -97,11 +92,11 @@ def environment(identifier, **options):
     return env, env.default_params
 
 
-def build(**overrides) -> RTRRLCtrnnRflo:
+def build(**overrides) -> RTRRLLstmRflo:
     """The graph an entry builds, on an environment small enough to read."""
 
     built = assemble(
-        RTRRLCtrnnRflo,
+        RTRRLLstmRflo,
         BuildRequest(
             parameters=parameters(**overrides),
             environment=EnvironmentSpec(
@@ -126,7 +121,7 @@ def apart(a, b) -> float:
     )
 
 
-def cell_of(agent) -> CTRNNCell:
+def cell_of(agent) -> LSTMCell:
     return agent.core.torso._network.components[0].cell
 
 
@@ -134,36 +129,50 @@ def torso_params(state):
     return state.core.torso.params[CELL]["cell"]
 
 
+def sigmoid(a):
+    return 1.0 / (1.0 + jnp.exp(-a))
+
+
 # ------------------------------------------------------------- what it selects
-def test_the_torso_is_a_ctrnn_and_holds_exactly_its_two_parameters():
-    """One matrix and one time constant, and nothing before or behind them.
+def test_the_torso_is_an_lstm_and_holds_exactly_its_four_matrices():
+    """One matrix per gate, and nothing before or behind them.
 
     The width says the layout: ``[observation, previous action, previous
-    reward, hidden, bias]``, one column each, in one array. A projection in
-    front of the cell would show up here as a second component, and the
-    affine-free normalization behind it holds nothing to credit -- so the whole
-    torso is the recurrence, which is what makes RFLO's credit the torso's.
+    reward, hidden, bias]``, one column each. A projection in front of the cell
+    would show up here as a second component, and the affine-free normalization
+    behind it holds nothing to credit -- so the whole torso is the recurrence,
+    which is what makes the trace's credit the torso's.
     """
 
     state = build().init(jax.random.key(0))
     tree = state.core.torso.params
 
     assert set(tree) == {CELL}
-    assert set(tree[CELL]["cell"]) == {"W", "tau"}
+    assert set(tree[CELL]["cell"]) == set(GATES)
     features = OBSERVATION + ACTION + 1
-    assert tree[CELL]["cell"]["W"].shape == (HIDDEN, features + HIDDEN + 1)
-    assert tree[CELL]["cell"]["tau"].shape == (HIDDEN,)
+    for name in GATES:
+        assert tree[CELL]["cell"][name].shape == (HIDDEN, features + HIDDEN + 1)
 
 
-def test_the_selected_differentiation_is_rflo_and_carries_its_sensitivity():
+def test_the_selected_differentiation_is_rflo_and_carries_three_traces():
+    """Three and not four, which is the equations rather than a saving.
+
+    ``dc/dW_o`` is identically zero, so a fourth trace would be a zero the scan
+    carries and the phantom contracts to nothing. That it is absent *here*, in
+    the state the algorithm carries between transitions, is the claim -- the
+    cell could be right about it and the graph still allocate one.
+    """
+
     agent = build()
-    assert isinstance(agent.core.torso._differentiation, CTRNNRflo)
+    assert isinstance(agent.core.torso._differentiation, LSTMRflo)
 
     after, _ = run(agent, 3)
     sensitivity = after.core.torso.recurrence.differentiation_state
-    assert set(sensitivity) == {"W", "tau"}
-    assert sensitivity["W"].shape[0] == ENVS
-    assert float(jnp.abs(sensitivity["W"]).max()) > 0.0
+    assert set(sensitivity) == set(TRACED)
+    assert "W_o" not in sensitivity
+    for name in TRACED:
+        assert sensitivity[name].shape[0] == ENVS
+        assert float(jnp.abs(sensitivity[name]).max()) > 0.0
 
 
 def test_this_entry_may_not_select_anything_but_rflo():
@@ -171,13 +180,13 @@ def test_this_entry_may_not_select_anything_but_rflo():
 
     The family carries ``tbptt`` -- it is the exact judge the cell's tests
     measure the approximation against -- and the entry does not offer it, so a
-    result filed under ``rtrrl_ctrnn_rflo`` cannot have been produced by
-    anything else. An experiment identity a ``kind:`` line can quietly falsify
-    is not an identity.
+    result filed under ``rtrrl_lstm_rflo`` cannot have been produced by
+    anything else. An LSTM torso differentiated by truncated backpropagation is
+    a thing this repository already runs, and its name is ``drqn``.
     """
 
-    assert set(kinds(ctrnn_rflo.PARAMETERS, "torso.differentiation")) == {"rflo"}
-    assert set(CTRNN_DIFFERENTIATION_FAMILY.branches) == {"rflo", "tbptt"}
+    assert set(kinds(lstm_rflo.PARAMETERS, "torso.differentiation")) == {"rflo"}
+    assert set(LSTM_DIFFERENTIATION_FAMILY.branches) == {"rflo", "tbptt"}
 
     with pytest.raises(KeyError):
         build(**{"torso.differentiation.kind": "tbptt"})
@@ -197,21 +206,36 @@ def test_the_normalization_behind_the_cell_is_a_choice_that_holds_no_parameters(
     assert apart(torso_params(moved), torso_params(normalized)) > 0.0
 
 
+def test_the_forget_bias_the_run_document_names_reaches_the_drawn_parameters():
+    """One declared number the graph passes through to the initialisation.
+
+    It is the factor the trace is multiplied by every transition, so it is the
+    one initialisation choice this torso gives a run document a reason to move
+    -- and a graph that dropped it on the floor would look identical until
+    someone tried to.
+    """
+
+    for bias in (0.0, 2.5):
+        state = build(**{"torso.forget_bias": bias}).init(jax.random.key(0))
+        assert float(jnp.abs(torso_params(state)["W_f"][:, -1] - bias).max()) < 1e-6
+        assert float(jnp.abs(torso_params(state)["W_i"][:, -1]).max()) == 0.0
+
+
 def test_the_configuration_the_issue_names_builds():
-    """``hidden_dim: 32``, which is the published width, under both entries."""
+    """``hidden_dim: 32``, which is the width the other RTRRL entries run."""
 
     agent = build(**{"torso.hidden_dim": 32})
     state = agent.init(jax.random.key(0))
-    assert state.core.torso.params[CELL]["cell"]["tau"].shape == (32,)
+    assert torso_params(state)["W_o"].shape == (32, OBSERVATION + ACTION + 1 + 32 + 1)
 
 
 # --------------------------------------------------------- what one step is
-def test_one_transition_is_the_euler_step_of_the_ctrnn_ode():
+def test_one_transition_is_the_lstm_recurrence():
     """The transition inside a real step, recomputed from the parameters alone.
 
     The reading copy is what acts and what the torso is walked with, so this is
     that copy rather than the stepped one -- getting those two the wrong way
-    round is a mistake the equation would not catch on the first transition,
+    round is a mistake the equations would not catch on the first transition,
     when they are still the same tree.
     """
 
@@ -227,11 +251,15 @@ def test_one_transition_is_the_euler_step_of_the_ctrnn_ode():
 
     carry = state.core.torso.recurrence.carry[0]
     row = jnp.concatenate(
-        [torso._input(timestep)[:, 0], carry, jnp.ones((ENVS, 1))], -1
+        [torso._input(timestep)[:, 0], carry.hidden, jnp.ones((ENVS, 1))], -1
     )
-    activated = jnp.tanh(row @ weights["W"].T)
-    wanted = carry + (1.0 / weights["tau"]) * (activated - carry)
-    assert apart(advanced.carry[0], wanted) < 1e-5
+    cell = sigmoid(row @ weights["W_f"].T) * carry.cell + sigmoid(
+        row @ weights["W_i"].T
+    ) * jnp.tanh(row @ weights["W_g"].T)
+    hidden = sigmoid(row @ weights["W_o"].T) * jnp.tanh(cell)
+
+    assert apart(advanced.carry[0].cell, cell) < 1e-5
+    assert apart(advanced.carry[0].hidden, hidden) < 1e-5
 
 
 def test_the_sensitivity_the_algorithm_carries_is_the_cell_s_own_recurrence():
@@ -250,7 +278,7 @@ def test_the_sensitivity_the_algorithm_carries_is_the_cell_s_own_recurrence():
     advanced, _ = torso.apply(
         state.core.torso.slow_params, timestep, state.core.torso.recurrence
     )
-    standalone = CTRNNRflo(torso._network.components[0])
+    standalone = LSTMRflo(torso._network.components[0])
     _, _, wanted = standalone(
         state.core.torso.slow_params[CELL],
         torso._input(timestep),
@@ -276,7 +304,7 @@ def test_the_step_is_taken_along_the_trace_as_it_stood():
     for name in ("torso", "actor", "critic"):
         block = getattr(after.core, name)
         assert apart(block.params, getattr(start.core, name).params) == 0.0
-    assert float(jnp.abs(after.core.torso.traces[CELL]["cell"]["W"]).max()) > 0.0
+    assert float(jnp.abs(after.core.torso.traces[CELL]["cell"]["W_g"]).max()) > 0.0
 
 
 def test_the_td_error_is_the_one_step_return_against_the_carried_value():
@@ -386,13 +414,13 @@ def test_an_ending_restarts_the_emphasis_the_trace_and_the_sensitivity():
     assert float(jnp.min(emphasis)) < 1.0, "nothing decayed, so nothing restarted"
 
 
-def test_a_stream_that_ended_walks_the_torso_from_an_empty_sensitivity():
+def test_a_stream_that_ended_walks_the_torso_from_an_empty_carry_and_trace():
     """The cell's reset reaching the algorithm, on the stream that ended.
 
     The emphasis above is the algorithm's own restart; this is the torso's.
-    One stream is told its episode ended and the sensitivity it comes out with
-    has to be the one a sequence that has not run would have -- while its
-    neighbours, told nothing, keep theirs.
+    Both halves of the carry are checked, because the cell state and the hidden
+    state are cleared by the same tree walk but reach the next transition by
+    two different routes -- one through the phantom, one through the gates.
     """
 
     agent = build()
@@ -413,165 +441,60 @@ def test_a_stream_that_ended_walks_the_torso_from_an_empty_sensitivity():
             ),
         ),
     )
-    first = jax.tree.map(lambda leaf: leaf[:1], advanced.differentiation_state)
+
+    def first(tree):
+        return jax.tree.map(lambda leaf: leaf[:1], tree)
+
+    def rest(tree):
+        return jax.tree.map(lambda leaf: leaf[1:], tree)
+
     assert (
-        apart(first, jax.tree.map(lambda leaf: leaf[:1], fresh.differentiation_state))
+        apart(first(advanced.differentiation_state), first(fresh.differentiation_state))
         == 0.0
     )
-
-    rest = jax.tree.map(lambda leaf: leaf[1:], advanced.differentiation_state)
+    assert apart(first(advanced.carry[0]), first(fresh.carry[0])) == 0.0
     assert (
-        apart(rest, jax.tree.map(lambda leaf: leaf[1:], fresh.differentiation_state))
+        apart(rest(advanced.differentiation_state), rest(fresh.differentiation_state))
         > 0.0
     )
+    assert apart(rest(advanced.carry[0]), rest(fresh.carry[0])) > 0.0
 
 
-def test_every_recurrent_parameter_of_the_cell_learns():
-    """Both leaves move, which RFLO's two recurrences are what make possible."""
+def test_every_matrix_of_the_cell_learns_including_the_untraced_one():
+    """Four matrices move, and one of them has no trace to move along.
+
+    ``W_o`` is a quarter of the recurrence's parameters and receives its whole
+    gradient from the instantaneous path ``h_t = o_t tanh(c_t)``. Nothing else
+    in this suite would notice a graph that credited only the traced three:
+    the run would train, the metrics would be finite, and a quarter of the
+    torso would be frozen at its initialisation.
+    """
 
     start = build().init(jax.random.key(0))
     after, _ = run(build(), 6)
 
-    for leaf in ("W", "tau"):
-        assert apart(torso_params(after)[leaf], torso_params(start)[leaf]) > 0.0
+    for name in GATES:
+        assert apart(torso_params(after)[name], torso_params(start)[name]) > 0.0
 
 
-# --------------------------------------------------------- the constrained tau
-def test_tau_is_projected_back_onto_its_floor_after_a_step():
-    """A step that would carry ``tau`` under the floor leaves it at the floor.
+def test_the_kernel_names_no_constrained_set_and_the_torso_applies_none():
+    """The projection is the kernel's to name, and this one has nothing to name.
 
-    The floor is raised above every drawn value, so the whole vector has to be
-    projected and the same run without a floor is there to say what would
-    otherwise have happened. Below ``dt`` the leak ``1 - dt/tau`` changes sign,
-    so this is a bound on the parameter's domain rather than a preference.
+    Every gate is bounded by its own nonlinearity and ``c`` grows at most
+    linearly in the number of transitions, so there is no divisor and no sign
+    to protect. The mechanism ``rtrrl_ctrnn_rflo`` needed for ``tau`` is
+    therefore absent here rather than present and empty, which is what "the
+    kernel names it" is supposed to buy.
     """
 
-    floor = 6.0  # above the initial draw, which is uniform on [1, 5]
-    settings = {"torso.optimizer.adam.lr": 1.0}
-    held, _ = run(build(**settings, **{"torso.tau_floor": floor}), 4)
-    # The published floor, and the lowest one this entry will build: a floor of
-    # zero is refused, so the contrast has to come from a legal run rather than
-    # from an unconstrained one.
-    low, _ = run(build(**settings, **{"torso.tau_floor": 1.0}), 4)
-
-    assert float(jnp.min(torso_params(held)["tau"])) >= floor - 1e-6
-    assert float(jnp.min(torso_params(low)["tau"])) < floor, (
-        "the run at the published floor stayed above the raised one anyway, "
-        "so the raised one says nothing"
-    )
-
-
-def test_the_reading_copy_is_inside_the_constraint_too():
-    """Both copies are points of the set, so acting never divides by a bad tau.
-
-    With a partial follow the reading copy is a convex combination of two
-    points that are already inside, but it starts from the drawn parameters --
-    which a raised floor puts outside -- so the projection has to reach it.
-    """
-
-    floor = 6.0
-    agent = build(
-        **{
-            "torso.tau_floor": floor,
-            "torso.optimizer.adam.lr": 1.0,
-            "torso.follow": 0.25,
-        }
-    )
-    state, _ = run(agent, 4)
-
-    slow = state.core.torso.slow_params[CELL]["cell"]["tau"]
-    assert float(jnp.min(slow)) >= floor - 1e-6
-
-
-def test_the_floor_is_the_kernel_s_to_name_and_a_kernel_may_name_none():
-    """The projection belongs to the component whose parameter it bounds.
-
-    The algorithm applies whatever the cell states and knows only where that
-    cell's parameters sit in the sequence's tree. A core that states nothing --
-    which is every other core in the repository -- gets no projection at all,
-    so this is not something a kernel has to implement to be usable here.
-    """
-
-    assert (
-        float(cell_of(build()).constrain({"tau": jnp.asarray([-1.0])})["tau"][0]) == 1.0
-    )
-    raised = build(**{"torso.tau_floor": 3.0, "torso.dt": 1.0})
-    assert (
-        float(cell_of(raised).constrain({"tau": jnp.asarray([-1.0])})["tau"][0]) == 3.0
-    )
-
-    silent = Sequence(
-        components=(RNN(cell=RTUCell(config=RTUConfig(features=2, hidden_dim=2))),)
-    )
-    assert kernel_constraint(silent) is None
-
-
-@pytest.mark.parametrize(
-    "settings,reason",
-    (
-        ({"torso.tau_floor": 0.0}, "tau_floor"),
-        ({"torso.tau_floor": 0.5, "torso.dt": 1.0}, "tau_floor"),
-        ({"torso.dt": 0.0, "torso.tau_floor": 1.0}, "torso.dt"),
-    ),
-)
-def test_a_pair_of_settings_the_recurrence_is_undefined_for_is_refused(
-    settings, reason
-):
-    """Each value is inside its own domain and the pair is not.
-
-    A parameter tree conditions on branches, not on a sibling's value, so this
-    is a build-time refusal rather than a declaration -- the same shape as
-    ``rtrrl_aaai``'s refusal of an outer clip over the intentional step. What
-    it buys is measured in the test below: without it these configurations do
-    not fail, they produce numbers.
-    """
-
-    with pytest.raises(ValueError, match=reason):
-        build(**settings)
-
-
-def test_the_refused_settings_are_the_ones_that_would_have_produced_nan():
-    """Why the refusal is a refusal and not a warning.
-
-    ``tau`` is what the step divides by and the projection lands on the floor
-    exactly, so a floor of zero is a division by zero on the first update that
-    pushes ``tau`` down -- not a small number, ``NaN``. A floor under ``dt``
-    inverts the leak, and past ``dt/2`` the Euler step diverges. Both are driven
-    here through the cell directly, which is the only way left to reach them.
-    """
-
-    def walked(dt, tau):
-        core = RNN(
-            cell=CTRNNCell(
-                config=CTRNNConfig(features=2, hidden_dim=3, dt=dt, tau_floor=tau)
-            )
-        )
-        x = jax.random.normal(jax.random.key(1), (1, 12, 2))
-        done = jnp.zeros((1, 12), dtype=bool)
-        empty = jnp.zeros((1, 3))
-        params = core.init(jax.random.key(2), x, done=done, initial_carry=empty)[
-            "params"
-        ]
-        # The parameters a run reaches once the projection has landed on the
-        # floor, which is where an update that overshot leaves them.
-        landed = {"cell": {**params["cell"], "tau": jnp.full((3,), tau)}}
-        _, output = cast(
-            "tuple[Any, Any]",
-            core.apply({"params": landed}, x, done=done, initial_carry=empty),
-        )
-        return jnp.asarray(output)
-
-    assert not bool(jnp.all(jnp.isfinite(walked(1.0, 0.0)))), "a zero floor is finite"
-    assert float(jnp.abs(walked(1.0, 0.25)).max()) > 1e4, "a floor under dt/2 is calm"
-    assert float(jnp.abs(walked(1.0, 1.0)).max()) < 10.0, "the published domain is not"
+    assert not hasattr(cell_of(build()), "constrain")
+    assert build().core.torso._constraint is None
 
 
 # ------------------------------------------------------- what a sweep may vary
 STRUCTURAL = (
     "torso.hidden_dim",
-    "torso.dt",
-    "torso.tau_floor",
-    "torso.wiring",
+    "torso.forget_bias",
     "torso.layer_norm",
     "torso.optimizer.kind",
     "meta_rl",
@@ -592,12 +515,12 @@ SWEEPABLE = (
 
 @pytest.mark.parametrize("name", STRUCTURAL)
 def test_a_structural_leaf_is_declared_static(name):
-    assert flatten(ctrnn_rflo.PARAMETERS)[name].static, f"{name} may be swept"
+    assert flatten(lstm_rflo.PARAMETERS)[name].static, f"{name} may be swept"
 
 
 @pytest.mark.parametrize("name", SWEEPABLE)
 def test_a_leaf_the_graph_reads_arithmetically_may_be_swept(name):
-    assert not flatten(ctrnn_rflo.PARAMETERS)[name].static, f"{name} may not be swept"
+    assert not flatten(lstm_rflo.PARAMETERS)[name].static, f"{name} may not be swept"
 
 
 def members(**varying) -> Any:
@@ -625,11 +548,16 @@ def members(**varying) -> Any:
 
 def test_a_group_may_not_vary_the_shape_of_the_recurrence():
     with pytest.raises(GroupError, match="torso.hidden_dim"):
-        swept_parameters(members(**{"torso.hidden_dim": 8}), ctrnn_rflo.PARAMETERS)
+        swept_parameters(members(**{"torso.hidden_dim": 8}), lstm_rflo.PARAMETERS)
+
+
+def test_a_group_may_not_vary_the_bias_the_forget_gate_is_drawn_with():
+    with pytest.raises(GroupError, match="torso.forget_bias"):
+        swept_parameters(members(**{"torso.forget_bias": 0.0}), lstm_rflo.PARAMETERS)
 
 
 def test_a_group_may_vary_a_decay():
-    swept = swept_parameters(members(lambda_rnn=0.1), ctrnn_rflo.PARAMETERS)
+    swept = swept_parameters(members(lambda_rnn=0.1), lstm_rflo.PARAMETERS)
     assert set(swept) == {"lambda_rnn"}
 
 
@@ -673,35 +601,42 @@ def test_a_member_of_a_vmapped_round_is_the_run_it_would_have_been_alone():
 def test_the_algorithm_declares_its_own_surface_beside_the_shared_one():
     """Its parameters are its own; its metrics and its schema are RTRRL's.
 
-    A reader comparing an LRU run against a CTRNN one is asking the same
-    question of both, so the series they file have to have the same names.
+    A reader comparing an LRU run, a CTRNN run and an LSTM one is asking the
+    same question of all three, so the series they file have to have the same
+    names.
     """
 
-    from memorax.algorithms import rtrrl_aaai
+    from memorax.algorithms import rtrrl_aaai, rtrrl_ctrnn_rflo
 
-    assert ctrnn_rflo.METRICS == rtrrl_aaai.METRICS
-    assert ctrnn_rflo.OBSERVATIONS == rtrrl_aaai.OBSERVATIONS
-    assert ctrnn_rflo.PARAMETERS != rtrrl_aaai.PARAMETERS
-    assert "torso.hidden_dim" in flatten(ctrnn_rflo.PARAMETERS)
-    assert "torso.backbone.kind" not in flatten(ctrnn_rflo.PARAMETERS)
-    assert "torso.backbone.kind" in flatten(rtrrl_aaai.PARAMETERS)
+    assert lstm_rflo.METRICS == rtrrl_aaai.METRICS
+    assert lstm_rflo.OBSERVATIONS == rtrrl_aaai.OBSERVATIONS
+    assert lstm_rflo.PARAMETERS != rtrrl_aaai.PARAMETERS
+    assert lstm_rflo.PARAMETERS != rtrrl_ctrnn_rflo.PARAMETERS
+
+    declared = flatten(lstm_rflo.PARAMETERS)
+    assert "torso.hidden_dim" in declared
+    assert "torso.backbone.kind" not in declared
+    # The two RFLO torsos are not one graph with a kernel setting: the CTRNN's
+    # leak is a declared parameter with a floor, and this one's is a gate.
+    assert "torso.tau_floor" not in declared
+    assert "torso.forget_bias" not in flatten(rtrrl_ctrnn_rflo.PARAMETERS)
 
 
 def test_the_two_entries_declare_one_schema_and_one_set_of_metrics():
-    from entries import rtrrl_ctrnn_rflo, rtrrl_ctrnn_rflo_ensemble
+    from entries import rtrrl_lstm_rflo, rtrrl_lstm_rflo_ensemble
 
-    assert rtrrl_ctrnn_rflo.PARAMETERS == rtrrl_ctrnn_rflo_ensemble.PARAMETERS
-    assert rtrrl_ctrnn_rflo.METRICS == rtrrl_ctrnn_rflo_ensemble.METRICS
-    assert rtrrl_ctrnn_rflo_ensemble.GROUPED is True
-    assert getattr(rtrrl_ctrnn_rflo, "GROUPED", False) is False
+    assert rtrrl_lstm_rflo.PARAMETERS == rtrrl_lstm_rflo_ensemble.PARAMETERS
+    assert rtrrl_lstm_rflo.METRICS == rtrrl_lstm_rflo_ensemble.METRICS
+    assert rtrrl_lstm_rflo_ensemble.GROUPED is True
+    assert getattr(rtrrl_lstm_rflo, "GROUPED", False) is False
 
 
 # ---------------------------------------------------- the launch documents
 # The launch documents live beside `memo/` rather than inside it: they are the
 # repository's, and the image's build context is this directory.
 EXPERIMENTS = Path(__file__).resolve().parents[5] / "experiments"
-ALONE = EXPERIMENTS / "rtrrl issue65 ctrnn rflo.yaml"
-GROUPED = EXPERIMENTS / "rtrrl issue65 ctrnn rflo ensemble.yaml"
+ALONE = EXPERIMENTS / "rtrrl issue67 lstm rflo.yaml"
+GROUPED = EXPERIMENTS / "rtrrl issue67 lstm rflo ensemble.yaml"
 
 
 def document(path: Path) -> dict:
@@ -732,8 +667,8 @@ def test_the_two_launch_documents_differ_only_in_the_entry_and_what_it_runs():
 
     alone, grouped = document(ALONE), document(GROUPED)
 
-    assert alone["entry"] == "rtrrl_ctrnn_rflo"
-    assert grouped["entry"] == "rtrrl_ctrnn_rflo_ensemble"
+    assert alone["entry"] == "rtrrl_lstm_rflo"
+    assert grouped["entry"] == "rtrrl_lstm_rflo_ensemble"
     assert alone["space"] == grouped["space"]
     assert grouped["environment"]["seeds"] == [0, 1, 2]
 
@@ -744,14 +679,9 @@ def test_the_two_launch_documents_differ_only_in_the_entry_and_what_it_runs():
 
 
 def test_the_published_configuration_resolves_against_what_the_entry_declares():
-    """Every leaf the document names is one the entry reads, and it builds.
+    """Every leaf the document names is one the entry reads, and it builds."""
 
-    The issue asks for `torso.hidden_dim: 32` under this entry; this is that
-    request taken from the file it would arrive in, resolved against the
-    declared tree, and built into a graph.
-    """
-
-    declared = flatten(ctrnn_rflo.PARAMETERS)
+    declared = flatten(lstm_rflo.PARAMETERS)
     space = paths(document(ALONE)["space"])
 
     unknown = sorted(name for name in space if name not in declared)
@@ -763,4 +693,4 @@ def test_the_published_configuration_resolves_against_what_the_entry_declares():
 
     agent = build(**chosen)
     state, _ = run(agent, 2)
-    assert torso_params(state)["W"].shape[0] == 32
+    assert torso_params(state)["W_o"].shape[0] == 32
