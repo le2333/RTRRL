@@ -119,8 +119,39 @@ recurrence costs a factor of the hidden width, and RFLO is what the published
 the dropped term from the other side: there the two recurrences must *not*
 agree, and their difference is the same expression this section names.
 
-Which is the same statement, said twice. RFLO exists exactly where the
-cross-unit block does, and the two families say so by what each offers.
+`memorax/networks/sequence_models/lstm.py` is the second such core and the
+second family. Its unit reads every other unit's previous *hidden* state
+through the recurrent block of four matrices, so the cross-unit block is again
+present; what differs from the CTRNN is where the leak comes from. There the
+leak is `1 - dt/tau`, a constant per unit that a declared parameter names.
+Here it is the forget gate `sigma(W_f v_t)`, a learned function of the state,
+different at every transition — so the rate at which credit is forgotten is
+part of what the run is learning rather than part of what it was configured
+with. The state the trace is a derivative of is `c` and not the cell's output,
+and the output gate carries no trace at all because it does not enter `c`; both
+are derived in `docs/rtrrl-lstm-rflo.md`. `LSTM_DIFFERENTIATION_FAMILY`
+therefore offers `rflo` and `tbptt` and no `exact_rtrl`, and the
+`rtrrl_lstm_rflo` entry narrows that to `rflo` — where the CTRNN entry's reason
+was that `tbptt` is its tests' judge, this one has a second: an LSTM torso
+differentiated by truncated backpropagation is a thing this repository already
+runs under the name `drqn`.
+
+`memorax/networks/sequence_models/dense_ssm.py` is the third, and it is the one
+that makes the paragraph above testable rather than only arguable. The claim
+this section rests on is about the *structure* -- that the cross-unit block is
+zero because the parameterisation makes it zero -- and neither the LRU nor the
+RTU can be asked what would happen if it were not, because neither has a block
+to remove. The dense state-space core is the same linear step with `A` full, so
+the block is a thing that can be switched off: with the off-diagonal zeroed,
+`tests/test_dense_ssm_rflo.py` shows RFLO reproducing backpropagation through
+the unroll at every length it is asked for, and with the off-diagonal restored
+it shows the two parting by exactly `(A - diag(A)) S_{t-1}`. That is this
+section's argument, run as a measurement on a registered core rather than on
+the unregistered `tanh` recurrence
+`tests/test_diagonal_rflo_characterization.py` defines for the purpose.
+
+Which is the same statement, said four times. RFLO exists exactly where the
+cross-unit block does, and the families say so by what each offers.
 
 ## What the claim covers, and what bounds it
 
