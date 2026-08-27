@@ -24,7 +24,9 @@ family of its own. Its unit reads every other unit's previous state, the block
 below is genuinely there, and `CTRNN_DIFFERENTIATION_FAMILY` offers `rflo`
 because the published `RTRRL-CTRNN-RFLO` runs it. `tests/test_ctrnn_rflo.py`
 holds that gap from the other side: there RFLO and exact credit must disagree,
-and by the same term.
+and by the same term. `lstm.py` is the second such core -- its gates read every
+other unit's previous hidden state -- and `tests/test_lstm_rflo.py` holds the
+same gap for it, with the forget gate in the leak's place.
 
 A unit here is one complex mode: two real coordinates for both cores, since each
 keeps a real and an imaginary part per mode. Within a unit the recurrent

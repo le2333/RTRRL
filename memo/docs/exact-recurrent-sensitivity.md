@@ -119,8 +119,25 @@ recurrence costs a factor of the hidden width, and RFLO is what the published
 the dropped term from the other side: there the two recurrences must *not*
 agree, and their difference is the same expression this section names.
 
-Which is the same statement, said twice. RFLO exists exactly where the
-cross-unit block does, and the two families say so by what each offers.
+`memorax/networks/sequence_models/lstm.py` is the second such core and the
+second family. Its unit reads every other unit's previous *hidden* state
+through the recurrent block of four matrices, so the cross-unit block is again
+present; what differs from the CTRNN is where the leak comes from. There the
+leak is `1 - dt/tau`, a constant per unit that a declared parameter names.
+Here it is the forget gate `sigma(W_f v_t)`, a learned function of the state,
+different at every transition — so the rate at which credit is forgotten is
+part of what the run is learning rather than part of what it was configured
+with. The state the trace is a derivative of is `c` and not the cell's output,
+and the output gate carries no trace at all because it does not enter `c`; both
+are derived in `docs/rtrrl-lstm-rflo.md`. `LSTM_DIFFERENTIATION_FAMILY`
+therefore offers `rflo` and `tbptt` and no `exact_rtrl`, and the
+`rtrrl_lstm_rflo` entry narrows that to `rflo` — where the CTRNN entry's reason
+was that `tbptt` is its tests' judge, this one has a second: an LSTM torso
+differentiated by truncated backpropagation is a thing this repository already
+runs under the name `drqn`.
+
+Which is the same statement, said three times. RFLO exists exactly where the
+cross-unit block does, and the families say so by what each offers.
 
 ## What the claim covers, and what bounds it
 

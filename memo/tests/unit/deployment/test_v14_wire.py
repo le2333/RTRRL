@@ -152,6 +152,8 @@ def test_image_catalog_uses_the_deployment_contract(tmp_path: Path) -> None:
         "rtrrl_ctrnn_rflo",
         "rtrrl_ctrnn_rflo_ensemble",
         "rtrrl_ensemble",
+        "rtrrl_lstm_rflo",
+        "rtrrl_lstm_rflo_ensemble",
         "stream_ac",
     }
     assert parsed.entries["rtrrl"].command == ("python", "-m", "entries.rtrrl")
@@ -177,9 +179,11 @@ def test_image_catalog_uses_the_deployment_contract(tmp_path: Path) -> None:
         "rtrrl_ctrnn_rflo": False,
         "rtrrl_ctrnn_rflo_ensemble": True,
         "rtrrl_ensemble": True,
+        "rtrrl_lstm_rflo": False,
+        "rtrrl_lstm_rflo_ensemble": True,
         "stream_ac": False,
     }
-    for algorithm in ("drqn", "rtrrl", "rtrrl_ctrnn_rflo"):
+    for algorithm in ("drqn", "rtrrl", "rtrrl_ctrnn_rflo", "rtrrl_lstm_rflo"):
         alone = parsed.entries[algorithm]
         grouped = parsed.entries[f"{algorithm}_ensemble"]
         assert grouped.metrics == alone.metrics
@@ -195,3 +199,13 @@ def test_image_catalog_uses_the_deployment_contract(tmp_path: Path) -> None:
     assert "hidden_dim" in ctrnn["torso"]
     assert "backbone" not in ctrnn["torso"]
     assert "backbone" in parsed.entries["rtrrl"].parameters["torso"]
+
+    # And a third, for the same reason one more time: the LSTM torso's leak is
+    # its forget gate, the CTRNN's is `1 - dt/tau`, and neither declaration
+    # accepts the other's leaves. Three RTRRL graphs, three schemas, and the
+    # catalog is where the control plane reads that they are not one.
+    lstm = parsed.entries["rtrrl_lstm_rflo"].parameters
+    assert lstm != ctrnn != parsed.entries["rtrrl"].parameters
+    assert "forget_bias" in lstm["torso"]
+    assert "tau_floor" not in lstm["torso"]
+    assert "forget_bias" not in ctrnn["torso"]
