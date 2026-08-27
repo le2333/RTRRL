@@ -1,4 +1,5 @@
 from .ctrnn import CTRNNCell, CTRNNConfig, CTRNNRflo
+from .dense_ssm import DenseSSMCell, DenseSSMConfig, DenseSSMRflo
 from .ffm import FFMCarry, FFMCell, FFMConfig
 from .linear_attention import LinearAttentionCarry, LinearAttentionCell, LinearAttentionConfig
 from .lru import LRUCarry, LRUCell, LRUConfig

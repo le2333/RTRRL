@@ -28,6 +28,13 @@ and by the same term. `lstm.py` is the second such core -- its gates read every
 other unit's previous hidden state -- and `tests/test_lstm_rflo.py` holds the
 same gap for it, with the forget gate in the leak's place.
 
+`dense_ssm.py` is the third, and it is the one that can be asked this file's
+question directly: it is a linear state-space step with `A` full, so zeroing the
+off-diagonal turns it into the case this file argues about instead of merely
+resembling it. `tests/test_dense_ssm_rflo.py` runs both directions on it. The
+recurrence below stays because it is the *nonlinear* witness, and because it is
+defined where it is read.
+
 A unit here is one complex mode: two real coordinates for both cores, since each
 keeps a real and an imaginary part per mode. Within a unit the recurrent
 Jacobian is a full 2x2 rotation and is carried in full; it is across units that

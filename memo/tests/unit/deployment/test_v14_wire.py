@@ -154,6 +154,8 @@ def test_image_catalog_uses_the_deployment_contract(tmp_path: Path) -> None:
         "rtrrl_ensemble",
         "rtrrl_lstm_rflo",
         "rtrrl_lstm_rflo_ensemble",
+        "rtrrl_ssm_rflo",
+        "rtrrl_ssm_rflo_ensemble",
         "stream_ac",
     }
     assert parsed.entries["rtrrl"].command == ("python", "-m", "entries.rtrrl")
@@ -181,9 +183,17 @@ def test_image_catalog_uses_the_deployment_contract(tmp_path: Path) -> None:
         "rtrrl_ensemble": True,
         "rtrrl_lstm_rflo": False,
         "rtrrl_lstm_rflo_ensemble": True,
+        "rtrrl_ssm_rflo": False,
+        "rtrrl_ssm_rflo_ensemble": True,
         "stream_ac": False,
     }
-    for algorithm in ("drqn", "rtrrl", "rtrrl_ctrnn_rflo", "rtrrl_lstm_rflo"):
+    for algorithm in (
+        "drqn",
+        "rtrrl",
+        "rtrrl_ctrnn_rflo",
+        "rtrrl_lstm_rflo",
+        "rtrrl_ssm_rflo",
+    ):
         alone = parsed.entries[algorithm]
         grouped = parsed.entries[f"{algorithm}_ensemble"]
         assert grouped.metrics == alone.metrics
@@ -209,3 +219,13 @@ def test_image_catalog_uses_the_deployment_contract(tmp_path: Path) -> None:
     assert "forget_bias" in lstm["torso"]
     assert "tau_floor" not in lstm["torso"]
     assert "forget_bias" not in ctrnn["torso"]
+
+    # And a fourth, which is the one the distinction is easiest to lose on: a
+    # dense state-space recurrence is `rtrrl`'s LRU with one constraint lifted,
+    # and a `backbone` value could not have said which of the two a result came
+    # from -- or which gradient it spent, since the diagonal one takes exact
+    # RTRL and this one takes RFLO.
+    ssm = parsed.entries["rtrrl_ssm_rflo"].parameters
+    assert ssm not in (ctrnn, lstm, parsed.entries["rtrrl"].parameters)
+    assert "spectral_bound" in ssm["torso"]
+    assert "backbone" not in ssm["torso"]

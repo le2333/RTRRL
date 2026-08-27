@@ -669,6 +669,39 @@ def _head_gradient_norm(tree):
     return subtree_norms({"head": tree}, streams=True)["head"]
 
 
+def kernel_constraint(network: Sequence):
+    """Project a torso's parameters back onto the set its kernel allows.
+
+    The kernel states the set; this knows only where in the sequence's tree
+    that kernel's parameters are -- the recurrent component's slot, and the
+    ``cell`` the ``RNN`` wrapper keeps them under. A kernel naming no
+    constraint gets no projection, so this is not something every core has to
+    implement to be usable as a torso: of the cores this repository declares,
+    the CTRNN bounds ``tau`` from below and the dense state-space core bounds
+    the row norms of ``A``, and every other one names nothing.
+
+    It lives here, beside the :class:`Torso` that applies it, because two
+    algorithms now need the same traversal of the same tree shape. Before the
+    second one it was private to ``rtrrl_ctrnn_rflo``, which was the right
+    place for it while the contract had one implementation.
+    """
+
+    index = network.recurrent
+    if index is None:
+        return None
+    name = network.names[index]
+    cell = network.components[index].cell
+    constrain = getattr(cell, "constrain", None)
+    if constrain is None:
+        return None
+
+    def project(params):
+        branch = params[name]
+        return {**params, name: {**branch, "cell": constrain(branch["cell"])}}
+
+    return project
+
+
 # ------------------------------------------------------------ the shared block
 class Torso(Block):
     """The recurrent representation shared by both heads."""

@@ -53,6 +53,7 @@ jobs:
         memorax/algorithms/rtrrl_aaai.py
         memorax/algorithms/rtrrl_ctrnn_rflo.py
         memorax/algorithms/rtrrl_lstm_rflo.py
+        memorax/algorithms/rtrrl_ssm_rflo.py
         memorax/algorithms/stream_ac.py
         memorax/utils/trees.py
         memorax/networks/backbones.py
@@ -62,6 +63,7 @@ jobs:
         memorax/networks/readouts.py
         memorax/networks/sequence.py
         memorax/networks/sequence_models/ctrnn.py
+        memorax/networks/sequence_models/dense_ssm.py
         memorax/networks/sequence_models/lstm.py
         memorax/parameters.py
         memorax/observability

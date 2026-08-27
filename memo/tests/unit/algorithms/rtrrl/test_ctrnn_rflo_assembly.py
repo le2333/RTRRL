@@ -28,7 +28,7 @@ import yaml
 
 from entries._ensemble import GroupError, swept_parameters
 from memorax.algorithms import rtrrl_ctrnn_rflo as ctrnn_rflo
-from memorax.algorithms.rtrrl_aaai import Recurrence
+from memorax.algorithms.rtrrl_aaai import Recurrence, kernel_constraint
 from memorax.algorithms.rtrrl_ctrnn_rflo import RTRRLCtrnnRflo
 from memorax.assembly import BuildRequest, EnvironmentSpec, assemble
 from memorax.networks.sequence import Sequence
@@ -503,7 +503,7 @@ def test_the_floor_is_the_kernel_s_to_name_and_a_kernel_may_name_none():
     silent = Sequence(
         components=(RNN(cell=RTUCell(config=RTUConfig(features=2, hidden_dim=2))),)
     )
-    assert ctrnn_rflo._constraint(silent) is None
+    assert kernel_constraint(silent) is None
 
 
 @pytest.mark.parametrize(
