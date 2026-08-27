@@ -1,0 +1,130 @@
+# Issue 65 R1.1 smoke: the paper's own RTRRL-CTRNN-RFLO, on the shape the LRU
+# entry already runs. A local shape check, not the formal protocol -- the seed
+# count, the budget and the metrics of the reproduction are the experiment
+# side's.
+#
+# This is a different graph from `rtrrl`, not the same graph with a backbone
+# setting, which is why it is a different entry and why its `space.torso` has
+# no `backbone` in it:
+#
+#   - one weight matrix carrying input, recurrent and bias columns together,
+#     integrated by one Euler step of the CTRNN ODE;
+#   - RFLO rather than exact recurrent sensitivity, because the recurrence is
+#     dense and exact credit would cost a factor of `hidden_dim`;
+#   - `tau` projected back onto `tau_floor` after every update.
+#
+# The settings below are the published ones: `dt: 1`, `tau_floor: 1`,
+# `wiring: fully_connected`, `layer_norm: false`, `hidden_dim: 32`. Four of the
+# six defects listed in `memo/docs/rtrrl-ctrnn-rflo-corrections.md` are
+# unobservable under exactly this configuration, which is how they survived; a
+# run that moves any of them is comparing against corrected behaviour and the
+# published numbers no longer bound it.
+#
+# Read, at the reporting boundaries:
+#   - eval/episode/return finite throughout
+#   - update.torso.trace_norm finite and non-zero -- a zero would mean RFLO's
+#     trace never reached the torso's step
+#   - the run's wall clock against `rtrrl halfcheetah smoke.yaml` on the same
+#     instance, which is the cost of a dense recurrence against a diagonal one
+
+experiment: rtrrl-issue65
+name: rtrrl-issue65-ctrnn-rflo
+description: "Issue 65 R1.1 smoke: the published CTRNN torso, credited by RFLO"
+
+# Set to the digest built from the branch that carries `entries/rtrrl_ctrnn_rflo`.
+# No earlier image has that entry, so a dispatch against one fails at start-up
+# rather than running something else under this name.
+image: 007122174918.dkr.ecr.eu-north-1.amazonaws.com/rtrrl@sha256:0000000000000000000000000000000000000000000000000000000000000000
+entry: rtrrl_ctrnn_rflo
+storage: s3://rtrrl-artifacts-007122174918/trainer
+
+environment:
+  id: brax::halfcheetah
+  backend: spring
+  seeds: [0]
+  episode_length: 64
+
+training:
+  num_envs: 1
+  total_steps: 256
+  chunk_steps: 256
+
+evaluation:
+  every_steps: 256
+  episodes: 5
+  chunk_steps: 320
+  seed: 1000
+
+logging:
+  aim:
+    url: aim://172.31.62.192:53800
+
+score:
+  metric: eval/episode/return
+  window_steps: [0, 256]
+  reduce: last
+  non_finite: worst
+  direction: maximize
+
+compute:
+  instance_type: c7a.large
+  timeout_minutes: 30
+
+hpo:
+  rounds: 1
+  trials_per_round: 1
+  parallel_jobs: 1
+  startup_trials: 1
+  seed: 0
+
+space:
+  torso:
+    # The recurrence's own parameters, directly under `torso`: there is one
+    # recurrence in this entry and naming it twice would put a constant in
+    # every run document.
+    hidden_dim: [32]
+    dt: [1.0]
+    tau_floor: [1.0]
+    wiring: [fully_connected]
+    layer_norm: [false]
+    differentiation:
+      kind: [rflo]
+    optimizer:
+      kind: [adam]
+      adam:
+        lr: [0.001]
+    grad_clip: [1.0]
+    follow: [1.0]
+  actor:
+    optimizer:
+      kind: [adam]
+      adam:
+        lr: [0.001]
+    head:
+      kind: [state_std]
+      state_std:
+        initialization:
+          kind: [lecun]
+  critic:
+    optimizer:
+      kind: [adam]
+      adam:
+        lr: [0.001]
+    head:
+      kind: [value]
+      value:
+        initialization:
+          kind: [lecun]
+  normalization:
+    observation:
+      kind: [none]
+    reward:
+      kind: [none]
+  gamma: [0.99]
+  lambda_pi: [0.99]
+  lambda_v: [0.99]
+  lambda_rnn: [0.99]
+  eta_pi: [1.0]
+  eta_f: [1.0]
+  entropy_rate: [0.00001]
+  meta_rl: [false]

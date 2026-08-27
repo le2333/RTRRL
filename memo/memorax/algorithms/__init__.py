@@ -30,6 +30,7 @@ if TYPE_CHECKING:
     from .rtrrl_aaai import RTRRL as RTRRL
     from .rtrrl_aaai import RTRRLConfig as RTRRLConfig
     from .rtrrl_aaai import RTRRLState as RTRRLState
+    from .rtrrl_ctrnn_rflo import RTRRLCtrnnRflo as RTRRLCtrnnRflo
     from .sac import SAC as SAC
     from .sac import SACConfig as SACConfig
     from .sac import SACState as SACState
@@ -68,6 +69,7 @@ _EXPORTS = {
     "RTRRL": (".rtrrl_aaai", "RTRRL"),
     "RTRRLConfig": (".rtrrl_aaai", "RTRRLConfig"),
     "RTRRLState": (".rtrrl_aaai", "RTRRLState"),
+    "RTRRLCtrnnRflo": (".rtrrl_ctrnn_rflo", "RTRRLCtrnnRflo"),
     "StreamAC": (".stream_ac", "StreamAC"),
     "StreamACConfig": (".stream_ac", "StreamACConfig"),
     "StreamACState": (".stream_ac", "StreamACState"),
@@ -81,6 +83,7 @@ __all__ = [
     "PQN",
     "R2D2",
     "RTRRL",
+    "RTRRLCtrnnRflo",
     "SAC",
     "ActionDecision",
     "DQNConfig",

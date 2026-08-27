@@ -1,0 +1,78 @@
+"""Deployment composition for RTRRL over the published CTRNN-RFLO torso.
+
+A separate entry from ``rtrrl`` rather than a value it could be given,
+because it is a different graph: a non-diagonal recurrence, an approximate
+online gradient, and a constrained parameter. Its parameter schema says the
+same thing -- ``torso.hidden_dim`` beside ``torso.dt`` and ``torso.wiring``,
+where ``rtrrl`` has a backbone branch -- so a run document cannot be moved
+between the two by editing the entry name. See
+``memorax.algorithms.rtrrl_ctrnn_rflo``.
+"""
+
+from __future__ import annotations
+
+import sys
+
+from memorax.algorithms.rtrrl_ctrnn_rflo import METRICS as METRICS
+from memorax.algorithms.rtrrl_ctrnn_rflo import OBSERVATIONS
+from memorax.algorithms.rtrrl_ctrnn_rflo import PARAMETERS as PARAMETERS
+from memorax.algorithms.rtrrl_ctrnn_rflo import RTRRLCtrnnRflo
+from memorax.assembly import BuildRequest, EnvironmentSpec, assemble
+from memorax.runtime import Runtime, RuntimeConfig
+
+from ._observability import build_reporter, load_run
+from ._schedule import trajectory_at_steps, trajectory_record
+
+
+def build_request(config) -> BuildRequest:
+    """Project the deployment run document onto assembly's input."""
+
+    algorithm = config.algorithm
+    environment = algorithm.environment
+    return BuildRequest(
+        parameters=algorithm.parameters,
+        environment=EnvironmentSpec(
+            id=environment.id,
+            backend=environment.backend,
+            observed=environment.observed,
+            episode_length=environment.episode_length,
+            kwargs=environment.kwargs,
+        ),
+        num_envs=algorithm.num_envs,
+        record=trajectory_record(config, OBSERVATIONS),
+    )
+
+
+def runtime_config(config) -> RuntimeConfig:
+    """Project the deployment run document onto Runtime's input."""
+
+    training = config.training
+    return RuntimeConfig(
+        total_steps=training.total_steps,
+        chunk_steps=training.chunk_steps,
+        max_episode_steps=config.algorithm.environment.episode_length,
+        evaluate_every_steps=config.evaluation.every_steps,
+        evaluation_episodes=config.evaluation.episodes,
+        evaluation_chunk_steps=config.evaluation.chunk_steps,
+        evaluation_seed=config.evaluation.seed,
+        num_envs=config.algorithm.num_envs,
+        seed=training.seed,
+        trajectory_at_steps=trajectory_at_steps(config),
+    )
+
+
+def run(reporter, config) -> None:
+    algorithm = assemble(RTRRLCtrnnRflo, build_request(config))
+    Runtime(algorithm=algorithm, config=runtime_config(config)).run(reporter)
+
+
+def main(argv: list[str] | None = None) -> int:
+    del argv
+    config, scratch = load_run()
+    with build_reporter(config, scratch) as reporter:
+        run(reporter, config)
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

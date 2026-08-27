@@ -61,6 +61,36 @@ def test_experiment_fields_are_projected_to_their_consumers(
     assert configuration["evaluation"] == experiment["evaluation"]
 
 
+def test_the_arguments_an_environment_is_built_with_reach_the_run(
+    experiment: Any, catalog: Any, tmp_path: Path
+) -> None:
+    """A task defined by a constructor argument can be named by an experiment.
+
+    The environment block is projected whole rather than field by field, so
+    this side needs no vocabulary for what a namespace's constructor takes --
+    which is what lets a bsuite chain length be swept from an experiment file
+    without the control plane learning anything about bsuite.
+    """
+
+    experiment = dict(experiment)
+    experiment["environment"] = {
+        "id": "gymnax::UmbrellaChain-bsuite",
+        "backend": None,
+        "seeds": [0],
+        "episode_length": 40,
+        "kwargs": {"chain_length": 40, "n_distractor": 5},
+    }
+
+    configuration = runner(experiment, catalog, tmp_path).next_round()[0]
+
+    assert configuration["algorithm"]["environment"] == {
+        "id": "gymnax::UmbrellaChain-bsuite",
+        "backend": None,
+        "episode_length": 40,
+        "kwargs": {"chain_length": 40, "n_distractor": 5},
+    }
+
+
 def test_each_run_has_one_artifact_root(experiment: Any, catalog: Any, tmp_path: Path) -> None:
     """The experiment says a storage root; which run writes where is ours."""
 

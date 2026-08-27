@@ -51,6 +51,7 @@ jobs:
         memorax/algorithms/contract.py
         memorax/algorithms/r2d2.py
         memorax/algorithms/rtrrl_aaai.py
+        memorax/algorithms/rtrrl_ctrnn_rflo.py
         memorax/algorithms/stream_ac.py
         memorax/utils/trees.py
         memorax/networks/backbones.py
@@ -59,6 +60,7 @@ jobs:
         memorax/networks/initializers/sparse.py
         memorax/networks/readouts.py
         memorax/networks/sequence.py
+        memorax/networks/sequence_models/ctrnn.py
         memorax/parameters.py
         memorax/observability
         memorax/runtime

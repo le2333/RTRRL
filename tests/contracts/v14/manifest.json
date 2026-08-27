@@ -1,0 +1,11 @@
+{
+  "runs": [
+    "s3://artifacts/trainer/configs/stream-ac-t0.json"
+  ],
+  "groups": [
+    [
+      "s3://artifacts/trainer/configs/drqn-t0-s0.json",
+      "s3://artifacts/trainer/configs/drqn-t0-s1.json"
+    ]
+  ]
+}

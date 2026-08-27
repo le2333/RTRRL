@@ -19,10 +19,21 @@ from memorax.runtime import BuiltAlgorithm, Program
 
 @dataclass(frozen=True)
 class EnvironmentSpec:
+    """What a build says about the environment, in assembly's own vocabulary.
+
+    ``kwargs`` reaches the namespace adapter's ``make`` unchanged. It carries
+    the arguments the environment is *constructed* with, which for some tasks
+    is what says which task it is; the other three say what the deployment
+    does to whatever was constructed.
+    """
+
     id: str
     backend: str | None
     observed: Any
     episode_length: int
+    # Typed as a mapping so a specification does not advertise a dictionary
+    # its holder may write into, and defaulted from a factory so two builds
+    # that name no arguments do not share one.
     kwargs: Mapping[str, Any] = field(default_factory=dict)
 
 
