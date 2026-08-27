@@ -389,7 +389,7 @@ def _intentional_reports(*, taken: bool, advantage: bool = False) -> Intentional
     )
 
 
-def _reports(*, torso: bool, actor: bool, critic: bool) -> Reports:
+def reports_for(*, torso: bool, actor: bool, critic: bool) -> Reports:
     """The readings one configuration takes, given which blocks are intentional.
 
     ``step_size`` is every block's, whichever rule stepped it: Adam reports its
@@ -680,10 +680,12 @@ class Torso(Block):
         differentiation: Any,
         *,
         trace: Trace | None = None,
+        constraint: Any = None,
     ) -> None:
         super().__init__(cfg, cfg.gamma * cfg.lambda_rnn, trace=trace)
         self._network = network
         self._differentiation = differentiation
+        self._constraint = constraint
 
     @property
     def carry_shape(self):
@@ -741,7 +743,10 @@ class Torso(Block):
                 done=done,
                 initial_carry=carry,
             )
-        params = variables["params"]
+        # Drawn, then projected: a floor above the initial draw would
+        # otherwise leave the first transition acting on a parameter the kernel
+        # says is outside its domain.
+        params = self.constrain(variables["params"])
         return TorsoState(
             params=params,
             traces=self.initial_traces(params),
@@ -765,6 +770,20 @@ class Torso(Block):
 
     def gradient_norms(self, tree):
         return _gradient_norms(self._network, tree)
+
+    def constrain(self, params):
+        """The stepped parameters put back inside the set the kernel allows.
+
+        Most recurrent kernels allow every real number their parameters can
+        hold and hand back what they were given. One that does not -- a time
+        constant a division by it needs held away from zero -- says so, and the
+        projection is applied here, after the step and before the reading copy
+        follows it, so the followed copy is a point of that set too.
+        """
+
+        if self._constraint is None:
+            return params
+        return self._constraint(params)
 
     def followed(self, params, slow_params):
         """The reading copy takes one step toward the copy that was updated."""
@@ -870,6 +889,7 @@ class Core:
         actor_head: Any,
         critic_head: Any,
         reports: Reports = Reports(),
+        torso_constraint: Any = None,
     ) -> None:
         self.cfg = cfg
         self.reports = reports
@@ -884,7 +904,11 @@ class Core:
         # take the entropy untraced, as the published implementation does.
         self.folds_entropy = {name: traces[name].reads == CURRENT for name in BLOCKS}
         self.torso = Torso(
-            cfg, torso_network, torso_differentiation, trace=traces["torso"]
+            cfg,
+            torso_network,
+            torso_differentiation,
+            trace=traces["torso"],
+            constraint=torso_constraint,
         )
         self.actor = Actor(cfg, actor_head, trace=traces["actor"])
         self.critic = Critic(cfg, critic_head, trace=traces["critic"])
@@ -1195,13 +1219,19 @@ class Core:
             state, traced, direct, delta, step, reset_before
         )
 
+        torso_params = self.torso.constrain(stepped["torso"])
         return (
             state.replace(
                 torso=state.torso.replace(
-                    params=stepped["torso"],
+                    params=torso_params,
                     traces=advanced["torso"],
-                    slow_params=self.torso.followed(
-                        stepped["torso"], state.torso.slow_params
+                    # The reading copy is projected too. It is what acts and
+                    # what the sequence is walked with, so a constraint that
+                    # held only for the copy being stepped would leave the one
+                    # every forward pass reads outside the set whenever the
+                    # follow is partial.
+                    slow_params=self.torso.constrain(
+                        self.torso.followed(torso_params, state.torso.slow_params)
                     ),
                     recurrence=recurrence,
                 ),
@@ -1241,6 +1271,7 @@ class RTRRL:
         evaluation: EvaluationConfig | None = None,
         record: Iterable[str] = (),
         reports: Reports = Reports(),
+        torso_constraint: Any = None,
     ) -> None:
         self.cfg = cfg
         evaluation = evaluation or EvaluationConfig()
@@ -1260,6 +1291,7 @@ class RTRRL:
             actor_head,
             critic_head,
             reports,
+            torso_constraint=torso_constraint,
         )
         self.record = frozenset(record)
         # What this configuration files, which is not always what the class
@@ -1338,7 +1370,7 @@ class RTRRL:
                 discount=gamma,
             ),
             record=record,
-            reports=_reports(
+            reports=reports_for(
                 torso=isinstance(torso_optimizer, IntentionalUpdate),
                 actor=isinstance(actor_optimizer, IntentionalUpdate),
                 critic=isinstance(critic_optimizer, IntentionalUpdate),

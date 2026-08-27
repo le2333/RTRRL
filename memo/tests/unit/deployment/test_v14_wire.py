@@ -149,6 +149,8 @@ def test_image_catalog_uses_the_deployment_contract(tmp_path: Path) -> None:
         "drqn_ensemble",
         "r2d2",
         "rtrrl",
+        "rtrrl_ctrnn_rflo",
+        "rtrrl_ctrnn_rflo_ensemble",
         "rtrrl_ensemble",
         "stream_ac",
     }
@@ -172,11 +174,24 @@ def test_image_catalog_uses_the_deployment_contract(tmp_path: Path) -> None:
         "drqn_ensemble": True,
         "r2d2": False,
         "rtrrl": False,
+        "rtrrl_ctrnn_rflo": False,
+        "rtrrl_ctrnn_rflo_ensemble": True,
         "rtrrl_ensemble": True,
         "stream_ac": False,
     }
-    for algorithm in ("drqn", "rtrrl"):
+    for algorithm in ("drqn", "rtrrl", "rtrrl_ctrnn_rflo"):
         alone = parsed.entries[algorithm]
         grouped = parsed.entries[f"{algorithm}_ensemble"]
         assert grouped.metrics == alone.metrics
         assert grouped.parameters == alone.parameters
+
+    # Two entries for one published algorithm, and they are not two names for
+    # one graph: the CTRNN torso declares the recurrence's parameters directly
+    # under `torso`, where the LRU/RTU one declares a backbone to choose first.
+    # A run document written for either is refused by the other, which is the
+    # whole reason the CTRNN-RFLO is an entry rather than a backbone value.
+    ctrnn = parsed.entries["rtrrl_ctrnn_rflo"].parameters
+    assert ctrnn != parsed.entries["rtrrl"].parameters
+    assert "hidden_dim" in ctrnn["torso"]
+    assert "backbone" not in ctrnn["torso"]
+    assert "backbone" in parsed.entries["rtrrl"].parameters["torso"]
