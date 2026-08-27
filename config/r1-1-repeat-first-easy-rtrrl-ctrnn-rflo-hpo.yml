@@ -1,0 +1,128 @@
+experiment: r1.1
+name: R1-1-RepeatFirstEasy-RTRRL-CTRNN-RFLO
+description: R1.1 RTRRL-CTRNN-RFLO AUC HPO on RepeatFirst
+image: 007122174918.dkr.ecr.eu-north-1.amazonaws.com/rtrrl@sha256:0e469cdd9b9d986fcbaf47f0f9ff5b6a181c17a4b454d4c59722b6f57fb6d66f
+entry: rtrrl_ctrnn_rflo_ensemble
+storage: s3://rtrrl-artifacts-007122174918/trainer
+environment:
+  id: popjym::RepeatFirstEasy
+  backend: null
+  observed: null
+  seeds:
+  - 0
+  episode_length: 52
+training:
+  num_envs: 1
+  total_steps: 5000000
+  chunk_steps: 1000
+evaluation:
+  every_steps: 100000
+  episodes: 1
+  chunk_steps: 520
+  seed: 1000
+logging:
+  aim:
+    url: aim://172.31.62.192:53800
+score:
+  metric: eval/episode/return
+  window_steps:
+  - 0
+  - 5000000
+  reduce: auc
+  episodes_per_checkpoint: 1
+  non_finite: worst
+  direction: maximize
+compute:
+  instance_type: c7a.medium
+  timeout_minutes: 360
+hpo:
+  rounds: 3
+  trials_per_round: 4
+  parallel_jobs: 2
+  startup_trials: 4
+  seed: 0
+space:
+  torso:
+    hidden_dim:
+    - 32
+    dt:
+    - 1.0
+    tau_floor:
+    - 1.0
+    wiring:
+    - fully_connected
+    layer_norm:
+    - false
+    differentiation:
+      kind:
+      - rflo
+    optimizer:
+      kind:
+      - adam
+      adam:
+        lr:
+        - 3.0e-05
+        - 1.0e-04
+        - 3.0e-04
+    grad_clip:
+    - 1.0
+    follow:
+    - 1.0
+  actor:
+    optimizer:
+      kind:
+      - adam
+      adam:
+        lr:
+        - 0.0001
+    head:
+      kind:
+      - categorical
+      categorical:
+        initialization:
+          kind:
+          - lecun
+  critic:
+    optimizer:
+      kind:
+      - adam
+      adam:
+        lr:
+        - 0.0001
+    head:
+      kind:
+      - value
+      value:
+        initialization:
+          kind:
+          - lecun
+  normalization:
+    observation:
+      kind:
+      - none
+    reward:
+      kind:
+      - none
+  gamma:
+  - 0.99
+  lambda_pi:
+  - 0.9
+  - 0.95
+  - 0.99
+  lambda_v:
+  - 0.9
+  - 0.95
+  - 0.99
+  lambda_rnn:
+  - 0.9
+  - 0.95
+  - 0.99
+  eta_pi:
+  - 1.0
+  eta_f:
+  - 1.0
+  entropy_rate:
+  - 1.0e-05
+  meta_rl:
+  - true
+run_number: 90

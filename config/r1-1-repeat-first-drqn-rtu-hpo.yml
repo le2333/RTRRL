@@ -1,0 +1,92 @@
+experiment: r1.1
+name: R1-1-RepeatFirst-DRQN-RTU
+description: R1.1 DRQN-RTU 5M, 3x4 HPO on RepeatFirst
+image: 007122174918.dkr.ecr.eu-north-1.amazonaws.com/rtrrl@sha256:0e469cdd9b9d986fcbaf47f0f9ff5b6a181c17a4b454d4c59722b6f57fb6d66f
+entry: drqn
+storage: s3://rtrrl-artifacts-007122174918/trainer
+environment:
+  id: popjym::RepeatFirstEasy
+  backend: null
+  observed: null
+  seeds:
+  - 0
+  episode_length: 52
+training:
+  num_envs: 1
+  total_steps: 5000000
+  chunk_steps: 1000
+evaluation:
+  every_steps: 100000
+  episodes: 1
+  chunk_steps: 2000
+  seed: 1000
+logging:
+  aim:
+    url: aim://172.31.62.192:53800
+score:
+  metric: eval/episode/return
+  window_steps:
+  - 0
+  - 5000000
+  reduce: auc
+  episodes_per_checkpoint: 1
+  non_finite: worst
+  direction: maximize
+compute:
+  instance_type: c7a.medium
+  timeout_minutes: 360
+hpo:
+  rounds: 3
+  trials_per_round: 4
+  parallel_jobs: 2
+  startup_trials: 4
+  seed: 0
+space:
+  core:
+    kind:
+    - rtu
+    rtu:
+      hidden_dim:
+      - 32
+  learning:
+    kind:
+    - truncated
+    truncated:
+      length:
+      - 10
+      - 20
+  optimizer:
+    kind:
+    - adadelta
+    adadelta:
+      lr:
+      - 0.03
+      - 0.1
+      rho:
+      - 0.95
+      eps:
+      - 1.0e-08
+  grad_clip:
+  - 10.0
+  replay:
+    capacity:
+    - 400000
+    minimum_size:
+    - 50000
+    batch_size:
+    - 32
+  target:
+    update_period:
+    - 10000
+  exploration:
+    epsilon_start:
+    - 1.0
+    epsilon_end:
+    - 0.1
+    epsilon_decay_steps:
+    - 1000000
+    evaluation_epsilon:
+    - 0.05
+  gamma:
+  - 0.99
+run_number: 56
