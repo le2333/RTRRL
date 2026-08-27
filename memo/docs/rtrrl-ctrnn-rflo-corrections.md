@@ -13,6 +13,22 @@ says where the published behaviour is, what the correct semantics is and where
 it comes from, why the published behaviour is wrong, what this repository does
 instead, and the test that fails if the correction is removed.
 
+Six were found; they are not all corrected in the same sense, and the
+difference is worth stating before the list rather than leaving a reader to
+infer it:
+
+- **Four are corrected here** — 1, 2, 3 and 4. They are on the path this
+  algorithm runs, and this repository does something different from the
+  published code.
+- **One is recorded and not carried** — 5. It is in the `rtrl` branch, which
+  this repository does not implement, so there is nothing here to correct. It
+  is measured rather than asserted, because a claim about somebody else's code
+  should be.
+- **One was already corrected** — 6. It belongs to the shared flow and
+  `rtrrl_aaai` fixed it before this work; this entry inherits it, and it is
+  listed so the accounting of what the published implementation gets wrong is
+  complete rather than only covering what was new.
+
 Nothing here was fixed silently, and nothing here is a preference.
 
 ## Why all six survived
@@ -226,7 +242,10 @@ that exists to be exact is exact on one leaf of two.
 
 **Not carried.** This repository implements the `rflo` branch, which the paper's
 CTRNN experiments use and which the issue asks for; there is no `rtrl` branch
-here to correct. It is recorded because a later exact-RTRL CTRNN must not be
+here to correct. `CTRNN_DIFFERENTIATION_FAMILY` carries `rflo` and `tbptt`, and
+the `rtrrl_ctrnn_rflo` entry declares only `rflo` -- the entry's name is a claim
+about which online gradient produced a result, and `tbptt` is the tests' exact
+judge rather than a mode a run may select under that name. It is recorded because a later exact-RTRL CTRNN must not be
 built by transcribing that line, and because it says something about how much
 of the published online-gradient code was ever compared against anything.
 

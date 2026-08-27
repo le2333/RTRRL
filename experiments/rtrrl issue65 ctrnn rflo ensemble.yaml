@@ -51,10 +51,10 @@ evaluation:
 
 logging:
   aim:
-    url: aim://172.31.62.192:53801
+    url: aim://172.31.62.192:53800
 
 score:
-  metric: eval/episode/return_per_step
+  metric: eval/episode/return
   window_steps: [0, 256]
   reduce: last
   non_finite: worst

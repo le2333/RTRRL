@@ -31,13 +31,18 @@ from memorax.algorithms import rtrrl_ctrnn_rflo as ctrnn_rflo
 from memorax.algorithms.rtrrl_aaai import Recurrence
 from memorax.algorithms.rtrrl_ctrnn_rflo import RTRRLCtrnnRflo
 from memorax.assembly import BuildRequest, EnvironmentSpec, assemble
-from memorax.networks.differentiation import TruncatedBPTT
 from memorax.networks.sequence import Sequence
 from memorax.networks.sequence_models import RNN, RTUCell, RTUConfig
-from memorax.networks.sequence_models.ctrnn import CTRNNCell, CTRNNRflo
+from memorax.networks.sequence_models.ctrnn import (
+    CTRNN_DIFFERENTIATION_FAMILY,
+    CTRNNCell,
+    CTRNNConfig,
+    CTRNNRflo,
+)
 from memorax.parameters import expand, flatten
 from tests.support.builders import graph_of
 from tests.support.environments import TinyContinuousEnv
+from tests.support.parameters import kinds
 
 ENVS = 3
 OBSERVATION = 2  # TinyContinuousEnv's, and its action is as wide again
@@ -161,21 +166,21 @@ def test_the_selected_differentiation_is_rflo_and_carries_its_sensitivity():
     assert float(jnp.abs(sensitivity["W"]).max()) > 0.0
 
 
-def test_the_other_declared_differentiation_builds_and_credits_differently():
-    """``tbptt`` is a branch a run may select, so it has to be one that runs.
+def test_this_entry_may_not_select_anything_but_rflo():
+    """The entry's name is a claim about which online gradient produced a run.
 
-    It is also the exact judge the cell's tests measure RFLO against, and on
-    this dense recurrence the two must not agree -- a configuration that
-    selected it and got RFLO's numbers would be a branch that exists only in
-    the catalog.
+    The family carries ``tbptt`` -- it is the exact judge the cell's tests
+    measure the approximation against -- and the entry does not offer it, so a
+    result filed under ``rtrrl_ctrnn_rflo`` cannot have been produced by
+    anything else. An experiment identity a ``kind:`` line can quietly falsify
+    is not an identity.
     """
 
-    truncated = build(**{"torso.differentiation.kind": "tbptt"})
-    assert isinstance(truncated.core.torso._differentiation, TruncatedBPTT)
+    assert set(kinds(ctrnn_rflo.PARAMETERS, "torso.differentiation")) == {"rflo"}
+    assert set(CTRNN_DIFFERENTIATION_FAMILY.branches) == {"rflo", "tbptt"}
 
-    state, _ = run(truncated, 4)
-    assert state.core.torso.recurrence.differentiation_state is None
-    assert apart(torso_params(state), torso_params(run(build(), 4)[0])) > 1e-6
+    with pytest.raises(KeyError):
+        build(**{"torso.differentiation.kind": "tbptt"})
 
 
 def test_the_normalization_behind_the_cell_is_a_choice_that_holds_no_parameters():
@@ -444,12 +449,15 @@ def test_tau_is_projected_back_onto_its_floor_after_a_step():
     floor = 6.0  # above the initial draw, which is uniform on [1, 5]
     settings = {"torso.optimizer.adam.lr": 1.0}
     held, _ = run(build(**settings, **{"torso.tau_floor": floor}), 4)
-    free, _ = run(build(**settings, **{"torso.tau_floor": 0.0}), 4)
+    # The published floor, and the lowest one this entry will build: a floor of
+    # zero is refused, so the contrast has to come from a legal run rather than
+    # from an unconstrained one.
+    low, _ = run(build(**settings, **{"torso.tau_floor": 1.0}), 4)
 
     assert float(jnp.min(torso_params(held)["tau"])) >= floor - 1e-6
-    assert float(jnp.min(torso_params(free)["tau"])) < floor, (
-        "an unconstrained run stayed above the floor anyway, so the "
-        "constrained one says nothing"
+    assert float(jnp.min(torso_params(low)["tau"])) < floor, (
+        "the run at the published floor stayed above the raised one anyway, "
+        "so the raised one says nothing"
     )
 
 
@@ -487,7 +495,7 @@ def test_the_floor_is_the_kernel_s_to_name_and_a_kernel_may_name_none():
     assert (
         float(cell_of(build()).constrain({"tau": jnp.asarray([-1.0])})["tau"][0]) == 1.0
     )
-    raised = build(**{"torso.tau_floor": 3.0})
+    raised = build(**{"torso.tau_floor": 3.0, "torso.dt": 1.0})
     assert (
         float(cell_of(raised).constrain({"tau": jnp.asarray([-1.0])})["tau"][0]) == 3.0
     )
@@ -498,6 +506,66 @@ def test_the_floor_is_the_kernel_s_to_name_and_a_kernel_may_name_none():
     assert ctrnn_rflo._constraint(silent) is None
 
 
+@pytest.mark.parametrize(
+    "settings,reason",
+    (
+        ({"torso.tau_floor": 0.0}, "tau_floor"),
+        ({"torso.tau_floor": 0.5, "torso.dt": 1.0}, "tau_floor"),
+        ({"torso.dt": 0.0, "torso.tau_floor": 1.0}, "torso.dt"),
+    ),
+)
+def test_a_pair_of_settings_the_recurrence_is_undefined_for_is_refused(
+    settings, reason
+):
+    """Each value is inside its own domain and the pair is not.
+
+    A parameter tree conditions on branches, not on a sibling's value, so this
+    is a build-time refusal rather than a declaration -- the same shape as
+    ``rtrrl_aaai``'s refusal of an outer clip over the intentional step. What
+    it buys is measured in the test below: without it these configurations do
+    not fail, they produce numbers.
+    """
+
+    with pytest.raises(ValueError, match=reason):
+        build(**settings)
+
+
+def test_the_refused_settings_are_the_ones_that_would_have_produced_nan():
+    """Why the refusal is a refusal and not a warning.
+
+    ``tau`` is what the step divides by and the projection lands on the floor
+    exactly, so a floor of zero is a division by zero on the first update that
+    pushes ``tau`` down -- not a small number, ``NaN``. A floor under ``dt``
+    inverts the leak, and past ``dt/2`` the Euler step diverges. Both are driven
+    here through the cell directly, which is the only way left to reach them.
+    """
+
+    def walked(dt, tau):
+        core = RNN(
+            cell=CTRNNCell(
+                config=CTRNNConfig(features=2, hidden_dim=3, dt=dt, tau_floor=tau)
+            )
+        )
+        x = jax.random.normal(jax.random.key(1), (1, 12, 2))
+        done = jnp.zeros((1, 12), dtype=bool)
+        empty = jnp.zeros((1, 3))
+        params = core.init(jax.random.key(2), x, done=done, initial_carry=empty)[
+            "params"
+        ]
+        # The parameters a run reaches once the projection has landed on the
+        # floor, which is where an update that overshot leaves them.
+        landed = {"cell": {**params["cell"], "tau": jnp.full((3,), tau)}}
+        _, output = cast(
+            "tuple[Any, Any]",
+            core.apply({"params": landed}, x, done=done, initial_carry=empty),
+        )
+        return jnp.asarray(output)
+
+    assert not bool(jnp.all(jnp.isfinite(walked(1.0, 0.0)))), "a zero floor is finite"
+    assert float(jnp.abs(walked(1.0, 0.25)).max()) > 1e4, "a floor under dt/2 is calm"
+    assert float(jnp.abs(walked(1.0, 1.0)).max()) < 10.0, "the published domain is not"
+
+
 # ------------------------------------------------------- what a sweep may vary
 STRUCTURAL = (
     "torso.hidden_dim",
@@ -505,7 +573,6 @@ STRUCTURAL = (
     "torso.tau_floor",
     "torso.wiring",
     "torso.layer_norm",
-    "torso.differentiation.kind",
     "torso.optimizer.kind",
     "meta_rl",
 )

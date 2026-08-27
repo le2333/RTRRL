@@ -87,6 +87,11 @@ from .rtrrl_aaai import (
     reports_for,
 )
 
+#: What this entry may select, which is not everything the family carries.
+#: ``tbptt`` is the exact judge the cell's tests measure RFLO against, and this
+#: entry's name is a claim about which online gradient produced a result.
+CTRNN_DIFFERENTIATION = CTRNN_DIFFERENTIATION_FAMILY.restricted("rflo")
+
 
 # --------------------------------------------------------------- declarations
 @dataclass(frozen=True)
@@ -109,9 +114,12 @@ class TorsoParameters:
     # reported result used; the recurrences are written with it throughout, so
     # a run that moves it moves the sensitivity with it.
     dt: float = param(valid=(0.0, 1.0), search=(0.1, 1.0), static=True)
-    # The floor `tau` is projected back onto after every update. Below `dt` the
-    # leak `1 - dt/tau` turns negative and the integration diverges, so this is
-    # a bound on the parameter's domain and not a preference.
+    # The floor `tau` is projected back onto after every update, and it is a
+    # bound on the parameter's domain rather than a preference. At zero the
+    # projection lands `tau` exactly on a value the forward divides by. Between
+    # zero and `dt` the leak `1 - dt/tau` is negative, and past `dt/2` the Euler
+    # step diverges outright -- measured at 3.6e5 after twelve transitions with
+    # `dt = 1, tau_floor = 0.25`. `_refuse_an_unstable_step` refuses both.
     tau_floor: float = param(valid=(0.0, 100.0), search=(1.0, 2.0), static=True)
     wiring: str = param(valid=list(WIRINGS), search=["fully_connected"])
     # The affine-free normalization behind the cell. The published default is
@@ -119,8 +127,13 @@ class TorsoParameters:
     # LRU torso has it on unconditionally, which is one more reason these are
     # two graphs rather than one graph with a backbone setting.
     layer_norm: bool = param(valid=[False, True], search=[False])
+    # RFLO alone. The family carries `tbptt` as well -- it is the exact judge
+    # the cell's tests measure the approximation against -- but this entry's
+    # name is a claim about which online gradient produced a result, and an
+    # experiment identity that a `kind:` line can quietly falsify is not one.
+    # A CTRNN-TBPTT arm, if one is ever wanted, gets an entry that says so.
     differentiation: str = structure(
-        branches=CTRNN_DIFFERENTIATION_FAMILY.branches, search=("rflo",)
+        branches=CTRNN_DIFFERENTIATION.branches, search=("rflo",)
     )
     optimizer: str = structure(branches=RTRRL_OPTIMIZERS.branches)
     grad_clip: float = param(valid=(0.0, 100.0), search=(0.0, 10.0))
@@ -173,16 +186,54 @@ def _constraint(network: Sequence):
     return project
 
 
+def _refuse_an_unstable_step(dt: float, tau_floor: float) -> None:
+    """Refuse a pair of settings the recurrence is not defined for.
+
+    Each is inside its own declared domain and the pair is not, which is a
+    condition a parameter tree cannot state -- it conditions on branches, not
+    on a sibling's value -- so the build refuses it with the reason rather than
+    accepting a run that produces `NaN` on the transition that reaches it. The
+    same shape as ``rtrrl_aaai``'s refusal of a clip over the intentional step.
+
+    ``tau`` is a divisor and the projection lands on the floor exactly, so a
+    floor of zero is a division by zero rather than a value near one: the
+    forward returns `NaN` from the first step at which an update pushes `tau`
+    down. Above zero but under ``dt`` the leak ``1 - dt/tau`` is negative,
+    which past ``dt/2`` is an Euler step that diverges -- 3.6e5 after twelve
+    transitions at ``dt = 1, tau_floor = 0.25``. ``tau_floor >= dt`` is the
+    published domain, the one the recurrences are written for, and the one the
+    integration is stable on.
+    """
+
+    if dt <= 0:
+        raise ValueError(
+            f"torso.dt is {dt}: a CTRNN with a non-positive integration step "
+            "never advances its state, and its sensitivity is zero for every "
+            "parameter"
+        )
+    if tau_floor < dt:
+        raise ValueError(
+            f"torso.tau_floor is {tau_floor} and torso.dt is {dt}: tau is what "
+            "the step divides by and the projection lands on the floor exactly,"
+            f" so this run reaches a leak of 1 - {dt}/{tau_floor} on the first "
+            "update that pushes tau down. Hold the floor at or above dt, which "
+            "is where the published run puts it"
+        )
+
+
 def _torso(parameters, components: ComponentBuilder, *, features: int):
     """The CTRNN, whatever follows it, and the online method that credits it."""
 
+    dt = float(parameters["torso.dt"])
+    tau_floor = float(parameters["torso.tau_floor"])
+    _refuse_an_unstable_step(dt, tau_floor)
     cell = CTRNNCell(
         config=CTRNNConfig(
             features=features,
             hidden_dim=int(parameters["torso.hidden_dim"]),
-            dt=float(parameters["torso.dt"]),
+            dt=dt,
             wiring=str(parameters["torso.wiring"]),
-            tau_floor=float(parameters["torso.tau_floor"]),
+            tau_floor=tau_floor,
         )
     )
     following = (
@@ -192,7 +243,7 @@ def _torso(parameters, components: ComponentBuilder, *, features: int):
     )
     network = Sequence(components=(RNN(cell=cell), *following))
     differentiation = components.build(
-        CTRNN_DIFFERENTIATION_FAMILY,
+        CTRNN_DIFFERENTIATION,
         "torso.differentiation",
         core=network.core,
     )

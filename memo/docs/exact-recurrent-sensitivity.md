@@ -111,7 +111,9 @@ the repository. `memorax/networks/sequence_models/ctrnn.py` carries a CTRNN,
 whose unit reads every other unit's previous state through one weight matrix:
 the cross-unit block there is not small but present, and `RFLO` is a real
 approximation rather than an identity. So `CTRNN_DIFFERENTIATION_FAMILY` offers
-`rflo` and `tbptt`, and offers no `exact_rtrl` — exact sensitivity on a dense
+`rflo` and `tbptt`, and offers no `exact_rtrl` -- and the `rtrrl_ctrnn_rflo`
+entry narrows that to `rflo` alone, since `tbptt` there is the tests' judge and
+not a mode a run may pick while keeping the name — exact sensitivity on a dense
 recurrence costs a factor of the hidden width, and RFLO is what the published
 `RTRRL-CTRNN-RFLO` spends instead. `tests/test_ctrnn_rflo.py` holds that gap to
 the dropped term from the other side: there the two recurrences must *not*
