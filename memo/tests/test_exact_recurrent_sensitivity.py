@@ -37,6 +37,8 @@ across them would show.
 
 from __future__ import annotations
 
+from dataclasses import replace
+
 import jax
 import jax.numpy as jnp
 import pytest
@@ -50,6 +52,7 @@ from memorax.networks.differentiation import TruncatedBPTT
 from memorax.networks.sequence import Sequence
 from memorax.networks.sequence_models.lru import LRUStructuredRTRL
 from memorax.networks.sequence_models.rtu import RTUStructuredRTRL
+from memorax.rl.updates import ObBound, ObGDStep
 from memorax.utils import Timestep
 from tests.support.numerics import assert_within, deviations, flattened
 
@@ -609,20 +612,57 @@ def test_a_live_step_does_not_begin_the_sensitivity_again(kind):
 
 
 # ----------------------------------------------------------- eligibility traces
-def trace_blocks(cfg: RTRRLConfig) -> dict:
-    network = torso_network("lru")
+def declared_traces(cfg: RTRRLConfig) -> dict:
+    """The eligibility recurrence behind each name, wherever it is kept.
+
+    The two readouts own theirs. The shared torso does not: its eligibility
+    belongs to the aggregation that credits it, which under an input position
+    is one recurrence at ``lambda_rnn`` and under an output one is a recurrence
+    per head at that head's own rate. Both are read from the aggregation the
+    configuration selected, so this is the declaration rather than a copy of
+    it.
+    """
+
+    aggregation = rtrrl.make_torso_aggregation(cfg)
     return {
-        "torso": rtrrl.Torso(cfg, network, TruncatedBPTT(network.core)),
-        "actor": rtrrl.Actor(cfg, heads.StateStdGaussian(action_dim=ACTIONS)),
-        "critic": rtrrl.Critic(cfg, heads.VNetwork()),
+        f"torso.{name}" if name != "torso" else "torso": recurrence
+        for name, recurrence in aggregation.recurrences.items()
+    } | {
+        name: recurrence
+        for name, recurrence in rtrrl.make_head_traces(cfg).items()
     }
 
 
+def output_bounded():
+    """Two ObGD torso steps, which is what splits the torso's eligibility.
+
+    ObGD rather than the intentional update, because this case is about the
+    *decay* each branch runs at and the intentional selection would also change
+    the recursion: it pairs with the accumulating trace, which drops the
+    emphasis and reads after the derivative has joined. That pairing is
+    asserted where it belongs, in
+    ``tests/unit/algorithms/rtrrl/test_torso_aggregation.py``; here the
+    recursion is held fixed so the rate is the only thing that moves.
+    """
+
+    step = ObGDStep(bound=ObBound(kappa=1.0), lr=1e-3)
+    return rtrrl.OutputSteps(actor=step, critic=step)
+
+
 @pytest.mark.parametrize(
-    ("block", "declared"),
-    (("torso", "lambda_rnn"), ("actor", "lambda_pi"), ("critic", "lambda_v")),
+    ("block", "declared", "optimizer"),
+    (
+        ("torso", "lambda_rnn", None),
+        ("actor", "lambda_pi", None),
+        ("critic", "lambda_v", None),
+        # The output position, where the torso's eligibility is two and each
+        # runs at the rate of the head whose credit it carries -- not at
+        # `lambda_rnn`, which belongs to the joint path and to nothing else.
+        ("torso.actor", "lambda_pi", output_bounded()),
+        ("torso.critic", "lambda_v", output_bounded()),
+    ),
 )
-def test_the_trace_recursion_is_the_one_each_block_declares(block, declared):
+def test_the_trace_recursion_is_the_one_each_block_declares(block, declared, optimizer):
     """``z <- gamma * lambda * (1 - reset) * z + F * grad``, per block and stream.
 
     Each block decays at its own rate, the reset is read before the decay rather
@@ -632,6 +672,8 @@ def test_the_trace_recursion_is_the_one_each_block_declares(block, declared):
     """
 
     cfg = settings()
+    if optimizer is not None:
+        cfg = replace(cfg, torso_optimizer=optimizer, torso_grad_clip=0.0)
     rate = cfg.gamma * getattr(cfg, declared)
     keys = jax.random.split(jax.random.key(4), 3)
 
@@ -648,11 +690,11 @@ def test_the_trace_recursion_is_the_one_each_block_declares(block, declared):
         ).astype(jnp.float32)
         emphasis = jax.random.uniform(jax.random.fold_in(keys[2], step), (STREAMS,))
 
-        # Through the block's own trace component, which is where the
-        # recursion lives now. Which component a block gets is the algorithm's
-        # pairing decision; that it is this recursion when nothing says
-        # otherwise is what is asserted here.
-        trace = trace_blocks(cfg)[block].trace.advance(
+        # Through the trace component itself, which is where the recursion
+        # lives now. Which component a name gets is the algorithm's pairing
+        # decision; that it is this recursion when nothing says otherwise is
+        # what is asserted here.
+        trace = declared_traces(cfg)[block].advance(
             trace, gradient, reset=reset, emphasis=emphasis
         )
         wanted = {

@@ -5,6 +5,7 @@
     Normalization     the scales the environment's numbers are read through
     Core              a torso, two heads, and everything that couples them
       Torso           the shared recurrent representation and following copy
+        Aggregation   where the two heads' credit for it is combined
       Actor / Critic  a readout, and the objectives it names
 
 Three blocks, and each is its own parameter group: it selects its own
@@ -18,9 +19,17 @@ optimizer here was a fixed rate. It costs something now: the intentional
 update's ``eta`` is 0.05 for a policy and 0.5 for a value function in the work
 it comes from, and one selection for both readouts could not say that.
 
-Each block also owns an eligibility trace -- a component, in ``memorax.rl.traces``,
-not a rule's private state -- and which recurrence it runs is paired with the
-optimizer that reads it. See ``make_traces``.
+Each readout also owns an eligibility trace -- a component, in
+``memorax.rl.traces``, not a rule's private state -- and which recurrence it
+runs is paired with the optimizer that reads it. See ``make_head_traces``.
+
+The torso owns as many as its aggregation has paths. The actor's and the
+critic's credit for the one shared block is added either before the trace and
+the rule, which is the published topology and one of each, or after them, which
+is a trace and a rule state per head summed only where the parameters are
+written. Neither rule that can sit there is linear in what it is given, so the
+two are different algorithms; ``docs/rtrrl-torso-aggregation.md`` says what each
+means and :class:`TorsoAggregation` is where it lives.
 
 Rebuilt from ``../RTRRL-AAAI25/rtrrl.py``. Driven against it by
 ``tests/test_rtrrl_parity.py``; behaviour in ``tests/test_rtrrl.py``.
@@ -30,7 +39,7 @@ from __future__ import annotations
 
 from collections.abc import Iterable, Mapping
 from dataclasses import dataclass, field, fields, replace
-from typing import Any
+from typing import Any, NamedTuple
 
 import jax
 import jax.numpy as jnp
@@ -78,8 +87,13 @@ from memorax.rl.normalization import (
 from memorax.rl.traces import CARRIED, CURRENT, Trace
 from memorax.rl.updates import (
     DRTRRL,
+    OBGD_BOUND_FAMILY,
     STEP_FAMILY,
     Adam,
+    ObGD,
+    ObGDStep,
+    Sgd,
+    make_bounded_rule,
     make_d_rtrrl_rule,
     make_intentional_rule,
 )
@@ -106,6 +120,28 @@ from .contract import (
 # than for the value function. A group of one also makes every rule's step size
 # a block's reading rather than a group's.
 BLOCKS: tuple[str, ...] = ("torso", "actor", "critic")
+#: The two that read the shared representation rather than being it.
+HEADS: tuple[str, ...] = ("actor", "critic")
+
+# Where the actor's and the critic's credit for the shared torso is added
+# together. Both positions read the same two cotangents out of the same
+# recurrent forward; what differs is whether the sum happens before the trace
+# and the rule or after them. Neither the intentional update nor ObGD is
+# linear in what it is given -- both carry running statistics of it and derive
+# a step size from them -- so `Rule(actor + critic)` is not `Rule(actor) +
+# Rule(critic)` and the two are different algorithms rather than two spellings
+# of one.
+INPUT = "input"
+OUTPUT = "output"
+# The path an input aggregation traces, which is the whole torso's and is named
+# for the block rather than for either head: what reaches it is neither head's
+# derivative but their sum through the shared recurrence.
+JOINT = "torso"
+# The paths an output aggregation traces, one per head whose credit it carries.
+# They are named for the heads because that is what they are -- the actor's
+# route to the torso and the critic's -- and because each runs the trace decay
+# and the intentional signal of the head it belongs to.
+TORSO_BRANCHES: tuple[str, ...] = ("actor", "critic")
 
 
 # --------------------------------------------------------------- configuration
@@ -124,7 +160,10 @@ class RTRRLConfig:
     eta_f: float = 1.0
     entropy_rate: float = 1e-5
 
-    torso_optimizer: Adam | DRTRRL | IntentionalUpdate = field(
+    # A bare step aggregates at the input: one joint derivative, one torso
+    # trace, one rule. `OutputSteps` aggregates at the output: two of each,
+    # summed only where the parameters are written.
+    torso_optimizer: Adam | DRTRRL | IntentionalUpdate | ObGDStep | OutputSteps = field(
         default_factory=lambda: Adam(lr=1e-4)
     )
     actor_optimizer: Adam | DRTRRL | IntentionalUpdate = field(
@@ -143,7 +182,108 @@ class RTRRLConfig:
     action_classes: int | None = None
 
 
+#: What a readout may step under. A head has one derivative and one trace, so
+#: there is nothing to aggregate and no position to name.
 RTRRL_OPTIMIZERS = STEP_FAMILY.restricted("adam", "d_rtrrl", "iu")
+
+
+@dataclass(frozen=True)
+class OutputIntentional:
+    """Two intentional torso steps that meet only at the parameter update.
+
+    Each branch declares a whole :class:`IntentionalUpdate` of its own, and
+    ``eta`` above all: the published actor-critic intends a different fraction
+    for a policy than for a value function, and two branches sharing one
+    setting would be the input aggregation with extra state.
+    """
+
+    actor: IntentionalUpdate = group(of=IntentionalUpdate)
+    critic: IntentionalUpdate = group(of=IntentionalUpdate)
+
+
+@dataclass(frozen=True)
+class OutputObGD:
+    """The same split, under ObGD's bound rather than the intentional step.
+
+    Each branch declares its own base rate, its own ``kappa`` and its own
+    bound, because each bounds its own contribution and nothing bounds the
+    sum. See :class:`OutputSteps`.
+    """
+
+    actor: ObGD = group(of=ObGD)
+    critic: ObGD = group(of=ObGD)
+
+
+@dataclass(frozen=True)
+class OutputSteps:
+    """An output aggregation as it was built: one step per branch.
+
+    The finished torso update is ``Delta_actor + Delta_critic``, added once,
+    element by element, and written once. Nothing bounds the sum: each branch's
+    rule has already bounded or sized its own contribution, and a third bound
+    over the total would be a limit no configuration declared and no branch
+    could account for. So the sum may be longer than either part, which is what
+    it means for the two paths to be independent all the way to the update.
+    """
+
+    actor: Any
+    critic: Any
+
+
+def _obgd_step(settings: ObGD, builder: ComponentBuilder, path: str) -> ObGDStep:
+    """One ``obgd`` declaration with the bound it names built rather than named.
+
+    A group nested inside a branch is a second choice, and reading a branch
+    back fills in only the first; the builder is what descends. See
+    :class:`memorax.rl.updates.ObGDStep`.
+    """
+
+    return ObGDStep(
+        bound=builder.build(OBGD_BOUND_FAMILY, f"{path}.bound"),
+        lr=settings.lr,
+    )
+
+
+def _construct_torso_step(selection, builder: ComponentBuilder):
+    """The torso's step, which for two of the six branches is two steps."""
+
+    settings = selection.parameters
+    if isinstance(settings, ObGD):
+        return _obgd_step(settings, builder, selection.path)
+    if isinstance(settings, OutputIntentional):
+        return OutputSteps(actor=settings.actor, critic=settings.critic)
+    if isinstance(settings, OutputObGD):
+        return OutputSteps(
+            actor=_obgd_step(settings.actor, builder, f"{selection.path}.actor"),
+            critic=_obgd_step(settings.critic, builder, f"{selection.path}.critic"),
+        )
+    return settings
+
+
+#: What the shared torso may step under, which is the readouts' choices plus
+#: the position the two heads' credit is combined at. The position is in the
+#: name of the branch rather than beside it, because it is not a modifier of
+#: the rule: ``output_iu`` maintains two intentional optimizers where
+#: ``input_iu`` maintains one, and no setting of one is the other.
+#:
+#: ``iu`` is deliberately absent. It named what is now ``input_iu`` and means
+#: exactly that, but a name that had one meaning and now has a position in it
+#: is worth failing on rather than translating silently: a run document that
+#: still says ``iu`` is refused at build with the branches it could have named,
+#: which is a migration the reader performs rather than one performed for them.
+TORSO_STEP_BRANCHES = {
+    "adam": Adam,
+    "d_rtrrl": DRTRRL,
+    "input_iu": IntentionalUpdate,
+    "input_obgd": ObGD,
+    "output_iu": OutputIntentional,
+    "output_obgd": OutputObGD,
+}
+
+RTRRL_TORSO_OPTIMIZERS = ComponentFamily(
+    branches=TORSO_STEP_BRANCHES,
+    construct=_construct_torso_step,
+)
 
 
 @dataclass(frozen=True)
@@ -220,19 +360,22 @@ RTRRL_TORSO_FAMILY = ComponentFamily(
 class TorsoParameters:
     """The shared block's own settings.
 
+    ``optimizer`` names both the rule and where the two heads' credit for this
+    one shared block is combined; see :data:`TORSO_STEP_BRANCHES`.
+
     ``grad_clip`` is the outer bound on the finished torso update, and it is
-    the one parameter here whose valid range depends on a sibling: the
-    intentional update derives its own step size and refuses to have a second,
-    undeclared bound placed over it, so ``optimizer.kind: iu`` requires
-    ``grad_clip: 0``. The declaration cannot say that -- a parameter tree
-    conditions on branches, not on another parameter's value -- so the build
-    refuses it with the reason rather than accepting a run that is not the
-    algorithm it names. A search space selecting ``iu`` has to pin this to
-    zero, or every trial fails at construction.
+    the one parameter here whose valid range depends on a sibling: both rules
+    that size or bound their own step refuse to have a second, undeclared bound
+    placed over it, so every ``optimizer.kind`` but ``adam`` and ``d_rtrrl``
+    requires ``grad_clip: 0``. The declaration cannot say that -- a parameter
+    tree conditions on branches, not on another parameter's value -- so the
+    build refuses it with the reason rather than accepting a run that is not
+    the algorithm it names. A search space selecting one of those has to pin
+    this to zero, or every trial fails at construction.
     """
 
     backbone: str = structure(branches=RTRRL_TORSO_FAMILY.branches)
-    optimizer: str = structure(branches=RTRRL_OPTIMIZERS.branches)
+    optimizer: str = structure(branches=RTRRL_TORSO_OPTIMIZERS.branches)
     grad_clip: float = param(valid=(0.0, 100.0), search=(0.0, 10.0))
     follow: float = param(valid=(0.0, 1.0), search=(0.0, 1.0))
 
@@ -345,6 +488,42 @@ class BlockReports:
 
 
 @dataclass(frozen=True)
+class BranchReports:
+    """Which of one output branch's readings to take.
+
+    The same four a block declares, and off by default for the same reason
+    :class:`IntentionalReports` is: they exist only where the torso's credit is
+    combined at the output, and a declaration on by default would advertise
+    them for every run that does not have them.
+    """
+
+    grad_norm: bool = reading(at="grad_norm", split=True, default=False)
+    trace_norm: bool = reading(at="trace_norm", split=True, default=False)
+    step_size: bool = reading(at="step_size", default=False)
+    intentional: IntentionalReports = readings(of=IntentionalReports, at="intentional")
+
+
+@dataclass(frozen=True)
+class TorsoReports(BlockReports):
+    """The shared block's readings, at whichever position it was aggregated.
+
+    The four inherited fields are the *joint* path's: they exist under an input
+    aggregation, where there is one derivative, one trace and one step size to
+    report, and are absent under an output one, where each of those is two
+    things and reporting either alone would be a number nothing produced.
+
+    ``actor`` and ``critic`` are the other way round. They are what an output
+    aggregation reports, one whole block's worth per branch, which is what
+    makes the two paths readable apart: a run that could only see the summed
+    update could not tell a branch that stopped moving from one whose
+    contribution the other cancelled.
+    """
+
+    actor: BranchReports = readings(of=BranchReports, at="actor")
+    critic: BranchReports = readings(of=BranchReports, at="critic")
+
+
+@dataclass(frozen=True)
 class HeadReports:
     """Which whole-readout readings to take."""
 
@@ -366,7 +545,7 @@ class Reports:
     value: bool = reading(at="forward.critic.value")
     td_error: bool = reading(at="update.td_error")
     emphasis: bool = reading(at="update.emphasis")
-    torso: BlockReports = readings(of=BlockReports, at="update.torso")
+    torso: TorsoReports = readings(of=TorsoReports, at="update.torso")
     actor: HeadReports = readings(of=HeadReports, at="update.actor")
     critic: HeadReports = readings(of=HeadReports, at="update.critic")
 
@@ -389,21 +568,68 @@ def _intentional_reports(*, taken: bool, advantage: bool = False) -> Intentional
     )
 
 
-def reports_for(*, torso: bool, actor: bool, critic: bool) -> Reports:
-    """The readings one configuration takes, given which blocks are intentional.
+def _torso_reports(step) -> TorsoReports:
+    """Which of the torso's readings exist, given where its credit is combined.
+
+    Exactly one of the two levels is on. Under an input aggregation the joint
+    path is the torso and there are no branches; under an output one there are
+    two branches and no joint anything -- not a derivative, not a trace, not a
+    step size -- so leaving the inherited fields on would advertise four names
+    whose values are permanently absent.
+    """
+
+    if not isinstance(step, OutputSteps):
+        return TorsoReports(
+            intentional=_intentional_reports(taken=isinstance(step, IntentionalUpdate))
+        )
+    return TorsoReports(
+        grad_norm=False,
+        trace_norm=False,
+        step_size=False,
+        intentional=_intentional_reports(taken=False),
+        actor=_branch_reports(step.actor, advantage=True),
+        critic=_branch_reports(step.critic),
+    )
+
+
+def _branch_reports(step, *, advantage: bool = False) -> BranchReports:
+    """One output branch's readings, which are on wherever the branch exists."""
+
+    return BranchReports(
+        grad_norm=True,
+        trace_norm=True,
+        step_size=True,
+        intentional=_intentional_reports(
+            taken=isinstance(step, IntentionalUpdate), advantage=advantage
+        ),
+    )
+
+
+def reports_for(*, torso, actor, critic) -> Reports:
+    """The readings one configuration takes, given the rules it built.
+
+    The three arguments are the built steps rather than three booleans, because
+    what a block reports no longer follows from one fact about it: a torso
+    reports at one of two positions, and under the output one it reports twice.
 
     ``step_size`` is every block's, whichever rule stepped it: Adam reports its
-    rate, D-RTRRL its threshold, and the intentional update the dynamic step it
-    derived. One name, because a reader comparing two runs is asking the same
-    question of both.
+    rate, D-RTRRL its threshold, ObGD the rate its bound left, and the
+    intentional update the dynamic step it derived. One name, because a reader
+    comparing two runs is asking the same question of both.
     """
 
     return Reports(
-        torso=BlockReports(intentional=_intentional_reports(taken=torso)),
+        torso=_torso_reports(torso),
         actor=HeadReports(
-            intentional=_intentional_reports(taken=actor, advantage=True)
+            intentional=_intentional_reports(
+                taken=isinstance(actor, IntentionalUpdate), advantage=True
+            )
         ),
-        critic=HeadReports(intentional=_intentional_reports(taken=critic)),
+        critic=HeadReports(
+            intentional=_intentional_reports(
+                taken=isinstance(critic, IntentionalUpdate)
+            )
+        ),
     )
 
 
@@ -414,7 +640,21 @@ REPORTS = Reports()
 # has to be able to name what it will then be able to score on; what any one
 # run files is narrower and travels on the built graph, not on the class.
 AVAILABLE_REPORTS = Reports(
-    torso=BlockReports(intentional=_intentional_reports(taken=True)),
+    torso=TorsoReports(
+        intentional=_intentional_reports(taken=True),
+        actor=BranchReports(
+            grad_norm=True,
+            trace_norm=True,
+            step_size=True,
+            intentional=_intentional_reports(taken=True, advantage=True),
+        ),
+        critic=BranchReports(
+            grad_norm=True,
+            trace_norm=True,
+            step_size=True,
+            intentional=_intentional_reports(taken=True),
+        ),
+    ),
     actor=HeadReports(intentional=_intentional_reports(taken=True, advantage=True)),
     critic=HeadReports(intentional=_intentional_reports(taken=True)),
 )
@@ -466,12 +706,24 @@ class BlockUpdate(struct.PyTreeNode):
     intentional: IntentionalReading = IntentionalReading()
 
 
+class TorsoUpdate(BlockUpdate):
+    """The shared block's, at whichever position its two credits were combined.
+
+    The inherited fields carry the joint path's quantities and the two nested
+    blocks carry the branches'. One level is filled and the other is empty; see
+    :class:`TorsoReports`.
+    """
+
+    actor: BlockUpdate = BlockUpdate()
+    critic: BlockUpdate = BlockUpdate()
+
+
 class UpdateMetrics(struct.PyTreeNode):
     """Three blocks, and two quantities belonging to none of them."""
 
     td_error: Any = None
     emphasis: Any = None
-    torso: BlockUpdate = BlockUpdate()
+    torso: TorsoUpdate = TorsoUpdate()
     actor: BlockUpdate = BlockUpdate()
     critic: BlockUpdate = BlockUpdate()
 
@@ -544,6 +796,30 @@ BLOCK_DECAYS = {
 BLOCK_SIGNALS = {"torso": TD, "actor": ADVANTAGE, "critic": TD}
 
 
+def _refuse_a_second_bound(step, *, name: str, clip: float) -> None:
+    """A rule that sizes its own step is not stepped under an outer clip too.
+
+    The intentional update derives its step size from the statistics it
+    carries, and ObGD shrinks its rate whenever a step would cross the TD
+    target. Both are bounds a configuration declared and can account for.
+    Clipping the finished update afterwards is a second one it did not, so it
+    is refused with the reason rather than applied on top.
+    """
+
+    if not clip:
+        return
+    what = (
+        "the intentional update sets its own step size from the statistics it "
+        "carries"
+        if isinstance(step, IntentionalUpdate)
+        else "ObGD bounds its own step so that one update cannot cross the TD " "target"
+    )
+    raise ValueError(
+        f"{what}; clipping the finished {name} step to {clip} would be a "
+        "second, undeclared bound on it"
+    )
+
+
 def _block_rule(step, *, cfg: RTRRLConfig, name: str, clip: float):
     """Whichever rule a block's optimizer names, over that one block.
 
@@ -551,92 +827,544 @@ def _block_rule(step, *, cfg: RTRRLConfig, name: str, clip: float):
     is the shape the D-RTRRL rule's normalization units are cut from and the
     shape the intentional rule keys its per-block optimizers by. With one block
     per rule the two D-RTRRL scopes name the same unit; see :class:`DRTRRL`.
+
+    ``name`` is a block's for a head and for the torso's joint path, and a
+    *branch's* for one path of an output aggregation -- which is why the decay
+    and the signal are read from the same two tables either way: a torso branch
+    runs the trace and steps along the signal of the head whose credit it
+    carries.
     """
 
     if isinstance(step, IntentionalUpdate):
-        if clip:
-            raise ValueError(
-                "the intentional update sets its own step size from the "
-                "statistics it carries; clipping the finished step to "
-                f"{clip} would be a second, undeclared bound on it"
-            )
+        _refuse_a_second_bound(step, name=name, clip=clip)
         return make_intentional_rule(
             step,
             signals={name: BLOCK_SIGNALS[name]},
             decays={name: cfg.gamma * BLOCK_DECAYS[name](cfg)},
             streams=cfg.num_envs,
         )
+    if isinstance(step, ObGDStep):
+        _refuse_a_second_bound(step, name=name, clip=clip)
+        # The published pair, through the rule StreamAC already answers to:
+        # the bound this path declared, written over a plain rate.
+        return make_bounded_rule(bound=step.bound, base=Sgd(lr=step.lr))
     if isinstance(step, DRTRRL):
         return make_d_rtrrl_rule(step, clip=clip)
     return _adam_rule(step, clip=clip)
 
 
-def make_rules(cfg: RTRRLConfig):
-    """One rule per block, all three answering the same contract."""
+def _trace_for(step, *, decay: float) -> Trace:
+    """The eligibility recurrence that goes with what was selected.
 
-    optimizers = {
-        "torso": cfg.torso_optimizer,
-        "actor": cfg.actor_optimizer,
-        "critic": cfg.critic_optimizer,
-    }
-    clips = {"torso": cfg.torso_grad_clip, "actor": 0.0, "critic": 0.0}
-    return {
-        name: _block_rule(optimizers[name], cfg=cfg, name=name, clip=clips[name])
-        for name in BLOCKS
-    }
-
-
-def make_traces(cfg: RTRRLConfig):
-    """One eligibility recurrence per block, paired with its optimizer.
-
-    Which recurrence a block runs is not a free setting. An intentional update
+    Which recurrence a path runs is not a free setting. An intentional update
     is derived against ``z_t = gamma*lambda*z_{t-1} + p_t`` read *after* this
     step's derivative has joined it, and against no emphasis; RTRRL's own rules
-    are written over the trace as it stood, weighted by the followed-trace
-    emphasis. Pairing them the other way round would leave the step size
-    dividing by a trace the step was not taken along, so the algorithm --
-    which owns both -- constructs the one that goes with what was selected.
+    -- Adam, D-RTRRL and ObGD alike -- are written over the trace as it stood,
+    weighted by the followed-trace emphasis. Pairing them the other way round
+    would leave the step size dividing by a trace the step was not taken along,
+    so the algorithm -- which owns both -- constructs the one that goes with
+    what was selected.
 
     The optimizer never sees this choice. It is handed a trace and told nothing
     about where in the transition it was read.
     """
 
-    optimizers = {
-        "torso": cfg.torso_optimizer,
-        "actor": cfg.actor_optimizer,
-        "critic": cfg.critic_optimizer,
-    }
+    if isinstance(step, IntentionalUpdate):
+        return Trace(decay=decay, reads=CURRENT, emphasized=False)
+    return Trace(decay=decay, reads=CARRIED, emphasized=True)
+
+
+def make_head_rules(cfg: RTRRLConfig):
+    """One rule per readout. The torso's are the aggregation's."""
+
+    optimizers = {"actor": cfg.actor_optimizer, "critic": cfg.critic_optimizer}
     return {
-        name: (
-            Trace(
-                decay=cfg.gamma * BLOCK_DECAYS[name](cfg),
-                reads=CURRENT,
-                emphasized=False,
-            )
-            if isinstance(optimizers[name], IntentionalUpdate)
-            else Trace(
-                decay=cfg.gamma * BLOCK_DECAYS[name](cfg),
-                reads=CARRIED,
-                emphasized=True,
-            )
-        )
-        for name in BLOCKS
+        name: _block_rule(optimizers[name], cfg=cfg, name=name, clip=0.0)
+        for name in HEADS
     }
+
+
+def make_head_traces(cfg: RTRRLConfig):
+    """One eligibility recurrence per readout, paired with its optimizer."""
+
+    optimizers = {"actor": cfg.actor_optimizer, "critic": cfg.critic_optimizer}
+    return {
+        name: _trace_for(optimizers[name], decay=cfg.gamma * BLOCK_DECAYS[name](cfg))
+        for name in HEADS
+    }
+
+
+def _folded(traced, direct, *, sign, folds: bool):
+    """What one path's trace accumulates, and what of it stays untraced.
+
+    For a path folding the entropy in, the traced derivative is the sum the
+    paper differentiates as one objective. The sign is the TD error's rather
+    than the normalized advantage's, and they are the same sign: the clip
+    preserves it and the running scale it is divided by is never negative.
+    Taking it here is what lets the optimizer stay ignorant of the entropy
+    entirely.
+    """
+
+    if direct is None or not folds:
+        return traced, direct
+    return (
+        jax.tree.map(
+            lambda leaf, term: leaf + broadcast_stream(sign, term) * term,
+            traced,
+            direct,
+        ),
+        None,
+    )
+
+
+def _step_size(result, key):
+    """The step one path took, under the one name every rule reports it by.
+
+    A rule serving several blocks reports one per block; a rule serving one
+    reports the number. Both are the same reading, and the caller asking for it
+    should not have to know which kind of rule answered.
+    """
+
+    size = result.metrics.get("step_size")
+    if isinstance(size, Mapping):
+        return size[key]
+    return size
+
+
+def _intentional_reading(result, key, reports: IntentionalReports):
+    """One path's intentional readings, gated by what this graph declares."""
+
+    produced = result.metrics.get("intentional")
+    if produced is None:
+        return IntentionalReading()
+    reading = produced[key]
+    return IntentionalReading(
+        **{
+            item.name: (
+                getattr(reading, item.name) if getattr(reports, item.name) else None
+            )
+            for item in fields(IntentionalReports)
+        }
+    )
+
+
+# -------------------------------------------- where the two credits are joined
+class Aggregated(struct.PyTreeNode):
+    """One transition's worth of the shared torso's learning.
+
+    ``update`` is the finished parameter update, whichever position produced
+    it, so the caller writes the parameters once and knows nothing about how
+    many rules contributed to what it was handed. The other four are per path,
+    and what a path is depends on the position: one thing under an input
+    aggregation, one per branch under an output one.
+    """
+
+    update: Any
+    traces: Any
+    state: Any
+    derivative: Any
+    taken: Any
+
+
+class _Taken(NamedTuple):
+    """What one path produced this transition, named rather than positional."""
+
+    update: Any
+    traces: Any
+    derivative: Any
+    result: Any
+
+
+class _ContributionPath:
+    """One route from a head's objective to the shared torso's parameters.
+
+    A derivative, a trace, a rule and that rule's state -- everything that has
+    to be its own for two contributions to be genuinely two. A private helper
+    rather than a component: it owns no part of the algorithm the aggregation
+    around it does not already own, and its whole content is that these four
+    travel together.
+    """
+
+    def __init__(self, cfg: RTRRLConfig, name: str, step, *, clip: float) -> None:
+        self.name = name
+        self.step = step
+        self.trace = _trace_for(step, decay=cfg.gamma * BLOCK_DECAYS[name](cfg))
+        self.rule = _block_rule(step, cfg=cfg, name=name, clip=clip)
+        # The same fact as which trace it runs; see `_folded`.
+        self.folds_entropy = self.trace.reads == CURRENT
+        self.streams = cfg.num_envs
+
+    def initial_traces(self, params):
+        return self.trace.initial(params, self.streams)
+
+    def init(self, params, traces):
+        return self.rule.init(params={self.name: params}, traces={self.name: traces})
+
+    def take(
+        self,
+        *,
+        params,
+        carried,
+        traced,
+        direct,
+        delta,
+        sign,
+        step,
+        state,
+        reset,
+        emphasis,
+    ):
+        """Advance this path's trace, then take this path's step along it."""
+
+        derivative, untraced = _folded(
+            traced, direct, sign=sign, folds=self.folds_entropy
+        )
+        stepped, advanced = self.trace.stepped(
+            carried, derivative, reset=reset, emphasis=emphasis
+        )
+        taken = self.rule.apply(
+            {self.name: stepped},
+            None if untraced is None else {self.name: untraced},
+            state,
+            delta=delta,
+            derivative={self.name: derivative},
+            step=step,
+            params={self.name: params},
+        )
+        return _Taken(
+            update=taken.updates[self.name],
+            traces=advanced,
+            derivative=derivative,
+            result=taken,
+        )
+
+    def reading(self, norms, reports, derivative, advanced, taken):
+        """What this path's step passed through, as far as it was asked for."""
+
+        return BlockUpdate(
+            grad_norm=norms(derivative) if reports.grad_norm else None,
+            trace_norm=norms(advanced) if reports.trace_norm else None,
+            step_size=_step_size(taken, self.name) if reports.step_size else None,
+            intentional=_intentional_reading(taken, self.name, reports.intentional),
+        )
+
+
+class TorsoAggregation:
+    """Where the actor's and the critic's credit for the shared torso meets.
+
+    Both positions read the same two cotangents out of the same recurrent
+    forward, and neither costs a second forward or a second sensitivity. What
+    they differ in is where the two are added::
+
+        input    p       = J^T (u_actor + u_critic);  one trace, one rule
+        output   p_actor = J^T u_actor               a trace and a rule each,
+                 p_critic = J^T u_critic             summed as finished updates
+
+    and that is a difference in the algorithm rather than in its spelling,
+    because neither rule that can sit here is linear in what it is given. The
+    intentional update preconditions by a second moment of the derivative and
+    divides by a statistic of the trace; ObGD shrinks its rate by the trace's
+    own norm. So ``Rule(a + b) != Rule(a) + Rule(b)``, and a run has to say
+    which of the two it took.
+
+    A parent constructs one implementation or the other and otherwise treats
+    them alike: it hands over the pullback of the torso forward and the two
+    heads' cotangents, and receives a finished update, the traces the next
+    transition carries, the rule state, and the readings.
+    """
+
+    position: str
+
+    @property
+    def recurrences(self) -> Mapping[str, Trace]:
+        """The eligibility recurrence on each path, by the name it is filed under.
+
+        One under ``torso`` at ``gamma * lambda_rnn`` when the contributions are
+        combined before the trace, and one under each head's name at that
+        head's own ``gamma * lambda`` when they are combined after it. Nothing
+        in the algorithm reads this -- each path steps its own -- but which
+        recurrence a position declares is a claim worth being able to check.
+        """
+
+        raise NotImplementedError
+
+    def cotangents(self, upstream, *, actor, critic):
+        """What this position traces, pulled back through the shared torso."""
+
+        raise NotImplementedError
+
+    def untraced(self, upstream, entropy):
+        """Where the actor's entropy direction reaches the torso, if anywhere."""
+
+        raise NotImplementedError
+
+    def initial_traces(self, params):
+        """One trace per path, which is what online means."""
+
+        raise NotImplementedError
+
+    def init(self, params, traces):
+        """Fresh rule state, one per path."""
+
+        raise NotImplementedError
+
+    def step(
+        self,
+        *,
+        params,
+        carried,
+        traced,
+        direct,
+        delta,
+        sign,
+        step,
+        state,
+        reset,
+        emphasis,
+    ) -> Aggregated:
+        """One transition: trace, step, and whatever the parameters are owed.
+
+        ``delta`` arrives already scaled by ``eta_f``, and ``sign`` is the sign
+        of the TD error before that scaling, which is what an entropy fold is
+        signed by. ``carried``, ``traced``, ``direct`` and ``state`` are per
+        path, and what a path is is the implementation's to say.
+        """
+
+        raise NotImplementedError
+
+    def reading(
+        self, norms, reports: TorsoReports, aggregated: Aggregated
+    ) -> TorsoUpdate:
+        """Project what the step passed through onto the declared readings."""
+
+        raise NotImplementedError
+
+
+class InputAggregation(TorsoAggregation):
+    """The two cotangents summed before anything reads them.
+
+    RTRRL's own topology and the one every recorded run answers to. One
+    instantaneous derivative, one eligibility trace at ``gamma * lambda_rnn``,
+    one rule state, one step. The sum happens inside the pullback -- the two
+    cotangents are added and pulled back once -- which is where it has always
+    happened and is not the same arithmetic, to the last bit, as pulling back
+    twice and adding.
+
+    What reaches this path is neither ``grad V`` nor ``grad log pi`` but their
+    sum through the shared recurrence, which is why its intentional signal is
+    the plain TD error and why the ``eta`` it derives a step from is not on the
+    same axis as a head's. See :data:`BLOCK_SIGNALS`.
+    """
+
+    position = INPUT
+
+    def __init__(self, cfg: RTRRLConfig, step, *, clip: float) -> None:
+        self.path = _ContributionPath(cfg, JOINT, step, clip=clip)
+
+    @property
+    def recurrences(self) -> Mapping[str, Trace]:
+        return {JOINT: self.path.trace}
+
+    def cotangents(self, upstream, *, actor, critic):
+        # A gate would be a factor on one of these two terms.
+        return upstream(actor + critic)[0]
+
+    def untraced(self, upstream, entropy):
+        return upstream(entropy)[0]
+
+    def initial_traces(self, params):
+        return self.path.initial_traces(params)
+
+    def init(self, params, traces):
+        return self.path.init(params, traces)
+
+    def step(
+        self,
+        *,
+        params,
+        carried,
+        traced,
+        direct,
+        delta,
+        sign,
+        step,
+        state,
+        reset,
+        emphasis,
+    ) -> Aggregated:
+        taken = self.path.take(
+            params=params,
+            carried=carried,
+            traced=traced,
+            direct=direct,
+            delta=delta,
+            sign=sign,
+            step=step,
+            state=state,
+            reset=reset,
+            emphasis=emphasis,
+        )
+        return Aggregated(
+            update=taken.update,
+            traces=taken.traces,
+            state=taken.result.state,
+            derivative=taken.derivative,
+            taken=taken.result,
+        )
+
+    def reading(
+        self, norms, reports: TorsoReports, aggregated: Aggregated
+    ) -> TorsoUpdate:
+        block = self.path.reading(
+            norms, reports, aggregated.derivative, aggregated.traces, aggregated.taken
+        )
+        return TorsoUpdate(
+            grad_norm=block.grad_norm,
+            trace_norm=block.trace_norm,
+            step_size=block.step_size,
+            intentional=block.intentional,
+        )
+
+
+class OutputAggregation(TorsoAggregation):
+    """The two cotangents kept apart until the parameters are written.
+
+    Two paths, and everything a path is is two things: an instantaneous
+    derivative pulled back from one head's cotangent alone, an eligibility
+    trace at that head's own ``gamma * lambda`` rather than at ``lambda_rnn``,
+    a rule with its own settings, and that rule's whole state -- second
+    moments, clipping statistic, advantage scale, bound statistics, dynamic
+    step size. Changing one branch's configuration moves nothing on the other.
+
+    The actor's branch carries the entropy direction and the critic's does not,
+    which follows from whose objective the term belongs to. Whether it is
+    traced or applied on the step it arises is that branch's rule's business,
+    the same as anywhere else.
+
+    Both branches read the parameters this transition started with, and their
+    updates are added element by element and written once. Applying one and
+    then computing the other would make the pair order-dependent, and would not
+    be this topology.
+    """
+
+    position = OUTPUT
+
+    def __init__(self, cfg: RTRRLConfig, steps: OutputSteps, *, clip: float) -> None:
+        self.paths = {
+            name: _ContributionPath(cfg, name, getattr(steps, name), clip=clip)
+            for name in TORSO_BRANCHES
+        }
+
+    @property
+    def recurrences(self) -> Mapping[str, Trace]:
+        return {name: path.trace for name, path in self.paths.items()}
+
+    def cotangents(self, upstream, *, actor, critic):
+        cotangent = {"actor": actor, "critic": critic}
+        # One pullback per branch, over the one forward and the one sensitivity
+        # both branches share. What is independent is the state each path
+        # carries, not the recurrence they read.
+        return {name: upstream(cotangent[name])[0] for name in TORSO_BRANCHES}
+
+    def untraced(self, upstream, entropy):
+        return {"actor": upstream(entropy)[0]}
+
+    def initial_traces(self, params):
+        return {name: path.initial_traces(params) for name, path in self.paths.items()}
+
+    def init(self, params, traces):
+        return {
+            name: path.init(params, traces[name]) for name, path in self.paths.items()
+        }
+
+    def step(
+        self,
+        *,
+        params,
+        carried,
+        traced,
+        direct,
+        delta,
+        sign,
+        step,
+        state,
+        reset,
+        emphasis,
+    ) -> Aggregated:
+        took = {
+            name: path.take(
+                params=params,
+                carried=carried[name],
+                traced=traced[name],
+                direct=None if direct is None else direct.get(name),
+                delta=delta,
+                sign=sign,
+                step=step,
+                state=state[name],
+                reset=reset,
+                emphasis=emphasis,
+            )
+            for name, path in self.paths.items()
+        }
+        return Aggregated(
+            # Added element by element, and nothing else: no clip, no norm, no
+            # third bound. See :class:`OutputSteps`.
+            update=jax.tree.map(
+                lambda *parts: sum(parts),
+                *[taken.update for taken in took.values()],
+            ),
+            traces={name: taken.traces for name, taken in took.items()},
+            state={name: taken.result.state for name, taken in took.items()},
+            derivative={name: taken.derivative for name, taken in took.items()},
+            taken={name: taken.result for name, taken in took.items()},
+        )
+
+    def reading(
+        self, norms, reports: TorsoReports, aggregated: Aggregated
+    ) -> TorsoUpdate:
+        def branch(name: str) -> BlockUpdate:
+            return self.paths[name].reading(
+                norms,
+                getattr(reports, name),
+                aggregated.derivative[name],
+                aggregated.traces[name],
+                aggregated.taken[name],
+            )
+
+        return TorsoUpdate(actor=branch("actor"), critic=branch("critic"))
+
+
+def make_torso_aggregation(cfg: RTRRLConfig) -> TorsoAggregation:
+    """The aggregation the torso's optimizer selection names.
+
+    Two steps or one is the whole of the selection, so the built type is the
+    discriminator: nothing else has to be consulted to know which position a
+    configuration asked for.
+    """
+
+    optimizer = cfg.torso_optimizer
+    if isinstance(optimizer, OutputSteps):
+        return OutputAggregation(cfg, optimizer, clip=cfg.torso_grad_clip)
+    return InputAggregation(cfg, optimizer, clip=cfg.torso_grad_clip)
 
 
 class Block:
-    """What every one of the three has: a stream count, a decay and a trace.
+    """What each readout has: a stream count, a decay and a trace.
 
     The trace is a component rather than a method here. What it does is one
-    recurrence and one reading decision, both of which two of these blocks
-    would otherwise have to spell identically, and both of which an algorithm
-    has to be able to swap without the block noticing.
+    recurrence and one reading decision, both of which the two readouts would
+    otherwise have to spell identically, and both of which an algorithm has to
+    be able to swap without the block noticing.
 
     Left unsaid it is RTRRL's own -- emphasis-weighted, and read as it stood
     before this transition's derivative joined it. That is the recurrence this
     algorithm has always run and the one every rule but the intentional update
     is written over, so it is the default rather than something each caller
     has to know to ask for.
+
+    The torso is not one of these. It has as many traces as its credit has
+    paths, which is one or two, and they belong to the component that decides
+    how many there are; see :class:`TorsoAggregation`.
     """
 
     def __init__(
@@ -703,8 +1431,15 @@ def kernel_constraint(network: Sequence):
 
 
 # ------------------------------------------------------------ the shared block
-class Torso(Block):
-    """The recurrent representation shared by both heads."""
+class Torso:
+    """The recurrent representation shared by both heads.
+
+    Not a :class:`Block`, because a block is one eligibility trace and this
+    block has as many as its aggregation has paths -- one or two. What credits
+    the shared parameters is :class:`TorsoAggregation`, which owns the traces,
+    the rules and the rule states; what is here is the network, its online
+    sensitivity, the set its kernel allows and the copy that reads.
+    """
 
     def __init__(
         self,
@@ -712,10 +1447,9 @@ class Torso(Block):
         network: Any,
         differentiation: Any,
         *,
-        trace: Trace | None = None,
         constraint: Any = None,
     ) -> None:
-        super().__init__(cfg, cfg.gamma * cfg.lambda_rnn, trace=trace)
+        self.cfg = cfg
         self._network = network
         self._differentiation = differentiation
         self._constraint = constraint
@@ -761,7 +1495,12 @@ class Torso(Block):
         )
 
     def init(self, keys, timestep: Timestep) -> TorsoState:
-        """Fresh online state for the shared block, and a copy for it to follow."""
+        """Fresh online state for the shared block, and a copy for it to follow.
+
+        The eligibility comes back empty. How many traces this block carries is
+        the aggregation's answer and not the network's, so the algorithm that
+        holds both fills the field; see :meth:`Core.init`.
+        """
 
         param_key, torso_key, dropout_key = keys
         _, done, _, _ = timestep
@@ -782,7 +1521,7 @@ class Torso(Block):
         params = self.constrain(variables["params"])
         return TorsoState(
             params=params,
-            traces=self.initial_traces(params),
+            traces=None,
             slow_params=params,
             recurrence=Recurrence(
                 carry=carry, differentiation_state=differentiation_state
@@ -927,58 +1666,57 @@ class Core:
         self.cfg = cfg
         self.reports = reports
         self.td0 = make_td0()
-        self.rules = make_rules(cfg)
-        traces = make_traces(cfg)
-        # Which blocks trace the entropy direction instead of adding it on the
-        # step it arises. It is the same fact as which trace they run, and it
-        # is the algorithm's: the intentional policy gradient is the derivative
-        # of the log-probability and the entropy together, signed by the TD
-        # error, and it is that sum the trace accumulates. RTRRL's own rules
-        # take the entropy untraced, as the published implementation does.
-        self.folds_entropy = {name: traces[name].reads == CURRENT for name in BLOCKS}
+        self.rules = make_head_rules(cfg)
+        traces = make_head_traces(cfg)
+        # Which readouts trace the entropy direction instead of adding it on
+        # the step it arises. It is the same fact as which trace they run, and
+        # it is the algorithm's: the intentional policy gradient is the
+        # derivative of the log-probability and the entropy together, signed by
+        # the TD error, and it is that sum the trace accumulates. RTRRL's own
+        # rules take the entropy untraced, as the published implementation
+        # does. A torso path answers the same question for itself.
+        self.folds_entropy = {name: traces[name].reads == CURRENT for name in HEADS}
+        self.aggregation = make_torso_aggregation(cfg)
         self.torso = Torso(
             cfg,
             torso_network,
             torso_differentiation,
-            trace=traces["torso"],
             constraint=torso_constraint,
         )
         self.actor = Actor(cfg, actor_head, trace=traces["actor"])
         self.critic = Critic(cfg, critic_head, trace=traces["critic"])
-        self.blocks = {
-            "torso": self.torso,
-            "actor": self.actor,
-            "critic": self.critic,
-        }
+        self.heads = {"actor": self.actor, "critic": self.critic}
 
     def init(self, keys, timestep: Timestep) -> CoreState:
-        """Fresh online state for all three blocks and all three rules."""
+        """Fresh online state for all three blocks and every rule they select.
+
+        The torso's is the aggregation's, because how many rules there are
+        is the same question as where the two contributions are combined.
+        """
 
         torso_keys, actor_key, critic_key = keys
         torso = self.torso.init(torso_keys, timestep)
+        # One eligibility per path the two contributions travel by, which the
+        # block itself has no way to count.
+        torso = torso.replace(traces=self.aggregation.initial_traces(torso.params))
         _, hidden = self.torso.apply(torso.params, timestep, torso.recurrence)
         actor = self.actor.init(actor_key, hidden, timestep)
         critic = self.critic.init(critic_key, hidden, timestep)
 
-        params = {
-            "torso": torso.params,
-            "actor": actor.params,
-            "critic": critic.params,
-        }
-        traces = {
-            "torso": torso.traces,
-            "actor": actor.traces,
-            "critic": critic.traces,
-        }
+        params = {"actor": actor.params, "critic": critic.params}
+        traces = {"actor": actor.traces, "critic": critic.traces}
         return CoreState(
             torso=torso,
             actor=actor,
             critic=critic,
             rule={
-                name: rule.init(
-                    params={name: params[name]}, traces={name: traces[name]}
-                )
-                for name, rule in self.rules.items()
+                "torso": self.aggregation.init(torso.params, torso.traces),
+                **{
+                    name: rule.init(
+                        params={name: params[name]}, traces={name: traces[name]}
+                    )
+                    for name, rule in self.rules.items()
+                },
             },
             value=jnp.zeros((self.cfg.num_envs,), dtype=jnp.float32),
             emphasis=jnp.ones((self.cfg.num_envs,), dtype=jnp.float32),
@@ -1030,13 +1768,14 @@ class Core:
             critic_traced, critic_upward = jax.grad(
                 self.critic.traced_objective, argnums=(0, 1)
             )(critic_params, hidden, timestep)
-            # A gate would be a factor on one of these two terms.
-            torso_traced = upstream(actor_upward + critic_upward)[0]
+            torso_traced = self.aggregation.cotangents(
+                upstream, actor=actor_upward, critic=critic_upward
+            )
 
             actor_direct, direct_upward = jax.grad(
                 self.actor.immediate_objective, argnums=(0, 1)
             )(actor_params, hidden, timestep)
-            torso_direct = upstream(direct_upward)[0]
+            torso_direct = self.aggregation.untraced(upstream, direct_upward)
 
             value = self.critic.apply(critic_params, hidden, timestep)[0]
             return (
@@ -1092,73 +1831,71 @@ class Core:
         ).astype(jnp.float32)
 
     def _derivatives(self, traced, direct, delta):
-        """What each block's trace accumulates, and what stays untraced.
+        """What each readout's trace accumulates, and what stays untraced.
 
-        For a block folding the entropy in, the traced derivative is the sum
-        the paper differentiates as one objective. The sign is the TD error's
-        rather than the normalized advantage's, and they are the same sign: the
-        clip preserves it and the running scale it is divided by is never
-        negative. Taking it here is what lets the optimizer stay ignorant of
-        the entropy entirely.
+        The torso's paths answer the same question inside the aggregation,
+        which is where the number of them is known. See
+        :func:`_folded`, which both callers share.
         """
 
         sign = jnp.sign(delta)
         derivative, untraced = {}, {}
-        for name in BLOCKS:
-            immediate = direct.get(name)
-            if immediate is None or not self.folds_entropy[name]:
-                derivative[name] = traced[name]
-                untraced[name] = immediate
-                continue
-            derivative[name] = jax.tree.map(
-                lambda leaf, term: leaf + broadcast_stream(sign, term) * term,
+        for name in HEADS:
+            derivative[name], untraced[name] = _folded(
                 traced[name],
-                immediate,
+                direct.get(name),
+                sign=sign,
+                folds=self.folds_entropy[name],
             )
-            untraced[name] = None
         return derivative, untraced
 
     def _take_updates(self, state, traced, direct, delta, step, reset_before):
-        """Advance each block's trace, then take each block's step along it.
+        """Advance every trace, then take the step each rule sizes along it.
 
-        The trace moves first and hands back both readings; which one this
-        update steps along is the trace component's decision and not visible
-        here. What is visible is that the algorithm keeps every trace it had,
-        whichever rule is downstream.
+        The trace moves first and hands back both readings; which one an update
+        steps along is the trace component's decision and not visible here.
+        What is visible is that the algorithm keeps every trace it had,
+        whichever rule is downstream and however many of them the torso's
+        credit is routed through.
+
+        ``eta_f`` scales the TD error the torso is aggregated by, at either
+        position and on every path: it is RTRRL's own dial on how far the
+        shared representation moves relative to the readouts, and it is a
+        property of crediting the torso rather than of where the crediting is
+        combined.
         """
 
-        params = {
-            "torso": state.torso.params,
-            "actor": state.actor.params,
-            "critic": state.critic.params,
-        }
-        carried = {
-            "torso": state.torso.traces,
-            "actor": state.actor.traces,
-            "critic": state.critic.traces,
-        }
+        params = {"actor": state.actor.params, "critic": state.critic.params}
+        carried = {"actor": state.actor.traces, "critic": state.critic.traces}
         emphasis = self._emphasis(state, reset_before)
         derivative, untraced = self._derivatives(traced, direct, delta)
+        aggregated = self.aggregation.step(
+            params=state.torso.params,
+            carried=state.torso.traces,
+            traced=traced["torso"],
+            direct=direct["torso"],
+            delta=delta * self.cfg.eta_f,
+            sign=jnp.sign(delta),
+            step=step,
+            state=state.rule["torso"],
+            reset=reset_before,
+            emphasis=emphasis,
+        )
         stepped_traces = {
-            name: block.stepped_trace(
+            name: head.stepped_trace(
                 carried[name],
                 derivative[name],
                 reset_before=reset_before,
                 emphasis=emphasis,
             )
-            for name, block in self.blocks.items()
-        }
-        deltas = {
-            "torso": delta * self.cfg.eta_f,
-            "actor": delta,
-            "critic": delta,
+            for name, head in self.heads.items()
         }
         taken = {
             name: rule.apply(
                 {name: stepped_traces[name][0]},
                 None if untraced[name] is None else {name: untraced[name]},
                 state.rule[name],
-                delta=deltas[name],
+                delta=delta,
                 derivative={name: derivative[name]},
                 step=step,
                 params={name: params[name]},
@@ -1166,69 +1903,59 @@ class Core:
             for name, rule in self.rules.items()
         }
         stepped = {
-            name: jax.tree.map(
+            "torso": jax.tree.map(
                 lambda parameter, update: parameter + update,
-                params[name],
-                taken[name].updates[name],
-            )
-            for name in params
-        }
-        advanced = {name: pair[1] for name, pair in stepped_traces.items()}
-        return stepped, taken, emphasis, advanced, derivative
-
-    def _intentional_reading(self, name, taken):
-        """One block's intentional readings, gated by what this graph declares."""
-
-        reports = getattr(self.reports, name).intentional
-        produced = taken[name].metrics.get("intentional")
-        if produced is None:
-            return IntentionalReading()
-        reading = produced[name]
-        return IntentionalReading(
+                state.torso.params,
+                aggregated.update,
+            ),
             **{
-                item.name: (
-                    getattr(reading, item.name) if getattr(reports, item.name) else None
+                name: jax.tree.map(
+                    lambda parameter, update: parameter + update,
+                    params[name],
+                    taken[name].updates[name],
                 )
-                for item in fields(IntentionalReports)
-            }
-        )
+                for name in params
+            },
+        }
+        rule = {
+            "torso": aggregated.state,
+            **{name: result.state for name, result in taken.items()},
+        }
+        advanced = {
+            "torso": aggregated.traces,
+            **{name: pair[1] for name, pair in stepped_traces.items()},
+        }
+        return stepped, taken, aggregated, rule, emphasis, advanced, derivative
 
-    def _step_size(self, name, taken):
-        """The step this block took, under the one name every rule reports it by.
-
-        A rule serving several blocks reports one per block; a rule serving one
-        reports the number. Both are the same reading, and the caller asking
-        for it should not have to know which kind of rule answered.
-        """
-
-        size = taken[name].metrics.get("step_size")
-        if isinstance(size, Mapping):
-            return size[name]
-        return size
-
-    def _update_reading(self, delta, emphasis, traced, advanced, taken):
+    def _update_reading(self, delta, emphasis, traced, advanced, taken, aggregated):
         """Project update products onto the readings this graph declares."""
 
-        def block_reading(name):
+        def head_reading(name):
             reports = getattr(self.reports, name)
-            block = self.blocks[name]
+            head = self.heads[name]
             return BlockUpdate(
                 grad_norm=(
-                    block.gradient_norms(traced[name]) if reports.grad_norm else None
+                    head.gradient_norms(traced[name]) if reports.grad_norm else None
                 ),
                 trace_norm=(
-                    block.gradient_norms(advanced[name]) if reports.trace_norm else None
+                    head.gradient_norms(advanced[name]) if reports.trace_norm else None
                 ),
-                step_size=self._step_size(name, taken) if reports.step_size else None,
-                intentional=self._intentional_reading(name, taken),
+                step_size=(
+                    _step_size(taken[name], name) if reports.step_size else None
+                ),
+                intentional=_intentional_reading(
+                    taken[name], name, reports.intentional
+                ),
             )
 
         return UpdateMetrics(
             td_error=delta if self.reports.td_error else None,
             emphasis=emphasis if self.reports.emphasis else None,
-            torso=block_reading("torso"),
-            actor=block_reading("actor"),
-            critic=block_reading("critic"),
+            torso=self.aggregation.reading(
+                self.torso.gradient_norms, self.reports.torso, aggregated
+            ),
+            actor=head_reading("actor"),
+            critic=head_reading("critic"),
         )
 
     def update_parameters(
@@ -1248,9 +1975,15 @@ class Core:
         )
 
         delta = self._td_error(state, timestep, value, terminal)
-        stepped, taken, emphasis, advanced, derivative = self._take_updates(
-            state, traced, direct, delta, step, reset_before
-        )
+        (
+            stepped,
+            taken,
+            aggregated,
+            rule,
+            emphasis,
+            advanced,
+            derivative,
+        ) = self._take_updates(state, traced, direct, delta, step, reset_before)
 
         torso_params = self.torso.constrain(stepped["torso"])
         return (
@@ -1270,7 +2003,7 @@ class Core:
                 ),
                 actor=BlockState(params=stepped["actor"], traces=advanced["actor"]),
                 critic=BlockState(params=stepped["critic"], traces=advanced["critic"]),
-                rule={name: result.state for name, result in taken.items()},
+                rule=rule,
                 value=value,
                 emphasis=emphasis,
             ),
@@ -1279,7 +2012,9 @@ class Core:
                 actor=actor_reading,
                 critic=CriticForward(value=value if self.reports.value else None),
             ),
-            self._update_reading(delta, emphasis, derivative, advanced, taken),
+            self._update_reading(
+                delta, emphasis, derivative, advanced, taken, aggregated
+            ),
         )
 
 
@@ -1359,7 +2094,7 @@ class RTRRL:
         features = int(context.observation_space.shape[0])
         if meta_rl:
             features += action_dim(context.action_space) + 1
-        torso_optimizer = components.build(RTRRL_OPTIMIZERS, "torso.optimizer")
+        torso_optimizer = components.build(RTRRL_TORSO_OPTIMIZERS, "torso.optimizer")
         actor_optimizer = components.build(RTRRL_OPTIMIZERS, "actor.optimizer")
         critic_optimizer = components.build(RTRRL_OPTIMIZERS, "critic.optimizer")
         torso_network, torso_differentiation = components.build(
@@ -1404,9 +2139,9 @@ class RTRRL:
             ),
             record=record,
             reports=reports_for(
-                torso=isinstance(torso_optimizer, IntentionalUpdate),
-                actor=isinstance(actor_optimizer, IntentionalUpdate),
-                critic=isinstance(critic_optimizer, IntentionalUpdate),
+                torso=torso_optimizer,
+                actor=actor_optimizer,
+                critic=critic_optimizer,
             ),
         )
 

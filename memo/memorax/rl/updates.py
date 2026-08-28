@@ -35,7 +35,7 @@ import jax.numpy as jnp
 from flax import struct
 
 from memorax.building import ComponentFamily
-from memorax.parameters import param
+from memorax.parameters import param, structure
 
 from .intentional import IntentionalOptimizer, IntentionalUpdate
 
@@ -297,6 +297,52 @@ STEP_FAMILY = ComponentFamily(
     branches=STEP_BRANCHES,
     construct=_selected_parameters,
 )
+
+# The three bounds that are an ObGD, which is every branch of the bound family
+# except the one that says there is no bound. ``none`` there names the base
+# alone, and a base alone is SGD or Adam rather than a bounded step; a rule
+# selected by the name ``obgd`` and then handed no bound would be a rule whose
+# name said nothing about what it does.
+OBGD_BOUND_FAMILY = BOUND_FAMILY.restricted("ob", "adaptive_ob", "adaptive_ob_fixed")
+
+
+@dataclass(frozen=True)
+class ObGD:
+    """The overshooting-bounded step, declared where one rule is selected.
+
+    :func:`make_bounded_rule` already takes a bound and a base, and StreamAC
+    selects the two side by side because it wants the whole cross product --
+    including ``none``, which is the base alone. An algorithm choosing *this
+    rule against others* is asking a narrower question: it wants the published
+    ObGD, which is a bound written over a plain rate. So the base is a rate
+    here rather than a second choice, and the bound is the one axis left.
+
+    ``lr`` is that rate, and it is the same number ``Sgd.lr`` carries: the
+    bound shrinks it whenever a step would cross the TD target, and leaves it
+    alone otherwise. Which bound -- ``ob``, ``adaptive_ob`` or the published
+    ``adaptive_ob_fixed`` -- stays a branch of its own, because the three are
+    different denominators and a run has to be able to say which it answered
+    to.
+    """
+
+    bound: str = structure(branches=OBGD_BOUND_FAMILY.branches)
+    lr: float = param(valid=(1e-9, 10.0), search=(1e-5, 1.0), log=True)
+
+
+@dataclass(frozen=True)
+class ObGDStep:
+    """One ``obgd`` selection with its bound built rather than named.
+
+    A declaration nested inside a branch is read back as the name it selected
+    and not as what that name declares -- :func:`memorax.parameters.read_branch`
+    fills in only the branch a group chose, and a group inside a branch is a
+    second such choice. So the bound is resolved through the component builder,
+    which does descend, and what an algorithm receives is this: the bound
+    itself, and the rate it is written over.
+    """
+
+    bound: Any
+    lr: float
 
 
 def make_bounded_rule(*, bound, base) -> UpdateRule:

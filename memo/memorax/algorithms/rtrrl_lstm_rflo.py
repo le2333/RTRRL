@@ -66,7 +66,6 @@ from memorax.networks.sequence_models.lstm import (
 )
 from memorax.parameters import describe_parameters, group, numeric, param, structure
 from memorax.rl import action_classes, action_dim
-from memorax.rl.intentional import IntentionalUpdate
 from memorax.rl.normalization import (
     DISCOUNTED_NORMALIZATION_FAMILY,
     NORMALIZATION_FAMILY,
@@ -79,6 +78,7 @@ from .rtrrl_aaai import PARTS as PARTS
 from .rtrrl_aaai import (
     RTRRL,
     RTRRL_OPTIMIZERS,
+    RTRRL_TORSO_OPTIMIZERS,
 )
 from .rtrrl_aaai import TRAINING_METRICS as TRAINING_METRICS
 from .rtrrl_aaai import (
@@ -129,7 +129,7 @@ class TorsoParameters:
     differentiation: str = structure(
         branches=LSTM_DIFFERENTIATION.branches, search=("rflo",)
     )
-    optimizer: str = structure(branches=RTRRL_OPTIMIZERS.branches)
+    optimizer: str = structure(branches=RTRRL_TORSO_OPTIMIZERS.branches)
     grad_clip: float = param(valid=(0.0, 100.0), search=(0.0, 10.0))
     follow: float = param(valid=(0.0, 1.0), search=(0.0, 1.0))
 
@@ -210,7 +210,7 @@ class RTRRLLstmRflo(RTRRL):
         features = int(context.observation_space.shape[0])
         if meta_rl:
             features += action_dim(context.action_space) + 1
-        torso_optimizer = components.build(RTRRL_OPTIMIZERS, "torso.optimizer")
+        torso_optimizer = components.build(RTRRL_TORSO_OPTIMIZERS, "torso.optimizer")
         actor_optimizer = components.build(RTRRL_OPTIMIZERS, "actor.optimizer")
         critic_optimizer = components.build(RTRRL_OPTIMIZERS, "critic.optimizer")
         network, differentiation = _torso(parameters, components, features=features)
@@ -253,8 +253,8 @@ class RTRRLLstmRflo(RTRRL):
             ),
             record=record,
             reports=reports_for(
-                torso=isinstance(torso_optimizer, IntentionalUpdate),
-                actor=isinstance(actor_optimizer, IntentionalUpdate),
-                critic=isinstance(critic_optimizer, IntentionalUpdate),
+                torso=torso_optimizer,
+                actor=actor_optimizer,
+                critic=critic_optimizer,
             ),
         )
