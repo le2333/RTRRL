@@ -104,9 +104,11 @@ class TorsoParameters:
     are built into the cell rather than read arithmetically by the running
     graph, so the members of one vmapped round cannot disagree about them.
 
-    ``grad_clip`` carries ``rtrrl_aaai``'s condition unchanged: the intentional
-    update derives its own step size and refuses a second bound over it, so
-    ``optimizer.kind: iu`` requires ``grad_clip: 0``.
+    ``grad_clip`` carries ``rtrrl_aaai``'s condition unchanged: the two rules
+    that size or bound their own step refuse a second bound over it, so the
+    four branches selecting one -- ``input_iu``, ``output_iu``, ``input_obgd``
+    and ``output_obgd`` -- require ``grad_clip: 0``. ``adam``, ``sgd`` and
+    ``d_rtrrl`` keep it.
     """
 
     hidden_dim: int = param(valid=(1, 4096), search=(32, 512), static=True)

@@ -378,14 +378,19 @@ class TorsoParameters:
     one shared block is combined; see :data:`TORSO_STEP_BRANCHES`.
 
     ``grad_clip`` is the outer bound on the finished torso update, and it is
-    the one parameter here whose valid range depends on a sibling: both rules
-    that size or bound their own step refuse to have a second, undeclared bound
-    placed over it, so every ``optimizer.kind`` but ``adam`` and ``d_rtrrl``
-    requires ``grad_clip: 0``. The declaration cannot say that -- a parameter
-    tree conditions on branches, not on another parameter's value -- so the
-    build refuses it with the reason rather than accepting a run that is not
-    the algorithm it names. A search space selecting one of those has to pin
-    this to zero, or every trial fails at construction.
+    the one parameter here whose valid range depends on a sibling. The two
+    rules that size or bound their own step refuse to have a second, undeclared
+    bound placed over it, so the four branches that select one of them --
+    ``input_iu``, ``output_iu``, ``input_obgd`` and ``output_obgd`` -- require
+    ``grad_clip: 0``. The three that do not are ``adam``, ``sgd`` and
+    ``d_rtrrl``: for the two plain rates this clip is the only bound there is,
+    and D-RTRRL declares it as its own outer bound on the finished update.
+
+    The declaration cannot say that -- a parameter tree conditions on branches,
+    not on another parameter's value -- so the build refuses the pair with the
+    reason rather than accepting a run that is not the algorithm it names. A
+    search space selecting one of the four has to pin this to zero, or every
+    trial fails at construction.
     """
 
     backbone: str = structure(branches=RTRRL_TORSO_FAMILY.branches)
@@ -1360,11 +1365,14 @@ class InputAggregation(TorsoAggregation):
         block = self.path.reading(
             norms, reports, aggregated.derivative, aggregated.traces, aggregated.taken
         )
+        # Every field of the block, by name, rather than the four this used to
+        # copy. A joint path *is* a block's worth of readings and the two types
+        # differ only in what an output aggregation adds, so listing the shared
+        # fields here made the reading silently narrower than the declaration
+        # each time one was added -- which is how `obgd` came to be advertised
+        # under `update.torso.obgd.*` and filed as nothing at all.
         return TorsoUpdate(
-            grad_norm=block.grad_norm,
-            trace_norm=block.trace_norm,
-            step_size=block.step_size,
-            intentional=block.intentional,
+            **{item.name: getattr(block, item.name) for item in fields(BlockUpdate)}
         )
 
 

@@ -829,6 +829,81 @@ def test_every_mode_is_reachable_from_a_run_configuration(mode):
     ), "the torso never moved"
 
 
+@pytest.mark.parametrize("mode", sorted(MODES))
+def test_every_series_a_mode_declares_arrives_with_a_value(mode):
+    """Declared and produced are the same set, in both directions, per mode.
+
+    A name in the schema and not in what a step files is a series the driver
+    looks for and never finds, and it fails a run rather than a test -- the
+    declaration travels to Runtime on the built graph, so nothing local
+    compares the two unless something like this does.
+
+    ``flattened`` drops a ``None`` leaf, which is what makes this the check
+    rather than a restatement of the schema: a reading the kernel declares and
+    then never fills is absent here and present in ``observations.series``, and
+    the two sets stop being equal. Asserting the names exist would not have
+    noticed, which is how a whole rule's telemetry was declared and dropped on
+    the way into the metrics it is filed under.
+    """
+
+    built = assembled(mode)
+    state = built.program.init(jax.random.key(0))
+    _, metrics = built.program.train(jax.random.key(1), state, 4)
+
+    produced = {
+        name.lstrip(".").replace("/.", ".").replace("/", ".")
+        for name in flattened({"forward": metrics.forward, "update": metrics.update})
+    }
+    assert produced == set(built.observations.series)
+
+
+@pytest.mark.parametrize("mode", ["input_obgd", "output_obgd"])
+def test_the_bound_statistics_reach_the_metrics_a_run_files(mode):
+    """And the values are the bound's own, not zeros standing in for it.
+
+    The case above compares two sets of names. This reads the numbers: a rate
+    that survived is in ``(0, 1]``, a denominator is not negative, and the L1
+    the bound reads is above zero once a trace exists at all -- so a reading
+    wired to the wrong quantity, or to a tree of zeros, fails here rather than
+    being filed for the length of a run.
+    """
+
+    built = assembled(mode)
+    state = built.program.init(jax.random.key(0))
+    _, metrics = built.program.train(jax.random.key(1), state, 8)
+
+    torso = metrics.update.torso
+    # The base rate each path was configured with, from the same place the run
+    # document got it.
+    branches = (
+        {"": (torso, MODES[mode]["torso.optimizer.input_obgd.lr"])}
+        if mode == "input_obgd"
+        else {
+            "actor": (
+                torso.actor,
+                MODES[mode]["torso.optimizer.output_obgd.actor.lr"],
+            ),
+            "critic": (
+                torso.critic,
+                MODES[mode]["torso.optimizer.output_obgd.critic.lr"],
+            ),
+        }
+    )
+    for name, (branch, lr) in branches.items():
+        reading = branch.obgd
+        assert reading.bound_scale is not None, f"{name}: no bound statistics arrived"
+        scale = np.asarray(reading.bound_scale)
+        assert np.all(scale > 0.0) and np.all(scale <= 1.0 + 1e-6), name
+        assert np.all(np.asarray(reading.bound_denominator) >= 0.0), name
+        assert np.all(np.asarray(reading.delta_bar) >= 1.0), name
+        assert np.any(np.asarray(reading.trace_sum) > 0.0), f"{name}: the L1 is zero"
+        assert np.all(np.asarray(reading.second_moment_rms) > 0.0), name
+        # And it is this branch's own rate it is a fraction of.
+        np.testing.assert_allclose(
+            scale, np.asarray(branch.step_size) / lr, rtol=1e-5, err_msg=name
+        )
+
+
 @pytest.mark.parametrize("mode", ["output_iu", "output_obgd"])
 def test_an_output_run_files_its_branches_and_no_joint_reading(mode):
     """A reading exists where the quantity does, and the position decides where.
