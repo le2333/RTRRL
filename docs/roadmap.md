@@ -118,7 +118,7 @@ infra 的 `adapter.py` 判叶子用 `"search" in node`，那**正是 R2 之后**
 
 `experiment.py` 改读模板的名字（`entry` / `space` / `score.direction` / `catalog["entries"]`），`_configurations` 产出 `RunConfig` 的十三个字段。五个块原样透传，`PASSED_THROUGH` 是那份清单。
 
-协调字段全在 infra 侧生成，实验文件不问：`launch_id`（UTC 时间戳，可用 `--launch-id` 固定）、`run_id = {name}-{launch}-t{trial}`、`digest ← image`、`score.s3` 和 `logging.rerun_s3 ← storage/{experiment}/{launch}/{run_id}/`。`contract` **抄 catalog 的**而不是自己声明——运行配置该claim的是那个将要读它的镜像实现的版本。
+协调字段全在 infra 侧生成，实验文件不问：`launch_id`（UTC 时间戳加随机后缀，可用 `--launch-id` 固定）、`run_id = {name}-{launch}-t{trial}`、`digest ← image`、`score.s3` 和 `logging.rerun_s3 ← storage/{experiment}/{launch}/{run_id}/`。`contract` **抄 catalog 的**而不是自己声明——运行配置该claim的是那个将要读它的镜像实现的版本。
 
 三个 fail-fast 都在起容器之前：文件缺字段（`REQUIRED`）、`space` 里有 catalog 没声明的名字（`SpaceError`）、`image` 没钉 digest。
 

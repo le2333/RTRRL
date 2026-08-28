@@ -207,6 +207,11 @@ def test_batch_run_routes_deployment_fields_to_batch_executor(
         def __init__(self, **options: Any) -> None:
             captured.update(options)
 
+        def claim(self, launch: dict[str, Any], *, exclusive: bool) -> str:
+            captured["claim"] = launch
+            captured["exclusive"] = exclusive
+            return "s3://claimed"
+
         def __call__(self, configurations: tuple[dict, ...], score: Any) -> tuple[dict, ...]:
             return tuple(
                 {
@@ -248,4 +253,9 @@ def test_batch_run_routes_deployment_fields_to_batch_executor(
     assert captured["job_queue"] == "dev-cpu-c7al-queue"
     assert captured["job_definition"] == "trainer-c7al-" + "b" * 64
     assert captured["timeout_seconds"] == 5400
+    # The control prefix is taken before the first round is submitted into it,
+    # and an operator-named launch id says the prefix may already be theirs.
+    assert captured["claim"]["launch_id"] == LAUNCH
+    assert captured["claim"]["experiment"] == experiment["experiment"]
+    assert captured["exclusive"] is False
     assert captured["parallel_jobs"] == 2

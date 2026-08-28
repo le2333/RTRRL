@@ -2,8 +2,11 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
+import socket
 import sys
 from collections.abc import Sequence
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
@@ -87,12 +90,46 @@ def _executor(
     )
 
 
+def _claim(
+    executor: LocalRoundExecutor | BatchRoundExecutor,
+    arguments: argparse.Namespace,
+    experiment: dict[str, Any],
+    runner: ExperimentRunner,
+) -> None:
+    """Take the control prefix, before the first round is submitted into it.
+
+    Only the Batch exchange is named after the launch -- a local one is
+    wherever ``--exchange`` pointed, shared by every launch that names it --
+    and only S3 offers a create two processes cannot both win. So this is a
+    Batch-side guarantee, and a local exchange stays the operator's to keep
+    distinct.
+    """
+
+    if not isinstance(executor, BatchRoundExecutor):
+        return
+    executor.claim(
+        {
+            "launch_id": runner.launch_id,
+            "experiment": experiment["experiment"],
+            "name": experiment["name"],
+            "role": runner.role,
+            "created": datetime.now(UTC).isoformat(timespec="seconds"),
+            "host": socket.gethostname(),
+            "pid": os.getpid(),
+        },
+        # A launch id this process invented must name a prefix nobody holds; one
+        # the operator passed is their assertion that they meant this one.
+        exclusive=arguments.launch_id is None,
+    )
+
+
 def main(argv: Sequence[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="trainerctl")
     subparsers = parser.add_subparsers(dest="command", required=True)
     run_parser = subparsers.add_parser("run")
     # One launch names one set of runs. Passing it lets a round be asked for
-    # again without the artifacts landing somewhere new.
+    # again without the artifacts landing somewhere new, and is the only way to
+    # write into a control prefix some other launch has already claimed.
     run_parser.add_argument("--launch-id", default=None)
     _add_launch_arguments(run_parser)
     settle_parser = subparsers.add_parser(
@@ -144,6 +181,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             )
         )
         return 0
+    _claim(executor, arguments, experiment, runner)
     study = runner.run(executor)
     trials = [
         {
@@ -163,6 +201,10 @@ def main(argv: Sequence[str] | None = None) -> int:
         json.dumps(
             {
                 "study": study.study_name,
+                # Which launch this was. Reported rather than left to be
+                # worked out, because a generated id is no longer the start
+                # time and cannot be reconstructed from when it was run.
+                "launch_id": runner.launch_id,
                 "role": runner.role,
                 "seeds": list(runner.seeds),
                 "evaluation_seed": experiment["evaluation"]["seed"],

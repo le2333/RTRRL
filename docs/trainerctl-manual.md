@@ -157,9 +157,13 @@ logging:
 ```
 
 **Identity.** `experiment` is the Aim experiment the runs are filed under; `name` is the
-study. Repeated launches of the same file are told apart by a launch id, a UTC timestamp
-generated at start, so nothing is overwritten. `--launch-id` pins it when you need the
-artifacts of a launch to land where an earlier one's did.
+study. Repeated launches of the same file are told apart by a launch id, so nothing is
+overwritten. A generated one is the UTC second the launch started followed by eight random
+characters — `20260818-151037-3f9c1ab2` — because the second alone is not enough: two
+controllers started together read the same one, and before this they took the same control
+prefix and wrote over each other's manifests. `run` prints the id it took, which is the
+only place to read it. `--launch-id` pins it when you need the artifacts of a launch to
+land where an earlier one's did.
 
 **`image`** must be pinned to a digest (`@sha256:...`). A tag is refused outright: the
 catalog binds a search space to the image that declared it, and a floating tag would let
@@ -475,7 +479,7 @@ Two subcommands. There is deliberately no `status`, `resume`, or `history`.
 | `--backend local\|batch` | none; required | `batch` submits to AWS; `local` runs the worker as a subprocess here |
 | `--catalog PATH` | none; required | The image's `catalog.json` |
 | `--database PATH` | none; required | The Optuna study database |
-| `--launch-id ID` | generated | Names this launch's artifacts; a UTC timestamp by default |
+| `--launch-id ID` | generated | Names this launch's artifacts; a UTC timestamp and random suffix by default |
 | `--exchange PATH` | — | Where round configs and manifests are written; required for `local` |
 | `--workspace PATH` | — | Worker scratch root; required for `local` |
 | `--queues run\|dev` | `run` | `batch` only |
@@ -493,8 +497,9 @@ work genuinely has not finished is reported as still running and left alone.
 
 ### Output and where things land
 
-`run` prints the study to stdout as JSON: every trial's number, state, value and
-parameters, and the best trial. `settle` prints what it settled and what is still running.
+`run` prints the study to stdout as JSON: the launch id, every trial's number, state,
+value and parameters, and the best trial. `settle` prints what it settled and what is
+still running.
 Progress and worker output go to stderr, so `> report.json` gives a clean machine-readable
 result.
 
@@ -505,6 +510,12 @@ Under `--backend local`, the exchange holds one directory per round:
 {exchange}/round-000/manifest.json         # which runs this worker must execute, in order
 {exchange}/round-000/worker.log            # the worker's combined stdout and stderr
 ```
+
+Under `--backend batch`, the same rounds are written to
+`{storage}/{experiment}/{launch_id}/control/`, and beside them `control/launch.json` says
+which process took that prefix. It is written with a conditional create, so a launch that
+generated its own id and found the prefix already taken stops there rather than submitting
+into someone else's.
 
 Each run's own artifacts are written by the entry into a scratch directory and uploaded,
 relative paths preserved, to `artifacts.root`, which is
@@ -544,6 +555,11 @@ entry, which is where the schedule arithmetic lives — `chunk_steps must contai
 environment steps`, `total_steps must consist of whole evaluation intervals`, and the
 `logging` shape, including `aim training names no scope`. These arrive as a failed job, not
 as a preflight message, so a shape mistake costs one container start.
+
+**The control prefix was already taken.** `... already belongs to ...` names the launch
+that holds it, and nothing was submitted. A generated launch id refuses to write into an
+existing prefix; passing `--launch-id` is how you say you meant that one, which is what a
+resumed launch does.
 
 **A job failed.** The failing job's name, the reason, and the last 200 events of its
 CloudWatch log are printed to stderr, surviving jobs in that round are terminated, and the
