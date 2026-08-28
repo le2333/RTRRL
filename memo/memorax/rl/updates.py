@@ -62,6 +62,50 @@ class RuleOutput(struct.PyTreeNode):
     metrics: Any
 
 
+class ObGDReading(struct.PyTreeNode):
+    """What one bounded step passed through, per stream.
+
+    The step size alone says a rate was small and not why it was small. It is
+    the quotient of four things -- the base rate, the TD error, the trace's own
+    size and, under the adaptive bounds, the second moment the trace was
+    normalized by -- and none of the four can be recovered from it afterwards.
+    A run reporting only the quotient cannot tell a rate held down by a large
+    trace from one held down by a large TD error, which is the question anyone
+    reading a bounded run is asking.
+
+    ``trace_sum`` is the L1 the bound reads: ``sum |z|`` under the plain bound,
+    and ``sum |z| / sqrt(v_hat)`` under the adaptive ones, which is why it is
+    not the trace norm an algorithm reports beside it.
+
+    ``delta_bar`` is ``max(|delta|, 1)``, the TD error as the bound reads it.
+    Reported rather than left to be derived from whatever TD error a caller
+    also files, because an algorithm may scale the error before handing it over
+    -- RTRRL multiplies the torso's by ``eta_f`` -- and then the two are
+    different numbers.
+
+    ``bound_denominator`` is ``delta_bar * trace_sum * lr * kappa``, *before*
+    the maximum with one. That is the product the bound compares against one,
+    and the step size is ``lr`` divided by ``max(1, this)``. Before the maximum
+    because afterwards a run approaching its bound and a run nowhere near it
+    are the same number, and which of those a run is is worth being able to
+    see. The bound is active exactly where this exceeds one.
+
+    ``bound_scale`` is what survived: ``step_size / lr``, in ``(0, 1]``.
+
+    ``second_moment_rms`` is the mean over parameters of the denominator the
+    adaptive bounds divide by, which is ``sqrt(v_hat) + eps`` or
+    ``sqrt(v_hat + eps)`` depending on which was declared. It is None for the
+    plain bound, where nothing normalizes and carrying a zero would say there
+    was a normalization that happened to be one.
+    """
+
+    trace_sum: Any = None
+    delta_bar: Any = None
+    bound_denominator: Any = None
+    bound_scale: Any = None
+    second_moment_rms: Any = None
+
+
 @dataclass(frozen=True)
 class UpdateRule:
     """Build-time pairing of a rule's state constructor and its step.
@@ -431,10 +475,8 @@ def make_bounded_rule(*, bound, base) -> UpdateRule:
             for leaf in jax.tree.leaves(normalized)
         )
         delta_bar = jnp.maximum(jnp.abs(delta), 1.0)
-        step_size = learning_rate / jnp.maximum(
-            1.0,
-            delta_bar * trace_sum * learning_rate * kappa,
-        )
+        pressure = delta_bar * trace_sum * learning_rate * kappa
+        step_size = learning_rate / jnp.maximum(1.0, pressure)
 
         # The bounded step size reaches the TD error first, and their product
         # multiplies the trace. That is the order StreamAC multiplies in, and
@@ -467,10 +509,41 @@ def make_bounded_rule(*, bound, base) -> UpdateRule:
         return RuleOutput(
             updates=updates,
             state=moment,
-            metrics={"step_size": step_size},
+            metrics={
+                "step_size": step_size,
+                # The four the step size is a quotient of, so that a small rate
+                # can be attributed rather than only observed. See ObGDReading.
+                "obgd": ObGDReading(
+                    trace_sum=trace_sum,
+                    delta_bar=delta_bar,
+                    bound_denominator=pressure,
+                    bound_scale=step_size / learning_rate,
+                    second_moment_rms=(
+                        _stream_mean(jax.tree.map(denominator, corrected))
+                        if adaptive
+                        else None
+                    ),
+                ),
+            },
         )
 
     return UpdateRule(init=init, apply=apply)
+
+
+def _stream_mean(tree):
+    """One mean per stream over every element of every leaf.
+
+    The same reduction :mod:`memorax.rl.intentional` takes of its
+    preconditioner, and for the same reason: a per-parameter statistic is not
+    a series, and what a reader can compare between two runs is its scale.
+    """
+
+    leaves = jax.tree.leaves(tree)
+    if not leaves:
+        return jnp.asarray(0.0)
+    total = sum(jnp.sum(leaf.reshape(leaf.shape[0], -1), axis=1) for leaf in leaves)
+    count = sum(int(leaf.size // leaf.shape[0]) for leaf in leaves)
+    return total / max(count, 1)
 
 
 def _stream_norm(tree):

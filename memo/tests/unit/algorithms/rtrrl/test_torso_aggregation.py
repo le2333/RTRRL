@@ -49,7 +49,13 @@ from memorax.rl.intentional import (
     IntentionalUpdate,
 )
 from memorax.rl.traces import CARRIED, CURRENT, Trace
-from memorax.rl.updates import ObBound, ObGDStep, Sgd, make_bounded_rule
+from memorax.rl.updates import (
+    AdaptiveObBoundFixed,
+    ObBound,
+    ObGDStep,
+    Sgd,
+    make_bounded_rule,
+)
 from tests.support.builders import graph_of
 from tests.support.environments import TinyContinuousEnv
 from tests.support.numerics import flattened
@@ -591,6 +597,100 @@ def test_the_entropy_direction_reaches_the_actor_branch_and_no_other():
     ), "the entropy direction never reached the actor branch"
 
 
+# ------------------------------------------------------ the bound, made readable
+def test_the_bound_statistics_are_the_terms_the_step_size_is_a_quotient_of():
+    """A small rate is attributable rather than only observable.
+
+    ``step_size`` alone says a rate was small and not why. It is ``lr`` over
+    ``max(1, delta_bar * trace_sum * lr * kappa)`` and none of those terms can
+    be recovered from the quotient, so each is reported: this holds the four
+    against the arithmetic they came from, and against the step size they
+    produce, on a sequence where the bound engages on some steps and not on
+    others.
+    """
+
+    steps = rtrrl.OutputSteps(actor=OBGD_SATURATED, critic=OBGD_SATURATED)
+    _, taken = drive(rtrrl.OutputAggregation(config(steps), steps, clip=0.0), SEQUENCE)
+
+    engaged = 0
+    for index, aggregated in enumerate(taken, start=1):
+        for name in ("actor", "critic"):
+            result = aggregated.taken[name]
+            reading = result.metrics["obgd"]
+            size = np.asarray(result.metrics["step_size"])
+            pressure = np.asarray(reading.bound_denominator)
+
+            np.testing.assert_allclose(
+                pressure,
+                np.asarray(reading.delta_bar)
+                * np.asarray(reading.trace_sum)
+                * OBGD_SATURATED.lr
+                * OBGD_SATURATED.bound.kappa,
+                rtol=1e-6,
+                err_msg=f"{name} step {index}: the denominator is not its own terms",
+            )
+            np.testing.assert_allclose(
+                size,
+                OBGD_SATURATED.lr / np.maximum(1.0, pressure),
+                rtol=1e-6,
+                err_msg=f"{name} step {index}: the step size is not what it bounds to",
+            )
+            np.testing.assert_allclose(
+                np.asarray(reading.bound_scale),
+                size / OBGD_SATURATED.lr,
+                rtol=1e-6,
+                err_msg=f"{name} step {index}: the scale is not what survived",
+            )
+            # The bound is active exactly where the product exceeds one, which
+            # is why the product is reported before the maximum rather than
+            # after: afterwards a run approaching its bound and a run nowhere
+            # near it are the same number.
+            assert np.all((pressure > 1.0) == (size < OBGD_SATURATED.lr - 1e-12))
+            engaged += int(np.any(pressure > 1.0))
+
+    assert engaged, "the bound never engaged, so half of these assertions are vacuous"
+    assert engaged < 2 * len(taken) * 2, (
+        "the bound engaged on every step and stream, so the inactive branch of "
+        "the maximum was never taken"
+    )
+
+
+def test_the_plain_bound_normalizes_by_nothing_and_reports_no_second_moment():
+    """A reading exists where the quantity does, down to which bound was named.
+
+    The adaptive bounds divide the trace by ``sqrt(v_hat)``, and the mean of
+    that denominator is what separates a rate held down by the second moment
+    from one held down by the trace itself. The plain bound has no such
+    denominator, and reporting a one there would be a normalization a reader
+    could not tell from an absent one.
+    """
+
+    plain = rtrrl.OutputSteps(actor=OBGD_ACTOR, critic=OBGD_CRITIC)
+    adaptive_step = ObGDStep(
+        bound=AdaptiveObBoundFixed(kappa=2.0, beta2=0.999, eps=1e-8), lr=LR
+    )
+    adaptive = rtrrl.OutputSteps(actor=adaptive_step, critic=adaptive_step)
+
+    _, without = drive(
+        rtrrl.OutputAggregation(config(plain), plain, clip=0.0), SEQUENCE
+    )
+    _, with_moment = drive(
+        rtrrl.OutputAggregation(config(adaptive), adaptive, clip=0.0), SEQUENCE
+    )
+
+    assert without[-1].taken["actor"].metrics["obgd"].second_moment_rms is None
+    moment = with_moment[-1].taken["actor"].metrics["obgd"].second_moment_rms
+    assert moment is not None
+    assert np.all(np.asarray(moment) > 0.0)
+
+    # And the normalization reaches the L1 the bound reads, which is what makes
+    # the two trace sums different numbers rather than one number twice.
+    assert not np.allclose(
+        np.asarray(without[-1].taken["actor"].metrics["obgd"].trace_sum),
+        np.asarray(with_moment[-1].taken["actor"].metrics["obgd"].trace_sum),
+    )
+
+
 # ---------------------------------------------------------- a whole run document
 def iu_branch(prefix, eta):
     return {f"{prefix}.eta": eta}
@@ -679,6 +779,30 @@ def assembled(mode, *, num_envs=2, overrides=None):
     )
 
 
+def test_an_input_run_files_the_bound_statistics_of_the_rule_it_selected():
+    """The joint path reports whichever of the two self-sizing rules it took.
+
+    Both derive their own step size and both have statistics behind it that the
+    step size does not carry, so the position is not what decides whether they
+    are filed -- the rule is.
+    """
+
+    bounded = set(assembled("input_obgd").observations.series)
+    for quantity in (
+        "trace_sum",
+        "delta_bar",
+        "bound_denominator",
+        "bound_scale",
+        "second_moment_rms",
+    ):
+        assert f"update.torso.obgd.{quantity}" in bounded, quantity
+    assert not any(".intentional." in name for name in bounded if "torso" in name)
+
+    intentional = set(assembled("input_iu").observations.series)
+    assert "update.torso.intentional.sigma_bar" in intentional
+    assert not any(".obgd." in name for name in intentional)
+
+
 @pytest.mark.parametrize("mode", sorted(MODES))
 def test_every_mode_is_reachable_from_a_run_configuration(mode):
     """All four survive the parameter surface and a scan of real transitions.
@@ -725,19 +849,36 @@ def test_an_output_run_files_its_branches_and_no_joint_reading(mode):
         assert f"update.torso.{branch}.grad_norm.recurrence" in filed
         assert f"update.torso.{branch}.trace_norm.recurrence" in filed
 
-    intentional = {
-        name
-        for name in filed
-        if name.startswith("update.torso.") and "intentional" in name
-    }
+    def under(rule):
+        return {
+            name
+            for name in filed
+            if name.startswith("update.torso.") and f".{rule}." in name
+        }
+
     if mode == "output_iu":
+        intentional = under("intentional")
         assert "update.torso.actor.intentional.advantage_scale" in intentional
         # The critic's branch steps along a TD error, so it has no advantage to
         # normalize and files no scale for one.
         assert "update.torso.critic.intentional.advantage_scale" not in intentional
         assert "update.torso.critic.intentional.sigma_bar" in intentional
+        assert not under("obgd"), "an intentional run filed bound statistics"
     else:
-        assert not intentional, "ObGD filed intentional readings it never produced"
+        assert not under("intentional"), "ObGD filed intentional readings"
+        for branch in ("actor", "critic"):
+            for quantity in (
+                "trace_sum",
+                "delta_bar",
+                "bound_denominator",
+                "bound_scale",
+                "second_moment_rms",
+            ):
+                assert f"update.torso.{branch}.obgd.{quantity}" in filed, quantity
+        # Each branch's, and no joint one: there is no joint bound to report.
+        assert not any(
+            name.startswith("update.torso.obgd.") for name in filed
+        ), "an output aggregation filed a joint bound statistic"
 
 
 def test_the_two_branches_stay_apart_across_streams_resets_and_a_resumption():

@@ -90,7 +90,9 @@ from memorax.rl.updates import (
     OBGD_BOUND_FAMILY,
     STEP_FAMILY,
     Adam,
+    AdaptiveObBound,
     ObGD,
+    ObGDReading,
     ObGDStep,
     Sgd,
     make_bounded_rule,
@@ -478,6 +480,27 @@ class IntentionalReports:
 
 
 @dataclass(frozen=True)
+class ObGDReports:
+    """Which of one bounded block's readings to take.
+
+    Off unless the block selected ObGD, for the reason
+    :class:`IntentionalReports` is off unless it selected the intentional
+    update: a name whose value is permanently absent is the failure a reading
+    declaration exists to make impossible.
+
+    Every one of these is a term the bounded step size is a quotient of and
+    that nothing downstream could recover from it -- see
+    :class:`memorax.rl.updates.ObGDReading`, where each is what it is.
+    """
+
+    trace_sum: bool = reading(at="trace_sum", default=False)
+    delta_bar: bool = reading(at="delta_bar", default=False)
+    bound_denominator: bool = reading(at="bound_denominator", default=False)
+    bound_scale: bool = reading(at="bound_scale", default=False)
+    second_moment_rms: bool = reading(at="second_moment_rms", default=False)
+
+
+@dataclass(frozen=True)
 class BlockReports:
     """Which position-split torso readings to take."""
 
@@ -485,6 +508,7 @@ class BlockReports:
     trace_norm: bool = reading(at="trace_norm", split=True)
     step_size: bool = reading(at="step_size")
     intentional: IntentionalReports = readings(of=IntentionalReports, at="intentional")
+    obgd: ObGDReports = readings(of=ObGDReports, at="obgd")
 
 
 @dataclass(frozen=True)
@@ -501,6 +525,7 @@ class BranchReports:
     trace_norm: bool = reading(at="trace_norm", split=True, default=False)
     step_size: bool = reading(at="step_size", default=False)
     intentional: IntentionalReports = readings(of=IntentionalReports, at="intentional")
+    obgd: ObGDReports = readings(of=ObGDReports, at="obgd")
 
 
 @dataclass(frozen=True)
@@ -579,8 +604,10 @@ def _torso_reports(step) -> TorsoReports:
     """
 
     if not isinstance(step, OutputSteps):
+        bounded, adaptive = _bounded(step)
         return TorsoReports(
-            intentional=_intentional_reports(taken=isinstance(step, IntentionalUpdate))
+            intentional=_intentional_reports(taken=isinstance(step, IntentionalUpdate)),
+            obgd=_obgd_reports(taken=bounded, adaptive=adaptive),
         )
     return TorsoReports(
         grad_norm=False,
@@ -595,6 +622,7 @@ def _torso_reports(step) -> TorsoReports:
 def _branch_reports(step, *, advantage: bool = False) -> BranchReports:
     """One output branch's readings, which are on wherever the branch exists."""
 
+    bounded, adaptive = _bounded(step)
     return BranchReports(
         grad_norm=True,
         trace_norm=True,
@@ -602,7 +630,33 @@ def _branch_reports(step, *, advantage: bool = False) -> BranchReports:
         intentional=_intentional_reports(
             taken=isinstance(step, IntentionalUpdate), advantage=advantage
         ),
+        obgd=_obgd_reports(taken=bounded, adaptive=adaptive),
     )
+
+
+def _obgd_reports(*, taken: bool, adaptive: bool = False) -> ObGDReports:
+    """One block's bounded readings, on only where they are produced.
+
+    ``second_moment_rms`` is the mean of the denominator the *adaptive* bounds
+    divide by, so it exists for a block that selected one and nowhere else.
+    The plain bound normalizes by nothing, and a reading of one there would be
+    a normalization that a reader could not tell from an absent one.
+    """
+
+    return ObGDReports(
+        **{
+            item.name: taken and (adaptive or item.name != "second_moment_rms")
+            for item in fields(ObGDReports)
+        }
+    )
+
+
+def _bounded(step) -> tuple[bool, bool]:
+    """Whether a step is ObGD, and whether the bound it named is an adaptive one."""
+
+    if not isinstance(step, ObGDStep):
+        return False, False
+    return True, isinstance(step.bound, AdaptiveObBound)
 
 
 def reports_for(*, torso, actor, critic) -> Reports:
@@ -642,17 +696,20 @@ REPORTS = Reports()
 AVAILABLE_REPORTS = Reports(
     torso=TorsoReports(
         intentional=_intentional_reports(taken=True),
+        obgd=_obgd_reports(taken=True, adaptive=True),
         actor=BranchReports(
             grad_norm=True,
             trace_norm=True,
             step_size=True,
             intentional=_intentional_reports(taken=True, advantage=True),
+            obgd=_obgd_reports(taken=True, adaptive=True),
         ),
         critic=BranchReports(
             grad_norm=True,
             trace_norm=True,
             step_size=True,
             intentional=_intentional_reports(taken=True),
+            obgd=_obgd_reports(taken=True, adaptive=True),
         ),
     ),
     actor=HeadReports(intentional=_intentional_reports(taken=True, advantage=True)),
@@ -696,14 +753,17 @@ class ForwardMetrics(struct.PyTreeNode):
 class BlockUpdate(struct.PyTreeNode):
     """How big what went into one block's step was, and what it passed through.
 
-    ``intentional`` is empty unless the block's optimizer is the intentional
-    update, which is the only one with state of its own worth reading.
+    ``intentional`` and ``obgd`` are empty unless the block selected that rule.
+    They are the two rules here that derive their own step size, and so the two
+    with statistics behind that number which nothing downstream could recover
+    from it.
     """
 
     grad_norm: Any = None
     trace_norm: Any = None
     step_size: Any = None
     intentional: IntentionalReading = IntentionalReading()
+    obgd: ObGDReading = ObGDReading()
 
 
 class TorsoUpdate(BlockUpdate):
@@ -931,6 +991,27 @@ def _step_size(result, key):
     return size
 
 
+def _obgd_reading(result, reports: ObGDReports):
+    """One path's bounded readings, gated by what this graph declares.
+
+    Not keyed by block, unlike the intentional rule's: the bounded rule reads
+    the whole tree it was handed as one unit and derives one step size for it,
+    so what it reports is one reading rather than one per block.
+    """
+
+    produced = result.metrics.get("obgd")
+    if produced is None:
+        return ObGDReading()
+    return ObGDReading(
+        **{
+            item.name: (
+                getattr(produced, item.name) if getattr(reports, item.name) else None
+            )
+            for item in fields(ObGDReports)
+        }
+    )
+
+
 def _intentional_reading(result, key, reports: IntentionalReports):
     """One path's intentional readings, gated by what this graph declares."""
 
@@ -1046,6 +1127,7 @@ class _ContributionPath:
             trace_norm=norms(advanced) if reports.trace_norm else None,
             step_size=_step_size(taken, self.name) if reports.step_size else None,
             intentional=_intentional_reading(taken, self.name, reports.intentional),
+            obgd=_obgd_reading(taken, reports.obgd),
         )
 
 

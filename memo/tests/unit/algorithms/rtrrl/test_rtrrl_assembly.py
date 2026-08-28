@@ -374,20 +374,24 @@ def test_an_intentional_run_files_exactly_the_series_its_schema_names():
     assert "update.actor.intentional.sigma_bar" in produced
     assert "update.actor.step_size" in produced
     # A catalog advertises every reading some configuration files, and no one
-    # configuration files all of them any more: the torso's credit is combined
-    # at one of two positions and each has readings the other cannot produce.
-    # This is the input position with every block intentional, which is all of
-    # the catalog but the two output branches'; the default configuration,
-    # which produces no intentional state at all, files strictly fewer.
-    # `test_torso_aggregation.py` holds the other position against the rest.
+    # configuration files all of them any more. Two independent choices narrow
+    # it: the torso's credit is combined at one of two positions, and each
+    # self-sizing rule reports the statistics behind its own step size. This is
+    # the input position with every block intentional, so what it files is the
+    # catalog less the two output branches' and less the bounded rule's; the
+    # default configuration, which selects neither self-sizing rule anywhere,
+    # files strictly fewer. `test_torso_aggregation.py` holds the other
+    # position and the other rule against the rest.
     available = set(taken(rtrrl.AVAILABLE_REPORTS, parts=PLACES))
     branches = {
         name
         for name in available
         if name.startswith(("update.torso.actor.", "update.torso.critic."))
     }
+    bounded = {name for name in available if ".obgd." in name}
     assert branches, "the catalog no longer advertises the output branches"
-    assert set(built.observations.series) == available - branches
+    assert bounded, "the catalog no longer advertises the bound statistics"
+    assert set(built.observations.series) == available - branches - bounded
     assert set(assembled().observations.series) < available
 
 

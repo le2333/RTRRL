@@ -149,15 +149,56 @@ run files.
 
 | position | filed under |
 | --- | --- |
-| input  | `update.torso.{grad_norm, trace_norm, step_size, intentional.*}` |
-| output | `update.torso.{actor,critic}.{grad_norm, trace_norm, step_size, intentional.*}` |
+| input  | `update.torso.{grad_norm, trace_norm, step_size}` |
+| output | `update.torso.{actor,critic}.{grad_norm, trace_norm, step_size}` |
 
 Under an output aggregation there is no joint derivative, no joint trace and no
-joint step size, so the four joint names are absent rather than reporting one
-branch or a sum of two. `step_size` is the dynamic step under the intentional
-update and the rate the bound left under ObGD, under the one name every rule
-reports its step scale by. The catalog advertises both sets, because a catalog
-says what some configuration can file; no single run files all of it.
+joint step size, so the joint names are absent rather than reporting one branch
+or a sum of two. `step_size` is the dynamic step under the intentional update
+and the rate the bound left under ObGD, under the one name every rule reports
+its step scale by. The catalog advertises both sets, because a catalog says
+what some configuration can file; no single run files all of it.
+
+### Behind the step size
+
+The position decides *where* those are filed; the rule decides what else is
+filed beside them. Both rules on offer here derive their own step size, and in
+both cases that number is a quotient whose terms cannot be recovered from it —
+a run that could only see the quotient could not tell a rate held down by a
+large trace from one held down by a large TD error. So each rule reports what
+the step passed through, under its own name:
+
+| rule | filed under |
+| --- | --- |
+| intentional | `…intentional.{clipped_delta, signal, advantage_scale, rms_scale, sigma_bar, trace_quadratic, denominator, update_norm, non_finite}` |
+| ObGD | `…obgd.{trace_sum, delta_bar, bound_denominator, bound_scale, second_moment_rms}` |
+
+where `…` is `update.torso` at the input position and
+`update.torso.{actor,critic}` at the output one, so an output run has one set
+per branch and the two are readable apart.
+
+The ObGD five are exactly the terms of
+
+    step_size = lr / max(1, delta_bar · trace_sum · lr · kappa)
+
+- `trace_sum` is the L1 the bound reads: `sum |z|` under the plain bound and
+  `sum |z| / sqrt(v_hat)` under the adaptive ones, which is why it is not the
+  `trace_norm` filed beside it.
+- `delta_bar` is `max(|delta|, 1)`, the TD error *as the bound reads it*. It is
+  reported rather than derived from `update.td_error` because the torso's error
+  is scaled by `eta_f` first, and the two are then different numbers.
+- `bound_denominator` is `delta_bar · trace_sum · lr · kappa`, **before** the
+  maximum with one. The bound is active exactly where it exceeds one. Before
+  the maximum, because afterwards a run approaching its bound and a run nowhere
+  near it are the same number, and which of those a run is is the thing worth
+  seeing.
+- `bound_scale` is what survived: `step_size / lr`, in `(0, 1]`.
+- `second_moment_rms` is the mean of the denominator the adaptive bounds divide
+  by — `sqrt(v_hat) + eps` or `sqrt(v_hat + eps)`, whichever was declared. It
+  is absent under the plain bound, where nothing normalizes.
+
+Together they answer the question the step size alone cannot: whether a small
+rate is a small base rate, a large trace, a large TD error, or a second moment.
 
 ## Migrating
 
