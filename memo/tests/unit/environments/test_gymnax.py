@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import jax
+import jax.numpy as jnp
 import pytest
 from gymnax.environments import spaces
 
@@ -11,6 +12,7 @@ from memorax.environments import make
 pytest.importorskip("gymnax")
 
 CARTPOLE = "gymnax::CartPole-v1"
+DISCOUNTING_CHAIN = "gymnax::DiscountingChain-bsuite"
 
 
 def test_the_factory_accepts_every_deployment_field_a_run_declares():
@@ -54,3 +56,31 @@ def test_the_backend_a_gymnax_run_declares_reaches_no_constructor():
     unnamed, _ = make(CARTPOLE, observed=None, backend=None, episode_length=9)
 
     assert type(named) is type(unnamed)
+
+
+def test_discounting_chain_rejects_a_horizon_before_its_last_reward():
+    with pytest.raises(ValueError, match="shorter than DiscountingChain's last reward"):
+        make(
+            DISCOUNTING_CHAIN,
+            observed=None,
+            backend=None,
+            episode_length=20,
+            mapping_seed=0,
+        )
+
+
+def test_discounting_chain_horizon_validation_is_safe_inside_jit():
+    """The ensemble rebuilds swept members while JAX traces their graph."""
+
+    @jax.jit
+    def build(_):
+        _, parameters = make(
+            DISCOUNTING_CHAIN,
+            observed=None,
+            backend=None,
+            episode_length=100,
+            mapping_seed=0,
+        )
+        return parameters.max_steps_in_episode
+
+    assert build(jnp.array(0)) == 100

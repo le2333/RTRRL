@@ -11,16 +11,20 @@ published topology and it is kept unchanged. What is new is that it is now one
 of two positions a run can select, and that the other one is a different
 algorithm rather than a different spelling of the same one.
 
-    torso.optimizer.kind:  adam | d_rtrrl | input_iu | input_obgd
-                                          | output_iu | output_obgd
+    torso.optimizer.kind:  adam | sgd | d_rtrrl | input_iu | input_obgd
+                                                | output_iu | output_obgd
 
 |                        | intentional update | ObGD          |
 | ---------------------- | ------------------ | ------------- |
 | combined before the rule | `input_iu`       | `input_obgd`  |
 | combined after the rule  | `output_iu`      | `output_obgd` |
 
-`adam` and `d_rtrrl` are input-aggregated and unchanged; they have no output
-form here because nothing asked for one.
+`adam`, `sgd` and `d_rtrrl` are input-aggregated and unchanged. The two plain
+rates carry no position because they have nothing to gain from one: both are
+linear in the direction they are handed, so `Rate(a + b)` *is*
+`Rate(a) + Rate(b)` — to the last bit for SGD, and for Adam up to the moments
+it would then have to keep two of. The split is offered exactly where it
+changes the answer.
 
 ## The two positions
 

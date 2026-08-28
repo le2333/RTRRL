@@ -14,7 +14,7 @@ from memorax.algorithms import rtrrl_aaai as rtrrl
 from memorax.assembly import BuildRequest, EnvironmentSpec, assemble
 from memorax.networks.sequence import PLACES
 from memorax.observability.metrics import metric_names
-from memorax.parameters import expand
+from memorax.parameters import expand, flatten
 from memorax.readings import taken
 from tests.support.builders import graph_of
 from tests.support.environments import TinyContinuousEnv
@@ -48,6 +48,19 @@ LIVE = {
     "lambda_v": 0.9,
     "lambda_rnn": 0.9,
     "entropy_rate": 1e-5,
+}
+
+TORSO_LR = 1e-2
+HEAD_LR = 5e-3
+
+SGD = {
+    **LIVE,
+    "torso.optimizer.kind": "sgd",
+    "torso.optimizer.sgd.lr": TORSO_LR,
+    "actor.optimizer.kind": "sgd",
+    "actor.optimizer.sgd.lr": HEAD_LR,
+    "critic.optimizer.kind": "sgd",
+    "critic.optimizer.sgd.lr": HEAD_LR,
 }
 
 D_RTRRL = {
@@ -96,6 +109,24 @@ INTENTIONAL = {
     "actor.optimizer.iu.beta_clip": 0.9998,
     "actor.optimizer.iu.beta_advantage": 0.9998,
     "actor.optimizer.iu.eps": 1e-8,
+    "critic.optimizer.kind": "iu",
+    "critic.optimizer.iu.eta": ETA_CRITIC,
+    "critic.optimizer.iu.clip": 20.0,
+    "critic.optimizer.iu.beta_rms": 0.999,
+    "critic.optimizer.iu.beta_clip": 0.9998,
+    "critic.optimizer.iu.beta_advantage": 0.9998,
+    "critic.optimizer.iu.eps": 1e-8,
+}
+
+# One block per rule, which is the configuration that would find a rule reading
+# a neighbour's state. The torso keeps its outer clip: only the intentional
+# update refuses one, and here it is the critic's, which declares none.
+MIXED = {
+    **LIVE,
+    "torso.optimizer.kind": "sgd",
+    "torso.optimizer.sgd.lr": TORSO_LR,
+    "actor.optimizer.kind": "adam",
+    "actor.optimizer.adam.lr": HEAD_LR,
     "critic.optimizer.kind": "iu",
     "critic.optimizer.iu.eta": ETA_CRITIC,
     "critic.optimizer.iu.clip": 20.0,
@@ -212,6 +243,187 @@ def test_rtrrl_builds_the_selected_kernel_scoped_differentiation(backbone, kind)
     state = built.program.init(jax.random.key(0))
     differentiation_state = state.core.torso.recurrence.differentiation_state
     assert (differentiation_state is None) is (kind == "tbptt")
+
+
+def test_every_block_chooses_from_one_set_of_rules():
+    """Three blocks, one family, and standard SGD among what every one offers.
+
+    A rule reaching one block has to reach all three, which is what keeps one
+    from arriving in the torso alone -- the shape the surface took when only
+    the torso's optimizer was being worked on.
+
+    The torso offers strictly more, and only in one way: it is the block two
+    contributions are combined for, so each rule that is not linear in what it
+    is given appears there once per position rather than once. That is the
+    difference this asserts is the *whole* difference -- the aggregated
+    branches and nothing else -- because a rule quietly present on the torso
+    and missing from a head is the failure the case was written for and is not
+    what having two positions looks like.
+    """
+
+    shared = {"sgd", "adam", "d_rtrrl"}
+    declared = flatten(rtrrl.PARAMETERS)
+    for block in ("torso", "actor", "critic"):
+        assert f"{block}.optimizer.sgd.lr" in declared
+
+    for head in ("actor", "critic"):
+        assert set(kinds(rtrrl.PARAMETERS, f"{head}.optimizer")) == shared | {"iu"}
+
+    torso = set(kinds(rtrrl.PARAMETERS, "torso.optimizer"))
+    assert torso & shared == shared, "a rule reached the readouts and not the torso"
+    assert torso - shared == {
+        "input_iu",
+        "input_obgd",
+        "output_iu",
+        "output_obgd",
+    }, "the torso offers something that is not one of the aggregated positions"
+
+    # And the order the rules are offered in is load-bearing: a configuration
+    # naming no optimizer is filled from the front of the domain, so a rule
+    # arriving ahead of Adam would change every unpinned run without changing a
+    # line of it.
+    unpinned = expand(rtrrl.PARAMETERS, {})
+    for block in ("torso", "actor", "critic"):
+        assert unpinned[f"{block}.optimizer.kind"] == "adam"
+
+
+@pytest.mark.parametrize("backbone", ("lru", "rtu"))
+def test_the_sgd_optimizer_is_reachable_from_a_run_configuration(backbone):
+    """The plain rate, from a run document through to a step that moves.
+
+    Its arithmetic is driven in ``test_rtrrl_sgd_rule``. What is asserted here
+    is everything between a configuration and that arithmetic: that ``sgd``
+    survives the parameter surface on either backbone, that each block steps at
+    the rate it declared rather than at a sibling's, and that a scan of real
+    transitions -- torso trace, two readouts, emphasis, and four episode
+    endings in thirty-two steps -- stays finite and moves every block.
+    """
+
+    built = assembled(backbone, optimizer=SGD)
+    state = built.program.init(jax.random.key(0))
+    stepped, metrics = built.program.train(jax.random.key(1), state, 32)
+
+    for path, leaf in flattened(stepped.core).items():
+        assert np.all(np.isfinite(leaf)), f"{path} went non-finite"
+    assert np.all(np.isfinite(metrics.update.td_error))
+
+    for block, rate in (("torso", TORSO_LR), ("actor", HEAD_LR), ("critic", HEAD_LR)):
+        np.testing.assert_allclose(getattr(metrics.update, block).step_size, rate)
+
+    for block in ("torso", "actor", "critic"):
+        before = flattened(getattr(state.core, block).params)
+        after = flattened(getattr(stepped.core, block).params)
+        assert any(
+            not np.array_equal(leaf, after[path]) for path, leaf in before.items()
+        ), f"{block} never moved"
+
+
+def test_a_rate_does_not_reach_anything_the_algorithm_carries():
+    """Selecting SGD changes the parameters and nothing around them.
+
+    The eligibility, the emphasis and the recurrent sensitivity are the
+    algorithm's, accumulated from the parameters as they stood when the
+    transition was taken -- so after one step from one init on one key they
+    cannot depend on which rule spent the direction. Asserting it against Adam
+    pins the boundary the rule contract draws: a rule is handed a direction and
+    hands back an update, and reads none of the state that produced it.
+    """
+
+    def one_step(optimizer):
+        built = assembled(optimizer=optimizer)
+        state = built.program.init(jax.random.key(0))
+        return graph_of(built).train_step(state, jax.random.key(1))[0]
+
+    under_sgd, under_adam = one_step(SGD), one_step(dict(LIVE))
+
+    for block in ("torso", "actor", "critic"):
+        assert_tree_equal(
+            getattr(under_sgd.core, block).traces,
+            getattr(under_adam.core, block).traces,
+            f"{block} eligibility",
+        )
+    assert_tree_equal(
+        under_sgd.core.torso.recurrence,
+        under_adam.core.torso.recurrence,
+        "the torso recurrence and its sensitivity",
+    )
+    assert_tree_equal(under_sgd.core.emphasis, under_adam.core.emphasis, "emphasis")
+
+    # And the parameters did move apart, so the agreement above is about the
+    # state rather than about two rules that took the same step.
+    stepped = flattened(under_sgd.core.torso.params)
+    other = flattened(under_adam.core.torso.params)
+    assert any(
+        not np.array_equal(leaf, other[path]) for path, leaf in stepped.items()
+    ), "the two rules moved the torso identically, so nothing was told apart"
+
+
+def test_a_resumed_sgd_run_is_the_run_it_would_have_been():
+    """A rate carries no statistic, and a checkpoint has to survive that too.
+
+    Runtime trains in chunks, so every run is already a sequence of
+    resumptions. A rule state holding nothing is the case a serialization round
+    trip is most likely to get quietly wrong: an empty subtree is easy to drop
+    and impossible to notice from the numbers afterwards.
+    """
+
+    built = assembled(optimizer=SGD)
+    graph = graph_of(built)
+    state = built.program.init(jax.random.key(0))
+    keys = jax.random.split(jax.random.key(1), 8)
+
+    uninterrupted, _ = jax.lax.scan(graph.train_step, state, keys)
+    halfway, _ = jax.lax.scan(graph.train_step, state, keys[:4])
+
+    assert not flattened(halfway.core.rule), "a bare rate carries no statistic"
+    saved = serialization.to_state_dict(halfway)
+    # The eligibility is still the block's rather than the rule's, which is
+    # what an empty rule state must not be read as meaning.
+    assert set(saved["core"]["torso"]) >= {"params", "traces"}
+
+    restored = serialization.from_state_dict(halfway, saved)
+    assert_tree_equal(restored, halfway, "restored state")
+    resumed, _ = jax.lax.scan(graph.train_step, restored, keys[4:])
+    assert_tree_equal(resumed.core, uninterrupted.core, "core")
+
+
+def test_the_three_blocks_may_each_be_stepped_by_a_different_rule():
+    """One run, three rules: an SGD torso, an Adam actor, an intentional critic.
+
+    Nothing in the configuration ties the blocks together, and this is where
+    that stops being a claim about the declaration and becomes one about the
+    graph: three rules, three states, three step sizes, and every block moving.
+    """
+
+    built = assembled(optimizer=MIXED)
+    state = built.program.init(jax.random.key(0))
+    stepped, metrics = built.program.train(jax.random.key(1), state, 32)
+
+    for path, leaf in flattened(stepped.core).items():
+        assert np.all(np.isfinite(leaf)), f"{path} went non-finite"
+
+    # Each rule carries what its own kind carries, over its own block and no
+    # other: nothing for the rate, Adam's two moments for the actor, the
+    # intentional statistics for the critic.
+    assert not flattened(stepped.core.rule["torso"]), "the sgd torso carried state"
+    assert set(stepped.core.rule["actor"][0].mu) == {"actor"}
+    assert set(stepped.core.rule["critic"]) == {"critic"}
+    assert {"nu", "sigma_bar"} <= set(
+        serialization.to_state_dict(stepped)["core"]["rule"]["critic"]["critic"]
+    )
+
+    # The torso reports the rate it declared; the critic derives its own, and
+    # a derived one that never moved would mean the two were not told apart.
+    np.testing.assert_allclose(metrics.update.torso.step_size, TORSO_LR)
+    derived = np.asarray(metrics.update.critic.step_size).reshape(-1)
+    assert not np.allclose(derived, derived[0]), "the critic's step never moved"
+
+    for block in ("torso", "actor", "critic"):
+        before = flattened(getattr(state.core, block).params)
+        after = flattened(getattr(stepped.core, block).params)
+        assert any(
+            not np.array_equal(leaf, after[path]) for path, leaf in before.items()
+        ), f"{block} never moved"
 
 
 def test_the_d_rtrrl_optimizer_is_reachable_from_a_run_configuration():

@@ -165,13 +165,13 @@ class RTRRLConfig:
     # A bare step aggregates at the input: one joint derivative, one torso
     # trace, one rule. `OutputSteps` aggregates at the output: two of each,
     # summed only where the parameters are written.
-    torso_optimizer: Adam | DRTRRL | IntentionalUpdate | ObGDStep | OutputSteps = field(
+    torso_optimizer: (
+        Sgd | Adam | DRTRRL | IntentionalUpdate | ObGDStep | OutputSteps
+    ) = field(default_factory=lambda: Adam(lr=1e-4))
+    actor_optimizer: Sgd | Adam | DRTRRL | IntentionalUpdate = field(
         default_factory=lambda: Adam(lr=1e-4)
     )
-    actor_optimizer: Adam | DRTRRL | IntentionalUpdate = field(
-        default_factory=lambda: Adam(lr=1e-4)
-    )
-    critic_optimizer: Adam | DRTRRL | IntentionalUpdate = field(
+    critic_optimizer: Sgd | Adam | DRTRRL | IntentionalUpdate = field(
         default_factory=lambda: Adam(lr=1e-4)
     )
     torso_grad_clip: float = 1.0
@@ -186,7 +186,11 @@ class RTRRLConfig:
 
 #: What a readout may step under. A head has one derivative and one trace, so
 #: there is nothing to aggregate and no position to name.
-RTRRL_OPTIMIZERS = STEP_FAMILY.restricted("adam", "d_rtrrl", "iu")
+#:
+#: Adam stays first, and the order is not cosmetic: a configuration that names
+#: no optimizer is filled from the front of the search domain, so putting a new
+#: rule ahead of Adam would change what every unpinned run is.
+RTRRL_OPTIMIZERS = STEP_FAMILY.restricted("adam", "sgd", "d_rtrrl", "iu")
 
 
 @dataclass(frozen=True)
@@ -268,6 +272,13 @@ def _construct_torso_step(selection, builder: ComponentBuilder):
 #: the rule: ``output_iu`` maintains two intentional optimizers where
 #: ``input_iu`` maintains one, and no setting of one is the other.
 #:
+#: The two plain rates carry no position because they have nothing to gain
+#: from one. Both are linear in the direction they are handed, so
+#: ``Rate(a + b)`` *is* ``Rate(a) + Rate(b)`` -- to the last bit for SGD, and
+#: for Adam up to the moments it would then have to keep two of. Splitting
+#: either would be two states for one algorithm, which is why the split is
+#: offered exactly where it changes the answer.
+#:
 #: ``iu`` is deliberately absent. It named what is now ``input_iu`` and means
 #: exactly that, but a name that had one meaning and now has a position in it
 #: is worth failing on rather than translating silently: a run document that
@@ -275,6 +286,7 @@ def _construct_torso_step(selection, builder: ComponentBuilder):
 #: which is a migration the reader performs rather than one performed for them.
 TORSO_STEP_BRANCHES = {
     "adam": Adam,
+    "sgd": Sgd,
     "d_rtrrl": DRTRRL,
     "input_iu": IntentionalUpdate,
     "input_obgd": ObGD,
@@ -815,18 +827,28 @@ def _from_batch(tree):
 
 
 # ------------------------------------------------------- one rule per block
-def _adam_rule(base: Adam, *, clip: float):
-    """Adam over the combined ascent, which is what the paper's RTRRL steps."""
+def _rate_rule(base: Sgd | Adam, *, clip: float):
+    """A learning rate over the combined ascent, preconditioned or not.
+
+    Adam is what the paper's RTRRL steps; plain SGD is the same chain with the
+    preconditioner left out, so the two share the order the clip is written in.
+    ``clip`` bounds the finished ascent direction before either sees it, which
+    is where the paper's ``grad_clip`` sits and is therefore where it stays for
+    a rate that does nothing else to the direction.
+
+    The scale is written **positive**, and this is the whole reason the chain
+    is spelled out rather than delegated to ``optax.sgd``/``optax.adam``: those
+    fold a negation into the rate because optax steps ``params + updates`` down
+    a gradient, while everything reaching a rule here is an *ascent* direction
+    the algorithm adds. Calling the packaged optimizer would silently descend.
+    """
 
     chain: list[Any] = []
     if clip:
         chain.append(optax.clip_by_global_norm(clip))
-    chain.extend(
-        (
-            optax.scale_by_adam(b1=base.b1, b2=base.b2, eps=base.eps),
-            optax.scale(base.lr),
-        )
-    )
+    if isinstance(base, Adam):
+        chain.append(optax.scale_by_adam(b1=base.b1, b2=base.b2, eps=base.eps))
+    chain.append(optax.scale(base.lr))
     return make_optax_rule(optax.chain(*chain), rate=base.lr)
 
 
@@ -910,7 +932,7 @@ def _block_rule(step, *, cfg: RTRRLConfig, name: str, clip: float):
         return make_bounded_rule(bound=step.bound, base=Sgd(lr=step.lr))
     if isinstance(step, DRTRRL):
         return make_d_rtrrl_rule(step, clip=clip)
-    return _adam_rule(step, clip=clip)
+    return _rate_rule(step, clip=clip)
 
 
 def _trace_for(step, *, decay: float) -> Trace:
@@ -932,6 +954,29 @@ def _trace_for(step, *, decay: float) -> Trace:
     if isinstance(step, IntentionalUpdate):
         return Trace(decay=decay, reads=CURRENT, emphasized=False)
     return Trace(decay=decay, reads=CARRIED, emphasized=True)
+
+
+def make_rules(cfg: RTRRLConfig):
+    """Every rule one configuration steps under, by the name it is filed under.
+
+    ``torso``, ``actor`` and ``critic`` when the torso's credit is combined at
+    the input, and ``torso.actor`` and ``torso.critic`` in place of the first
+    when it is combined at the output -- the same names the readings are filed
+    under, because they are the same paths.
+
+    Nothing in the algorithm calls this: :class:`Core` builds the readouts'
+    rules and the aggregation separately, because it needs the aggregation
+    itself and not a view of it. What this is for is asking what a
+    configuration steps under without building a graph to find out, which is a
+    question about routing rather than about arithmetic and is worth being
+    able to ask directly.
+    """
+
+    aggregation = make_torso_aggregation(cfg)
+    return {
+        JOINT if name == JOINT else f"{JOINT}.{name}": rule
+        for name, rule in aggregation.rules.items()
+    } | make_head_rules(cfg)
 
 
 def make_head_rules(cfg: RTRRLConfig):
@@ -1170,6 +1215,17 @@ class TorsoAggregation:
 
         raise NotImplementedError
 
+    @property
+    def rules(self) -> Mapping[str, Any]:
+        """The rule on each path, by the name it is filed under.
+
+        The same keys :attr:`recurrences` uses, and for the same reason: a
+        caller asking what a configuration steps under should not have to know
+        how many things the answer is. See :func:`make_rules`.
+        """
+
+        raise NotImplementedError
+
     def cotangents(self, upstream, *, actor, critic):
         """What this position traces, pulled back through the shared torso."""
 
@@ -1246,6 +1302,10 @@ class InputAggregation(TorsoAggregation):
     @property
     def recurrences(self) -> Mapping[str, Trace]:
         return {JOINT: self.path.trace}
+
+    @property
+    def rules(self) -> Mapping[str, Any]:
+        return {JOINT: self.path.rule}
 
     def cotangents(self, upstream, *, actor, critic):
         # A gate would be a factor on one of these two terms.
@@ -1340,6 +1400,10 @@ class OutputAggregation(TorsoAggregation):
     @property
     def recurrences(self) -> Mapping[str, Trace]:
         return {name: path.trace for name, path in self.paths.items()}
+
+    @property
+    def rules(self) -> Mapping[str, Any]:
+        return {name: path.rule for name, path in self.paths.items()}
 
     def cotangents(self, upstream, *, actor, critic):
         cotangent = {"actor": actor, "critic": critic}

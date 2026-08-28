@@ -5,7 +5,7 @@ from __future__ import annotations
 import codecs
 import json
 import time
-from collections.abc import Iterator
+from collections.abc import Iterator, Mapping
 from dataclasses import dataclass
 from typing import Any
 from urllib.parse import urlparse
@@ -20,6 +20,13 @@ TERMINAL = {"SUCCEEDED", "FAILED"}
 # multi-gigabyte body is read in thousands of calls rather than millions,
 # small enough that the control plane never notices.
 CHUNK_BYTES = 1 << 20
+# The object that says a control prefix is taken, written before anything is
+# submitted into it.
+LAUNCH_CLAIM = "launch.json"
+# What S3 answers a conditional write that lost the race with. Matched on the
+# code rather than on an exception class because every client here is injected
+# -- this module imports no AWS package, and a test's client is a fake.
+TAKEN = frozenset({"PreconditionFailed", "ConditionalRequestConflict"})
 
 _PROFILES = {
     "c7a.medium": ("c7am", "run-cpu-c7am-queue", "dev-cpu-c7am-queue"),
@@ -31,6 +38,10 @@ _PROFILES = {
 
 class BatchExecutionError(RuntimeError):
     """A Batch job failed before its complete round could be scored."""
+
+
+class LaunchCollisionError(RuntimeError):
+    """The control prefix this launch would write into already belongs to one."""
 
 
 @dataclass(frozen=True)
@@ -81,6 +92,50 @@ class BatchRoundExecutor:
         self.parallel_jobs = parallel_jobs
         self.poll_seconds = poll_seconds
         self._round = 0
+
+    def claim(self, launch: Mapping[str, Any], *, exclusive: bool) -> str:
+        """Take this launch's control prefix before anything is submitted into it.
+
+        Two controllers whose launch ids agreed used to write each other's
+        round manifests, and the loser only found out when its own result.json
+        was missing hours later. A conditional put is the one atomic create on
+        this path, so the prefix belongs to whoever's object lands first and
+        the other stops here, having spent nothing.
+
+        ``exclusive`` is what the launch id means. A generated one names a
+        prefix that must not exist yet, so an existing claim is the collision
+        and is refused. An operator-supplied one is the documented way to land
+        where an earlier launch did, so it adopts the claim already there.
+        """
+
+        uri = f"{self.exchange}/{LAUNCH_CLAIM}"
+        bucket, key = split_s3(uri)
+        try:
+            self.s3.put_object(
+                Bucket=bucket,
+                Key=key,
+                Body=json.dumps(dict(launch), sort_keys=True).encode(),
+                IfNoneMatch="*",
+            )
+        except Exception as error:
+            if not _taken(error):
+                raise
+            if exclusive:
+                raise LaunchCollisionError(
+                    f"{self.exchange} already belongs to {self._claimant(uri)}; "
+                    "this launch would have overwritten it. Pass --launch-id to "
+                    "name a different one, or to say you meant this one."
+                ) from None
+        return uri
+
+    def _claimant(self, uri: str) -> str:
+        """Whose launch holds a prefix, for the message that refuses to take it."""
+
+        try:
+            claim = json.loads(self._get(uri))
+            return ", ".join(f"{name}={claim[name]}" for name in sorted(claim))
+        except Exception:  # noqa: BLE001 - a claim that cannot be read is still a claim
+            return "a launch that left no readable claim"
 
     def __call__(
         self,
@@ -229,6 +284,16 @@ class BatchRoundExecutor:
     def _get(self, uri: str) -> bytes:
         bucket, key = split_s3(uri)
         return self.s3.get_object(Bucket=bucket, Key=key)["Body"].read()
+
+
+def _taken(error: Exception) -> bool:
+    """Whether an S3 error is the conditional write losing rather than failing."""
+
+    response = getattr(error, "response", None)
+    if not isinstance(response, Mapping):
+        return False
+    code = response.get("Error", {}).get("Code")
+    return code in TAKEN
 
 
 def _lines(body: Any, chunk_bytes: int = CHUNK_BYTES) -> Iterator[str]:

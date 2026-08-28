@@ -16,6 +16,7 @@ is which, so the split is made here from the parameter dataclass's own fields.
 import dataclasses
 
 import gymnax
+import jax
 from gymnax.environments import environment
 
 from memorax.environments.wrappers import (
@@ -92,6 +93,11 @@ def _refuse_a_horizon_that_redefines_the_task(env_id: str, params) -> None:
     """
 
     if "DiscountingChain" not in env_id:
+        return
+    # The ensemble entry assembles once before ``vmap`` and again while tracing
+    # each swept member. The concrete preflight build retains task validation;
+    # repeating it over traced parameters only fails compilation.
+    if isinstance(params.reward_timestep, jax.core.Tracer):
         return
     last_payment = int(max(params.reward_timestep))
     if params.max_steps_in_episode < last_payment:

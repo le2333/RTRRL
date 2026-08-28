@@ -33,13 +33,37 @@ class StreamedBody:
         self._source.close()
 
 
+class FakeClientError(Exception):
+    """The one thing the executor reads off a botocore error: its code.
+
+    Raised rather than returned because that is how a lost conditional write
+    arrives -- the caller finds out by having its ``put_object`` fail.
+    """
+
+    def __init__(self, code: str) -> None:
+        super().__init__(code)
+        self.response = {"Error": {"Code": code, "Message": code}}
+
+
 class FakeS3:
     def __init__(self) -> None:
         self.data: dict[tuple[str, str], bytes] = {}
         self.files: dict[tuple[str, str], Path] = {}
         self.bodies: dict[tuple[str, str], StreamedBody] = {}
 
-    def put_object(self, *, Bucket: str, Key: str, Body: bytes) -> None:
+    def put_object(
+        self,
+        *,
+        Bucket: str,
+        Key: str,
+        Body: bytes,
+        IfNoneMatch: str | None = None,
+    ) -> None:
+        # The conditional create, which is what makes a control prefix
+        # something only one launch can take. S3 answers the loser with
+        # PreconditionFailed and leaves the object that was already there.
+        if IfNoneMatch == "*" and (Bucket, Key) in self.data:
+            raise FakeClientError("PreconditionFailed")
         self.data[(Bucket, Key)] = Body
 
     def put_file(self, *, Bucket: str, Key: str, Source: Path) -> None:

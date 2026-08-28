@@ -6,10 +6,11 @@ from pathlib import Path
 from typing import Any
 
 import pytest
-from fakes import FakeBatch, FakeLogs, FakeS3, publish_result, split
+from fakes import FakeBatch, FakeClientError, FakeLogs, FakeS3, publish_result, split
 
 from trainer_infra.batch import (
     CHUNK_BYTES,
+    LAUNCH_CLAIM,
     REGION,
     BatchExecutionError,
     BatchRoundExecutor,
@@ -172,3 +173,27 @@ def test_scoring_finished_artifacts_submits_no_job() -> None:
         {"trial": trial, "seed": 0, "value": float(trial + 1)} for trial in range(2)
     )
     assert batch.submitted == []
+
+
+def test_claiming_a_prefix_records_what_took_it() -> None:
+    s3 = FakeS3()
+    taken = executor(s3, FakeBatch(s3)).claim({"launch_id": "launch"}, exclusive=True)
+
+    assert taken == f"s3://bucket/control/launch/{LAUNCH_CLAIM}"
+    assert json.loads(s3.data[split(taken)]) == {"launch_id": "launch"}
+
+
+def test_a_claim_that_fails_for_another_reason_is_not_read_as_a_collision() -> None:
+    """Only the lost race is a collision; everything else is still an error.
+
+    A claim swallowed because the bucket denied the write would leave the
+    launch running into a prefix it does not own, which is the failure this
+    whole path exists to prevent.
+    """
+
+    class Denying(FakeS3):
+        def put_object(self, **request: Any) -> None:
+            raise FakeClientError("AccessDenied")
+
+    with pytest.raises(FakeClientError):
+        executor(Denying(), FakeBatch(FakeS3())).claim({}, exclusive=True)

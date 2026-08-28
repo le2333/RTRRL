@@ -1001,6 +1001,7 @@ def test_the_declared_surface_names_the_position_rather_than_implying_it():
     branches = set(rtrrl.RTRRL_TORSO_OPTIMIZERS.branches)
     assert branches == {
         "adam",
+        "sgd",
         "d_rtrrl",
         "input_iu",
         "input_obgd",
@@ -1008,6 +1009,9 @@ def test_the_declared_surface_names_the_position_rather_than_implying_it():
         "output_obgd",
     }
     assert "iu" not in branches
+    # Adam stays first, because a configuration that names no optimizer is
+    # filled from the front of the search domain.
+    assert next(iter(rtrrl.RTRRL_TORSO_OPTIMIZERS.branches)) == "adam"
 
     declared = set(expand(rtrrl.PARAMETERS, {"torso.optimizer.kind": "output_obgd"}))
     for branch in ("actor", "critic"):
@@ -1026,7 +1030,7 @@ def test_the_head_optimizers_cannot_name_a_torso_position():
     a configuration say something that has no meaning there.
     """
 
-    assert set(rtrrl.RTRRL_OPTIMIZERS.branches) == {"adam", "d_rtrrl", "iu"}
+    assert set(rtrrl.RTRRL_OPTIMIZERS.branches) == {"adam", "sgd", "d_rtrrl", "iu"}
 
 
 def test_a_run_document_reaches_the_same_graph_the_config_builds():

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import secrets
 import statistics
 from collections.abc import Callable, Iterator, Mapping, Sequence
 from dataclasses import dataclass
@@ -49,6 +50,28 @@ REQUIRED: Mapping[str, tuple[str, ...]] = {
 SELECTION: tuple[str, ...] = ("study", "trial", "tuning_seeds")
 
 TRAINING_PHASE = "train/"
+
+# How many random bytes follow the timestamp in a generated launch id. The
+# stamp resolves to the second, and two controllers started from one terminal
+# land inside the same second often enough to have done it in production: both
+# generated 20260818-151037, both wrote the same control prefix, and the later
+# submission overwrote the earlier one's manifests, so a job named for one
+# configuration ran the other's. Four bytes separate every launch that will
+# ever share a second here and still leave the id short enough to read in a
+# job name.
+LAUNCH_ENTROPY_BYTES = 4
+
+
+def new_launch_id(moment: datetime | None = None) -> str:
+    """A launch id no concurrent controller will also hold.
+
+    The timestamp is what makes a launch findable months later, so it stays in
+    front and the ids still sort by when they started. What makes it unique is
+    the suffix, which comes from the process rather than from the clock.
+    """
+
+    stamp = (moment or datetime.now(UTC)).strftime("%Y%m%d-%H%M%S")
+    return f"{stamp}-{secrets.token_hex(LAUNCH_ENTROPY_BYTES)}"
 
 
 class ExperimentError(ValueError):
@@ -157,7 +180,7 @@ class ExperimentRunner:
             raise ExperimentError(f"the experiment file does not say {missing}")
 
         self.experiment = experiment
-        self.launch_id = launch_id or datetime.now(UTC).strftime("%Y%m%d-%H%M%S")
+        self.launch_id = launch_id or new_launch_id()
         self.digest = _digest(experiment["image"])
         self.seeds = _seeds(experiment)
         self.selection = self._selected(experiment)
