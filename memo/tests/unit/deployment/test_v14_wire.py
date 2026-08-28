@@ -229,3 +229,27 @@ def test_image_catalog_uses_the_deployment_contract(tmp_path: Path) -> None:
     assert ssm not in (ctrnn, lstm, parsed.entries["rtrrl"].parameters)
     assert "spectral_bound" in ssm["torso"]
     assert "backbone" not in ssm["torso"]
+
+
+def test_every_rtrrl_entry_offers_standard_sgd_on_every_block() -> None:
+    """The catalog is where a search space reads what it may ask for.
+
+    Four RTRRL graphs and eight entries, and a rule that reached the algorithm
+    but not the catalog would be a rule no launch document could name: the
+    control plane samples from what is described here, so an omission is not a
+    missing test but a missing option. Both halves are needed -- ``sgd`` in the
+    ``kind`` domain so a space may select or pin it, and ``sgd.lr`` beneath it
+    so the selection has a rate to carry.
+    """
+
+    catalog = build_catalog()
+    for name, entry in catalog.entries.items():
+        if not name.startswith("rtrrl"):
+            continue
+        for block in ("torso", "actor", "critic"):
+            optimizer = entry.parameters[block]["optimizer"]
+            assert "sgd" in optimizer["kind"]["valid"]["values"], f"{name}.{block}"
+            # And searchable, not merely valid: a space that may only pin a
+            # value cannot put the rule in a round against the others.
+            assert "sgd" in optimizer["kind"]["search"]["values"], f"{name}.{block}"
+            assert optimizer["sgd"]["lr"]["valid"]["type"] == "float"

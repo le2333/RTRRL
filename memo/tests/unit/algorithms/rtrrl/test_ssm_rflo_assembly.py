@@ -206,6 +206,50 @@ def test_the_normalization_behind_the_cell_is_a_choice_that_holds_no_parameters(
     assert apart(torso_params(moved), torso_params(normalized)) > 0.0
 
 
+# --------------------------------------------------------------- the update rule
+TORSO_LR = 1e-2
+HEAD_LR = 5e-3
+
+SGD = {
+    "torso.optimizer.kind": "sgd",
+    "torso.optimizer.sgd.lr": TORSO_LR,
+    "actor.optimizer.kind": "sgd",
+    "actor.optimizer.sgd.lr": HEAD_LR,
+    "critic.optimizer.kind": "sgd",
+    "critic.optimizer.sgd.lr": HEAD_LR,
+}
+
+
+def test_every_block_may_be_stepped_by_plain_sgd():
+    """This entry reads RTRRL's optimizer family, so it offers what that offers.
+
+    Reusing the family is not the same as reaching it -- an entry that declared
+    its own would look identical at the call site and quietly offer less. So
+    the rule is asserted where it is selected: declared on all three blocks,
+    built at the rate each one named, and stepping the cell this entry exists
+    for. The rule's arithmetic is driven in ``test_rtrrl_sgd_rule``.
+    """
+
+    for block in ("torso", "actor", "critic"):
+        assert "sgd" in kinds(ssm_rflo.PARAMETERS, f"{block}.optimizer")
+        assert f"{block}.optimizer.sgd.lr" in flatten(ssm_rflo.PARAMETERS)
+
+    agent = build(**SGD)
+    before = agent.init(jax.random.key(0))
+    after, metrics = run(agent, 8)
+
+    for block, rate in (("torso", TORSO_LR), ("actor", HEAD_LR), ("critic", HEAD_LR)):
+        taken = getattr(metrics.update, block)
+        assert float(jnp.max(jnp.abs(taken.step_size - rate))) == 0.0
+        assert (
+            apart(getattr(before.core, block).params, getattr(after.core, block).params)
+            > 0.0
+        ), f"{block} never moved"
+    assert all(
+        bool(jnp.all(jnp.isfinite(leaf))) for leaf in jax.tree.leaves(after.core)
+    ), "the run went non-finite"
+
+
 def test_the_configuration_the_launch_document_names_builds():
     """``hidden_dim: 32``, which is the width the other RTRRL entries run."""
 
