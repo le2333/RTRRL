@@ -12,6 +12,7 @@ from .delayed_observation import (
     DelayedObservationWrapper,
     DelayedObservationWrapperState,
 )
+from .episode_ending import NO_LIMIT, EpisodeEndingWrapper
 from .flickering_observation import FlickeringObservationWrapper
 from .multi_agent_record_episode_statistics import (
     MultiAgentRecordEpisodeStatistics,
