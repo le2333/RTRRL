@@ -9,11 +9,17 @@ An intentional update sizes a step by what the step is supposed to spend:
     rho     its inverse root, the preconditioner every term is read through
     sigma   the statistic <rho p, p>, averaged into sigma_bar at the trace's
             own decay
-    alpha   eta / max(sqrt(sigma_bar <rho z, z>), floor)
+    m       a first moment of the eligibility trace, at beta_momentum
+    alpha   eta / max(sqrt(sigma_bar <rho m, m>), floor)
 
-and one transition's update is ``alpha * signal * rho * z``, where the signal
+and one transition's update is ``alpha * signal * rho * m``, where the signal
 is a clipped TD error for a value function and an advantage normalized by its
 own running scale for a policy.
+
+``m`` is Adam's first moment moved onto the direction this optimizer steps
+along, and at ``beta_momentum = 0`` it *is* the trace, to the last bit: the
+published update is what this reduces to rather than what it approximates. See
+:func:`moment_average` and :class:`IntentionalUpdate`.
 
 **The trace is not this optimizer's.** It arrives already accumulated, from
 :mod:`memorax.rl.traces`, and so does the instantaneous derivative it was
@@ -84,6 +90,22 @@ class IntentionalUpdate:
 
     ``eps`` sits beside the root -- ``(sqrt(nu) + eps)`` -- which is where both
     the paper and the implementation put it.
+
+    ``beta_momentum`` is not the paper's. It is Adam's ``beta1``, written over
+    the eligibility trace: what this optimizer steps along is the trace, which
+    is the place a gradient method keeps its gradient, so smoothing it is the
+    same operation Adam performs and takes the same coefficient. The smoothed
+    trace replaces the raw one in *both* places the raw one is read -- the
+    direction the step is taken along, and the quadratic its step size divides
+    by -- because a step size derived against one direction and then spent on
+    another is not the size of anything.
+
+    Zero is the default and it is an exact zero, not a small one: the moment is
+    ``0 * m + 1 * z`` and its bias correction divides by ``1 - 0``, so at zero
+    every operation returns the trace itself and this is the published
+    optimizer bit for bit. A run that leaves it there is the paper's; a run
+    that raises it is a different optimizer, and says so by the number it
+    carries.
     """
 
     eta: float = param(valid=(1e-9, 100.0), search=(1e-4, 1.0), log=True)
@@ -91,6 +113,7 @@ class IntentionalUpdate:
     beta_rms: float = param(valid=(0.0, 1.0), search=[0.999], default=0.999)
     beta_clip: float = param(valid=(0.0, 1.0), search=[0.9998], default=0.9998)
     beta_advantage: float = param(valid=(0.0, 1.0), search=[0.9998], default=0.9998)
+    beta_momentum: float = param(valid=(0.0, 1.0), search=[0.0], default=0.0)
     denominator_floor: float = param(
         valid=(0.0, 1.0), search=[1e-8], default=1e-8, log=True
     )
@@ -101,7 +124,10 @@ class IntentionalState(struct.PyTreeNode):
     """One parameter group's intentional state, all of it per stream.
 
     No eligibility trace: that is the algorithm's, and it arrives at each step
-    from the trace component that owns it.
+    from the trace component that owns it. ``momentum`` is not one either -- it
+    is a running average *of* the trace that arrives, kept here because nothing
+    outside reads it and because at ``beta_momentum = 0`` it is that trace
+    unchanged.
 
     ``rho`` and ``alpha`` are not here either, being functions of what is --
     the preconditioner of ``nu``, the step size of ``sigma_bar`` and this
@@ -115,6 +141,7 @@ class IntentionalState(struct.PyTreeNode):
     """
 
     nu: Any
+    momentum: Any
     sigma_bar: Any
     delta_square: Any
     advantage_scale: Any = None
@@ -133,6 +160,10 @@ class IntentionalReading(struct.PyTreeNode):
     advantage_scale: Any = None
     rms_scale: Any = None
     sigma_bar: Any = None
+    # `<rho m, m>`, measured on the direction the step was actually taken
+    # along. At `beta_momentum = 0` that direction is the trace and this is the
+    # quantity the name has always meant; above zero it is the smoothed trace,
+    # which is what the step size divided by and so what is worth reading.
     trace_quadratic: Any = None
     denominator: Any = None
     step_size: Any = None
@@ -162,6 +193,37 @@ def corrected_average(previous, sample, *, beta, step):
     moving = remaining > 0
     rate = jnp.where(moving, (1.0 - beta) / jnp.where(moving, remaining, 1.0), 0.0)
     return previous + rate * (sample - previous)
+
+
+def moment_average(previous, sample, *, beta, step):
+    """Adam's first moment over a whole tree, corrected where it is read.
+
+    The other averages here are kept in their corrected form, which is what the
+    paper writes and what makes a first sample arrive whole. This one is kept
+    the way Adam keeps it -- ``beta * previous + (1 - beta) * sample``, divided
+    by ``1 - beta**step`` on the way out -- for one reason: at ``beta = 0`` that
+    recursion is ``0 * previous + 1 * sample`` and the correction is a division
+    by exactly one, so what comes back is the sample with no rounding anywhere.
+    The corrected recursion would compute ``previous + (sample - previous)``,
+    which is the same number in exact arithmetic and is not the same float, and
+    the whole claim about ``beta_momentum = 0`` is that there is no difference
+    to find.
+
+    Both the moment to carry and the moment to read are returned, because the
+    correction belongs to the reading and carrying a corrected moment would
+    make the next step's ``beta * previous`` a factor off.
+
+    A ``beta`` of exactly one names a moment that never moves. Its correction is
+    zero, the division is guarded, and what comes back is the moment as it
+    stands -- the zeros it was allocated with.
+    """
+
+    moving = jax.tree.map(
+        lambda old, leaf: beta * old + (1.0 - beta) * leaf, previous, sample
+    )
+    correction = 1.0 - beta**step
+    divisor = jnp.where(correction > 0, correction, 1.0)
+    return moving, jax.tree.map(lambda leaf: leaf / divisor, moving)
 
 
 def clipped_td_error(delta, mean_square, *, beta, clip, step):
@@ -265,6 +327,7 @@ class IntentionalOptimizer:
         zero = jnp.zeros((streams,), dtype=jnp.float32)
         return IntentionalState(
             nu=empty,
+            momentum=jax.tree.map(jnp.zeros_like, empty),
             sigma_bar=zero,
             delta_square=zero,
             advantage_scale=None if self.signal == TD else zero,
@@ -346,14 +409,25 @@ class IntentionalOptimizer:
             state.sigma_bar, sigma, beta=self.decay, step=step
         )
 
+        # The direction this step is taken along. At `beta_momentum = 0` it is
+        # `trace` and every line below reads the trace exactly as it always
+        # did; above zero it is the trace smoothed, and the step size is
+        # measured on it rather than on the raw trace, because a step size is
+        # how far to go along *this* direction.
+        carried, momentum = moment_average(
+            state.momentum, trace, beta=settings.beta_momentum, step=step
+        )
+
         quadratic = _stream_sum(
-            jax.tree.map(lambda inverse, leaf: inverse * jnp.square(leaf), rho, trace)
+            jax.tree.map(
+                lambda inverse, leaf: inverse * jnp.square(leaf), rho, momentum
+            )
         )
         denominator = jnp.sqrt(sigma_bar * quadratic)
         alpha = settings.eta / jnp.maximum(denominator, settings.denominator_floor)
 
         ascent = _stream_scaled(
-            jax.tree.map(lambda inverse, leaf: inverse * leaf, rho, trace),
+            jax.tree.map(lambda inverse, leaf: inverse * leaf, rho, momentum),
             alpha * signal,
         )
         updates = jax.tree.map(lambda leaf: jnp.mean(leaf, axis=0), ascent)
@@ -361,6 +435,7 @@ class IntentionalOptimizer:
             updates,
             IntentionalState(
                 nu=nu,
+                momentum=carried,
                 sigma_bar=sigma_bar,
                 delta_square=delta_square,
                 advantage_scale=scale,

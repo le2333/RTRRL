@@ -422,7 +422,7 @@ def test_a_reading_nobody_declared_is_absent():
         reports=rtrrl.Reports(
             log_prob=False,
             emphasis=False,
-            torso=rtrrl.BlockReports(grad_norm=False, trace_norm=True),
+            torso=rtrrl.TorsoReports(grad_norm=False, trace_norm=True),
             actor=rtrrl.HeadReports(step_size=False),
         )
     )
@@ -460,7 +460,7 @@ def test_declaring_less_compiles_to_less():
             value=False,
             td_error=False,
             emphasis=False,
-            torso=rtrrl.BlockReports(False, False, False),
+            torso=rtrrl.TorsoReports(False, False, False),
             actor=rtrrl.HeadReports(False, False, False),
             critic=rtrrl.HeadReports(False, False, False),
         )

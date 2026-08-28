@@ -95,13 +95,13 @@ INTENTIONAL = {
     # The intentional update sets its own step size, so the outer bound on the
     # finished torso step has to be off before one can be selected at all.
     "torso.grad_clip": 0.0,
-    "torso.optimizer.kind": "iu",
-    "torso.optimizer.iu.eta": ETA_CRITIC,
-    "torso.optimizer.iu.clip": 20.0,
-    "torso.optimizer.iu.beta_rms": 0.999,
-    "torso.optimizer.iu.beta_clip": 0.9998,
-    "torso.optimizer.iu.beta_advantage": 0.9998,
-    "torso.optimizer.iu.eps": 1e-8,
+    "torso.optimizer.kind": "input_iu",
+    "torso.optimizer.input_iu.eta": ETA_CRITIC,
+    "torso.optimizer.input_iu.clip": 20.0,
+    "torso.optimizer.input_iu.beta_rms": 0.999,
+    "torso.optimizer.input_iu.beta_clip": 0.9998,
+    "torso.optimizer.input_iu.beta_advantage": 0.9998,
+    "torso.optimizer.input_iu.eps": 1e-8,
     "actor.optimizer.kind": "iu",
     "actor.optimizer.iu.eta": ETA_ACTOR,
     "actor.optimizer.iu.clip": 20.0,
@@ -246,19 +246,37 @@ def test_rtrrl_builds_the_selected_kernel_scoped_differentiation(backbone, kind)
 
 
 def test_every_block_chooses_from_one_set_of_rules():
-    """Three blocks, one family, and standard SGD among what it offers.
+    """Three blocks, one family, and standard SGD among what every one offers.
 
-    The blocks declare the same restriction of the shared step family, so a
-    rule reaching one of them reaches all three. Asserting the three sets are
-    equal is what keeps a rule from arriving in the torso alone, which is the
-    shape the surface took when only the torso's optimizer was being worked on.
+    A rule reaching one block has to reach all three, which is what keeps one
+    from arriving in the torso alone -- the shape the surface took when only
+    the torso's optimizer was being worked on.
+
+    The torso offers strictly more, and only in one way: it is the block two
+    contributions are combined for, so each rule that is not linear in what it
+    is given appears there once per position rather than once. That is the
+    difference this asserts is the *whole* difference -- the aggregated
+    branches and nothing else -- because a rule quietly present on the torso
+    and missing from a head is the failure the case was written for and is not
+    what having two positions looks like.
     """
 
-    offered = {"sgd", "adam", "d_rtrrl", "iu"}
+    shared = {"sgd", "adam", "d_rtrrl"}
     declared = flatten(rtrrl.PARAMETERS)
     for block in ("torso", "actor", "critic"):
-        assert set(kinds(rtrrl.PARAMETERS, f"{block}.optimizer")) == offered
         assert f"{block}.optimizer.sgd.lr" in declared
+
+    for head in ("actor", "critic"):
+        assert set(kinds(rtrrl.PARAMETERS, f"{head}.optimizer")) == shared | {"iu"}
+
+    torso = set(kinds(rtrrl.PARAMETERS, "torso.optimizer"))
+    assert torso & shared == shared, "a rule reached the readouts and not the torso"
+    assert torso - shared == {
+        "input_iu",
+        "input_obgd",
+        "output_iu",
+        "output_obgd",
+    }, "the torso offers something that is not one of the aggregated positions"
 
     # And the order the rules are offered in is load-bearing: a configuration
     # naming no optimizer is filled from the front of the domain, so a rule
@@ -567,11 +585,25 @@ def test_an_intentional_run_files_exactly_the_series_its_schema_names():
     assert produced == set(built.observations.series)
     assert "update.actor.intentional.sigma_bar" in produced
     assert "update.actor.step_size" in produced
-    # A catalog advertises every reading some configuration files. This is the
-    # configuration that files all of them; the default one, which produces no
-    # intentional state at all, files strictly fewer.
+    # A catalog advertises every reading some configuration files, and no one
+    # configuration files all of them any more. Two independent choices narrow
+    # it: the torso's credit is combined at one of two positions, and each
+    # self-sizing rule reports the statistics behind its own step size. This is
+    # the input position with every block intentional, so what it files is the
+    # catalog less the two output branches' and less the bounded rule's; the
+    # default configuration, which selects neither self-sizing rule anywhere,
+    # files strictly fewer. `test_torso_aggregation.py` holds the other
+    # position and the other rule against the rest.
     available = set(taken(rtrrl.AVAILABLE_REPORTS, parts=PLACES))
-    assert set(built.observations.series) == available
+    branches = {
+        name
+        for name in available
+        if name.startswith(("update.torso.actor.", "update.torso.critic."))
+    }
+    bounded = {name for name in available if ".obgd." in name}
+    assert branches, "the catalog no longer advertises the output branches"
+    assert bounded, "the catalog no longer advertises the bound statistics"
+    assert set(built.observations.series) == available - branches - bounded
     assert set(assembled().observations.series) < available
 
 
