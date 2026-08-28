@@ -30,6 +30,8 @@ uses three and is the only place their averaging matters.
 
 from __future__ import annotations
 
+from dataclasses import replace
+
 import jax
 import jax.numpy as jnp
 import numpy as np
@@ -57,6 +59,12 @@ SETTINGS = IntentionalUpdate(
     denominator_floor=FLOOR,
     eps=EPS,
 )
+
+# Adam's `beta1` over the eligibility trace. The published optimizer is the
+# zero of this, which is why `SETTINGS` leaves it at its default and why every
+# case here that is about something else runs at zero.
+MOMENTUM = 0.6
+SMOOTHED = replace(SETTINGS, beta_momentum=MOMENTUM)
 
 WIDTH = 4
 PARAMS = {"w": jnp.zeros((WIDTH,), dtype=jnp.float32)}
@@ -130,7 +138,7 @@ def paper_step(carried, transition, *, settings, decay, signal, step):
     algorithm's convention for dropping it.
     """
 
-    z, nu, sigma_bar, mean_square, scale = carried
+    z, m, nu, sigma_bar, mean_square, scale = carried
     delta = float(transition["delta"])
     gradient = np.asarray(transition["derivative"], dtype=np.float64)
     direct = np.asarray(
@@ -155,18 +163,23 @@ def paper_step(carried, transition, *, settings, decay, signal, step):
     sigma = float(rho @ (gradient**2))
     sigma_bar = averaged(sigma_bar, sigma, decay)
     z = decay * (1 - reset) * z + gradient
-    quadratic = float(rho @ (z**2))
+    # Adam's first moment, kept plain and corrected on the way out, over the
+    # trace rather than over a gradient. At `beta_momentum = 0` it is `z`.
+    beta1 = settings.beta_momentum
+    m = beta1 * m + (1 - beta1) * z
+    direction = m / (1 - beta1**step)
+    quadratic = float(rho @ (direction**2))
     denominator = np.sqrt(sigma_bar * quadratic)
     alpha = settings.eta / max(denominator, settings.denominator_floor)
 
-    update = alpha * chosen * rho * z
-    return (z, nu, sigma_bar, mean_square, scale), update
+    update = alpha * chosen * rho * direction
+    return (z, m, nu, sigma_bar, mean_square, scale), update
 
 
 def paper(sequence, *, settings=SETTINGS, decay=DECAY, signal=TD):
     """Every update the paper's equations produce over one sequence."""
 
-    carried = (np.zeros(WIDTH), np.zeros(WIDTH), 0.0, 0.0, 0.0)
+    carried = (np.zeros(WIDTH), np.zeros(WIDTH), np.zeros(WIDTH), 0.0, 0.0, 0.0)
     updates = []
     for step, transition in enumerate(sequence, start=1):
         carried, update = paper_step(
@@ -195,9 +208,14 @@ WITH_ENTROPY = [
 ]
 
 
+@pytest.mark.parametrize(
+    "settings", [SETTINGS, SMOOTHED], ids=["published", "smoothed"]
+)
 @pytest.mark.parametrize("signal", [TD, ADVANTAGE])
 @pytest.mark.parametrize("sequence", [SEQUENCE, WITH_ENTROPY], ids=["plain", "entropy"])
-def test_every_update_is_the_one_the_paper_s_equations_produce(signal, sequence):
+def test_every_update_is_the_one_the_paper_s_equations_produce(
+    signal, sequence, settings
+):
     """Both algorithms, over a sequence with a reset and an outlier in it.
 
     The outlier is what makes the clip do something, the zero TD error is where
@@ -206,8 +224,8 @@ def test_every_update_is_the_one_the_paper_s_equations_produce(signal, sequence)
     its first sample behind.
     """
 
-    taken = drive(*pair(signal=signal), sequence)
-    expected = paper(sequence, signal=signal)
+    taken = drive(*pair(signal=signal, settings=settings), sequence)
+    expected = paper(sequence, signal=signal, settings=settings)
 
     for step, ((updates, _, _, _), reference) in enumerate(
         zip(taken, expected), start=1
@@ -222,6 +240,48 @@ def test_every_update_is_the_one_the_paper_s_equations_produce(signal, sequence)
 
 
 # ----------------------------------------------------- what "intentional" is
+
+
+def test_a_momentum_of_zero_carries_the_trace_itself_and_nothing_rounder():
+    """What makes ``beta_momentum: 0`` the published optimizer rather than near it.
+
+    The moment is ``0 * m + 1 * z`` corrected by ``1 - 0**t``, which is a
+    multiplication by one and a division by one, so the direction the step is
+    taken along is the trace the algorithm handed over -- the same floats, not
+    the same value recomputed. Written as ``m + (z - m)``, the form every other
+    average here is kept in, it would not be, and the equality the case above
+    asserts at ``rtol=1e-5`` would be hiding a difference rather than there
+    being none to hide.
+    """
+
+    for updates, state, _, used in drive(*pair(), SEQUENCE):
+        del updates
+        assert np.array_equal(
+            np.asarray(state.momentum["w"]), np.asarray(used["w"])
+        ), "the moment at beta_momentum = 0 is not the trace it was handed"
+
+
+def test_a_momentum_above_zero_steps_along_a_direction_the_trace_is_not():
+    """And the difference is the smoothing, not a rescaling of the same vector.
+
+    A first moment of a sequence points where the sequence has been, which is
+    not where its latest term points. So the two are checked for being
+    non-parallel rather than merely unequal: a step that had only been scaled
+    would be the published algorithm with a different ``eta``.
+    """
+
+    smoothed = drive(*pair(settings=SMOOTHED), SEQUENCE)
+    plain = drive(*pair(), SEQUENCE)
+
+    angles = []
+    for (_, state, _, used), _ in zip(smoothed, plain):
+        moment = np.asarray(state.momentum["w"])[0]
+        trace = np.asarray(used["w"])[0]
+        lengths = np.linalg.norm(moment) * np.linalg.norm(trace)
+        if lengths > 0:
+            angles.append(abs(float(moment @ trace) / lengths))
+    assert angles, "the sequence never produced a trace to compare against"
+    assert min(angles) < 0.999, "the moment stayed parallel to the trace throughout"
 
 
 def test_one_step_spends_exactly_the_intended_fraction_of_the_td_error():
