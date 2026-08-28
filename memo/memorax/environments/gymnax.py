@@ -20,8 +20,33 @@ import jax
 from gymnax.environments import environment
 
 from memorax.environments.wrappers import (
+    EpisodeEndingWrapper,
     SelectObservationWrapper,
     bsuite_wrapper_for,
+)
+
+# The environments whose ``max_steps_in_episode`` is a clock imposed on the task
+# rather than the horizon the task is defined over. Classic control is the whole
+# of the list: a pole falls, a car reaches its flag, a pendulum never finishes at
+# all, and in each of them the step limit is somebody's convenience rather than a
+# statement about the problem. A bsuite chain is the other case and says so for
+# itself -- ``bsuite_wrapper_for`` hands the two tasks that know their own ending
+# a wrapper that reports it.
+#
+# Declared rather than inferred, because from inside a step the two cases are the
+# same comparison against the same field. An environment whose only ending is its
+# clock is indistinguishable from one whose clock cut a task short, and guessing
+# wrong in that direction has TD bootstrap past an ending with nothing after it.
+# So the default is to say nothing and leave ``terminal_of`` reading ``done``,
+# which is what every gymnax run did before this list existed.
+EXTERNAL_EPISODE_LIMIT = frozenset(
+    {
+        "Acrobot-v1",
+        "CartPole-v1",
+        "MountainCar-v0",
+        "MountainCarContinuous-v0",
+        "Pendulum-v1",
+    }
 )
 
 
@@ -68,6 +93,11 @@ def make(
         env_params = env_params.replace(**declared)
 
     env_params = env_params.replace(max_steps_in_episode=episode_length)
+
+    # Underneath everything else: the wrappers above read what a step returns,
+    # and what a step returns is only the transition once gymnax's reset has
+    # been taken off it.
+    env = EpisodeEndingWrapper(env, external_limit=env_id in EXTERNAL_EPISODE_LIMIT)
 
     if "bsuite" in env_id:
         env = bsuite_wrapper_for(env_id)(env)

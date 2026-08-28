@@ -12,17 +12,21 @@ first says the future is worth nothing -- ``td0`` gates the bootstrap on
 ``terminal``, so an agent told that a step limit is a terminal state is being
 taught that reaching the limit is as bad as failing. Gymnax reports one flag
 for both, so the distinction is drawn here, per task, from what that task's
-own parameters say. It is drawn only for the environments below; every other
-gymnax environment still reports its step limit as a termination, which is a
-gap this module makes visible rather than one it closes.
+own parameters say. It is drawn only for the environments below, because only
+they can draw it from a task's own numbers; a gymnax environment outside bsuite
+is answered by ``EpisodeEndingWrapper``, which reads a step limit as a clock
+only where the adapter has named that environment as having one.
 
-Neither reading may consult the environment's state after a step. Gymnax's
-base ``step`` resets on the transition that ended the episode, so the state it
-hands back on that step is the *next* episode's opening -- a wrapper that read
-``time`` there to decide whether the chain had completed would read zero, and
-would report every ending as a truncation without ever raising. Both readings
-are therefore taken from what this wrapper counts itself and from the reward,
-neither of which is rewound.
+Neither reading consults the environment's state after a step, and both are
+kept that way now that one could. Gymnax's base ``step`` resets on the
+transition that ended the episode, so the state it handed back on that step was
+the *next* episode's opening -- a wrapper that read ``time`` there to decide
+whether the chain had completed would read zero, and would report every ending
+as a truncation without ever raising. ``EpisodeEndingWrapper`` sits underneath
+this one and takes the transition from ``step_env``, so that state is no longer
+rewound; the counting here stays where it is because it is right either way,
+and a reading that does not depend on how it is stacked is the cheaper one to
+keep.
 """
 
 import jax.numpy as jnp
@@ -185,9 +189,12 @@ class UmbrellaChainWrapper(BSuiteWrapper):
     length rather than by which flag gymnax raised.
 
     The environment keeps a ``total_regret`` of its own, which would be the
-    obvious thing to read and is not readable here: the state handed back on
-    the ending step has already been reset to the next episode's, so it says
-    zero. The decision is scored by the last step's reward instead.
+    obvious thing to read. It was unreadable while gymnax's reset rewound the
+    ending step's state to the next episode's zero, and is readable again now
+    that ``EpisodeEndingWrapper`` takes the reset off; the decision is still
+    scored by the last step's reward, because moving to the environment's
+    counter would change what this wrapper reports and is a question about
+    regret rather than about endings.
     """
 
     distinguishes_truncation = True
