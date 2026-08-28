@@ -80,6 +80,7 @@ from memorax.rl.updates import (
     DRTRRL,
     STEP_FAMILY,
     Adam,
+    Sgd,
     make_d_rtrrl_rule,
     make_intentional_rule,
 )
@@ -124,13 +125,13 @@ class RTRRLConfig:
     eta_f: float = 1.0
     entropy_rate: float = 1e-5
 
-    torso_optimizer: Adam | DRTRRL | IntentionalUpdate = field(
+    torso_optimizer: Sgd | Adam | DRTRRL | IntentionalUpdate = field(
         default_factory=lambda: Adam(lr=1e-4)
     )
-    actor_optimizer: Adam | DRTRRL | IntentionalUpdate = field(
+    actor_optimizer: Sgd | Adam | DRTRRL | IntentionalUpdate = field(
         default_factory=lambda: Adam(lr=1e-4)
     )
-    critic_optimizer: Adam | DRTRRL | IntentionalUpdate = field(
+    critic_optimizer: Sgd | Adam | DRTRRL | IntentionalUpdate = field(
         default_factory=lambda: Adam(lr=1e-4)
     )
     torso_grad_clip: float = 1.0
@@ -143,7 +144,10 @@ class RTRRLConfig:
     action_classes: int | None = None
 
 
-RTRRL_OPTIMIZERS = STEP_FAMILY.restricted("adam", "d_rtrrl", "iu")
+# Adam stays first, and the order is not cosmetic: a configuration that names
+# no optimizer is filled from the front of the search domain, so putting a new
+# rule ahead of Adam would change what every unpinned run is.
+RTRRL_OPTIMIZERS = STEP_FAMILY.restricted("adam", "sgd", "d_rtrrl", "iu")
 
 
 @dataclass(frozen=True)
@@ -503,18 +507,28 @@ def _from_batch(tree):
 
 
 # ------------------------------------------------------- one rule per block
-def _adam_rule(base: Adam, *, clip: float):
-    """Adam over the combined ascent, which is what the paper's RTRRL steps."""
+def _rate_rule(base: Sgd | Adam, *, clip: float):
+    """A learning rate over the combined ascent, preconditioned or not.
+
+    Adam is what the paper's RTRRL steps; plain SGD is the same chain with the
+    preconditioner left out, so the two share the order the clip is written in.
+    ``clip`` bounds the finished ascent direction before either sees it, which
+    is where the paper's ``grad_clip`` sits and is therefore where it stays for
+    a rate that does nothing else to the direction.
+
+    The scale is written **positive**, and this is the whole reason the chain
+    is spelled out rather than delegated to ``optax.sgd``/``optax.adam``: those
+    fold a negation into the rate because optax steps ``params + updates`` down
+    a gradient, while everything reaching a rule here is an *ascent* direction
+    the algorithm adds. Calling the packaged optimizer would silently descend.
+    """
 
     chain: list[Any] = []
     if clip:
         chain.append(optax.clip_by_global_norm(clip))
-    chain.extend(
-        (
-            optax.scale_by_adam(b1=base.b1, b2=base.b2, eps=base.eps),
-            optax.scale(base.lr),
-        )
-    )
+    if isinstance(base, Adam):
+        chain.append(optax.scale_by_adam(b1=base.b1, b2=base.b2, eps=base.eps))
+    chain.append(optax.scale(base.lr))
     return make_optax_rule(optax.chain(*chain), rate=base.lr)
 
 
@@ -568,7 +582,7 @@ def _block_rule(step, *, cfg: RTRRLConfig, name: str, clip: float):
         )
     if isinstance(step, DRTRRL):
         return make_d_rtrrl_rule(step, clip=clip)
-    return _adam_rule(step, clip=clip)
+    return _rate_rule(step, clip=clip)
 
 
 def make_rules(cfg: RTRRLConfig):
