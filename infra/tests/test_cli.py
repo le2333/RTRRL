@@ -8,6 +8,7 @@ from urllib.parse import urlparse
 from urllib.request import url2pathname
 
 import optuna
+import pytest
 import yaml
 
 from trainer_infra import ExperimentRunner, cli
@@ -259,3 +260,67 @@ def test_batch_run_routes_deployment_fields_to_batch_executor(
     assert captured["claim"]["experiment"] == experiment["experiment"]
     assert captured["exclusive"] is False
     assert captured["parallel_jobs"] == 2
+
+
+def test_a_launch_says_which_id_it_took_before_it_can_fail(
+    tmp_path: Path,
+    capsys: Any,
+    monkeypatch: Any,
+    experiment: dict[str, Any],
+    catalog: dict[str, Any],
+) -> None:
+    """A controller that dies mid-run has already said what to settle.
+
+    `settle` requires a launch id, and a generated one can no longer be worked
+    out from when the launch started. So the id cannot wait for the final JSON:
+    the run that most needs it is exactly the run that never prints it.
+    """
+
+    experiment["compute"] = {"instance_type": "c7a.large", "timeout_minutes": 90}
+    experiment["hpo"]["parallel_jobs"] = 1
+    experiment_path = tmp_path / "experiment.yaml"
+    experiment_path.write_text(yaml.safe_dump(experiment), encoding="utf-8")
+    catalog_path = tmp_path / "catalog.json"
+    catalog_path.write_text(json.dumps(catalog), encoding="utf-8")
+    claimed: dict[str, Any] = {}
+
+    class Session:
+        def client(self, name: str) -> str:
+            return name
+
+    class Dying:
+        def __init__(self, **options: Any) -> None:
+            del options
+
+        def claim(self, launch: dict[str, Any], *, exclusive: bool) -> str:
+            del exclusive
+            claimed.update(launch)
+            return "s3://claimed"
+
+        def __call__(self, configurations: tuple[dict, ...], score: Any) -> tuple[dict, ...]:
+            raise RuntimeError("the controller was killed")
+
+    monkeypatch.setattr(cli, "_batch_session", Session)
+    monkeypatch.setattr(cli, "BatchRoundExecutor", Dying)
+
+    with pytest.raises(RuntimeError):
+        main(
+            [
+                "run",
+                str(experiment_path),
+                "--backend",
+                "batch",
+                "--catalog",
+                str(catalog_path),
+                "--database",
+                str(tmp_path / "study.db"),
+                "--queues",
+                "dev",
+            ]
+        )
+
+    captured = capsys.readouterr()
+    # What was announced is the launch that took the prefix, and stdout is
+    # still the one document a report redirects.
+    assert f"launch {claimed['launch_id']}" in captured.err
+    assert captured.out == ""

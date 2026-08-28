@@ -182,6 +182,13 @@ def main(argv: Sequence[str] | None = None) -> int:
         )
         return 0
     _claim(executor, arguments, experiment, runner)
+    # Said the moment the prefix is taken, not once the study finishes. A
+    # generated id is no longer the start time, and `settle` requires one, so a
+    # controller that dies in its third round has to have already told the
+    # operator which launch to settle -- which the final JSON, by then never
+    # printed, would not have. stderr because stdout is the machine-readable
+    # channel and stays one document.
+    print(f"launch {runner.launch_id}", file=sys.stderr, flush=True)
     study = runner.run(executor)
     trials = [
         {
@@ -201,9 +208,9 @@ def main(argv: Sequence[str] | None = None) -> int:
         json.dumps(
             {
                 "study": study.study_name,
-                # Which launch this was. Reported rather than left to be
-                # worked out, because a generated id is no longer the start
-                # time and cannot be reconstructed from when it was run.
+                # Repeated here so a captured report is self-contained; the
+                # copy that matters for recovery went to stderr before the
+                # first round was submitted.
                 "launch_id": runner.launch_id,
                 "role": runner.role,
                 "seeds": list(runner.seeds),

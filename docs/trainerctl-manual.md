@@ -161,9 +161,11 @@ study. Repeated launches of the same file are told apart by a launch id, so noth
 overwritten. A generated one is the UTC second the launch started followed by eight random
 characters — `20260818-151037-3f9c1ab2` — because the second alone is not enough: two
 controllers started together read the same one, and before this they took the same control
-prefix and wrote over each other's manifests. `run` prints the id it took, which is the
-only place to read it. `--launch-id` pins it when you need the artifacts of a launch to
-land where an earlier one's did.
+prefix and wrote over each other's manifests. `run` announces the id it took on stderr —
+`launch 20260818-151037-3f9c1ab2` — before it submits anything, because a generated one
+cannot be worked out from the start time and `settle` needs it from a launch that died.
+`--launch-id` pins it when you need the artifacts of a launch to land where an earlier
+one's did.
 
 **`image`** must be pinned to a digest (`@sha256:...`). A tag is refused outright: the
 catalog binds a search space to the image that declared it, and a floating tag would let
@@ -499,7 +501,8 @@ work genuinely has not finished is reported as still running and left alone.
 
 `run` prints the study to stdout as JSON: the launch id, every trial's number, state,
 value and parameters, and the best trial. `settle` prints what it settled and what is
-still running.
+still running. The launch id is on stderr as well, printed before the first round rather
+than after the last, so a run that never reaches its report has still said what it was.
 Progress and worker output go to stderr, so `> report.json` gives a clean machine-readable
 result.
 
@@ -555,6 +558,12 @@ entry, which is where the schedule arithmetic lives — `chunk_steps must contai
 environment steps`, `total_steps must consist of whole evaluation intervals`, and the
 `logging` shape, including `aim training names no scope`. These arrive as a failed job, not
 as a preflight message, so a shape mistake costs one container start.
+
+**The launch id was lost with the terminal.** `settle` needs it and a generated one is
+not the start time. Every launch of an experiment is a directory under
+`{storage}/{experiment}/`, and a Batch launch's `control/launch.json` says which host and
+process took it and when — enough to tell your dead controller's launch from the others
+without having kept its output.
 
 **The control prefix was already taken.** `... already belongs to ...` names the launch
 that holds it, and nothing was submitted. A generated launch id refuses to write into an
