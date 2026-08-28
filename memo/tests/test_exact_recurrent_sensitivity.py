@@ -627,10 +627,7 @@ def declared_traces(cfg: RTRRLConfig) -> dict:
     return {
         f"torso.{name}" if name != "torso" else "torso": recurrence
         for name, recurrence in aggregation.recurrences.items()
-    } | {
-        name: recurrence
-        for name, recurrence in rtrrl.make_head_traces(cfg).items()
-    }
+    } | {name: recurrence for name, recurrence in rtrrl.make_head_traces(cfg).items()}
 
 
 def output_bounded():
