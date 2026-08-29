@@ -35,7 +35,14 @@ from collections.abc import Iterator, Mapping, Sequence
 from dataclasses import dataclass
 from typing import Any
 
-from trainer_infra.adapter import KIND, SpaceError, domain_contains, parameter_range
+from trainer_infra.adapter import (
+    KIND,
+    SpaceError,
+    domain_contains,
+    offers_one_value,
+    parameter_range,
+    readable_domain,
+)
 
 FIELDS = ("domain", "paths")
 
@@ -147,18 +154,24 @@ def searched(bindings: Mapping[str, Any] | None) -> Iterator[str]:
     launch is refused for what it says: the configuration it reports on is
     frozen, and a variable with a domain left in it is a choice still being
     made.
+
+    What counts as frozen is the domain and not the notation. A binding writes
+    its domain the way a space leaf does, so ``{type: choice, values: [0.999]}``
+    and ``{type: float, low: 0.5, high: 0.5}`` are as pinned as ``[0.999]`` is,
+    and a formal launch that refused them would be refusing a configuration that
+    was in fact frozen.
+
+    A domain this cannot read is passed over rather than reported. It is a
+    malformed binding, resolution says so in the sentence that names the field,
+    and this runs first.
     """
 
     for name, declaration in (bindings or {}).items():
         if not isinstance(declaration, Mapping):
             continue  # resolution reports the shape; this only reads a domain
-        domain = declaration.get("domain")
-        if domain is None:
-            continue
-        listed = isinstance(domain, Sequence) and not isinstance(domain, (str, bytes))
-        if listed and len(domain) == 1:
-            continue  # a one-option categorical is a value, not a choice
-        yield str(name)
+        domain = readable_domain(declaration.get("domain"))
+        if domain is not None and not offers_one_value(domain):
+            yield str(name)
 
 
 def _selected_branch(kind: Any) -> str | None:

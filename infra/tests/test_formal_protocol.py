@@ -192,6 +192,38 @@ def test_a_formal_launch_that_is_still_searching_starts_nothing(
         runner(formal, catalog, tmp_path)
 
 
+
+@pytest.mark.parametrize(
+    ("domain", "searching"),
+    [
+        pytest.param({"type": "float", "low": 0.9, "high": 0.95}, True, id="a real range"),
+        pytest.param({"type": "float", "low": 0.9, "high": 0.9}, False, id="an empty range"),
+        pytest.param({"type": "choice", "values": [0.9, 0.95]}, True, id="two options"),
+        pytest.param({"type": "choice", "values": [0.9]}, False, id="one option"),
+    ],
+)
+def test_a_range_written_the_long_way_is_read_as_a_range(
+    experiment: Any, catalog: Any, tmp_path: Path, domain: Any, searching: bool
+) -> None:
+    """A leaf and a group are both mappings, and only ``type`` tells them apart.
+
+    Read as a group, a range has no leaves and so reports nothing -- which is
+    how ``gamma: {type: float, low: 0.9, high: 0.95}`` used to pass a launch
+    whose whole claim is that it is no longer choosing. The two spellings of a
+    pinned value have to pass, and both spellings of a live one have to fail,
+    or the rule is about notation rather than about the search.
+    """
+
+    formal = frozen(experiment)
+    formal["space"]["gamma"] = domain
+
+    if not searching:
+        assert runner(formal, catalog, tmp_path).role == "formal"
+        return
+    with pytest.raises(ExperimentError, match="still offer more than one value"):
+        runner(formal, catalog, tmp_path)
+
+
 def test_a_formal_launch_scored_on_training_return_starts_nothing(
     experiment: Any, catalog: Any, tmp_path: Path
 ) -> None:

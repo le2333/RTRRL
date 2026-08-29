@@ -450,7 +450,10 @@ bindings:
 
 A variable's name has no dots and a destination is a dotted path, which is how the two
 namespaces stay apart — and why a variable cannot name another variable, so there is no
-cycle to spell. The rest is checked before a container starts:
+cycle to spell. A `domain` is written exactly the way a `space` leaf is, and what makes one
+frozen is the domain rather than the notation: `[0.999]`, `{type: choice, values: [0.999]}`
+and `{type: float, low: 0.999, high: 0.999}` are one value each, to a formal launch as much
+as to the sampler. The rest is checked before a container starts:
 
 | Refusal | Cause |
 | --- | --- |
@@ -472,8 +475,22 @@ short edit away from named in its header.
 The binding is archived on the study alongside the seeds and the selection, because what
 the one dimension stood for is not recoverable from what Optuna stores. Resuming a study —
 `trainerctl settle` — reads the variable back and writes it out to its destinations again,
-so the runs it scores are the runs that were submitted. Omitting `bindings` leaves a file
-exactly as it was.
+so the runs it scores are the runs that were submitted.
+
+**A study cannot be restamped.** That record is what the trials already in it were drawn
+under, so resuming with an edited file is refused rather than allowed to overwrite it:
+
+```
+study 'rtrrl-issue81-shared-adam' already records ['bindings'] differently; it describes
+the trials it has already drawn, so resume the launch it belongs to or name a study of
+your own
+```
+
+The same holds for the seeds a launch was measured on, its evaluation seed, its sampler
+seed and its selection — everything the control plane archives. A file that shares nothing
+records `bindings: []`, so adding a binding to a study that ran without one is a
+disagreement too, rather than a key that was simply not there before. Omitting `bindings`
+otherwise leaves a file exactly as it was.
 
 ### Scoring
 

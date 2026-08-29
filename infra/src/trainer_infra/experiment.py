@@ -10,7 +10,12 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
-from trainer_infra.adapter import resolve_parameter_ranges, static_names
+from trainer_infra.adapter import (
+    offers_one_value,
+    readable_domain,
+    resolve_parameter_ranges,
+    static_names,
+)
 from trainer_infra.bindings import resolve_bindings
 from trainer_infra.bindings import searched as searched_bindings
 from trainer_infra.hpo import HPO
@@ -131,16 +136,21 @@ def _seeds(experiment: Mapping[str, Any]) -> tuple[int, ...]:
 
 
 def _frozen(space: Mapping[str, Any]) -> Iterator[str]:
-    """Every leaf of a search space that still offers more than one value."""
+    """Every leaf of a search space that still offers more than one value.
+
+    A leaf and a group are both mappings, and what tells them apart is the word
+    that tells them apart everywhere else: a leaf written the long way says
+    ``type``. Reading a range as a group is not a harmless confusion -- walked as
+    one it has no leaves, so ``gamma: {type: float, low: 0.9, high: 0.99}``
+    reported nothing and a formal launch accepted a leaf it was still searching.
+    """
 
     for name, node in space.items():
-        if isinstance(node, Mapping):
-            yield from (f"{name}.{path}" for path in _frozen(node))
-        elif (
-            not isinstance(node, (str, bytes))
-            and isinstance(node, Sequence)
-            and len(node) != 1
-        ):
+        domain = readable_domain(node)
+        if domain is None:
+            if isinstance(node, Mapping):
+                yield from (f"{name}.{path}" for path in _frozen(node))
+        elif not offers_one_value(domain):
             yield name
 
 
@@ -239,11 +249,10 @@ class ExperimentRunner:
                 # Archived rather than reconstructed: the destinations a study's
                 # one dimension stood for are not recoverable from what Optuna
                 # stores, and a resumed study has to be readable on its own.
-                **(
-                    {}
-                    if not self.bindings
-                    else {"bindings": [binding.record() for binding in self.bindings]}
-                ),
+                # Written even when empty, so that adding or removing a binding
+                # is a disagreement the study can refuse rather than a key that
+                # was simply not there before.
+                "bindings": [binding.record() for binding in self.bindings],
                 **({} if self.selection is None else {"selection": dict(self.selection)}),
             },
         )

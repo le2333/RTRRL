@@ -31,7 +31,7 @@ import pytest
 import yaml
 from test_cli import WORKER
 
-from trainer_infra import BindingError, ExperimentError, ExperimentRunner
+from trainer_infra import BindingError, ExperimentError, ExperimentRunner, StudyError
 from trainer_infra.cli import main
 from trainer_infra.rounds import partition
 
@@ -342,6 +342,129 @@ def test_a_launch_reports_what_its_one_dimension_stood_for(
         assert {drawn[path] for path in ADAM_B2} == {trial["parameters"]["shared_beta2"]}
 
 
+
+# ------------------------------------------------------- what a study records
+@pytest.mark.parametrize(
+    "edit",
+    [
+        pytest.param(
+            lambda experiment: experiment["bindings"]["shared_beta2"]["paths"].pop(),
+            id="a destination dropped",
+        ),
+        pytest.param(
+            lambda experiment: experiment["bindings"]["shared_beta2"].update(
+                domain=[0.9, 0.99]
+            ),
+            id="a domain narrowed",
+        ),
+        pytest.param(
+            lambda experiment: experiment.pop("bindings"),
+            id="the binding removed",
+        ),
+    ],
+)
+def test_a_study_refuses_to_be_restamped_as_a_different_launch(
+    blocks: Any, catalog: Any, tmp_path: Path, edit: Any
+) -> None:
+    """The record is the only thing a drawn trial can be read back through.
+
+    A study stores one dimension per binding, under the variable's name, and
+    which paths that name stood for is written nowhere else. Rewriting it on
+    resume would leave every trial already in the study unreadable while the
+    study went on looking complete -- so an edited file is refused instead of
+    being allowed to overwrite what the trials were drawn under.
+    """
+
+    experiment = one_trial(bind(blocks, "shared_beta2", BETA2, ADAM_B2))
+    runner(experiment, catalog, tmp_path).next_round()
+
+    resumed = copy.deepcopy(experiment)
+    edit(resumed)
+
+    with pytest.raises(StudyError, match="already records"):
+        runner(resumed, catalog, tmp_path).next_round()
+
+
+def test_resuming_the_launch_it_belongs_to_is_not_a_disagreement(
+    blocks: Any, catalog: Any, tmp_path: Path
+) -> None:
+    """Which is what `settle` does, and it must stay ordinary."""
+
+    experiment = one_trial(bind(blocks, "shared_beta2", BETA2, ADAM_B2))
+    first = runner(experiment, catalog, tmp_path)
+    submitted = parameters(first.next_round())
+
+    resumed = runner(copy.deepcopy(experiment), catalog, tmp_path)
+    (open_trial,) = resumed.hpo.running()
+
+    assert open_trial.parameters == submitted
+    assert study_of(resumed).user_attrs["bindings"] == [
+        binding.record() for binding in first.bindings
+    ]
+
+
+def test_a_file_that_shares_nothing_still_says_so(
+    blocks: Any, catalog: Any, tmp_path: Path
+) -> None:
+    """Empty rather than absent, so adding a binding later is a disagreement.
+
+    A key that was simply not there before cannot be compared against, and a
+    study whose trials were drawn with three independent betas would silently
+    accept a resume that tied them together.
+    """
+
+    built = runner(one_trial(copy.deepcopy(blocks)), catalog, tmp_path)
+    built.next_round()
+    assert study_of(built).user_attrs["bindings"] == []
+
+    with pytest.raises(StudyError, match="bindings"):
+        runner(
+            one_trial(bind(blocks, "shared_beta2", BETA2, ADAM_B2)), catalog, tmp_path
+        ).next_round()
+
+
+# --------------------------------------------------- what counts as frozen
+@pytest.mark.parametrize(
+    "domain",
+    [
+        pytest.param([0.999], id="a one-option list"),
+        pytest.param({"type": "choice", "values": [0.999]}, id="a one-option choice"),
+        pytest.param({"type": "float", "low": 0.999, "high": 0.999}, id="an empty range"),
+    ],
+)
+def test_a_formal_launch_takes_a_frozen_domain_however_it_is_written(
+    blocks: Any, catalog: Any, tmp_path: Path, domain: Any
+) -> None:
+    """A binding writes its domain the way a space leaf does, so all three spell
+    the same pinned value, and a formal launch that refused two of them would be
+    refusing a configuration that was in fact frozen."""
+
+    blocks["environment"]["seeds"] = [10, 11]
+    blocks["selection"] = {"study": "s", "trial": 3, "tuning_seeds": [0]}
+    bind(blocks, "shared_beta2", domain, ADAM_B2)
+
+    assert runner(blocks, catalog, tmp_path).role == "formal"
+
+
+@pytest.mark.parametrize(
+    "domain",
+    [
+        pytest.param([0.99, 0.999], id="two options"),
+        pytest.param({"type": "choice", "values": [0.99, 0.999]}, id="a two-option choice"),
+        pytest.param({"type": "float", "low": 0.9, "high": 0.999}, id="a real range"),
+    ],
+)
+def test_a_formal_launch_refuses_a_domain_that_still_chooses(
+    blocks: Any, catalog: Any, tmp_path: Path, domain: Any
+) -> None:
+    blocks["environment"]["seeds"] = [10, 11]
+    blocks["selection"] = {"study": "s", "trial": 3, "tuning_seeds": [0]}
+    bind(blocks, "shared_beta2", domain, ADAM_B2)
+
+    with pytest.raises(ExperimentError, match="shared_beta2"):
+        runner(blocks, catalog, tmp_path)
+
+
 # ---------------------------------------------------------------- the refusals
 @pytest.mark.parametrize(
     ("name", "domain", "paths", "message"),
@@ -429,22 +552,6 @@ def test_a_bound_parameter_cannot_also_be_pinned_under_space(
 
     with pytest.raises(BindingError, match="also pinned under space"):
         runner(bind(blocks, "shared_beta2", BETA2, ADAM_B2), catalog, tmp_path)
-
-
-def test_a_formal_launch_cannot_leave_a_variable_still_offering_a_choice(
-    blocks: Any, catalog: Any, tmp_path: Path
-) -> None:
-    """A formal launch runs what it froze, and a domain is a choice not made."""
-
-    blocks["environment"]["seeds"] = [10, 11]
-    blocks["selection"] = {"study": "s", "trial": 3, "tuning_seeds": [0]}
-    bind(blocks, "shared_beta2", BETA2, ADAM_B2)
-
-    with pytest.raises(ExperimentError, match="shared_beta2"):
-        runner(blocks, catalog, tmp_path)
-
-    blocks["bindings"]["shared_beta2"]["domain"] = [0.999]
-    assert runner(blocks, catalog, tmp_path).role == "formal"
 
 
 @pytest.mark.parametrize(

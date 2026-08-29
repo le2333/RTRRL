@@ -23,6 +23,10 @@ class SampledTrial:
 RunRound = Callable[[tuple[SampledTrial, ...]], Sequence[float]]
 
 
+class StudyError(RuntimeError):
+    """A study on disk is not the study this launch describes."""
+
+
 def sample_parameters(
     trial: optuna.trial.Trial,
     parameters: Mapping[str, Any],
@@ -218,7 +222,7 @@ class HPO:
         if self._study is not None:
             return self._study
         self.database.parent.mkdir(parents=True, exist_ok=True)
-        self._study = optuna.create_study(
+        study = optuna.create_study(
             study_name=self.name,
             storage=f"sqlite:///{self.database}",
             sampler=optuna.samplers.TPESampler(
@@ -228,6 +232,35 @@ class HPO:
             direction=self.direction,
             load_if_exists=True,
         )
-        for key, value in self.metadata.items():
-            self._study.set_user_attr(key, value)
+        self._archive(study)
+        self._study = study
         return self._study
+
+    def _archive(self, study: optuna.Study) -> None:
+        """Stamp what this launch is, refusing to restamp it as something else.
+
+        The study is loaded where it already exists, so this runs again on every
+        resume, and an unconditional write would let an edited file rewrite the
+        record of trials that had already been drawn under the old one.
+
+        For a shared parameter that record is not a convenience. The study holds
+        one dimension per binding and stores it under the variable's name; which
+        paths that name stood for is written nowhere else, so a rewritten
+        ``bindings`` makes every trial already in the study unreadable while
+        leaving it looking complete. The same is true of the seeds a launch was
+        measured on and of the selection it froze, so what is compared is
+        everything this side archives rather than the bindings alone.
+        """
+
+        stored = study.user_attrs
+        changed = sorted(
+            key for key, value in self.metadata.items() if key in stored and stored[key] != value
+        )
+        if changed:
+            raise StudyError(
+                f"study {self.name!r} already records {changed} differently; it describes "
+                "the trials it has already drawn, so resume the launch it belongs to or "
+                "name a study of your own"
+            )
+        for key, value in self.metadata.items():
+            study.set_user_attr(key, value)

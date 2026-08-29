@@ -113,6 +113,38 @@ def parameter_range(specification: Any) -> dict[str, Any]:
     return dict(specification)
 
 
+def readable_domain(written: Any) -> dict[str, Any] | None:
+    """A written domain as a range, or nothing where a domain is not written.
+
+    Both trees that carry domains also carry groups, and a group is a mapping
+    too. What separates them is the same word everywhere else in this side: a
+    leaf written the long way says ``type``. Reading a range as a group is not a
+    harmless confusion -- walked as one it has no leaves, so it reports nothing
+    rather than reporting itself.
+    """
+
+    if not isinstance(written, (list, Mapping)):
+        return None
+    resolved = parameter_range(written)
+    return resolved if "type" in resolved else None
+
+
+def offers_one_value(domain: Mapping[str, Any]) -> bool:
+    """Whether a resolved domain leaves anything for a sampler to choose.
+
+    The notation does not decide it. ``[0.999]``, ``{type: choice, values:
+    [0.999]}`` and ``{type: float, low: 0.999, high: 0.999}`` are one value
+    each, and a rule about what a study would still search has to read the
+    domain rather than the spelling it arrived in.
+    """
+
+    if domain["type"] == "choice":
+        values = domain.get("values")
+        return isinstance(values, list) and len(values) == 1
+    low = domain.get("low")
+    return low is not None and low == domain.get("high")
+
+
 def _outside_valid_domains(
     declared: Mapping[str, Any], overrides: Mapping[str, Any], *, prefix: str
 ) -> Iterator[str]:
