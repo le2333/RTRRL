@@ -47,12 +47,22 @@ class R2D2Config(struct.PyTreeNode):
 # ------------------------------------------------------------- parameter space
 @dataclass(frozen=True)
 class RecurrentParameters:
-    """What either recurrent backbone needs to be built, and nothing else.
+    """What any of R2D2's cores needs to be built, and nothing else.
 
     R2D2 declares its own rather than reusing the shared backbone family's,
     which also declares a recurrent differentiation. That is a choice about how
     an online step takes its gradient and has nothing to say about a replay
     sequence, which is differentiated by ordinary reverse mode either way.
+
+    All three cores read the same two widths, because it is R2D2's graph and
+    not the cell that asks for them: ``feature_dim`` is the width of the
+    encoder every core is entered through, and ``hidden_dim`` the width of the
+    core itself. The LRU reads ``feature_dim`` a second time as its readout
+    width; the RTU and the LSTM have no readout to size, their output being
+    their carry. That is the absence DRQN's ``LstmCore`` spells by declaring
+    ``hidden_dim`` alone -- there the cell reads the observation directly, so
+    there is no encoder for a second width to belong to. Here there is one, and
+    it is the same encoder for every core.
     """
 
     feature_dim: int = param(valid=(1, 4096), search=(16, 256), static=True)
@@ -95,7 +105,18 @@ class ExplorationParameters:
     evaluation_epsilon: float = param(valid=(0.0, 1.0), search=(0.0, 0.1))
 
 
-R2D2_BACKBONE_BRANCHES = {"lru": RecurrentParameters, "rtu": RecurrentParameters}
+# ``lstm`` is offered here and not in the online arm's core family for the
+# reason ``networks/backbones.py`` gives: nothing carries exact recurrent
+# sensitivity through a dense-gated cell, so only a learner that differentiates
+# by backpropagation may name one. R2D2 is such a learner under both of its
+# branches, and the LSTM is the cell it was published on -- so it is a standard
+# core here rather than an addition, and it is what a run has to be pinned to
+# for its difference from DRQN-LSTM to be a difference of learners.
+R2D2_BACKBONE_BRANCHES = {
+    "lru": RecurrentParameters,
+    "rtu": RecurrentParameters,
+    "lstm": RecurrentParameters,
+}
 Q_HEAD_BRANCHES = {"dueling": (), "linear": ()}
 LEARNING_BRANCHES = {"tbptt": TbpttParameters, "full_bptt": ()}
 VALUE_TRANSFORM_BRANCHES = {"signed_hyperbolic": (), "identity": ()}

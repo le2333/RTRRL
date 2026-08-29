@@ -132,8 +132,54 @@ def test_a_branch_the_experiment_did_not_choose_is_absent(configurations):
     assert params[f"backbone.{KIND}"] == "lru"
     assert params[f"learning.{KIND}"] == "tbptt"
     assert not [name for name in params if name.startswith("backbone.rtu.")]
+    assert not [name for name in params if name.startswith("backbone.lstm.")]
     assert not [name for name in params if name.startswith("learning.full_bptt.")]
     assert not [name for name in params if ".signed_hyperbolic." in name]
+
+
+@pytest.fixture(scope="module")
+def lstm_configurations(experiment, catalog, tmp_path_factory) -> tuple[dict, ...]:
+    """The same experiment with its core swapped, and nothing else touched.
+
+    That one block is the whole of what an R2D2-LSTM run changes, so resolving
+    it here is what says a manifest naming the published cell survives the
+    control plane -- which is where ``backbone.kind: lstm`` used to be refused.
+    """
+
+    return ExperimentRunner(
+        experiment={
+            **experiment,
+            "name": "template-lstm",
+            "space": {
+                **experiment["space"],
+                "backbone": {
+                    "kind": ["lstm"],
+                    "lstm": {"feature_dim": [32], "hidden_dim": [32]},
+                },
+            },
+        },
+        catalog=catalog,
+        database=tmp_path_factory.mktemp("study-lstm") / "study.db",
+        launch_id=LAUNCH,
+    ).next_round()
+
+
+def test_the_lstm_branch_resolves_assembles_and_steps(lstm_configurations):
+    """The same chain as the canonical round trip, over the branch R1.1.2 needs."""
+
+    config = RunSpec.model_validate(lstm_configurations[0])
+    params = config.algorithm.parameters
+
+    assert params[f"backbone.{KIND}"] == "lstm"
+    assert params["backbone.lstm.hidden_dim"] == 32
+    assert not [name for name in params if name.startswith("backbone.lru.")]
+    assert not [name for name in params if name.startswith("backbone.rtu.")]
+
+    program = assemble_r2d2(params, config.algorithm.environment, num_envs=STREAMS)
+    state = program.init(jax.random.key(config.training.seed))
+    _, metrics = program.train(jax.random.key(1), state, 2 * STREAMS)
+
+    assert metrics.interaction.reward.shape == (2, STREAMS)
 
 
 def test_the_resolved_manifest_assembles_and_steps(configurations):

@@ -39,8 +39,10 @@ UPSTREAM_BACKBONES = ("lru_published", "lru_rewritten")
 # Outside it for a stronger reason. A dense-gated cell has no structure for the
 # online arm to carry exact recurrent sensitivity through, so a family offering
 # one would offer a core only half of a matched comparison could be run on. Only
-# a learner that differentiates by backpropagation may name it, which today is
-# DRQN reproducing its own published network.
+# a learner that differentiates by backpropagation may name it: DRQN, reproducing
+# its own published network, and R2D2, whose published network is also built on
+# one. Both name it in their own parameter tree; it stays out of this family so
+# that an online arm cannot reach it.
 BPTT_BACKBONES = ("lstm",)
 
 
@@ -120,8 +122,10 @@ def backbone(
             ),
         )
     if name == "lstm":
-        # The published DRQN's cell, wrapped as the RTU is: one cell, whose
-        # hidden state is its output, so there is no readout width to size.
+        # The cell DRQN and R2D2 were both published on, wrapped as the RTU is:
+        # one cell whose hidden state is its output, so there is no readout
+        # width to size. What differs between the two learners is what stands
+        # in front of it, which is the caller's sequence and not this branch.
         # ``OptimizedLSTMCell`` is Flax's own LSTM with the four input matmuls
         # fused into one; the equations, the parameter names and the carry are
         # ``LSTMCell``'s, so nothing about the network follows from the choice.

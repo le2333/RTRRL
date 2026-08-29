@@ -72,7 +72,7 @@ def test_linear_and_dueling_heads_produce_one_q_per_action():
     )
 
 
-@pytest.mark.parametrize("backbone_kind", ["lru", "rtu"])
+@pytest.mark.parametrize("backbone_kind", ["lru", "rtu", "lstm"])
 def test_apply_unroll_and_recurrence_trajectory_share_one_graph(backbone_kind):
     q_function = QFunction(
         action_dim=2,
@@ -114,7 +114,7 @@ def test_apply_unroll_and_recurrence_trajectory_share_one_graph(backbone_kind):
     _assert_tree_allclose(post_recurrences, expected_post)
 
 
-@pytest.mark.parametrize("backbone_kind", ["lru", "rtu"])
+@pytest.mark.parametrize("backbone_kind", ["lru", "rtu", "lstm"])
 def test_episode_start_resets_before_consuming_the_input(backbone_kind):
     q_function = QFunction(
         action_dim=2,

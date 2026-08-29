@@ -47,9 +47,12 @@ rather than of representations.
 paper's network instead. It is a single Flax LSTM layer read directly by the
 linear Q head, with nothing before it and no normalisation behind it, which is
 what Hausknecht and Stone put after the convolutions. Nothing carries exact
-recurrent sensitivity through a dense-gated cell, so it is offered here and
-nowhere else: the online arm's core family does not list it, and a matched pair
-of runs cannot be pinned to it.
+recurrent sensitivity through a dense-gated cell, so no online arm offers it:
+the online arm's core family does not list it, and a matched pair of runs cannot
+be pinned to it. A learner that differentiates by backpropagation may, and both
+of the ones here do -- R2D2 declares the same cell under ``backbone.kind: lstm``,
+reached through its own encoder and read by its own head. What the boundary
+refuses is a matched pair, not a second learner.
 
 For low-dimensional tasks there is nothing for the paper's convolutional
 encoder to do: it existed to turn an 84x84 Atari frame into a feature vector,

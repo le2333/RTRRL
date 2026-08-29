@@ -105,13 +105,25 @@ def test_r2d2_declarations_live_with_its_graph_and_entry_reexports_them():
     assert r2d2.OBSERVATIONS.series == r2d2.TRAINING_METRICS
 
 
-def test_the_tree_declares_both_of_every_choice_and_no_online_differentiation():
+def test_the_tree_declares_every_choice_and_no_online_differentiation():
     declared = flatten(r2d2.PARAMETERS)
 
     assert not [path for path in declared if "differentiation" in path]
-    assert {"backbone.lru.feature_dim", "backbone.rtu.feature_dim"} <= set(declared)
+    # Every core is entered through the same encoder, so every core declares
+    # its width -- including the LSTM, which has no readout of its own and
+    # would declare none if it read the observation the way DRQN's does.
+    widths = {
+        "backbone.lru.feature_dim",
+        "backbone.rtu.feature_dim",
+        "backbone.lstm.feature_dim",
+        "backbone.lstm.hidden_dim",
+    }
+    assert widths <= set(declared)
+    # A width decides a shape, so it has to be known while the graph is built
+    # rather than sampled into a traced value.
+    assert all(declared[name].static for name in widths)
     for chooser, choices in (
-        ("backbone.kind", ("lru", "rtu")),
+        ("backbone.kind", ("lru", "rtu", "lstm")),
         ("head.kind", ("dueling", "linear")),
         ("learning.kind", ("tbptt", "full_bptt")),
         ("returns.value_transform.kind", ("signed_hyperbolic", "identity")),
@@ -181,7 +193,7 @@ def test_a_run_without_rerun_asks_for_no_sample_and_keeps_no_walk():
     assert entry.runtime_config(config).trajectory_at_steps == ()
 
 
-@pytest.mark.parametrize("backbone", ["lru", "rtu"])
+@pytest.mark.parametrize("backbone", ["lru", "rtu", "lstm"])
 @pytest.mark.parametrize("head", ["dueling", "linear"])
 def test_the_graph_builds_the_branches_the_manifest_selected(backbone, head):
     built = assembled(
