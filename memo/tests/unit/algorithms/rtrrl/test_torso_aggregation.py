@@ -1002,6 +1002,88 @@ def test_the_two_branches_stay_apart_across_streams_resets_and_a_resumption():
     )
 
 
+
+# Every setting an intentional rule has, at one value each. This is what an HPO
+# binding writes into the four paths that name a rule -- `eta` included, so the
+# four are as equal as a configuration can make them and anything that still
+# tells them apart afterwards is state rather than settings.
+SHARED_IU = {
+    "eta": 0.2,
+    "clip": 20.0,
+    "beta_rms": 0.999,
+    "beta_clip": 0.9998,
+    "beta_advantage": 0.9998,
+    "beta_momentum": 0.0,
+    "eps": 1e-8,
+}
+
+IU_RULES = (
+    "actor.optimizer.iu",
+    "critic.optimizer.iu",
+    "torso.optimizer.output_iu.actor",
+    "torso.optimizer.output_iu.critic",
+)
+
+
+def test_four_rules_given_one_setting_are_still_four_learners():
+    """Equal settings are not shared state, which is the whole of the promise.
+
+    The control plane can now draw one number and write it into several of a
+    run's parameters, so that a comparison across the actor, the critic and the
+    torso holds a setting fixed instead of searching it three times. What that
+    facility is allowed to mean is decided here rather than there: a value
+    arrives at four rules, and four rules is what the run still has.
+
+    ``sigma_bar`` is what tells them apart. It is each rule's own running scale
+    for the error it is being handed, so four rules that shared one would report
+    one number; they report four, and the torso's two branches -- the pair most
+    at risk, since they step the same parameters under settings that are now
+    identical -- also hold different second moments of their own traces.
+    """
+
+    overrides = {"actor.optimizer.kind": "iu", "critic.optimizer.kind": "iu"}
+    for rule in IU_RULES:
+        overrides |= {f"{rule}.{name}": value for name, value in SHARED_IU.items()}
+
+    built = assembled("output_iu", num_envs=STREAMS, overrides=overrides)
+    graph = graph_of(built)
+    torso = graph.cfg.torso_optimizer
+    settings = (
+        graph.cfg.actor_optimizer,
+        graph.cfg.critic_optimizer,
+        torso.actor,
+        torso.critic,
+    )
+    for name, value in SHARED_IU.items():
+        assert {getattr(rule, name) for rule in settings} == {value}, name
+
+    state = built.program.init(jax.random.key(0))
+    stepped, _ = built.program.train(jax.random.key(1), state, 8)
+    rule = stepped.core.rule
+    held = {
+        "actor": rule["actor"]["actor"],
+        "critic": rule["critic"]["critic"],
+        "torso.actor": rule["torso"]["actor"]["actor"],
+        "torso.critic": rule["torso"]["critic"]["critic"],
+    }
+
+    scales = {name: np.asarray(one.sigma_bar) for name, one in held.items()}
+    for name, scale in scales.items():
+        for other, against in scales.items():
+            if other <= name:
+                continue
+            assert not np.allclose(scale, against), f"{name} and {other} report one scale"
+
+    # The two torso branches step one set of parameters, so their states are the
+    # ones a single shared tree would be invisible in. Compared leaf by leaf.
+    actor_moment = flattened(held["torso.actor"].nu)
+    critic_moment = flattened(held["torso.critic"].nu)
+    assert set(actor_moment) == set(critic_moment)
+    assert any(
+        not np.allclose(actor_moment[path], critic_moment[path]) for path in actor_moment
+    )
+
+
 def test_the_torso_is_written_once_and_the_sum_is_not_bounded_again():
     """One parameter write, one projection, one followed copy, and no third bound.
 

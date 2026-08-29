@@ -11,6 +11,8 @@ from pathlib import Path
 from typing import Any
 
 from trainer_infra.adapter import resolve_parameter_ranges, static_names
+from trainer_infra.bindings import resolve_bindings
+from trainer_infra.bindings import searched as searched_bindings
 from trainer_infra.hpo import HPO
 from trainer_infra.scoring import ScoreSpec
 
@@ -207,6 +209,17 @@ class ExperimentRunner:
         self.score = ScoreSpec.from_mapping(experiment["score"])
         self._formal_is_measured()
 
+        parameters = resolve_parameter_ranges(descriptor["parameters"], experiment["space"])
+        # Checked here, with everything else a file has to get right before a
+        # container starts: a binding into a path the image does not declare is
+        # a round of jobs that each read the same missing value and die.
+        self.bindings = resolve_bindings(
+            declared=descriptor["parameters"],
+            resolved=parameters,
+            space=experiment["space"],
+            bindings=experiment.get("bindings") or {},
+        )
+
         hpo = experiment["hpo"]
         self.hpo = HPO(
             name=experiment["name"],
@@ -216,12 +229,21 @@ class ExperimentRunner:
             trials_per_round=hpo["trials_per_round"],
             startup_trials=hpo["startup_trials"],
             seed=hpo["seed"],
-            parameters=resolve_parameter_ranges(descriptor["parameters"], experiment["space"]),
+            parameters=parameters,
+            bindings=self.bindings,
             metadata={
                 "role": self.role,
                 "seeds": list(self.seeds),
                 "evaluation_seed": int(experiment["evaluation"]["seed"]),
                 "hpo_seed": int(hpo["seed"]),
+                # Archived rather than reconstructed: the destinations a study's
+                # one dimension stood for are not recoverable from what Optuna
+                # stores, and a resumed study has to be readable on its own.
+                **(
+                    {}
+                    if not self.bindings
+                    else {"bindings": [binding.record() for binding in self.bindings]}
+                ),
                 **({} if self.selection is None else {"selection": dict(self.selection)}),
             },
         )
@@ -251,7 +273,9 @@ class ExperimentRunner:
                 f"formal seeds {reused} were already used to tune this configuration; "
                 "a formal run measures a choice on seeds that did not make it"
             )
-        searched = sorted(_frozen(experiment["space"]))
+        searched = sorted(
+            [*_frozen(experiment["space"]), *searched_bindings(experiment.get("bindings"))]
+        )
         if searched:
             raise ExperimentError(
                 f"a formal launch runs the configuration it froze, but {searched} "
