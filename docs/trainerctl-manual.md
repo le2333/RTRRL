@@ -464,6 +464,11 @@ cycle to spell. The rest is checked before a container starts:
 | `shared variables [...] contain a dot` | A name shaped like a destination |
 | `binding '...' reaches 1 path(s)` | One destination is that parameter's own range |
 
+Two complete files are checked in beside the others:
+`experiments/rtrrl issue81 shared adam.yaml` is the first example as a launch, and
+`experiments/rtrrl issue81 shared iu output.yaml` is the second, with the two arms it is a
+short edit away from named in its header.
+
 The binding is archived on the study alongside the seeds and the selection, because what
 the one dimension stood for is not recoverable from what Optuna stores. Resuming a study —
 `trainerctl settle` — reads the variable back and writes it out to its destinations again,
