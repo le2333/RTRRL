@@ -253,7 +253,11 @@ class ExperimentRunner:
                 # is a disagreement the study can refuse rather than a key that
                 # was simply not there before.
                 "bindings": [binding.record() for binding in self.bindings],
-                **({} if self.selection is None else {"selection": dict(self.selection)}),
+                # Written even where there is none, for the reason bindings is:
+                # a key the study never held cannot be compared against, and
+                # deleting `selection` from a file is exactly how a formal study
+                # would be resumed as a tuning one.
+                "selection": None if self.selection is None else dict(self.selection),
             },
         )
 

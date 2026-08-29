@@ -487,10 +487,21 @@ your own
 ```
 
 The same holds for the seeds a launch was measured on, its evaluation seed, its sampler
-seed and its selection — everything the control plane archives. A file that shares nothing
-records `bindings: []`, so adding a binding to a study that ran without one is a
-disagreement too, rather than a key that was simply not there before. Omitting `bindings`
-otherwise leaves a file exactly as it was.
+seed and its selection — everything the control plane archives.
+
+Two things make that check total rather than nearly so. Every block is recorded even when
+it is empty — `bindings: []` where nothing is shared, `selection: null` where nothing was
+frozen — because a key the study never held is a key nothing can be compared against; and
+the comparison starts from what the study holds rather than from what the file still says,
+so a block *deleted* from a file is caught as well as one edited. Deleting `selection` from
+a formal launch and resuming its study is refused for exactly that reason, rather than
+quietly carrying on as a tuning launch in a study whose trials were drawn as a formal
+one's.
+
+A key the launch records and the study does not is written rather than refused: that is
+what a study opened by an older build looks like, and it cannot be told apart from one that
+recorded the key as absent. Omitting `bindings` otherwise leaves a file exactly as it
+was.
 
 ### Scoring
 

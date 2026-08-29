@@ -27,6 +27,12 @@ class StudyError(RuntimeError):
     """A study on disk is not the study this launch describes."""
 
 
+#: Distinct from every value a record may hold, ``None`` included: a launch that
+#: froze nothing archives ``selection: None``, so "absent" and "null" are two
+#: different claims and cannot share a sentinel.
+ABSENT = object()
+
+
 def sample_parameters(
     trial: optuna.trial.Trial,
     parameters: Mapping[str, Any],
@@ -119,6 +125,16 @@ def _suggest(
         step=parameter_range.get("step", 1),
         log=parameter_range.get("log", False),
     )
+
+
+def _disagreement(changed: Sequence[str], dropped: Sequence[str]) -> str:
+    """Which half of the record this launch is at odds with, or both."""
+
+    halves = [
+        *([f"already records {list(changed)} differently"] if changed else []),
+        *([f"records {list(dropped)}, which this launch does not claim"] if dropped else []),
+    ]
+    return " and ".join(halves)
 
 
 class HPO:
@@ -250,17 +266,32 @@ class HPO:
         leaving it looking complete. The same is true of the seeds a launch was
         measured on and of the selection it froze, so what is compared is
         everything this side archives rather than the bindings alone.
+
+        The comparison is over what the *study* holds, not over what the launch
+        still says. A key the launch has stopped claiming is the half that hides:
+        deleting a block from a file removes it from one side of an intersection
+        and leaves nothing to disagree with, so the check has to start from the
+        record rather than from the claim.
+
+        A key the launch records and the study does not is written instead of
+        refused. That is what a study opened by an older build looks like, and it
+        cannot be told apart from one that recorded the key as absent.
         """
 
+        if not self.metadata:
+            return  # a launch that claims no provenance overwrites none either
         stored = study.user_attrs
         changed = sorted(
-            key for key, value in self.metadata.items() if key in stored and stored[key] != value
+            key
+            for key, value in stored.items()
+            if key in self.metadata and self.metadata[key] != value
         )
-        if changed:
+        dropped = sorted(key for key in stored if self.metadata.get(key, ABSENT) is ABSENT)
+        if changed or dropped:
             raise StudyError(
-                f"study {self.name!r} already records {changed} differently; it describes "
-                "the trials it has already drawn, so resume the launch it belongs to or "
-                "name a study of your own"
+                f"study {self.name!r} {_disagreement(changed, dropped)}; it describes the "
+                "trials it has already drawn, so resume the launch it belongs to or name "
+                "a study of your own"
             )
         for key, value in self.metadata.items():
             study.set_user_attr(key, value)
