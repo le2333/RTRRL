@@ -77,7 +77,7 @@ def resolve_parameter_ranges(
 def _resolve(declared: Mapping[str, Any], overrides: Mapping[str, Any]) -> dict[str, Any]:
     return {
         name: (
-            _range(overrides.get(name, node["search"]))
+            parameter_range(overrides.get(name, node["search"]))
             if "search" in node
             else _resolve(node, overrides.get(name, {}))
         )
@@ -99,10 +99,50 @@ def _unpinnable(
             yield from _unpinnable(node, pinned, prefix=f"{path}.")
 
 
-def _range(specification: Any) -> dict[str, Any]:
+def parameter_range(specification: Any) -> dict[str, Any]:
+    """A written domain as the resolved tree spells it: a list is a categorical.
+
+    Public because a domain is written in two places now. An experiment writes
+    one under ``space`` to narrow a parameter, and one under ``bindings`` to
+    give a shared variable its own, and the two have to be the same notation or
+    an author would have to remember which of them they were writing.
+    """
+
     if isinstance(specification, list):
         return {"type": "choice", "values": list(specification)}
     return dict(specification)
+
+
+def readable_domain(written: Any) -> dict[str, Any] | None:
+    """A written domain as a range, or nothing where a domain is not written.
+
+    Both trees that carry domains also carry groups, and a group is a mapping
+    too. What separates them is the same word everywhere else in this side: a
+    leaf written the long way says ``type``. Reading a range as a group is not a
+    harmless confusion -- walked as one it has no leaves, so it reports nothing
+    rather than reporting itself.
+    """
+
+    if not isinstance(written, (list, Mapping)):
+        return None
+    resolved = parameter_range(written)
+    return resolved if "type" in resolved else None
+
+
+def offers_one_value(domain: Mapping[str, Any]) -> bool:
+    """Whether a resolved domain leaves anything for a sampler to choose.
+
+    The notation does not decide it. ``[0.999]``, ``{type: choice, values:
+    [0.999]}`` and ``{type: float, low: 0.999, high: 0.999}`` are one value
+    each, and a rule about what a study would still search has to read the
+    domain rather than the spelling it arrived in.
+    """
+
+    if domain["type"] == "choice":
+        values = domain.get("values")
+        return isinstance(values, list) and len(values) == 1
+    low = domain.get("low")
+    return low is not None and low == domain.get("high")
 
 
 def _outside_valid_domains(
@@ -112,13 +152,15 @@ def _outside_valid_domains(
         node = declared[name]
         path = f"{prefix}{name}"
         if "search" in node:
-            if not _within(node["valid"], _range(override)):
+            if not domain_contains(node["valid"], parameter_range(override)):
                 yield path
         else:
             yield from _outside_valid_domains(node, override, prefix=f"{path}.")
 
 
-def _within(valid: Mapping[str, Any], candidate: Mapping[str, Any]) -> bool:
+def domain_contains(valid: Mapping[str, Any], candidate: Mapping[str, Any]) -> bool:
+    """Every value ``candidate`` can produce is one ``valid`` accepts."""
+
     if valid["type"] == "choice":
         return candidate["type"] == "choice" and set(candidate["values"]) <= set(valid["values"])
     if candidate["type"] == "choice":

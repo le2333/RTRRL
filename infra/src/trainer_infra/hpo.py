@@ -8,6 +8,7 @@ from typing import Any, Literal, TypeAlias
 import optuna
 
 from trainer_infra.adapter import KIND
+from trainer_infra.bindings import Binding, expand
 
 Direction = Literal["minimize", "maximize"]
 Scalar: TypeAlias = bool | int | float | str
@@ -22,9 +23,20 @@ class SampledTrial:
 RunRound = Callable[[tuple[SampledTrial, ...]], Sequence[float]]
 
 
+class StudyError(RuntimeError):
+    """A study on disk is not the study this launch describes."""
+
+
+#: Distinct from every value a record may hold, ``None`` included: a launch that
+#: froze nothing archives ``selection: None``, so "absent" and "null" are two
+#: different claims and cannot share a sentinel.
+ABSENT = object()
+
+
 def sample_parameters(
     trial: optuna.trial.Trial,
     parameters: Mapping[str, Any],
+    bindings: Sequence[Binding] = (),
 ) -> dict[str, Scalar]:
     """Draw one point, descending only the branches this trial chose.
 
@@ -38,10 +50,24 @@ def sample_parameters(
     This is the same walk the worker does when it builds the graph. The only
     difference is where ``kind`` comes from: there it is read out of a
     configuration, here it is drawn a line above the branch it opens.
+
+    A bound leaf is passed over on the way down and filled afterwards, from one
+    draw made under the variable's own name. So the study searches one dimension
+    and the point that comes back out still carries an ordinary number at each
+    destination -- which is the whole of what sharing a parameter means.
     """
 
+    bound = frozenset(path for binding in bindings for path in binding.paths)
     drawn: dict[str, Scalar] = {}
-    _draw(trial, parameters, prefix="", drawn=drawn)
+    reached: set[str] = set()
+    _draw(trial, parameters, prefix="", drawn=drawn, bound=bound, reached=reached)
+    for binding in bindings:
+        destinations = [path for path in binding.paths if path in reached]
+        if not destinations:
+            continue  # a variable nothing live reads is not a dimension either
+        value = _suggest(trial, binding.name, binding.domain)
+        for path in destinations:
+            drawn[path] = value
     return drawn
 
 
@@ -51,20 +77,31 @@ def _draw(
     *,
     prefix: str,
     drawn: dict[str, Scalar],
+    bound: frozenset[str],
+    reached: set[str],
 ) -> None:
     groups: dict[str, Mapping[str, Any]] = {}
     for name, node in tree.items():
         path = f"{prefix}{name}"
-        if "type" in node:
-            drawn[path] = _suggest(trial, path, node)
-        else:
+        if "type" not in node:
             groups[name] = node
+        elif path in bound:
+            reached.add(path)
+        else:
+            drawn[path] = _suggest(trial, path, node)
 
     chosen = drawn.get(f"{prefix}{KIND}")
     for name, group in groups.items():
         if chosen is not None and name != str(chosen):
             continue
-        _draw(trial, group, prefix=f"{prefix}{name}.", drawn=drawn)
+        _draw(
+            trial,
+            group,
+            prefix=f"{prefix}{name}.",
+            drawn=drawn,
+            bound=bound,
+            reached=reached,
+        )
 
 
 def _suggest(
@@ -90,6 +127,16 @@ def _suggest(
     )
 
 
+def _disagreement(changed: Sequence[str], dropped: Sequence[str]) -> str:
+    """Which half of the record this launch is at odds with, or both."""
+
+    halves = [
+        *([f"already records {list(changed)} differently"] if changed else []),
+        *([f"records {list(dropped)}, which this launch does not claim"] if dropped else []),
+    ]
+    return " and ".join(halves)
+
+
 class HPO:
     """Own a persistent, round-based Optuna optimization lifecycle."""
 
@@ -103,6 +150,7 @@ class HPO:
         trials_per_round: int,
         startup_trials: int,
         parameters: Mapping[str, Any],
+        bindings: Sequence[Binding] = (),
         seed: int | None = None,
         metadata: Mapping[str, object] | None = None,
     ) -> None:
@@ -113,6 +161,7 @@ class HPO:
         self.trials_per_round = trials_per_round
         self.startup_trials = startup_trials
         self.parameters = dict(parameters)
+        self.bindings = tuple(bindings)
         self.seed = seed
         self.metadata = {} if metadata is None else dict(metadata)
         self._study: optuna.Study | None = None
@@ -123,7 +172,7 @@ class HPO:
         return tuple(
             SampledTrial(
                 number=trial.number,
-                parameters=sample_parameters(trial, self.parameters),
+                parameters=sample_parameters(trial, self.parameters, self.bindings),
             )
             for trial in trials
         )
@@ -135,11 +184,19 @@ class HPO:
         after a controller dies these are exactly the trials whose work may
         already be finished and unread. Optuna recorded their parameters when
         they were drawn, which is what makes them addressable again.
+
+        What it recorded is the point the study searched, so a shared variable
+        comes back under its own name and is written out here to the paths it
+        stands for. The runs being settled are the runs that were submitted, and
+        those carried the destinations.
         """
 
         study = self._open()
         return tuple(
-            SampledTrial(number=trial.number, parameters=dict(trial.params))
+            SampledTrial(
+                number=trial.number,
+                parameters=expand(trial.params, self.bindings),
+            )
             for trial in study.get_trials(deepcopy=False)
             if trial.state == optuna.trial.TrialState.RUNNING
         )
@@ -181,7 +238,7 @@ class HPO:
         if self._study is not None:
             return self._study
         self.database.parent.mkdir(parents=True, exist_ok=True)
-        self._study = optuna.create_study(
+        study = optuna.create_study(
             study_name=self.name,
             storage=f"sqlite:///{self.database}",
             sampler=optuna.samplers.TPESampler(
@@ -191,6 +248,50 @@ class HPO:
             direction=self.direction,
             load_if_exists=True,
         )
-        for key, value in self.metadata.items():
-            self._study.set_user_attr(key, value)
+        self._archive(study)
+        self._study = study
         return self._study
+
+    def _archive(self, study: optuna.Study) -> None:
+        """Stamp what this launch is, refusing to restamp it as something else.
+
+        The study is loaded where it already exists, so this runs again on every
+        resume, and an unconditional write would let an edited file rewrite the
+        record of trials that had already been drawn under the old one.
+
+        For a shared parameter that record is not a convenience. The study holds
+        one dimension per binding and stores it under the variable's name; which
+        paths that name stood for is written nowhere else, so a rewritten
+        ``bindings`` makes every trial already in the study unreadable while
+        leaving it looking complete. The same is true of the seeds a launch was
+        measured on and of the selection it froze, so what is compared is
+        everything this side archives rather than the bindings alone.
+
+        The comparison is over what the *study* holds, not over what the launch
+        still says. A key the launch has stopped claiming is the half that hides:
+        deleting a block from a file removes it from one side of an intersection
+        and leaves nothing to disagree with, so the check has to start from the
+        record rather than from the claim.
+
+        A key the launch records and the study does not is written instead of
+        refused. That is what a study opened by an older build looks like, and it
+        cannot be told apart from one that recorded the key as absent.
+        """
+
+        if not self.metadata:
+            return  # a launch that claims no provenance overwrites none either
+        stored = study.user_attrs
+        changed = sorted(
+            key
+            for key, value in stored.items()
+            if key in self.metadata and self.metadata[key] != value
+        )
+        dropped = sorted(key for key in stored if self.metadata.get(key, ABSENT) is ABSENT)
+        if changed or dropped:
+            raise StudyError(
+                f"study {self.name!r} {_disagreement(changed, dropped)}; it describes the "
+                "trials it has already drawn, so resume the launch it belongs to or name "
+                "a study of your own"
+            )
+        for key, value in self.metadata.items():
+            study.set_user_attr(key, value)

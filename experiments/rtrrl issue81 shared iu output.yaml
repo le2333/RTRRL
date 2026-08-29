@@ -1,0 +1,218 @@
+# Issue 81: Experiment 2's IU-output arm, with the intentional update's settings
+# held equal across all four rules an output aggregation runs and the four step
+# sizes searched apart. A local shape check of the `bindings` surface, not the
+# formal protocol.
+#
+# This is the case that decides whether the facility is general. `output_iu`
+# maintains *two* intentional optimizers on the torso -- one per head's
+# contribution, added only at the parameter update -- so the agent runs four
+# rules, not three:
+#
+#     actor.optimizer.iu                    the policy readout
+#     critic.optimizer.iu                   the value readout
+#     torso.optimizer.output_iu.actor       the torso's policy branch
+#     torso.optimizer.output_iu.critic      the torso's value branch
+#
+# A destination is a path, not a block, so the fourth is reached exactly the way
+# the first three are and the nesting costs nothing. Every setting the rule has
+# except `eta` is one variable over those four paths.
+#
+# `eta` is not among them, and that is the point of the arm. The published
+# actor-critic intends a different fraction for a policy than for a value
+# function -- 0.05 against 0.5 -- so a binding that reached the step sizes would
+# be expressing a claim the experiment does not make. Four etas, searched.
+#
+# **Four rules, four states.** Each keeps its own trace, its own sigma_bar and
+# its own second moment; equal settings are not shared state, and
+# `test_four_rules_given_one_setting_are_still_four_learners` in
+# `memo/tests/unit/algorithms/rtrrl/test_torso_aggregation.py` drives exactly
+# this configuration and reads the four apart.
+#
+# The other two arms of Experiment 2 are this file with the paths changed and
+# nothing else:
+#
+#   IU-input     `torso.optimizer.kind: [input_iu]`, and the torso's three
+#                destinations collapse to one, `torso.optimizer.input_iu.<name>`
+#   ObGD         `actor|critic.optimizer.kind: [obgd]`,
+#                `torso.optimizer.kind: [input_obgd]`, and the shared names are
+#                `bound.adaptive_ob_fixed.{kappa,beta2,eps}` under each -- with
+#                `bound.kind` pinned to `adaptive_ob_fixed` in `space`, since a
+#                structural choice is pinned and never bound
+#
+# Read, at the reporting boundaries:
+#   - eval/episode/return finite throughout
+#   - update.torso.actor.intentional.sigma_bar and
+#     update.torso.critic.intentional.sigma_bar both present and *different* --
+#     one number in both would mean the two branches had become one rule
+#   - update.torso.actor.intentional.advantage_scale present, and the critic's
+#     absent: the critic's signal is a TD error and has no advantage to scale
+
+experiment: rtrrl-issue81
+name: rtrrl-issue81-shared-iu-output
+description: "Issue 81: one intentional setting over four rules, four etas apart"
+
+# Set to the digest built from a branch carrying `output_iu` on the torso
+# (issue 69) and `iu` on the readouts (issue 77). No earlier image declares all
+# four of the paths below, so a dispatch against one is refused at start-up
+# rather than running something else under this name.
+image: 007122174918.dkr.ecr.eu-north-1.amazonaws.com/rtrrl@sha256:0000000000000000000000000000000000000000000000000000000000000000
+entry: rtrrl
+storage: s3://rtrrl-artifacts-007122174918/trainer
+
+environment:
+  id: brax::hopper
+  backend: spring
+  observed: [0, 2, 4, 6, 8, 10]
+  seeds: [0]
+  episode_length: 1000
+
+training:
+  num_envs: 1
+  total_steps: 5000
+  chunk_steps: 1000
+
+evaluation:
+  every_steps: 1000
+  episodes: 1
+  chunk_steps: 1000
+  seed: 1000
+
+logging:
+  aim:
+    url: aim://172.31.62.192:53800
+    training:
+      # A scope block per scope asked for, each with its own interval. `window`
+      # tiles the step axis and pools the episodes ending in each stretch.
+      window:
+        every_steps: 1000
+
+score:
+  metric: eval/episode/return
+  window_steps: [0, 5000]
+  reduce: last
+  non_finite: worst
+  direction: maximize
+
+compute:
+  instance_type: c7a.large
+  timeout_minutes: 60
+
+# Four dimensions, all of them etas. Written without bindings the same arm would
+# have searched or repeated twenty-eight leaves.
+hpo:
+  rounds: 2
+  trials_per_round: 4
+  parallel_jobs: 2
+  startup_trials: 4
+  seed: 0
+
+bindings:
+  iu_clip:
+    domain: [20.0]
+    paths:
+      - actor.optimizer.iu.clip
+      - critic.optimizer.iu.clip
+      - torso.optimizer.output_iu.actor.clip
+      - torso.optimizer.output_iu.critic.clip
+  iu_beta_rms:
+    domain: [0.999]
+    paths:
+      - actor.optimizer.iu.beta_rms
+      - critic.optimizer.iu.beta_rms
+      - torso.optimizer.output_iu.actor.beta_rms
+      - torso.optimizer.output_iu.critic.beta_rms
+  iu_beta_clip:
+    domain: [0.9998]
+    paths:
+      - actor.optimizer.iu.beta_clip
+      - critic.optimizer.iu.beta_clip
+      - torso.optimizer.output_iu.actor.beta_clip
+      - torso.optimizer.output_iu.critic.beta_clip
+  iu_beta_advantage:
+    # Declared by all four rules, and read by the two whose signal is an
+    # advantage. A destination is a declared leaf; what the rule does with it is
+    # the algorithm's.
+    domain: [0.9998]
+    paths:
+      - actor.optimizer.iu.beta_advantage
+      - critic.optimizer.iu.beta_advantage
+      - torso.optimizer.output_iu.actor.beta_advantage
+      - torso.optimizer.output_iu.critic.beta_advantage
+  iu_beta_momentum:
+    # Adam's beta1, written over the trace. At zero the direction *is* the
+    # trace, which is the published rule.
+    domain: [0.0]
+    paths:
+      - actor.optimizer.iu.beta_momentum
+      - critic.optimizer.iu.beta_momentum
+      - torso.optimizer.output_iu.actor.beta_momentum
+      - torso.optimizer.output_iu.critic.beta_momentum
+  iu_denominator_floor:
+    domain: [0.00000001]
+    paths:
+      - actor.optimizer.iu.denominator_floor
+      - critic.optimizer.iu.denominator_floor
+      - torso.optimizer.output_iu.actor.denominator_floor
+      - torso.optimizer.output_iu.critic.denominator_floor
+  iu_eps:
+    domain: [0.00000001]
+    paths:
+      - actor.optimizer.iu.eps
+      - critic.optimizer.iu.eps
+      - torso.optimizer.output_iu.actor.eps
+      - torso.optimizer.output_iu.critic.eps
+
+space:
+  torso:
+    backbone:
+      kind: [lru]
+      lru:
+        feature_dim: [64]
+        hidden_dim: [64]
+        differentiation:
+          kind: [exact_rtrl]
+    optimizer:
+      kind: [output_iu]
+      output_iu:
+        actor:
+          eta: {type: float, low: 1.0e-3, high: 1.0, log: true}
+        critic:
+          eta: {type: float, low: 1.0e-3, high: 1.0, log: true}
+    # Off, and it must be. The intentional update sizes its own step, so an
+    # outer clip over the finished torso update is a second bound no branch
+    # could account for -- the entry refuses one rather than applying it.
+    grad_clip: [0.0]
+    follow: [1.0]
+  actor:
+    optimizer:
+      kind: [iu]
+      iu:
+        eta: {type: float, low: 1.0e-3, high: 1.0, log: true}
+    head:
+      kind: [state_std]
+      state_std:
+        initialization:
+          kind: [lecun]
+  critic:
+    optimizer:
+      kind: [iu]
+      iu:
+        eta: {type: float, low: 1.0e-3, high: 1.0, log: true}
+    head:
+      kind: [value]
+      value:
+        initialization:
+          kind: [lecun]
+  normalization:
+    observation:
+      kind: [none]
+    reward:
+      kind: [none]
+  gamma: [0.99]
+  lambda_pi: [0.9]
+  lambda_v: [0.9]
+  lambda_rnn: [0.9]
+  eta_pi: [1.0]
+  eta_f: [1.0]
+  entropy_rate: [0.00001]
+  meta_rl: [true]

@@ -11,7 +11,7 @@ from typing import Any
 
 import pytest
 
-from trainer_infra import ExperimentError, ExperimentRunner
+from trainer_infra import ExperimentError, ExperimentRunner, StudyError
 from trainer_infra.scoring import ScoreSpec
 
 LAUNCH = "20260817-120000"
@@ -180,6 +180,42 @@ def test_a_formal_seed_that_tuned_the_configuration_starts_nothing(
         runner(formal, catalog, tmp_path)
 
 
+
+def test_a_tuning_launch_records_that_it_froze_nothing(
+    experiment: Any, catalog: Any, tmp_path: Path
+) -> None:
+    """Absent and null are two different claims, so the record makes it null.
+
+    A key the study never held cannot be compared against on resume, which is
+    what would let a formal study be picked up again as a tuning one.
+    """
+
+    launch = runner(experiment, catalog, tmp_path)
+    launch.next_round()
+
+    assert launch.hpo._open().user_attrs["selection"] is None
+
+
+def test_a_formal_study_cannot_be_resumed_with_its_selection_deleted(
+    experiment: Any, catalog: Any, tmp_path: Path
+) -> None:
+    """The trials in it were drawn as a formal launch's and stay that way.
+
+    `role` alone would have caught this, being derived from `selection` -- but
+    only by that derivation, and the message would have named a field nobody
+    edited. The block is archived in its own right, so both are reported.
+    """
+
+    formal = frozen(experiment)
+    runner(formal, catalog, tmp_path).next_round()
+
+    tuning = {key: value for key, value in formal.items() if key != "selection"}
+    tuning["environment"] = {**formal["environment"], "seeds": [0]}
+
+    with pytest.raises(StudyError, match="selection"):
+        runner(tuning, catalog, tmp_path).next_round()
+
+
 def test_a_formal_launch_that_is_still_searching_starts_nothing(
     experiment: Any, catalog: Any, tmp_path: Path
 ) -> None:
@@ -188,6 +224,38 @@ def test_a_formal_launch_that_is_still_searching_starts_nothing(
     formal = frozen(experiment)
     formal["space"]["gamma"] = [0.9, 0.95]
 
+    with pytest.raises(ExperimentError, match="still offer more than one value"):
+        runner(formal, catalog, tmp_path)
+
+
+
+@pytest.mark.parametrize(
+    ("domain", "searching"),
+    [
+        pytest.param({"type": "float", "low": 0.9, "high": 0.95}, True, id="a real range"),
+        pytest.param({"type": "float", "low": 0.9, "high": 0.9}, False, id="an empty range"),
+        pytest.param({"type": "choice", "values": [0.9, 0.95]}, True, id="two options"),
+        pytest.param({"type": "choice", "values": [0.9]}, False, id="one option"),
+    ],
+)
+def test_a_range_written_the_long_way_is_read_as_a_range(
+    experiment: Any, catalog: Any, tmp_path: Path, domain: Any, searching: bool
+) -> None:
+    """A leaf and a group are both mappings, and only ``type`` tells them apart.
+
+    Read as a group, a range has no leaves and so reports nothing -- which is
+    how ``gamma: {type: float, low: 0.9, high: 0.95}`` used to pass a launch
+    whose whole claim is that it is no longer choosing. The two spellings of a
+    pinned value have to pass, and both spellings of a live one have to fail,
+    or the rule is about notation rather than about the search.
+    """
+
+    formal = frozen(experiment)
+    formal["space"]["gamma"] = domain
+
+    if not searching:
+        assert runner(formal, catalog, tmp_path).role == "formal"
+        return
     with pytest.raises(ExperimentError, match="still offer more than one value"):
         runner(formal, catalog, tmp_path)
 

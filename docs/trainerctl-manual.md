@@ -20,6 +20,7 @@ read the others when you need them.
   - [The experiment file](#the-experiment-file)
   - [Metric names and what they were reduced over](#metric-names-and-what-they-were-reduced-over)
   - [The search space](#the-search-space)
+  - [One value at several parameters](#one-value-at-several-parameters)
   - [Scoring](#scoring)
   - [Reporting a result](#reporting-a-result)
   - [Command reference](#command-reference)
@@ -388,6 +389,120 @@ The task, the run shape and the evaluation shape are not algorithm parameters. T
 in the top-level `environment`, `training` and `evaluation` sections and reach the entry
 through the run configuration rather than through a sampled trial.
 
+### One value at several parameters
+
+Some comparisons hold a setting equal across the agent's blocks rather than searching it
+in each. Giving `actor.optimizer.adam.b2`, `critic.optimizer.adam.b2` and
+`torso.optimizer.adam.b2` the same list does not do that: they are three leaves, so the
+sampler draws three numbers and the study searches three dimensions. The comparison being
+run is then not the one the file describes.
+
+A `bindings` section declares a variable once and names the paths it is written into:
+
+```yaml
+bindings:
+  shared_beta2:
+    domain: [0.9, 0.99, 0.995, 0.999, 0.9999]   # the same notation a space leaf uses
+    paths:
+      - actor.optimizer.adam.b2
+      - critic.optimizer.adam.b2
+      - torso.optimizer.adam.b2
+
+space:
+  actor:
+    optimizer:
+      kind: [adam]
+      adam:
+        lr: {type: float, low: 1.0e-5, high: 1.0e-2, log: true}   # still its own
+  critic:
+    optimizer:
+      kind: [adam]
+      adam:
+        lr: {type: float, low: 1.0e-5, high: 1.0e-2, log: true}
+  torso:
+    optimizer:
+      kind: [adam]
+      adam:
+        lr: {type: float, low: 1.0e-5, high: 1.0e-2, log: true}
+```
+
+The study searches one parameter, `shared_beta2`, and each run document carries an
+ordinary number at each of the three paths. The three learning rates beside it are
+untouched and are still drawn apart.
+
+**A binding is configuration and nothing else.** The three blocks build three optimizers
+with three states exactly as they did before; no moment, trace or bound statistic is
+shared, and nothing in this section can make one be. Four rules given one setting are four
+rules, which is what lets `output_iu` fan one value out to every intentional rule an agent
+runs — the two heads and the torso's two branches — while each keeps its own `eta` and its
+own state:
+
+```yaml
+bindings:
+  shared_clip:
+    domain: [10.0, 20.0, 50.0]
+    paths:
+      - actor.optimizer.iu.clip
+      - critic.optimizer.iu.clip
+      - torso.optimizer.output_iu.actor.clip
+      - torso.optimizer.output_iu.critic.clip
+```
+
+A variable's name has no dots and a destination is a dotted path, which is how the two
+namespaces stay apart — and why a variable cannot name another variable, so there is no
+cycle to spell. A `domain` is written exactly the way a `space` leaf is, and what makes one
+frozen is the domain rather than the notation: `[0.999]`, `{type: choice, values: [0.999]}`
+and `{type: float, low: 0.999, high: 0.999}` are one value each, to a formal launch as much
+as to the sampler. The rest is checked before a container starts:
+
+| Refusal | Cause |
+| --- | --- |
+| `the image declares no parameter at [...]` | A destination the catalog does not have |
+| `the shared domain is outside the valid domain at [...]` | Some destination will not take the value |
+| `[...] are under branches this experiment does not select` | A destination under a `kind` this file pinned elsewhere |
+| `[...] select which parameters exist` | A `kind` was bound; pin a structural choice under `space` |
+| `more than one value is written into [...]` | Two variables name one path |
+| `[...] are bound to a shared variable and also pinned under space` | One leaf with two authors |
+| `shared variables [...] are already names in the image's parameter tree` | The name would collide with a parameter |
+| `shared variables [...] contain a dot` | A name shaped like a destination |
+| `binding '...' reaches 1 path(s)` | One destination is that parameter's own range |
+
+Two complete files are checked in beside the others:
+`experiments/rtrrl issue81 shared adam.yaml` is the first example as a launch, and
+`experiments/rtrrl issue81 shared iu output.yaml` is the second, with the two arms it is a
+short edit away from named in its header.
+
+The binding is archived on the study alongside the seeds and the selection, because what
+the one dimension stood for is not recoverable from what Optuna stores. Resuming a study —
+`trainerctl settle` — reads the variable back and writes it out to its destinations again,
+so the runs it scores are the runs that were submitted.
+
+**A study cannot be restamped.** That record is what the trials already in it were drawn
+under, so resuming with an edited file is refused rather than allowed to overwrite it:
+
+```
+study 'rtrrl-issue81-shared-adam' already records ['bindings'] differently; it describes
+the trials it has already drawn, so resume the launch it belongs to or name a study of
+your own
+```
+
+The same holds for the seeds a launch was measured on, its evaluation seed, its sampler
+seed and its selection — everything the control plane archives.
+
+Two things make that check total rather than nearly so. Every block is recorded even when
+it is empty — `bindings: []` where nothing is shared, `selection: null` where nothing was
+frozen — because a key the study never held is a key nothing can be compared against; and
+the comparison starts from what the study holds rather than from what the file still says,
+so a block *deleted* from a file is caught as well as one edited. Deleting `selection` from
+a formal launch and resuming its study is refused for exactly that reason, rather than
+quietly carrying on as a tuning launch in a study whose trials were drawn as a formal
+one's.
+
+A key the launch records and the study does not is written rather than refused: that is
+what a study opened by an older build looks like, and it cannot be told apart from one that
+recorded the key as absent. Omitting `bindings` otherwise leaves a file exactly as it
+was.
+
 ### Scoring
 
 The score is what the optimiser sees. It is computed by the control plane from the
@@ -458,7 +573,7 @@ space:
 | Refusal | Cause |
 | --- | --- |
 | `formal seeds [...] were already used to tune this configuration` | A listed seed appears in `selection.tuning_seeds` |
-| `a formal launch runs the configuration it froze, but [...] still offer more than one value` | Something under `space` is still being searched |
+| `a formal launch runs the configuration it froze, but [...] still offer more than one value` | Something under `space`, or a `bindings` domain, is still being searched |
 | `a formal launch cannot be scored on 'train/...'` | Training return is a diagnostic, never a formal score |
 | `the selection block does not say [...]` | `selection` is present but incomplete |
 
@@ -500,7 +615,8 @@ work genuinely has not finished is reported as still running and left alone.
 ### Output and where things land
 
 `run` prints the study to stdout as JSON: the launch id, every trial's number, state,
-value and parameters, and the best trial. `settle` prints what it settled and what is
+value and parameters, any `bindings` the file declared, and the best trial. `settle` prints
+what it settled and what is
 still running. The launch id is on stderr as well, printed before the first round rather
 than after the last, so a run that never reaches its report has still said what it was.
 Progress and worker output go to stderr, so `> report.json` gives a clean machine-readable
@@ -551,6 +667,7 @@ message names the field:
 | `the image declares no parameter named ...` | A `space` key the catalog does not have |
 | `experiment range is outside the valid domain for ...` | An override leaves the declared domain |
 | `structure parameters must be fixed for one experiment: ...` | A structural parameter is being searched |
+| `the image declares no parameter at [...]` | A `bindings` destination the catalog does not have; see [One value at several parameters](#one-value-at-several-parameters) |
 | `parallel_jobs must be between one and the number of trials` | `hpo.parallel_jobs` exceeds `trials_per_round` |
 
 **The run was rejected inside the image.** The run configuration is validated again by the
@@ -599,6 +716,13 @@ underscore, and requires three names from each:
 
 A module missing any of them fails the build with a message naming what it lacks, and an
 image with no entries at all is refused, since it could run nothing.
+
+An image declares parameters; it does not declare which of them an experiment holds equal.
+A binding is written by the experiment against the paths this tree produces — the same
+dotted names a run document carries — so nothing here has to anticipate one, and adding a
+block or renaming a branch changes what a binding may say without changing anything about
+how it is declared. See
+[One value at several parameters](#one-value-at-several-parameters).
 
 ```python
 from memorax.algorithms.stream_ac import METRICS as METRICS
@@ -734,6 +858,9 @@ Behaviours that are intentional but surprising, gathered in one place:
   a container start to find out.
 - An empty `space` is valid: it uses the catalog's complete algorithm parameter space
   unchanged.
+- A bound parameter disappears from a study's parameters: the trial records the variable
+  that was drawn, not the paths it was written to. The run documents carry the paths, and
+  the study's `bindings` attribute says which they were.
 - `metrics.jsonl` is not configurable and never sampled. Turning Aim's training scopes
   down makes the dashboard cheaper; it does not make the run's record thinner, and the
   score reads the record.

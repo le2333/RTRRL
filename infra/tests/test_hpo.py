@@ -3,7 +3,7 @@ from pathlib import Path
 import optuna
 import pytest
 
-from trainer_infra import HPO, SampledTrial
+from trainer_infra import HPO, SampledTrial, StudyError
 
 NO_PARAMETERS = {}
 
@@ -75,6 +75,57 @@ def test_run_hpo_records_each_round_before_starting_the_next(tmp_path: Path) -> 
     ]
     assert [trial.value for trial in study.trials] == [0.0, 1.0, 2.0, 3.0]
     assert study.user_attrs == {"experiment": "baseline"}
+
+
+
+def test_a_launch_that_stops_claiming_what_the_study_recorded_is_refused(
+    tmp_path: Path,
+) -> None:
+    """The half of a re-stamp that hides: a key deleted rather than edited.
+
+    Comparing what the file still says against what the study holds finds an
+    edited value and misses a removed one -- there is nothing left on the file's
+    side to disagree with. So the comparison starts from the record, and a
+    launch that no longer claims a key the study stores is a different launch.
+
+    Driven here rather than through an experiment file because every block that
+    file can drop is archived even when empty, which is the other half of the
+    same fix; this is the rule itself.
+    """
+
+    config = {
+        "name": "streamac",
+        "database": tmp_path / "study.db",
+        "direction": "maximize",
+        "rounds": 1,
+        "trials_per_round": 1,
+        "startup_trials": 1,
+        "seed": 7,
+        "parameters": {"gamma": {"type": "choice", "values": [0.9]}},
+    }
+    HPO(**config, metadata={"role": "formal", "selection": {"trial": 3}}).ask()
+
+    with pytest.raises(StudyError, match=r"\['selection'\], which this launch does not claim"):
+        HPO(**config, metadata={"role": "formal"}).ask()
+
+
+def test_a_launch_that_claims_no_provenance_overwrites_none(tmp_path: Path) -> None:
+    """A bare optimizer is a library object, not a second author of the record."""
+
+    config = {
+        "name": "streamac",
+        "database": tmp_path / "study.db",
+        "direction": "maximize",
+        "rounds": 1,
+        "trials_per_round": 1,
+        "startup_trials": 1,
+        "seed": 7,
+        "parameters": {"gamma": {"type": "choice", "values": [0.9]}},
+    }
+    HPO(**config, metadata={"role": "formal"}).ask()
+    HPO(**config).ask()
+
+    assert HPO(**config)._open().user_attrs == {"role": "formal"}
 
 
 def test_running_names_the_trials_the_study_never_heard_back_about(tmp_path: Path) -> None:

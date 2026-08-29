@@ -1,0 +1,182 @@
+# Issue 81: Experiment 2's Adam arm, with the updater settings held equal across
+# the three blocks and the three learning rates searched apart. A local shape
+# check of the `bindings` surface, not the formal protocol -- the seed count, the
+# budget and the metrics of a reported comparison are the experiment side's.
+#
+# What the file is for. Experiment 2 asks what an update rule does, holding its
+# settings fixed while the blocks that run it keep their own rates. Writing
+# `b2: [0.9, 0.99, ...]` under each of the three optimizers does not say that:
+# they are three leaves, the sampler draws three numbers, and the study searches
+# a space three dimensions wider than the comparison being described. So the
+# variable is declared once, under `bindings`, and named at the paths it reaches.
+#
+# Two kinds of binding are here on purpose:
+#
+#   - `shared_b2` has five values. It is one Optuna parameter, drawn once per
+#     trial, and every trial's run document carries that number at all three
+#     paths. The report says `shared_b2`, not the paths -- `bindings` in the
+#     report says which those were.
+#   - `shared_b1` and `shared_eps` have one value each. A binding with a single
+#     value is still a binding: it is how three places are set from one, which is
+#     the difference between a constant that was decided once and three constants
+#     that happen to agree today.
+#
+# **The Adam-beta1=0 arm is this file with `shared_b1: [0.0]`.** It is a
+# separate launch rather than a second value in the domain, because the two are
+# the arms being compared -- letting the sampler pick between them would fold the
+# comparison into the search.
+#
+# What is *not* shared: the three learning rates, which stay under `space` and
+# are drawn independently. And nothing at runtime. The actor, the critic and the
+# torso build three Adam optimizers with three moment pairs, exactly as they did
+# before this file could be written; equal settings are not shared state.
+#
+# Read, at the reporting boundaries:
+#   - eval/episode/return finite throughout
+#   - the three update.*.grad_norm series finite -- one shared beta must not
+#     make three blocks move as one
+#   - the report's `bindings` block, against `trials[*].parameters`: one
+#     `shared_b2` per trial and no `*.adam.b2` anywhere
+
+experiment: rtrrl-issue81
+name: rtrrl-issue81-shared-adam
+description: "Issue 81: one Adam beta over three optimizers, three learning rates apart"
+
+# Issue 37's image. Adam has been declared at all three blocks since long before
+# it, and a binding needs nothing from the image -- it is resolved entirely on
+# the control-plane side and the run document a worker reads carries ordinary
+# numbers. Move it forward when a newer rtrrl image is built.
+image: 007122174918.dkr.ecr.eu-north-1.amazonaws.com/rtrrl@sha256:7ca201c304dc6a38dc45d8142cfc05d1ec4deb3046e9e8e3594b4ff635cfd32d
+entry: rtrrl
+storage: s3://rtrrl-artifacts-007122174918/trainer
+
+# Masked Hopper, as issue 27 and issue 37 run it: six of the eleven readings,
+# velocities withheld.
+environment:
+  id: brax::hopper
+  backend: spring
+  observed: [0, 2, 4, 6, 8, 10]
+  seeds: [0]
+  episode_length: 1000
+
+training:
+  num_envs: 1
+  total_steps: 5000
+  chunk_steps: 1000
+
+evaluation:
+  every_steps: 1000
+  episodes: 1
+  chunk_steps: 1000
+  seed: 1000
+
+logging:
+  aim:
+    url: aim://172.31.62.192:53800
+    training:
+      # A scope block per scope asked for, each with its own interval. `window`
+      # tiles the step axis and pools the episodes ending in each stretch.
+      window:
+        every_steps: 1000
+
+score:
+  metric: eval/episode/return
+  window_steps: [0, 5000]
+  reduce: last
+  non_finite: worst
+  direction: maximize
+
+compute:
+  instance_type: c7a.large
+  timeout_minutes: 60
+
+# Small on purpose. What this file demonstrates is the shape of the search, not
+# its budget: four dimensions -- one shared beta and three rates -- where the
+# same experiment written without bindings would have had six.
+hpo:
+  rounds: 2
+  trials_per_round: 4
+  parallel_jobs: 2
+  startup_trials: 4
+  seed: 0
+
+# One variable, declared once, written into every path it names. A name has no
+# dots and may not be one the image's tree already uses; a destination is a
+# dotted path into that tree. That is the whole of how the two are told apart,
+# and it is why a variable cannot name another variable.
+bindings:
+  shared_b2:
+    domain: [0.9, 0.99, 0.995, 0.999, 0.9999]
+    paths:
+      - actor.optimizer.adam.b2
+      - critic.optimizer.adam.b2
+      - torso.optimizer.adam.b2
+  shared_b1:
+    # `[0.0]` is the Adam-beta1=0 arm. See the header.
+    domain: [0.9]
+    paths:
+      - actor.optimizer.adam.b1
+      - critic.optimizer.adam.b1
+      - torso.optimizer.adam.b1
+  shared_eps:
+    domain: [0.00000001]
+    paths:
+      - actor.optimizer.adam.eps
+      - critic.optimizer.adam.eps
+      - torso.optimizer.adam.eps
+
+space:
+  torso:
+    backbone:
+      kind: [lru]
+      lru:
+        feature_dim: [64]
+        hidden_dim: [64]
+        differentiation:
+          kind: [exact_rtrl]
+    optimizer:
+      kind: [adam]
+      adam:
+        # The torso's own rate, searched independently of the two heads'. A
+        # binding over `lr` as well would be a different experiment: one
+        # learner in three places rather than three learners under one rule.
+        lr: {type: float, low: 1.0e-5, high: 1.0e-2, log: true}
+        # b1, b2 and eps are absent here, and must be: a leaf that a binding
+        # writes cannot also be pinned under `space`. That would be two authors
+        # of one value, and the launch is refused rather than one of them
+        # silently winning.
+    grad_clip: [1.0]
+    follow: [1.0]
+  actor:
+    optimizer:
+      kind: [adam]
+      adam:
+        lr: {type: float, low: 1.0e-5, high: 1.0e-2, log: true}
+    head:
+      kind: [state_std]
+      state_std:
+        initialization:
+          kind: [lecun]
+  critic:
+    optimizer:
+      kind: [adam]
+      adam:
+        lr: {type: float, low: 1.0e-5, high: 1.0e-2, log: true}
+    head:
+      kind: [value]
+      value:
+        initialization:
+          kind: [lecun]
+  normalization:
+    observation:
+      kind: [none]
+    reward:
+      kind: [none]
+  gamma: [0.99]
+  lambda_pi: [0.9]
+  lambda_v: [0.9]
+  lambda_rnn: [0.9]
+  eta_pi: [1.0]
+  eta_f: [1.0]
+  entropy_rate: [0.00001]
+  meta_rl: [true]

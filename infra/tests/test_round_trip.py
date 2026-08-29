@@ -75,6 +75,37 @@ def test_every_shipped_experiment_says_what_this_side_requires(path: Path) -> No
     assert sorted(_absent(yaml.safe_load(path.read_text(encoding="utf-8")))) == []
 
 
+BOUND = tuple(
+    sorted(
+        path
+        for path in TEMPLATE.parent.glob("*.yaml")
+        if "bindings" in (yaml.safe_load(path.read_text(encoding="utf-8")) or {})
+    )
+)
+
+
+@pytest.mark.parametrize("path", BOUND, ids=lambda path: path.stem)
+def test_every_shipped_binding_is_one_variable_over_distinct_paths(path: Path) -> None:
+    """What a file can get wrong about a binding without naming a catalog.
+
+    The destinations themselves are checked against the image's tree at launch,
+    which needs a catalog this suite does not carry. What is checkable here is
+    the part that is true of any catalog: a variable's name is not shaped like a
+    destination, it reaches more than one, and no path is written twice -- within
+    one variable or across two, which is the same mistake made twice over.
+    """
+
+    bindings = yaml.safe_load(path.read_text(encoding="utf-8"))["bindings"]
+    written: list[str] = []
+    for name, declaration in bindings.items():
+        assert "." not in name, f"{name} is shaped like a destination"
+        assert set(declaration) == {"domain", "paths"}, name
+        assert len(declaration["paths"]) > 1, f"{name} reaches one path"
+        written += declaration["paths"]
+    assert sorted(set(written)) == sorted(written), "a path is written twice"
+
+
+
 def test_an_empty_file_is_refused_before_catalog_use() -> None:
     with pytest.raises(ExperimentError, match="does not say"):
         ExperimentRunner(experiment={}, catalog={}, database=Path("unused.db"))

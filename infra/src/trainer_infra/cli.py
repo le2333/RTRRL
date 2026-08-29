@@ -216,6 +216,11 @@ def main(argv: Sequence[str] | None = None) -> int:
                 "seeds": list(runner.seeds),
                 "evaluation_seed": experiment["evaluation"]["seed"],
                 "selection": runner.selection,
+                # A trial's parameters name the variable that was drawn, not the
+                # paths it was written to, so a report that did not say which
+                # those were could not be used to freeze the configuration it
+                # found.
+                "bindings": [binding.record() for binding in runner.bindings],
                 "trials": trials,
                 "best": {"number": best.number, "value": best.value},
             },

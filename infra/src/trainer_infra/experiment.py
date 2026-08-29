@@ -10,7 +10,14 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
-from trainer_infra.adapter import resolve_parameter_ranges, static_names
+from trainer_infra.adapter import (
+    offers_one_value,
+    readable_domain,
+    resolve_parameter_ranges,
+    static_names,
+)
+from trainer_infra.bindings import resolve_bindings
+from trainer_infra.bindings import searched as searched_bindings
 from trainer_infra.hpo import HPO
 from trainer_infra.scoring import ScoreSpec
 
@@ -129,16 +136,21 @@ def _seeds(experiment: Mapping[str, Any]) -> tuple[int, ...]:
 
 
 def _frozen(space: Mapping[str, Any]) -> Iterator[str]:
-    """Every leaf of a search space that still offers more than one value."""
+    """Every leaf of a search space that still offers more than one value.
+
+    A leaf and a group are both mappings, and what tells them apart is the word
+    that tells them apart everywhere else: a leaf written the long way says
+    ``type``. Reading a range as a group is not a harmless confusion -- walked as
+    one it has no leaves, so ``gamma: {type: float, low: 0.9, high: 0.99}``
+    reported nothing and a formal launch accepted a leaf it was still searching.
+    """
 
     for name, node in space.items():
-        if isinstance(node, Mapping):
-            yield from (f"{name}.{path}" for path in _frozen(node))
-        elif (
-            not isinstance(node, (str, bytes))
-            and isinstance(node, Sequence)
-            and len(node) != 1
-        ):
+        domain = readable_domain(node)
+        if domain is None:
+            if isinstance(node, Mapping):
+                yield from (f"{name}.{path}" for path in _frozen(node))
+        elif not offers_one_value(domain):
             yield name
 
 
@@ -207,6 +219,17 @@ class ExperimentRunner:
         self.score = ScoreSpec.from_mapping(experiment["score"])
         self._formal_is_measured()
 
+        parameters = resolve_parameter_ranges(descriptor["parameters"], experiment["space"])
+        # Checked here, with everything else a file has to get right before a
+        # container starts: a binding into a path the image does not declare is
+        # a round of jobs that each read the same missing value and die.
+        self.bindings = resolve_bindings(
+            declared=descriptor["parameters"],
+            resolved=parameters,
+            space=experiment["space"],
+            bindings=experiment.get("bindings") or {},
+        )
+
         hpo = experiment["hpo"]
         self.hpo = HPO(
             name=experiment["name"],
@@ -216,13 +239,25 @@ class ExperimentRunner:
             trials_per_round=hpo["trials_per_round"],
             startup_trials=hpo["startup_trials"],
             seed=hpo["seed"],
-            parameters=resolve_parameter_ranges(descriptor["parameters"], experiment["space"]),
+            parameters=parameters,
+            bindings=self.bindings,
             metadata={
                 "role": self.role,
                 "seeds": list(self.seeds),
                 "evaluation_seed": int(experiment["evaluation"]["seed"]),
                 "hpo_seed": int(hpo["seed"]),
-                **({} if self.selection is None else {"selection": dict(self.selection)}),
+                # Archived rather than reconstructed: the destinations a study's
+                # one dimension stood for are not recoverable from what Optuna
+                # stores, and a resumed study has to be readable on its own.
+                # Written even when empty, so that adding or removing a binding
+                # is a disagreement the study can refuse rather than a key that
+                # was simply not there before.
+                "bindings": [binding.record() for binding in self.bindings],
+                # Written even where there is none, for the reason bindings is:
+                # a key the study never held cannot be compared against, and
+                # deleting `selection` from a file is exactly how a formal study
+                # would be resumed as a tuning one.
+                "selection": None if self.selection is None else dict(self.selection),
             },
         )
 
@@ -251,7 +286,9 @@ class ExperimentRunner:
                 f"formal seeds {reused} were already used to tune this configuration; "
                 "a formal run measures a choice on seeds that did not make it"
             )
-        searched = sorted(_frozen(experiment["space"]))
+        searched = sorted(
+            [*_frozen(experiment["space"]), *searched_bindings(experiment.get("bindings"))]
+        )
         if searched:
             raise ExperimentError(
                 f"a formal launch runs the configuration it froze, but {searched} "
