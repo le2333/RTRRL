@@ -1002,7 +1002,6 @@ def test_the_two_branches_stay_apart_across_streams_resets_and_a_resumption():
     )
 
 
-
 # Every setting an intentional rule has, at one value each. This is what an HPO
 # binding writes into the four paths that name a rule -- `eta` included, so the
 # four are as equal as a configuration can make them and anything that still
@@ -1072,7 +1071,9 @@ def test_four_rules_given_one_setting_are_still_four_learners():
         for other, against in scales.items():
             if other <= name:
                 continue
-            assert not np.allclose(scale, against), f"{name} and {other} report one scale"
+            assert not np.allclose(
+                scale, against
+            ), f"{name} and {other} report one scale"
 
     # The two torso branches step one set of parameters, so their states are the
     # ones a single shared tree would be invisible in. Compared leaf by leaf.
@@ -1080,7 +1081,8 @@ def test_four_rules_given_one_setting_are_still_four_learners():
     critic_moment = flattened(held["torso.critic"].nu)
     assert set(actor_moment) == set(critic_moment)
     assert any(
-        not np.allclose(actor_moment[path], critic_moment[path]) for path in actor_moment
+        not np.allclose(actor_moment[path], critic_moment[path])
+        for path in actor_moment
     )
 
 
