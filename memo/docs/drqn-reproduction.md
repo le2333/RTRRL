@@ -233,14 +233,18 @@ Two absences are the whole of the wiring, and both are deliberate:
   paper rather than the paper's network.
   `test_the_cell_is_read_by_the_head_and_by_nothing_in_between` holds both.
 
-It is offered to DRQN and to nothing else. Nothing carries exact recurrent
-sensitivity through a dense-gated cell, so the online arm's core family does not
-list it — `RTRRL_TORSO_FAMILY` names `lru` and `rtu` — and `BPTT_BACKBONES`
-keeps it out of the shared backbone family for the same reason. A matched pair
-of runs therefore cannot be pinned to it, which is the boundary this branch
-lives inside: an `lstm` run is DRQN answerable to its own paper, and an
-`lru`/`rtu` run is DRQN answerable to the online learner. A write-up must not
-read a number from one as though it came from the other.
+It is offered to the replay learners and to no online arm. Nothing carries exact
+recurrent sensitivity through a dense-gated cell, so the online arm's core family
+does not list it — `RTRRL_TORSO_FAMILY` names `lru` and `rtu` — and
+`BPTT_BACKBONES` keeps it out of the shared backbone family for the same reason.
+R2D2 declares the same cell in its own tree, as `backbone.kind: lstm`, which is
+what a standard R2D2-LSTM baseline runs on; that is a second learner reaching the
+same cell, not a second reading of this branch, and R2D2 puts its own encoder in
+front of it where DRQN puts nothing. A matched pair of runs still cannot be
+pinned to it, which is the boundary this branch lives inside: an `lstm` run is
+DRQN answerable to its own paper, and an `lru`/`rtu` run is DRQN answerable to
+the online learner. A write-up must not read a number from one as though it came
+from the other.
 
 `test_drqn_lstm_core.py` checks the four places the learner reads a core — the
 zero state a window opens on, which for an LSTM is a cell state and a hidden
