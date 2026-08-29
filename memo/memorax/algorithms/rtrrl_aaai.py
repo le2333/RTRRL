@@ -87,7 +87,6 @@ from memorax.rl.normalization import (
 from memorax.rl.traces import CARRIED, CURRENT, Trace
 from memorax.rl.updates import (
     DRTRRL,
-    OBGD_BOUND_FAMILY,
     STEP_FAMILY,
     Adam,
     AdaptiveObBound,
@@ -98,6 +97,7 @@ from memorax.rl.updates import (
     make_bounded_rule,
     make_d_rtrrl_rule,
     make_intentional_rule,
+    obgd_step,
 )
 from memorax.runtime import ObservationSchema
 from memorax.utils import Timestep
@@ -168,10 +168,12 @@ class RTRRLConfig:
     torso_optimizer: (
         Sgd | Adam | DRTRRL | IntentionalUpdate | ObGDStep | OutputSteps
     ) = field(default_factory=lambda: Adam(lr=1e-4))
-    actor_optimizer: Sgd | Adam | DRTRRL | IntentionalUpdate = field(
+    # A readout's choices are the torso's minus the aggregation: it has one
+    # contribution, so there is no position for a rule to be taken at.
+    actor_optimizer: Sgd | Adam | DRTRRL | IntentionalUpdate | ObGDStep = field(
         default_factory=lambda: Adam(lr=1e-4)
     )
-    critic_optimizer: Sgd | Adam | DRTRRL | IntentionalUpdate = field(
+    critic_optimizer: Sgd | Adam | DRTRRL | IntentionalUpdate | ObGDStep = field(
         default_factory=lambda: Adam(lr=1e-4)
     )
     torso_grad_clip: float = 1.0
@@ -185,12 +187,16 @@ class RTRRLConfig:
 
 
 #: What a readout may step under. A head has one derivative and one trace, so
-#: there is nothing to aggregate and no position to name.
+#: there is nothing to aggregate and no position to name: ``iu`` and ``obgd``
+#: here are what ``input_iu`` / ``output_iu`` and ``input_obgd`` /
+#: ``output_obgd`` are on the torso, which is the block that has two
+#: contributions to combine. That asymmetry is the two blocks being different
+#: things, not a name missing from one of them.
 #:
 #: Adam stays first, and the order is not cosmetic: a configuration that names
 #: no optimizer is filled from the front of the search domain, so putting a new
 #: rule ahead of Adam would change what every unpinned run is.
-RTRRL_OPTIMIZERS = STEP_FAMILY.restricted("adam", "sgd", "d_rtrrl", "iu")
+RTRRL_OPTIMIZERS = STEP_FAMILY.restricted("adam", "sgd", "d_rtrrl", "iu", "obgd")
 
 
 @dataclass(frozen=True)
@@ -236,34 +242,23 @@ class OutputSteps:
     critic: Any
 
 
-def _obgd_step(settings: ObGD, builder: ComponentBuilder, path: str) -> ObGDStep:
-    """One ``obgd`` declaration with the bound it names built rather than named.
+def _construct_torso_step(selection, builder: ComponentBuilder):
+    """The torso's step, which for two of its seven branches is two steps.
 
-    A group nested inside a branch is a second choice, and reading a branch
-    back fills in only the first; the builder is what descends. See
-    :class:`memorax.rl.updates.ObGDStep`.
+    The five it shares with a readout are constructed the way a readout's are,
+    by the step family itself. What is here is the two that are a *pair* of
+    steps, which only the block with two contributions to combine can name.
     """
 
-    return ObGDStep(
-        bound=builder.build(OBGD_BOUND_FAMILY, f"{path}.bound"),
-        lr=settings.lr,
-    )
-
-
-def _construct_torso_step(selection, builder: ComponentBuilder):
-    """The torso's step, which for two of the six branches is two steps."""
-
     settings = selection.parameters
-    if isinstance(settings, ObGD):
-        return _obgd_step(settings, builder, selection.path)
     if isinstance(settings, OutputIntentional):
         return OutputSteps(actor=settings.actor, critic=settings.critic)
     if isinstance(settings, OutputObGD):
         return OutputSteps(
-            actor=_obgd_step(settings.actor, builder, f"{selection.path}.actor"),
-            critic=_obgd_step(settings.critic, builder, f"{selection.path}.critic"),
+            actor=obgd_step(settings.actor, builder, f"{selection.path}.actor"),
+            critic=obgd_step(settings.critic, builder, f"{selection.path}.critic"),
         )
-    return settings
+    return STEP_FAMILY.construct(selection, builder)
 
 
 #: What the shared torso may step under, which is the readouts' choices plus
@@ -573,6 +568,7 @@ class HeadReports:
     trace_norm: bool = reading(at="trace_norm")
     step_size: bool = reading(at="step_size")
     intentional: IntentionalReports = readings(of=IntentionalReports, at="intentional")
+    obgd: ObGDReports = readings(of=ObGDReports, at="obgd")
 
 
 @dataclass(frozen=True)
@@ -691,16 +687,25 @@ def reports_for(*, torso, actor, critic) -> Reports:
 
     return Reports(
         torso=_torso_reports(torso),
-        actor=HeadReports(
-            intentional=_intentional_reports(
-                taken=isinstance(actor, IntentionalUpdate), advantage=True
-            )
+        actor=_head_reports(actor, advantage=True),
+        critic=_head_reports(critic),
+    )
+
+
+def _head_reports(step, *, advantage: bool = False) -> HeadReports:
+    """One readout's readings, given the rule it selected.
+
+    A head has one of each quantity whatever it selected, so what varies is
+    only which rule's own statistics exist beside them -- the intentional
+    update's, ObGD's, or neither.
+    """
+
+    bounded, adaptive = _bounded(step)
+    return HeadReports(
+        intentional=_intentional_reports(
+            taken=isinstance(step, IntentionalUpdate), advantage=advantage
         ),
-        critic=HeadReports(
-            intentional=_intentional_reports(
-                taken=isinstance(critic, IntentionalUpdate)
-            )
-        ),
+        obgd=_obgd_reports(taken=bounded, adaptive=adaptive),
     )
 
 
@@ -729,8 +734,14 @@ AVAILABLE_REPORTS = Reports(
             obgd=_obgd_reports(taken=True, adaptive=True),
         ),
     ),
-    actor=HeadReports(intentional=_intentional_reports(taken=True, advantage=True)),
-    critic=HeadReports(intentional=_intentional_reports(taken=True)),
+    actor=HeadReports(
+        intentional=_intentional_reports(taken=True, advantage=True),
+        obgd=_obgd_reports(taken=True, adaptive=True),
+    ),
+    critic=HeadReports(
+        intentional=_intentional_reports(taken=True),
+        obgd=_obgd_reports(taken=True, adaptive=True),
+    ),
 )
 TRAINING_METRICS: tuple[str, ...] = taken(REPORTS, parts=PARTS)
 METRICS: tuple[str, ...] = metric_names(
@@ -2100,6 +2111,7 @@ class Core:
                 intentional=_intentional_reading(
                     taken[name], name, reports.intentional
                 ),
+                obgd=_obgd_reading(taken[name], reports.obgd),
             )
 
         return UpdateMetrics(

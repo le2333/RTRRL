@@ -316,13 +316,6 @@ BOUND_BRANCHES = {
 
 BASE_BRANCHES = {"sgd": Sgd, "adam": Adam}
 
-STEP_BRANCHES = {
-    "sgd": Sgd,
-    "adam": Adam,
-    "d_rtrrl": DRTRRL,
-    "iu": IntentionalUpdate,
-}
-
 
 def _selected_parameters(selection, builder):
     del builder
@@ -335,10 +328,6 @@ BOUND_FAMILY = ComponentFamily(
 )
 BASE_FAMILY = ComponentFamily(
     branches=BASE_BRANCHES,
-    construct=_selected_parameters,
-)
-STEP_FAMILY = ComponentFamily(
-    branches=STEP_BRANCHES,
     construct=_selected_parameters,
 )
 
@@ -387,6 +376,47 @@ class ObGDStep:
 
     bound: Any
     lr: float
+
+
+def obgd_step(settings: ObGD, builder, path: str) -> ObGDStep:
+    """One ``obgd`` declaration with the bound it names built rather than named.
+
+    Lives here rather than in each algorithm that offers the branch, so that a
+    family whose construct is this one cannot hand back something that looks
+    like a step and cannot be stepped.
+    """
+
+    return ObGDStep(
+        bound=builder.build(OBGD_BOUND_FAMILY, f"{path}.bound"),
+        lr=settings.lr,
+    )
+
+
+def _constructed_step(selection, builder):
+    """The selected step, with an ObGD's nested bound built rather than named.
+
+    Every other branch of this family declares only leaves, so reading the
+    branch back *is* constructing it. ObGD is the one that does not.
+    """
+
+    settings = selection.parameters
+    if isinstance(settings, ObGD):
+        return obgd_step(settings, builder, selection.path)
+    return settings
+
+
+STEP_BRANCHES = {
+    "sgd": Sgd,
+    "adam": Adam,
+    "d_rtrrl": DRTRRL,
+    "iu": IntentionalUpdate,
+    "obgd": ObGD,
+}
+
+STEP_FAMILY = ComponentFamily(
+    branches=STEP_BRANCHES,
+    construct=_constructed_step,
+)
 
 
 def make_bounded_rule(*, bound, base) -> UpdateRule:

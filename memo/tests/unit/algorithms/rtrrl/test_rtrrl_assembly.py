@@ -261,22 +261,26 @@ def test_every_block_chooses_from_one_set_of_rules():
     what having two positions looks like.
     """
 
-    shared = {"sgd", "adam", "d_rtrrl"}
     declared = flatten(rtrrl.PARAMETERS)
     for block in ("torso", "actor", "critic"):
         assert f"{block}.optimizer.sgd.lr" in declared
 
-    for head in ("actor", "critic"):
-        assert set(kinds(rtrrl.PARAMETERS, f"{head}.optimizer")) == shared | {"iu"}
-
+    heads = [
+        set(kinds(rtrrl.PARAMETERS, f"{h}.optimizer")) for h in ("actor", "critic")
+    ]
+    assert heads[0] == heads[1], "the two readouts offer different rules"
+    head = heads[0]
     torso = set(kinds(rtrrl.PARAMETERS, "torso.optimizer"))
-    assert torso & shared == shared, "a rule reached the readouts and not the torso"
-    assert torso - shared == {
-        "input_iu",
-        "input_obgd",
-        "output_iu",
-        "output_obgd",
-    }, "the torso offers something that is not one of the aggregated positions"
+
+    # The two rules that are not linear in what they are given appear on the
+    # torso once per aggregation position and on a readout once, because a
+    # readout has one contribution and nothing to combine. Every other rule
+    # appears under the same name in both places.
+    positioned = {"iu", "obgd"}
+    assert positioned <= head
+    assert torso == (head - positioned) | {
+        f"{position}_{rule}" for position in ("input", "output") for rule in positioned
+    }, "the two families differ by something other than the aggregation position"
 
     # And the order the rules are offered in is load-bearing: a configuration
     # naming no optimizer is filled from the front of the domain, so a rule
