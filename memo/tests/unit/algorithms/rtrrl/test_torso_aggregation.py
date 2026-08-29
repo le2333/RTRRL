@@ -1100,12 +1100,18 @@ def test_the_declared_surface_names_the_position_rather_than_implying_it():
 def test_the_head_optimizers_cannot_name_a_torso_position():
     """A readout has one derivative and one trace; there is nothing to aggregate.
 
-    The torso's two contribution optimizers are a different concept from the
-    heads' own, and offering the four positions where a head selects would let
-    a configuration say something that has no meaning there.
+    It selects the same rules the torso does -- including ObGD, which is what
+    lets a run put one update rule on all three blocks. What it cannot select
+    is a *position*: the four ``input_`` / ``output_`` names say where two
+    contributions meet, and a readout has one. Offering them here would let a
+    configuration say something that has no meaning where it said it.
     """
 
-    assert set(rtrrl.RTRRL_OPTIMIZERS.branches) == {"adam", "sgd", "d_rtrrl", "iu"}
+    branches = set(rtrrl.RTRRL_OPTIMIZERS.branches)
+    assert branches == {"adam", "sgd", "d_rtrrl", "iu", "obgd"}
+    assert not any(
+        name.startswith(("input_", "output_")) for name in branches
+    ), "a readout was offered an aggregation position"
 
 
 def test_a_run_document_reaches_the_same_graph_the_config_builds():

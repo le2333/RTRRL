@@ -13,6 +13,8 @@ algorithm rather than a different spelling of the same one.
 
     torso.optimizer.kind:  adam | sgd | d_rtrrl | input_iu | input_obgd
                                                 | output_iu | output_obgd
+    actor.optimizer.kind:  adam | sgd | d_rtrrl | iu        | obgd
+    critic.optimizer.kind: adam | sgd | d_rtrrl | iu        | obgd
 
 |                        | intentional update | ObGD          |
 | ---------------------- | ------------------ | ------------- |
@@ -25,6 +27,14 @@ linear in the direction they are handed, so `Rate(a + b)` *is*
 `Rate(a) + Rate(b)` — to the last bit for SGD, and for Adam up to the moments
 it would then have to keep two of. The split is offered exactly where it
 changes the answer.
+
+A readout selects from the same set under shorter names. `iu` and `obgd` there
+are what `input_iu` / `output_iu` and `input_obgd` / `output_obgd` are on the
+torso: a head has one contribution and one trace, so there is no position for
+it to name. The asymmetry is the two blocks being different things rather than
+a name missing from one of them, and it is what lets a run put **one** update
+rule on all three blocks — which an update-rule comparison needs, since an arm
+running Adam on the readouts and ObGD on the torso is measuring neither.
 
 ## The two positions
 
@@ -203,6 +213,39 @@ The ObGD five are exactly the terms of
 
 Together they answer the question the step size alone cannot: whether a small
 rate is a small base rate, a large trace, a large TD error, or a second moment.
+
+A readout files the same five under `update.actor.obgd.*` and
+`update.critic.obgd.*` when it selected ObGD. There is one set per block rather
+than per position there, because a head has one bound.
+
+## The frozen ObGD arm
+
+For the update-rule comparison — ObGD against Adam, Adam with `beta1 = 0`, SGD
+and the intentional update — the arm is **one rule on all three blocks**:
+
+```yaml
+actor:   {optimizer: {kind: obgd,       obgd: {bound: {kind: adaptive_ob_fixed}}}}
+critic:  {optimizer: {kind: obgd,       obgd: {bound: {kind: adaptive_ob_fixed}}}}
+torso:   {optimizer: {kind: input_obgd, input_obgd: {bound: {kind: adaptive_ob_fixed}}}}
+```
+
+Two things are pinned rather than swept, and both for the same reason — the arm
+is there to evaluate a published method, not to explore its variants:
+
+- **`adaptive_ob_fixed`**, because it is the published denominator
+  (`sqrt(v_hat + eps)`). `adaptive_ob` is `sqrt(v_hat) + eps`, which is what
+  this repository and everything forked from it computed, and the two stand
+  about a factor of two apart while the second moment is near `eps`. An arm
+  that let a sweep choose between them would be reporting a number for "ObGD"
+  that depends on which of two rules a trial happened to draw.
+- **`input_obgd`**, because the input position is the reference RTRRL topology:
+  the two heads' recurrent credit is combined before the update, exactly as it
+  was before there was a second position. An arm that changed the update rule
+  *and* the credit topology could not attribute a difference to either.
+
+`output_obgd`, `ob` and `adaptive_ob` stay available and stay out of the main
+experiment. They belong to a study of the aggregation position or of the bound
+variants, which is a different question from what this arm asks.
 
 ## Migrating
 
