@@ -32,7 +32,7 @@
 # before this file could be written; equal settings are not shared state.
 #
 # Read, at the reporting boundaries:
-#   - eval/episode/return_per_step finite throughout
+#   - eval/episode/return finite throughout
 #   - the three update.*.grad_norm series finite -- one shared beta must not
 #     make three blocks move as one
 #   - the report's `bindings` block, against `trials[*].parameters`: one
@@ -72,7 +72,7 @@ evaluation:
 
 logging:
   aim:
-    url: aim://172.31.62.192:53801
+    url: aim://172.31.62.192:53800
     training:
       # A scope block per scope asked for, each with its own interval. `window`
       # tiles the step axis and pools the episodes ending in each stretch.
@@ -80,7 +80,7 @@ logging:
         every_steps: 1000
 
 score:
-  metric: eval/episode/return_per_step
+  metric: eval/episode/return
   window_steps: [0, 5000]
   reduce: last
   non_finite: worst

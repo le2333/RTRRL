@@ -40,7 +40,7 @@
 #                structural choice is pinned and never bound
 #
 # Read, at the reporting boundaries:
-#   - eval/episode/return_per_step finite throughout
+#   - eval/episode/return finite throughout
 #   - update.torso.actor.intentional.sigma_bar and
 #     update.torso.critic.intentional.sigma_bar both present and *different* --
 #     one number in both would mean the two branches had become one rule
@@ -79,7 +79,7 @@ evaluation:
 
 logging:
   aim:
-    url: aim://172.31.62.192:53801
+    url: aim://172.31.62.192:53800
     training:
       # A scope block per scope asked for, each with its own interval. `window`
       # tiles the step axis and pools the episodes ending in each stretch.
@@ -87,7 +87,7 @@ logging:
         every_steps: 1000
 
 score:
-  metric: eval/episode/return_per_step
+  metric: eval/episode/return
   window_steps: [0, 5000]
   reduce: last
   non_finite: worst
