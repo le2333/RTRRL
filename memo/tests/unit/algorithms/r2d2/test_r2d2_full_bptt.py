@@ -294,7 +294,7 @@ def test_full_bptt_equals_zero_burn_in_tbptt_over_a_complete_episode():
     np.testing.assert_allclose(full_gradient, tbptt_gradient, rtol=1e-6, atol=1e-7)
 
 
-@pytest.mark.parametrize("backbone_kind", ["lru", "rtu"])
+@pytest.mark.parametrize("backbone_kind", ["lru", "rtu", "lstm"])
 def test_core_reset_derives_the_actor_batch_width(backbone_kind):
     q_function = QFunction(
         action_dim=2,
@@ -322,7 +322,7 @@ def test_core_reset_derives_the_actor_batch_width(backbone_kind):
         np.testing.assert_allclose(actual, expected)
 
 
-@pytest.mark.parametrize("backbone_kind", ["lru", "rtu"])
+@pytest.mark.parametrize("backbone_kind", ["lru", "rtu", "lstm"])
 @pytest.mark.parametrize("learning_kind", ["tbptt", "full_bptt"])
 def test_every_backbone_and_learning_mode_updates_recurrent_parameters(
     backbone_kind, learning_kind

@@ -79,7 +79,9 @@ hpo:
 # 形状与 catalog 相同：每层之内平铺，缩进即分组。选组件的那一项叫 kind，
 # 它和它的分支住在同一层，所以 backbone.kind 选，backbone.lru.* 属于被选中的那个。
 space:
-  # 网络。两个递归核声明同样的两个宽度，各在自己的分支里。
+  # 网络。三个递归核声明同样的两个宽度，各在自己的分支里：feature_dim 是编码器
+  # 的宽度（每个核都从它进入），hidden_dim 是核自己的宽度。lstm 是 R2D2 论文自己
+  # 的核，和 DRQN 的 core.kind: lstm 是同一个 cell，用来跑与 DRQN-LSTM 对齐的基线。
   backbone:
     kind: [lru]
     lru:
