@@ -33,6 +33,19 @@ class BraxGymnaxWrapper(GymnaxWrapper):
     def step(
         self, key: Key, state, action: Array, params
     ) -> tuple[Array, Any, Array, Array, dict]:
+        """One transition, on an action this adapter has already bounded.
+
+        Brax clips the action a second time on its way to the actuators, so the
+        physics is safe without this. The reward is not: HalfCheetah's control
+        cost is ``0.1 * sum(action ** 2)`` over the argument as passed, not over
+        the clipped copy the integrator sees. An unbounded policy therefore
+        leaves the dynamics alone and drives the *return* instead, which is the
+        one number nothing downstream normalizes. The published implementation
+        clips here for the same reason.
+        """
+
+        space = self.action_space(params)
+        action = jnp.clip(action, space.low, space.high)
         next_state = self._env.step(state, action)
         done = next_state.done.astype(jnp.bool)
         truncation = jnp.asarray(next_state.info["truncation"]).astype(jnp.bool)
