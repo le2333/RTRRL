@@ -2393,7 +2393,7 @@ class RTRRL:
             reset_before=state.timestep.done,
             step=current_step,
         )
-        obs, env_state, environment_reward, done, terminal, info = (
+        action, obs, env_state, environment_reward, done, terminal, info = (
             self.environment.step(env_key, state.env_state, action)
         )
         obs, reward, scales = self.normalization.apply(
@@ -2447,7 +2447,7 @@ class RTRRL:
         recurrence, action, _ = self.core.act(
             action_key, state.core, state.timestep, deterministic=False
         )
-        obs, env_state, environment_reward, done, terminal, info = (
+        action, obs, env_state, environment_reward, done, terminal, info = (
             self.environment.step(env_key, state.env_state, action)
         )
         obs, reward, _ = self.normalization.apply(
@@ -2486,7 +2486,7 @@ class RTRRL:
         recurrence, action, _ = self.core.act(
             action_key, state.core, state.timestep, deterministic=True
         )
-        obs, env_state, environment_reward, done, terminal, info = (
+        action, obs, env_state, environment_reward, done, terminal, info = (
             self.environment.step(env_key, state.env_state, action)
         )
         obs, reward, scales = self.normalization.apply(

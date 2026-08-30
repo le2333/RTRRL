@@ -864,7 +864,7 @@ class StreamAC:
         recurrence, action, actor_reading = self.core.sample_action(
             action_key, state.timestep, state.actor, deterministic=False
         )
-        obs, env_state, environment_reward, done, terminal, info = (
+        action, obs, env_state, environment_reward, done, terminal, info = (
             self.environment.step(env_key, state.env_state, action)
         )
         obs, reward, scales = self.normalization.apply(
@@ -922,7 +922,7 @@ class StreamAC:
         recurrence, action, _ = self.core.sample_action(
             action_key, state.timestep, state.actor, deterministic=False
         )
-        obs, env_state, environment_reward, done, terminal, info = (
+        action, obs, env_state, environment_reward, done, terminal, info = (
             self.environment.step(env_key, state.env_state, action)
         )
         obs, reward, _ = self.normalization.apply(
@@ -958,7 +958,7 @@ class StreamAC:
         recurrence, action, _ = self.core.sample_action(
             action_key, state.timestep, state.actor, deterministic=True
         )
-        obs, env_state, environment_reward, done, terminal, info = (
+        action, obs, env_state, environment_reward, done, terminal, info = (
             self.environment.step(env_key, state.env_state, action)
         )
         obs, reward, scales = self.normalization.apply(

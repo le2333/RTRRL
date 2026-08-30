@@ -1129,8 +1129,8 @@ class DRQN:
             self._inputs(state.timestep, state.episode_start),
             epsilon=epsilon,
         )
-        next_obs, env_state, reward, done, terminal, info = self.environment.step(
-            env_key, state.env_state, action
+        action, next_obs, env_state, reward, done, terminal, info = (
+            self.environment.step(env_key, state.env_state, action)
         )
         transition = ReplayTransition(
             observation=observation,
@@ -1206,8 +1206,8 @@ class DRQN:
             self._inputs(state.timestep, state.episode_start),
             epsilon=epsilon,
         )
-        next_obs, env_state, reward, done, terminal, info = self.environment.step(
-            env_key, state.env_state, action
+        action, next_obs, env_state, reward, done, terminal, info = (
+            self.environment.step(env_key, state.env_state, action)
         )
         return state.replace(
             timestep=self.environment.persisted(
@@ -1253,8 +1253,8 @@ class DRQN:
             self._inputs(state.timestep, state.episode_start),
             epsilon=jnp.asarray(self.cfg.evaluation_epsilon),
         )
-        next_obs, env_state, reward, done, terminal, info = self.environment.step(
-            env_key, state.env_state, action
+        action, next_obs, env_state, reward, done, terminal, info = (
+            self.environment.step(env_key, state.env_state, action)
         )
         next_timestep = self.environment.persisted(
             Timestep(obs=next_obs, action=action, reward=reward, done=done)
