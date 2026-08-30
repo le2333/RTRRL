@@ -86,7 +86,9 @@ class EnvironmentStreams:
         the caller records equal to the value the environment received -- and
         those must agree, because a meta-RL input feeds the recorded action back
         into the network, where an unbounded copy is a loop that nothing between
-        the two ever closes.
+        the two ever closes. It is offered rather than applied here: a caller
+        that feeds the action back asks for it, and one that does not is left
+        byte-identical to what it was.
 
         A space that declares no bounds -- a discrete one -- is returned
         untouched; there is nothing to hold it to.
@@ -99,20 +101,13 @@ class EnvironmentStreams:
         return jnp.clip(action, low, high)
 
     def step(self, key, env_state, action):
-        """Advance every stream by one unnormalized transition.
+        """Advance every stream by one unnormalized transition."""
 
-        The action is returned with the transition, and it is the bounded one:
-        a caller that records what ``step`` handed back cannot record something
-        the environment did not do.
-        """
-
-        action = self.bound(action)
         keys = jax.random.split(key, self.num_envs)
         obs, env_state, reward, done, info = jax.vmap(
             self.env.step, in_axes=(0, 0, 0, None)
         )(keys, env_state, action, self.env_params)
         return (
-            action,
             obs,
             env_state,
             jnp.asarray(reward, dtype=jnp.float32),
