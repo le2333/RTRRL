@@ -76,6 +76,30 @@ class EnvironmentStreams:
         obs, opened = self.init(key)
         return obs, select_ended(done, opened, env_state)
 
+    def bound(self, action):
+        """The action as the environment will actually take it.
+
+        A continuous space states what it accepts and an adapter is entitled to
+        hold it to that, but a policy is not obliged to sample inside it: the
+        Gaussian readouts are unsquashed, so what they draw regularly leaves the
+        box. Bounding here rather than inside an adapter is what keeps the value
+        the caller records equal to the value the environment received -- and
+        those must agree, because a meta-RL input feeds the recorded action back
+        into the network, where an unbounded copy is a loop that nothing between
+        the two ever closes. It is offered rather than applied here: a caller
+        that feeds the action back asks for it, and one that does not is left
+        byte-identical to what it was.
+
+        A space that declares no bounds -- a discrete one -- is returned
+        untouched; there is nothing to hold it to.
+        """
+
+        space = self.env.action_space(self.env_params)
+        low, high = getattr(space, "low", None), getattr(space, "high", None)
+        if low is None or high is None:
+            return action
+        return jnp.clip(action, low, high)
+
     def step(self, key, env_state, action):
         """Advance every stream by one unnormalized transition."""
 

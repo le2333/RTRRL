@@ -2393,6 +2393,9 @@ class RTRRL:
             reset_before=state.timestep.done,
             step=current_step,
         )
+        # What the network is told it did has to be what the environment did:
+        # `meta_rl` feeds this same action back into the recurrent input.
+        action = self.environment.bound(action)
         obs, env_state, environment_reward, done, terminal, info = (
             self.environment.step(env_key, state.env_state, action)
         )
@@ -2447,6 +2450,9 @@ class RTRRL:
         recurrence, action, _ = self.core.act(
             action_key, state.core, state.timestep, deterministic=False
         )
+        # What the network is told it did has to be what the environment did:
+        # `meta_rl` feeds this same action back into the recurrent input.
+        action = self.environment.bound(action)
         obs, env_state, environment_reward, done, terminal, info = (
             self.environment.step(env_key, state.env_state, action)
         )
@@ -2486,6 +2492,9 @@ class RTRRL:
         recurrence, action, _ = self.core.act(
             action_key, state.core, state.timestep, deterministic=True
         )
+        # What the network is told it did has to be what the environment did:
+        # `meta_rl` feeds this same action back into the recurrent input.
+        action = self.environment.bound(action)
         obs, env_state, environment_reward, done, terminal, info = (
             self.environment.step(env_key, state.env_state, action)
         )
