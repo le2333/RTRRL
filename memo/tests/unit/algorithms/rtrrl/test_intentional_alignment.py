@@ -23,7 +23,7 @@ here is which of the algorithm's trees reaches that optimizer.
 
 from __future__ import annotations
 
-from dataclasses import fields
+from dataclasses import fields, replace
 
 import jax
 import jax.numpy as jnp
@@ -427,17 +427,22 @@ def test_a_component_a_run_did_not_ask_for_is_not_watched_at_all():
     graph = graph_of(built)
     assert set(graph.core.watching) == set(rtrrl.WATCHED)
 
-    quiet = rtrrl.Reports(
-        **{
-            item.name: (
-                rtrrl.FinitenessReports(
-                    **{name: name in ("td_error", "params") for name in rtrrl.WATCHED}
-                )
-                if item.name == "finiteness"
-                else getattr(graph.core.reports, item.name)
-            )
-            for item in fields(rtrrl.Reports)
-        }
+    # Spelled out rather than built from a comprehension: `Reports` is a
+    # dataclass of differently-typed fields, and `**{name: ...}` over it gives a
+    # type checker one union for all of them.
+    quiet = replace(
+        graph.core.reports,
+        finiteness=rtrrl.FinitenessReports(
+            reward=False,
+            action=False,
+            value=False,
+            td_error=True,
+            derivative=False,
+            trace=False,
+            update=False,
+            params=True,
+            rule=False,
+        ),
     )
     graph.core.reports = quiet
     graph.core.watching = tuple(
