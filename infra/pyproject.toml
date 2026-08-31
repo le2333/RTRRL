@@ -6,6 +6,7 @@ dependencies = ["boto3>=1.40,<2", "optuna>=4,<5", "pyyaml>=6,<7"]
 
 [project.scripts]
 trainerctl = "trainer_infra.cli:main"
+study-scheduler = "trainer_infra.scheduler_cli:main"
 
 [dependency-groups]
 dev = ["pytest>=8,<9", "ruff>=0.15,<1"]

@@ -1,0 +1,14 @@
+[Unit]
+Description=Persistent AWS Batch study scheduler
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=%h/trainer/streaming-rtrrl
+ExecStart=%h/trainer/.venvs/trainer-infra/bin/python -m trainer_infra.scheduler_cli --state %h/trainer/streaming-rtrrl/runs/study-scheduler.sqlite run --max-concurrent 4 --poll-seconds 5 --launch-interval-seconds 30
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=default.target
