@@ -37,6 +37,13 @@ Every quantity is per stream: the leading axis of a derivative leaf is the
 parallel environment axis, and each stream carries its own second moment,
 statistic and step size. Only the finished update is averaged across them,
 which is where the caller's parameters -- which have no stream axis -- wait.
+
+**One thing here is not the paper's**, and it is at the bottom of the file
+behind a heading that says so: :class:`JointIntentionalOptimizer`, the step for
+a block that *two* objectives credit. The paper has no such block -- its
+actor-critic is two separate networks -- so this is derived from Eq. 12 rather
+than quoted from it, and it reduces to Eq. 12 when one of the two objectives
+is removed. Everything above the heading is the published optimizer.
 """
 
 from __future__ import annotations
@@ -459,4 +466,390 @@ class IntentionalOptimizer:
                 update_norm=jnp.sqrt(_stream_sum(jax.tree.map(jnp.square, ascent))),
                 non_finite=_stream_non_finite(ascent),
             ),
+        )
+
+
+# ------------------------------------------- two objectives, one shared block
+#
+# What follows is not in the paper, and the reason it is not is that the paper
+# never needs it: its actor-critic is two separate networks, so every parameter
+# is credited by exactly one objective and Eq. 12 answers for it whole. A
+# shared recurrent torso is credited by two, and one transition can write only
+# one `Delta_theta`, so *something* has to be decided that the paper does not
+# decide. This is that decision, derived from Eq. 12 rather than bolted beside
+# it.
+
+
+@dataclass(frozen=True)
+class JointIntentional:
+    """One intentional step over a block that two objectives credit.
+
+    ``eta_actor`` and ``eta_critic`` are the paper's ``eta`` twice, and they
+    keep the paper's meaning exactly: the fraction of its own objective's
+    outcome that objective's credit sets out to spend. What changes is only
+    that one step now has to honour both at once, which it does by taking the
+    largest step that violates neither -- see
+    :class:`JointIntentionalOptimizer`. The published pair, ``0.05`` for a
+    policy and ``0.5`` for a value function, means here what it means there.
+
+    Everything else is one setting rather than two, and each for a reason
+    rather than for tidiness:
+
+    ``clip`` and ``beta_clip``
+        There is one TD error on a transition. Both branches' signals are cut
+        from it -- the critic's is the clipped error and the actor's is that
+        error normalized -- so there is one clipping statistic to keep.
+
+    ``beta_advantage``
+        The normalized advantage exists on the actor's branch alone.
+
+    ``beta_rms``, ``eps``
+        There is one ``nu``, and so one ``rho``. It is a second moment of the
+        *summed* derivative, because ``rho`` is the only quantity in an
+        intentional step that belongs to the parameters rather than to an
+        objective: Eq. 12's Cauchy-Schwarz holds for any positive diagonal
+        common to both of its factors, and what the paper asks of ``rho`` is
+        that it normalize the magnitude of an *entry*. Split per objective it
+        stops doing that -- an entry one head never touches has a second
+        moment that decays at ``beta_rms`` with nothing to refresh it, and
+        ``1 / sqrt(nu)`` reads "this objective does not use this entry" as
+        "this entry is finely scaled". See issue 87.
+
+    ``beta_momentum``, ``denominator_floor``
+        Properties of the one direction and the one step size.
+    """
+
+    eta_actor: float = param(valid=(1e-9, 100.0), search=(1e-4, 1.0), log=True)
+    eta_critic: float = param(valid=(1e-9, 100.0), search=(1e-4, 1.0), log=True)
+    clip: float = param(valid=(0.0, 1e4), search=[20.0], default=20.0)
+    beta_rms: float = param(valid=(0.0, 1.0), search=[0.999], default=0.999)
+    beta_clip: float = param(valid=(0.0, 1.0), search=[0.9998], default=0.9998)
+    beta_advantage: float = param(valid=(0.0, 1.0), search=[0.9998], default=0.9998)
+    beta_momentum: float = param(valid=(0.0, 1.0), search=[0.0], default=0.0)
+    denominator_floor: float = param(
+        valid=(0.0, 1.0), search=[1e-8], default=1e-8, log=True
+    )
+    eps: float = param(valid=(1e-12, 1e-2), search=[1e-8], default=1e-8, log=True)
+
+
+class JointIntentionalState(struct.PyTreeNode):
+    """One shared block's joint intentional state, all of it per stream.
+
+    ``nu`` is one tree because ``rho`` is one metric. ``momentum`` and
+    ``sigma_bar`` are one per branch, because a trace and the statistic of the
+    gradient it accumulated are an objective's. ``delta_square`` and
+    ``advantage_scale`` are one each, because there is one TD error on a
+    transition and one advantage cut from it.
+
+    Which is the whole shape of the position: what belongs to the parameters is
+    shared, what belongs to an objective is not.
+    """
+
+    nu: Any
+    momentum: Any
+    sigma_bar: Any
+    delta_square: Any
+    advantage_scale: Any
+
+
+class JointIntentionalOptimizer:
+    """Two objectives' intentional step sizes, honoured by one step.
+
+    Each branch states the paper's requirement over its own objective::
+
+        alpha_b = eta_b / sqrt(sigma_bar_b * <rho m_b, m_b>)        (Eq. 12)
+
+    and on separate parameters those two are simply two updates. Here they are
+    two requirements on one ``Delta_theta``, and one number cannot satisfy two
+    equations. It can satisfy two *inequalities*, and that is what the paper's
+    ``eta`` has always been -- an intended spend, not an achieved one.
+
+    Write the block's outcome as the two functions' movements, and ask that the
+    step stay inside the ellipsoid the two allowances describe::
+
+        sum_b (Delta J_b / eta_b)^2 <= 1
+
+    With ``Delta_theta = alpha * rho * u`` and ``u = sum_b signal_b * m_b``,
+    each ``Delta J_b`` is ``alpha * <g_b, rho u>``, and Eq. 12's own
+    Cauchy-Schwarz bounds that by ``alpha * sqrt(sigma_b * <rho m_b, m_b>)``.
+    Substituting leaves
+
+        1 / alpha^2 = sum_b 1 / alpha_b^2
+
+    so the step taken here is the two published step sizes combined as the
+    reciprocal of the root of the sum of their reciprocals' squares. Four
+    things follow, and they are the reason this exists:
+
+    **It is Eq. 12 on one objective.** Delete a branch -- ``sigma_bar`` of
+    zero, nothing in ``u`` -- and ``alpha`` is
+    ``eta / sqrt(sigma_bar * <rho m, m>)``, the floor is where the published
+    implementation puts it, and the update is ``alpha * signal * rho * m``.
+    Not an approximation of the published step: the same expression, computed
+    as one reciprocal rather than one quotient, which costs the one rounding a
+    test comparing the two has to allow and nothing else.
+
+    **Both allowances survive.** ``alpha * sqrt(sigma_bar_b * q_b) <= eta_b``
+    holds for *each* branch simultaneously, because each term of the sum stands
+    on its own. So ``eta_actor`` and ``eta_critic`` mean here what they mean in
+    the paper, rather than becoming shares of some third budget.
+
+    **No cross term.** ``sigma`` is never summed across branches before it is
+    squared, so ``<p_actor, rho p_critic>`` appears nowhere. A coordinate the
+    two heads' credit opposes on cannot shrink the denominator.
+
+    **The tighter branch caps the looser.** ``alpha <= min_b alpha_b``. When
+    one head's credit for an entry is naturally tiny -- because that head does
+    not need it -- that branch's own ``alpha_b`` grows without bound and the
+    other holds the step. Divergence needs *both* denominators to collapse,
+    which is the single-objective case the paper already answers for.
+
+    ``decays`` is each branch's ``gamma * lambda``: the rate its ``sigma_bar``
+    averages at, which has to be the rate its trace forgets at. ``signals`` is
+    which scalar each branch's contribution to the direction is proportional
+    to. Both are the algorithm's to declare.
+    """
+
+    def __init__(self, settings: JointIntentional, *, decays, signals) -> None:
+        if set(decays) != set(signals):
+            raise ValueError(
+                "a joint intentional step needs one decay and one signal per "
+                f"branch; got decays for {sorted(decays)} and signals for "
+                f"{sorted(signals)}"
+            )
+        etas = {}
+        for name, signal in signals.items():
+            if signal not in SIGNALS:
+                raise ValueError(
+                    f"{signal!r} is not one of the signals an intentional "
+                    f"update steps along ({', '.join(SIGNALS)})"
+                )
+            allowance = f"eta_{name}"
+            if not hasattr(settings, allowance):
+                raise ValueError(
+                    f"a joint intentional step has no allowance for a branch "
+                    f"named {name!r}: {type(settings).__name__} declares no "
+                    f"{allowance}"
+                )
+            etas[name] = getattr(settings, allowance)
+        self.settings = settings
+        self.decays = dict(decays)
+        self.signals = dict(signals)
+        self.etas = etas
+
+    @property
+    def branches(self) -> tuple[str, ...]:
+        """The branch names in a fixed order, so two runs sum them alike."""
+
+        return tuple(sorted(self.signals))
+
+    def init(self, params, *, streams: int) -> JointIntentionalState:
+        """Fresh state: empty averages, one set per stream."""
+
+        empty = jax.tree.map(
+            lambda leaf: jnp.zeros((streams, *leaf.shape), dtype=jnp.float32), params
+        )
+        zero = jnp.zeros((streams,), dtype=jnp.float32)
+        return JointIntentionalState(
+            nu=empty,
+            momentum={
+                name: jax.tree.map(jnp.zeros_like, empty) for name in self.branches
+            },
+            sigma_bar={name: zero for name in self.branches},
+            delta_square=zero,
+            advantage_scale=zero,
+        )
+
+    def _cut(self, delta, state, *, step):
+        """Both branches' signals, cut from the one TD error the block saw."""
+
+        settings = self.settings
+        clipped, delta_square = clipped_td_error(
+            delta,
+            state.delta_square,
+            beta=settings.beta_clip,
+            clip=settings.clip,
+            step=step,
+        )
+        advantage, scale = normalized_advantage(
+            clipped, state.advantage_scale, beta=settings.beta_advantage, step=step
+        )
+        cut = {TD: clipped, ADVANTAGE: advantage}
+        return (
+            {name: cut[signal] for name, signal in self.signals.items()},
+            clipped,
+            delta_square,
+            scale,
+        )
+
+    def update(
+        self,
+        *,
+        delta,
+        traces,
+        derivatives,
+        direct,
+        step,
+        params,
+        state: JointIntentionalState,
+    ):
+        """One transition: one metric, two budgets, one step.
+
+        ``traces`` and ``derivatives`` are one per branch, from the trace
+        components that own them, and neither is written. ``direct`` is refused
+        for the reason :meth:`IntentionalOptimizer.update` refuses it -- the
+        entropy direction belongs inside the derivative the actor's branch
+        traces, not beside the step. ``params`` is accepted and unused, which
+        is the same property held here as there: an intentional step reads the
+        derivative's scale and never the parameters'.
+
+        Returns the update, the state, the readings belonging to the block, and
+        the readings belonging to each branch -- separately, because that split
+        is what this position *is* and a caller filing them under one name
+        would have to undo it.
+        """
+
+        del params
+        if direct is not None:
+            raise ValueError(
+                "a joint intentional update has no untraced term; the entropy "
+                "direction belongs in the derivative the actor's branch "
+                "accumulates, signed by the signal, before it reaches this "
+                "optimizer"
+            )
+        settings = self.settings
+        branches = self.branches
+        signals, clipped, delta_square, scale = self._cut(delta, state, step=step)
+
+        # One metric, off the summed derivative. See `JointIntentional`.
+        summed = jax.tree.map(
+            lambda *parts: sum(parts), *[derivatives[name] for name in branches]
+        )
+        nu = jax.tree.map(
+            lambda old, leaf: corrected_average(
+                old, jnp.square(leaf), beta=settings.beta_rms, step=step
+            ),
+            state.nu,
+            summed,
+        )
+        rho = jax.tree.map(lambda leaf: 1.0 / (jnp.sqrt(leaf) + settings.eps), nu)
+
+        def quadratic(tree):
+            return _stream_sum(
+                jax.tree.map(
+                    lambda inverse, leaf: inverse * jnp.square(leaf), rho, tree
+                )
+            )
+
+        sigma_bar = {
+            name: corrected_average(
+                state.sigma_bar[name],
+                quadratic(derivatives[name]),
+                beta=self.decays[name],
+                step=step,
+            )
+            for name in branches
+        }
+        moments = {
+            name: moment_average(
+                state.momentum[name],
+                traces[name],
+                beta=settings.beta_momentum,
+                step=step,
+            )
+            for name in branches
+        }
+        momentum = {name: moments[name][1] for name in branches}
+        trace_quadratic = {name: quadratic(momentum[name]) for name in branches}
+
+        # Each branch's own Eq. 12 denominator, as `sqrt(a) * sqrt(b)` rather
+        # than `sqrt(a * b)`: both factors are sums of squares over every
+        # parameter in a stream, so their product leaves float32's range from
+        # either end well before either factor does.
+        denominators = {
+            name: jnp.sqrt(sigma_bar[name]) * jnp.sqrt(trace_quadratic[name])
+            for name in branches
+        }
+        # The floor is per branch, where the published implementation puts
+        # it: it bounds one branch's own step size at `eta_b / floor`, and
+        # since `alpha <= min_b alpha_b` it bounds the block's by the same
+        # number. Flooring the combined denominator instead would be a bound
+        # on a quantity no branch declared.
+        floored = {
+            name: jnp.maximum(denominators[name], settings.denominator_floor)
+            for name in branches
+        }
+        step_sizes = {name: self.etas[name] / floored[name] for name in branches}
+        # `1 / alpha^2 = sum_b 1 / alpha_b^2`, written as the Euclidean norm of
+        # the reciprocals through the overflow-safe primitive for it. Squaring
+        # `d_b / eta_b` and adding would reintroduce the range problem the
+        # branch denominators were just written to avoid.
+        reciprocals = [floored[name] / self.etas[name] for name in branches]
+        denominator = reciprocals[0]
+        for term in reciprocals[1:]:
+            denominator = jnp.hypot(denominator, term)
+        alpha = 1.0 / denominator
+
+        # One step: each branch's smoothed trace, read through the one metric
+        # and scaled by `alpha * signal_b`, added once. Written per branch as
+        # `alpha * signal` rather than as one `alpha` over a summed direction,
+        # because per branch each term is the published `alpha * signal * rho *
+        # m` exactly, and on a single branch that is what this has to be.
+        ascent = jax.tree.map(
+            lambda *parts: sum(parts),
+            *[
+                _stream_scaled(
+                    jax.tree.map(
+                        lambda inverse, leaf: inverse * leaf, rho, momentum[name]
+                    ),
+                    alpha * signals[name],
+                )
+                for name in branches
+            ],
+        )
+        updates = jax.tree.map(lambda leaf: jnp.mean(leaf, axis=0), ascent)
+
+        block = IntentionalReading(
+            clipped_delta=clipped,
+            rms_scale=_stream_sum(rho) / max(_stream_count(rho), 1),
+            # `sqrt(sum_b (1 / alpha_b)^2)`, which is `1 / alpha`. Not the
+            # quantity a single-objective block files under this name -- there
+            # it is what `eta` is divided by, and here `eta` is already inside
+            # each term. The two are the same number only when one branch is
+            # left, which is the case where this reduces to Eq. 12.
+            denominator=denominator,
+            step_size=alpha,
+            update_norm=jnp.sqrt(_stream_sum(jax.tree.map(jnp.square, ascent))),
+            non_finite=_stream_non_finite(ascent),
+        )
+        per_branch = {
+            name: IntentionalReading(
+                signal=signals[name],
+                advantage_scale=None if self.signals[name] == TD else scale,
+                sigma_bar=sigma_bar[name],
+                # `<rho m_b, m_b>` on *this branch's* trace, which is what
+                # Eq. 12 divides by for this branch. Not the quadratic of the
+                # direction the block finally stepped along -- that direction
+                # is the sum of both branches', and no branch's step size was
+                # measured on it.
+                trace_quadratic=trace_quadratic[name],
+                denominator=denominators[name],
+                # What Eq. 12 alone would have taken along this branch. Read
+                # beside the block's `alpha`, it says which branch is holding
+                # the step -- which is the question this position exists to
+                # answer and the one no summed update can be asked.
+                step_size=step_sizes[name],
+            )
+            for name in branches
+        }
+        return (
+            updates,
+            JointIntentionalState(
+                nu=nu,
+                momentum={name: moments[name][0] for name in branches},
+                sigma_bar=sigma_bar,
+                delta_square=delta_square,
+                advantage_scale=scale,
+            ),
+            block,
+            per_branch,
         )

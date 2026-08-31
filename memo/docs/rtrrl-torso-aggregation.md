@@ -11,15 +11,24 @@ published topology and it is kept unchanged. What is new is that it is now one
 of two positions a run can select, and that the other one is a different
 algorithm rather than a different spelling of the same one.
 
-    torso.optimizer.kind:  adam | sgd | d_rtrrl | input_iu | input_obgd
+    torso.optimizer.kind:  adam | sgd | d_rtrrl | input_iu  | input_obgd
                                                 | output_iu | output_obgd
+                                                | joint_iu
     actor.optimizer.kind:  adam | sgd | d_rtrrl | iu        | obgd
     critic.optimizer.kind: adam | sgd | d_rtrrl | iu        | obgd
 
-|                        | intentional update | ObGD          |
-| ---------------------- | ------------------ | ------------- |
-| combined before the rule | `input_iu`       | `input_obgd`  |
-| combined after the rule  | `output_iu`      | `output_obgd` |
+|                            | intentional update | ObGD          |
+| -------------------------- | ------------------ | ------------- |
+| combined before the rule   | `input_iu`         | `input_obgd`  |
+| combined after the rule    | `output_iu`        | `output_obgd` |
+| combined inside the rule   | `joint_iu`         | —             |
+
+The third row is the intentional update's alone, and the dash is not a gap
+waiting to be filled. The intentional update is the only rule here that derives
+its step size from an intent stated *per objective*, so it is the only one where
+"two objectives, one step" is a question with a derived answer rather than a
+choice. ObGD's bound reads the trace it is handed; what a joint version of it
+would bound is not something anything has derived.
 
 `adam`, `sgd` and `d_rtrrl` are input-aggregated and unchanged. The two plain
 rates carry no position because they have nothing to gain from one: both are
@@ -36,7 +45,7 @@ a name missing from one of them, and it is what lets a run put **one** update
 rule on all three blocks — which an update-rule comparison needs, since an arm
 running Adam on the readouts and ObGD on the torso is measuring neither.
 
-## The two positions
+## The three positions
 
 Write `u_actor` and `u_critic` for the two heads' cotangents on the torso's
 output, and `Jᵀ` for the pullback through the recurrent sensitivity.
@@ -55,10 +64,81 @@ output, and `Jᵀ` for the pullback through the recurrent sensitivity.
 
     Δθ_torso = Δθ_actor + Δθ_critic
 
-Both positions read **one** forward pass and **one** recurrent sensitivity. The
-output position calls the same pullback twice rather than computing a second
-sensitivity, so what is independent is the state each path carries, not the
-recurrence they read.
+**Joint.** Two of everything that belongs to an objective, one of everything
+that belongs to the parameters:
+
+    p_actor  = Jᵀ u_actor              p_critic = Jᵀ u_critic
+    z_actor  at γ·λ_π                  z_critic at γ·λ_v
+    ρ        = 1 / (√ν + ε),   ν a second moment of  p_actor + p_critic
+    α_b      = η_b / √(σ̄_b · ⟨ρ m_b, m_b⟩)                       (Eq. 12)
+    1/α²     = 1/α_actor² + 1/α_critic²
+
+    Δθ_torso = α · ρ · (s_actor·m_actor + s_critic·m_critic)
+
+All three positions read **one** forward pass and **one** recurrent
+sensitivity. The output and joint positions call the same pullback twice rather
+than computing a second sensitivity, so what is independent is the state each
+path carries, not the recurrence they read.
+
+### Why the joint position is written that way
+
+The intentional update's premise is that a step size is derived from a stated
+outcome rather than chosen. On separate parameters that is Eq. 12 and there is
+nothing to decide. On a shared block there is: two objectives state two
+outcomes, one transition writes one `Δθ`, and one number cannot satisfy two
+equations.
+
+It can satisfy two *inequalities*, and an intended fraction has always been an
+intended spend rather than an achieved one. Write the block's outcome as the
+two functions' movements and ask the step to stay inside the ellipsoid the two
+allowances describe:
+
+    Σ_b (ΔJ_b / η_b)² ≤ 1
+
+With `Δθ = α·ρ·u` each `ΔJ_b` is `α·⟨g_b, ρu⟩`, which Eq. 12's own
+Cauchy–Schwarz bounds by `α·√(σ_b·⟨ρ m_b, m_b⟩)`. Substituting leaves the
+reciprocal-square combination above. Four things follow, and they are the
+reason the branch exists:
+
+- **It is Eq. 12 on one objective.** Delete a branch — `σ̄` of zero, nothing in
+  `u` — and `α` is `η / √(σ̄·⟨ρm, m⟩)`, the floor is where the published
+  implementation puts it, and the update is `α·signal·ρ·m`. Not an
+  approximation of the published step; the same expression, computed as one
+  reciprocal instead of one quotient.
+- **Both `eta` keep the paper's meaning.** `α·√(σ̄_b·q_b) ≤ η_b` holds for each
+  branch *simultaneously*, because each term of the sum stands on its own. So
+  `eta_actor` and `eta_critic` are still each objective's own intended
+  fraction, rather than shares of some third budget.
+- **No cross term.** `σ` is never summed across branches before it is squared,
+  so `⟨p_actor, ρ p_critic⟩` appears nowhere. A coordinate the two heads' credit
+  opposes on cannot shrink the denominator the step size divides by.
+- **The tighter branch caps the looser.** `α ≤ min_b α_b`. When one head's
+  credit for an entry is naturally tiny — because that head does not need it —
+  that branch's own `α_b` grows without bound and the other holds the step.
+  Divergence needs *both* denominators to collapse, which is the
+  single-objective case the paper already answers for.
+
+That last one is the issue-87 failure stated as a property. Under the output
+position an unbounded `α_b` is added straight to the parameters, and nothing in
+the topology is in a position to notice.
+
+### What is shared, and why it is `rho` and only `rho`
+
+`ν`, and so `ρ`, is a second moment of the **summed** derivative. It is the one
+quantity in an intentional step that belongs to the parameters rather than to an
+objective: Eq. 12's Cauchy–Schwarz holds for any positive diagonal common to
+both of its factors, and what the paper asks of `ρ` is that it normalize the
+magnitude of an *entry*.
+
+Split per objective it stops doing that. An entry one head never touches has a
+second moment that decays at `beta_rms` with nothing to refresh it — measured
+falling as `0.999**t` over tens of thousands of transitions, with `ρ` climbing
+toward its `1/eps` ceiling — and `1/√ν` then reads "this objective does not use
+this entry" as "this entry is finely scaled". The summed derivative has no such
+entry: what one head does not use, the other generally does.
+
+Everything else stays per objective, because everything else is one: the
+derivative, the trace and its decay, the signal, `σ̄`, and `eta`.
 
 ## Why this is two algorithms and not one
 
@@ -159,15 +239,21 @@ applies at both positions and on every path.
 
 ## What bounds what
 
-Each branch's rule bounds or sizes **its own** contribution and nothing else.
-The sum is an elementwise addition — no clip, no norm, no rescale — so it may
-be longer than either part. That is what it means for the two paths to be
-independent all the way to the parameters, and adding an outer bound over the
-total would be a limit no configuration declared and no branch could account
-for.
+At the **output** position each branch's rule bounds or sizes **its own**
+contribution and nothing else. The sum is an elementwise addition — no clip, no
+norm, no rescale — so it may be longer than either part. That is what it means
+for the two paths to be independent all the way to the parameters, and adding
+an outer bound over the total would be a limit no configuration declared and no
+branch could account for.
 
-For the same reason `torso.grad_clip` must be `0` for all four of the new
-branches. The intentional update derives its step size from statistics it
+At the **joint** position the answer is different and is the point of the
+position: the two allowances bound the one step, both at once, and neither is
+an outer bound added over a total — each is the intended fraction that branch
+already declared. `α ≤ min_b α_b`, so the block never steps further than either
+objective alone would have.
+
+For the same reason `torso.grad_clip` must be `0` for all five of the branches
+that size their own step. The intentional update derives its step size from statistics it
 carries; ObGD shrinks its rate so that one update cannot cross the TD target.
 Clipping the finished step afterwards is a second, undeclared bound over a rule
 that already has one, and the build refuses it with that reason rather than
@@ -188,6 +274,14 @@ run files.
 | --- | --- |
 | input  | `update.torso.{grad_norm, trace_norm, step_size}` |
 | output | `update.torso.{actor,critic}.{grad_norm, trace_norm, step_size}` |
+| joint  | `update.torso.step_size` and `update.torso.{actor,critic}.{grad_norm, trace_norm, step_size}` |
+
+The joint position is the one place both levels are filled, and each name sits
+at the level that produces it. There are two derivatives and two traces, so
+their norms are a branch's; there is one step size, so it is the block's. A
+branch's `step_size` there is `α_b` — what Eq. 12 alone would have taken along
+that branch — and reading it beside the block's `α` says which of the two is
+holding the step, which is the question no summed update can be asked.
 
 `update.finiteness.{reward, action, value, td_error, derivative, trace, update,
 params, rule}` is filed at either position and under every rule. Each is the
@@ -227,6 +321,15 @@ the step passed through, under its own name:
 where `…` is `update.torso` at the input position and
 `update.torso.{actor,critic}` at the output one, so an output run has one set
 per branch and the two are readable apart.
+
+A joint run splits that list the same way its step size is split. At the block:
+`clipped_delta`, `rms_scale`, `denominator`, `update_norm`, `non_finite` — one
+each, because there is one clipping statistic, one `ρ` and one update. At each
+branch: `signal`, `sigma_bar`, `trace_quadratic`, `denominator`, and
+`advantage_scale` for the actor's. `denominator` appears on both lists and is
+two different numbers: a branch's is its own Eq. 12 denominator
+`√(σ̄_b·q_b)`, and the block's is `√(Σ_b (1/α_b)²)` — the whole content of the
+position, and worth reading side by side.
 
 The ObGD five are exactly the terms of
 
@@ -301,16 +404,27 @@ is re-implemented at the algorithm's entry.
 
 ## Where this lives
 
-`memorax/algorithms/rtrrl_aaai.py` holds `TorsoAggregation` and its two
-implementations, `InputAggregation` and `OutputAggregation`, along with the six
-branches `RTRRL_TORSO_OPTIMIZERS` offers. The three other RTRRL graphs — the
-CTRNN, LSTM and dense state-space torsos — select from the same family and
-inherit the flow, because where the two credits meet is a property of sharing a
-torso rather than of which recurrence the torso runs.
+`memorax/algorithms/rtrrl_aaai.py` holds `TorsoAggregation` and its three
+implementations, `InputAggregation`, `OutputAggregation` and
+`JointAggregation`, along with the eight branches `RTRRL_TORSO_OPTIMIZERS`
+offers. The three other RTRRL graphs — the CTRNN, LSTM and dense state-space
+torsos — select from the same family and inherit the flow, because where the
+two credits meet is a property of sharing a torso rather than of which
+recurrence the torso runs.
+
+The joint step size itself is
+`memorax.rl.intentional.JointIntentionalOptimizer`, at the bottom of that
+module behind a heading saying it is not the paper's, and it reaches the
+algorithm through `make_joint_intentional_rule` — the one rule in
+`memorax/rl/updates.py` that reads its traces keyed by branch and writes one
+update keyed by the block, because that is what one step over two objectives is.
 
 `tests/unit/algorithms/rtrrl/test_torso_aggregation.py` drives each branch
 against a single-path reference built from `Trace` and either
 `IntentionalOptimizer` or `make_bounded_rule`, and holds the four modes against
 a real graph. `tests/unit/algorithms/rtrrl/test_rtrrl_assembly.py` holds the
 input position against everything that was true of the torso before there was a
-second one.
+second one. `tests/unit/components/test_joint_intentional_update.py` holds the
+joint step size against the four properties its derivation is defined by, and
+`tests/unit/algorithms/rtrrl/test_joint_position.py` holds the wiring around
+it.

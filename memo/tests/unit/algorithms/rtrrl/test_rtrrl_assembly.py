@@ -276,10 +276,18 @@ def test_every_block_chooses_from_one_set_of_rules():
     # torso once per aggregation position and on a readout once, because a
     # readout has one contribution and nothing to combine. Every other rule
     # appears under the same name in both places.
+    #
+    # `joint_iu` is a third position and the intentional update is the only
+    # rule that has one. Not an oversight: it is the only rule here that
+    # derives its step size from an intent stated per objective, so it is the
+    # only one where "two objectives, one step" has a derived answer rather
+    # than a choice. See `JointIntentionalOptimizer`.
     positioned = {"iu", "obgd"}
     assert positioned <= head
     assert torso == (head - positioned) | {
         f"{position}_{rule}" for position in ("input", "output") for rule in positioned
+    } | {
+        "joint_iu"
     }, "the two families differ by something other than the aggregation position"
 
     # And the order the rules are offered in is load-bearing: a configuration
