@@ -492,31 +492,51 @@ def _all_finite(component) -> Any:
 class FiniteWatch(struct.PyTreeNode):
     """For each watched component, the update step it first went non-finite on.
 
-    Zero means it never has. The quantity is monotone by construction -- a
-    first is a first -- and that is the whole reason it is carried rather than
-    derived from a per-step indicator afterwards: a reading taken every
-    thousand steps still reports the exact step, because the maximum over any
-    window containing it *is* it. An indicator would only say which window.
+    Zero means it never has, which is why the count starts at one: an update
+    step is ``state.update_step + 1``, so no real step collides with the
+    sentinel.
+
+    ``int32`` and not ``float32``. The claim this makes is the *exact* step, and
+    a float32 cannot hold one past ``2**24`` -- a 20M-step run would report a
+    rounded step and say nothing about having done so. An int32 covers every
+    step a run of this kind will reach.
+
+    The quantity is monotone by construction -- a first is a first -- and that
+    is the whole reason it is carried rather than derived from a per-step
+    indicator afterwards: a reading taken every thousand steps still reports the
+    exact step, because the maximum over any window containing it *is* it. An
+    indicator would only say which window.
 
     One number per component and not one per stream. The streams of a run share
     one set of parameters and one update, so a component is either finite for
     the agent or it is not; a per-stream copy would be answering a question
     about which environment, which is not the question a run that scored
     ``-1e30`` is asking.
+
+    **The watch holds only what its graph declared.** A component a run did not
+    ask for is absent here rather than present and unread, so nothing computes
+    ``_all_finite`` over its tree -- which is what makes turning one off
+    actually take the reduction back.
     """
 
     first: Any
 
     @classmethod
-    def clean(cls) -> FiniteWatch:
+    def clean(cls, names: Iterable[str] = WATCHED) -> FiniteWatch:
         """Nothing has failed yet, which is what a run starts from."""
 
-        return cls(first={name: jnp.zeros((), jnp.float32) for name in WATCHED})
+        return cls(first={name: jnp.zeros((), jnp.int32) for name in names})
 
     def advance(self, components: Mapping[str, Any], *, step) -> FiniteWatch:
-        """This transition, against what has already been recorded."""
+        """This transition, against what has already been recorded.
 
-        marked = jnp.asarray(step, jnp.float32)
+        Only the components this watch carries are read. ``components`` may
+        offer more -- the caller names every part of a transition without
+        knowing which of them were declared -- and the ones this watch has no
+        entry for cost nothing, which is the point.
+        """
+
+        marked = jnp.asarray(step, jnp.int32)
         return FiniteWatch(
             first={
                 name: jnp.where(
@@ -655,8 +675,13 @@ class FinitenessReports:
     tree the transition already builds, so watching it costs one reduction
     beside work that is at least linear in the same tree; and a diagnostic that
     has to have been switched on before the run that needed it is a diagnostic
-    nobody has when a study comes back all ``-1e30``. A run that wants the
-    reduction back can still say so, one component at a time.
+    nobody has when a study comes back all ``-1e30``.
+
+    A run that wants the reduction back says so one component at a time, and
+    gets it: what is declared here decides what the watch *carries*, and the
+    watch reads only what it carries. Turning a component off removes its
+    ``_all_finite`` from the step rather than only removing its number from the
+    report.
 
     See :class:`FiniteWatch` for what the numbers are.
     """
@@ -2014,6 +2039,11 @@ class Core:
         # entropy untraced, as the published implementation does. A torso path
         # answers the same question for itself.
         self.folds_entropy = {name: _folds_entropy(optimizers[name]) for name in HEADS}
+        # What the finite-value watch carries, which is what it costs. Decided
+        # here rather than at every step because it is a property of the graph.
+        self.watching = tuple(
+            name for name in WATCHED if getattr(reports.finiteness, name)
+        )
         self.aggregation = make_torso_aggregation(cfg)
         self.torso = Torso(
             cfg,
@@ -2058,7 +2088,7 @@ class Core:
             },
             value=jnp.zeros((self.cfg.num_envs,), dtype=jnp.float32),
             emphasis=jnp.ones((self.cfg.num_envs,), dtype=jnp.float32),
-            finiteness=FiniteWatch.clean(),
+            finiteness=FiniteWatch.clean(self.watching),
         )
 
     def reset(self, key, state: CoreState) -> CoreState:
@@ -2313,13 +2343,9 @@ class Core:
         }
 
     def _finiteness_reading(self, watch: FiniteWatch):
-        """The watch as far as this graph declares it, and no further."""
+        """The watch, which already holds exactly what this graph declared."""
 
-        reports = self.reports.finiteness
-        taken_names = [name for name in WATCHED if getattr(reports, name)]
-        if not taken_names:
-            return None
-        return {name: watch.first[name] for name in taken_names}
+        return watch.first or None
 
     def _update_reading(self, delta, emphasis, traced, advanced, taken, aggregated):
         """Project update products onto the readings this graph declares."""

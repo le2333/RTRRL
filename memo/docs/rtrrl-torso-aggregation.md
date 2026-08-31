@@ -197,6 +197,12 @@ still names the exact step â€” the maximum over any window containing it is it â
 and the nine names in the order above are what separates a run whose parameters
 went non-finite from one whose environment did.
 
+The step is an `int32`, because the claim is the exact step and a `float32`
+cannot hold one past `2**24`. Each of the nine can be declined, and declining
+one removes its whole-tree `isfinite` from every step rather than only its
+number from the report: the watch carries what the graph declared and reads only
+what it carries.
+
 Under an output aggregation there is no joint derivative, no joint trace and no
 joint step size, so the joint names are absent rather than reporting one branch
 or a sum of two. `step_size` is the dynamic step under the intentional update

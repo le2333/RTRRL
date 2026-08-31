@@ -309,7 +309,9 @@ def test_the_watch_records_the_first_step_and_keeps_it():
     """
 
     watch = rtrrl.FiniteWatch.clean()
-    assert all(float(value) == 0.0 for value in watch.first.values())
+    assert all(int(value) == 0 for value in watch.first.values())
+    # An exact step, and float32 stops being able to hold one past 2**24.
+    assert all(jnp.asarray(value).dtype == jnp.int32 for value in watch.first.values())
 
     clean = {name: jnp.zeros((2,)) for name in rtrrl.WATCHED}
     watch = watch.advance(clean, step=1)
@@ -378,9 +380,7 @@ def test_the_watch_does_not_reach_the_update_it_is_watching():
     poisoned = state.replace(
         core=state.core.replace(
             finiteness=rtrrl.FiniteWatch(
-                first={
-                    name: jnp.asarray(jnp.nan, jnp.float32) for name in rtrrl.WATCHED
-                }
+                first={name: jnp.asarray(-(2**30), jnp.int32) for name in rtrrl.WATCHED}
             )
         )
     )
@@ -411,3 +411,54 @@ def test_every_watched_name_is_a_reading_a_run_can_be_told_about():
     assert set(rtrrl.WATCHED) == {item.name for item in fields(rtrrl.FinitenessReports)}
     for name in rtrrl.WATCHED:
         assert f"update.finiteness.{name}" in rtrrl.TRAINING_METRICS
+
+
+def test_a_component_a_run_did_not_ask_for_is_not_watched_at_all():
+    """Turning one off takes its reduction back, not only its number.
+
+    The watch carries exactly what the graph declared, and reads only what it
+    carries, so a component nobody asked for costs no ``_all_finite`` over its
+    tree. A declaration that gated the *report* and not the work would leave
+    every run paying for a whole-tree scan of its parameters, traces and
+    updates -- which is the cost the declaration exists to be able to decline.
+    """
+
+    built = assembled("input_iu", num_envs=2)
+    graph = graph_of(built)
+    assert set(graph.core.watching) == set(rtrrl.WATCHED)
+
+    quiet = rtrrl.Reports(
+        **{
+            item.name: (
+                rtrrl.FinitenessReports(
+                    **{name: name in ("td_error", "params") for name in rtrrl.WATCHED}
+                )
+                if item.name == "finiteness"
+                else getattr(graph.core.reports, item.name)
+            )
+            for item in fields(rtrrl.Reports)
+        }
+    )
+    graph.core.reports = quiet
+    graph.core.watching = tuple(
+        name for name in rtrrl.WATCHED if getattr(quiet.finiteness, name)
+    )
+    state = graph.core.init(
+        (
+            (jax.random.key(0), jax.random.key(1), jax.random.key(2)),
+            jax.random.key(3),
+            jax.random.key(4),
+        ),
+        graph.environment.blank_timestep(
+            jnp.zeros((2, 2), dtype=jnp.float32)
+        ).to_sequence(),
+    )
+
+    assert set(state.finiteness.first) == {"td_error", "params"}
+
+    # And a step over that state reads two components rather than nine: what is
+    # absent from the watch is never handed to `_all_finite` at all.
+    advanced = state.finiteness.advance(
+        {name: jnp.zeros((1,)) for name in rtrrl.WATCHED}, step=5
+    )
+    assert set(advanced.first) == {"td_error", "params"}
