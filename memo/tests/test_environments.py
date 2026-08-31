@@ -68,7 +68,7 @@ class FakeEpisodes:
         )
 
     def step(self, state, action):
-        del action
+        self.offered = action
         taken = self._script[self._taken]
         self._taken += 1
         return state.replace(
@@ -125,6 +125,29 @@ def test_the_step_hands_back_the_state_its_episode_ended_in():
 
     assert bool(done)
     assert obs.tolist() == ENDED_IN.tolist()
+
+
+def test_the_adapter_bounds_the_action_it_was_given():
+    """HalfCheetah's control cost is over the argument, not the clipped copy.
+
+    Brax clips again on the way to the actuators, so the physics is safe either
+    way; the *reward* is not, because the cost term reads the action as passed.
+    An unbounded policy head therefore drives the return rather than the
+    dynamics -- the one number nothing downstream normalizes, and the one the TD
+    error is built from. The bound landed with #84 and this is the assertion it
+    did not bring: what the environment is stepped with is inside the space it
+    declares, whatever it was offered.
+    """
+
+    inner = FakeEpisodes([Stepped(obs=ENDED_IN, done=False, truncation=False)])
+    env = BraxGymnaxWrapper(inner)
+    params = env.default_params
+    _, state = env.reset(jax.random.key(0), params)
+
+    env.step(jax.random.key(1), state, jnp.asarray([7.5]), params)
+    space = env.action_space(params)
+
+    assert float(inner.offered[0]) == float(space.high)
 
 
 def test_brax_reports_its_own_step_limit_as_a_truncation():

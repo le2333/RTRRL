@@ -127,6 +127,29 @@ arises follows from the branch's rule, exactly as it does everywhere else:
   of the log-probability and the entropy together;
 - under ObGD it stays untraced, as the published implementation applies it.
 
+### Which transition a step spends
+
+Every path here — both positions, all four rules — steps along the **carried**
+trace, and that is not a free choice either.
+
+RTRRL runs one forward per transition and carries the previous value, so
+
+    δ_t = r + γ·V(s_t) − V(s_{t−1})
+
+belongs to the transition that *ended* on this step. The derivative that
+transition is credited through is `p_{t−1}`, computed on the previous step, and
+the trace holding it as its newest term is `z_{t−1}`. So the carried trace is
+what the paper's "accumulating trace, read after this step's derivative has
+joined it" *is* under RTRRL's ordering — the same trace, reached one step later
+because the error arrives one step later.
+
+The intentional branches read `z_t` until issue 87. That put `p_t` at the head
+of the trace: the derivative of the state the error *bootstraps from*, which
+enters δ with a `+γ` and not a `−1`. A value step then raised the error it had
+sized itself to remove, at a gain proportional to `eta`, and masked HalfCheetah
+overflowed float32 in about 150 updates. The recurrences still differ — the
+intentional one carries no `m_t` — and the reading no longer does.
+
 ### The TD error
 
 Both branches are credited by `δ·η_f`. `η_f` is RTRRL's own dial on how far the
@@ -165,6 +188,14 @@ run files.
 | --- | --- |
 | input  | `update.torso.{grad_norm, trace_norm, step_size}` |
 | output | `update.torso.{actor,critic}.{grad_norm, trace_norm, step_size}` |
+
+`update.finiteness.{reward, action, value, td_error, derivative, trace, update,
+params, rule}` is filed at either position and under every rule. Each is the
+update step its component first held a non-finite value on, and zero while it
+never has. The quantity is monotone, so a reading taken every thousand steps
+still names the exact step — the maximum over any window containing it is it —
+and the nine names in the order above are what separates a run whose parameters
+went non-finite from one whose environment did.
 
 Under an output aggregation there is no joint derivative, no joint trace and no
 joint step size, so the joint names are absent rather than reporting one branch

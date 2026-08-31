@@ -6,23 +6,39 @@ whichever rule happens to be stepping this week: two algorithms that trace the
 same derivative differently are two algorithms, and an optimizer that quietly
 accumulated its own would make that difference unreadable from the outside.
 
-Two recurrences, and the difference between them is *when* the update reads:
+Two independent choices, and keeping them apart is the point of this module.
+
+**The recurrence** is what joins the trace:
 
 ``emphasized``
-    ``z_t = decay * (1 - reset) * z_{t-1} + m_t * p_t``, and the update steps
-    along ``z_{t-1}``. RTRRL's, including the followed-trace emphasis ``m_t``.
-    Its first transition moves nothing, because the trace the update reads has
-    not been written yet.
+    ``z_t = decay * (1 - reset) * z_{t-1} + m_t * p_t``. RTRRL's, including the
+    followed-trace emphasis ``m_t``.
 
 ``accumulating``
-    ``z_t = decay * (1 - reset) * z_{t-1} + p_t``, and the update steps along
-    ``z_t``. StreamAC's, and the one the intentional update is derived
-    against. Its first transition already moves.
+    ``z_t = decay * (1 - reset) * z_{t-1} + p_t``, with no emphasis. StreamAC's,
+    and the recurrence the intentional update is derived against.
 
-That ordering is not a detail of when a line runs. It decides whether this
-step's derivative is in the trace this step spends, and any rule reading the
-trace inherits the answer -- which is why it is declared here, once, rather
-than discovered from whichever rule is downstream.
+**The reading** is which of the two traces a step is taken along, ``carried``
+(``z_{t-1}``) or ``current`` (``z_t``), and it is a fact about the *algorithm's
+ordering* rather than about the rule:
+
+- an algorithm that computes ``V(s)`` and ``V(s')`` in one update -- StreamAC,
+  and the intentional update's published implementation -- has just accumulated
+  the derivative its TD error measures, so it reads ``current``;
+- an algorithm that runs one forward per transition and carries the previous
+  value -- RTRRL -- has an error whose transition *ended* here and whose
+  derivative joined the trace last step, so it reads ``carried``. Its first
+  transition moves nothing, because the trace the update reads has not been
+  written yet.
+
+Both are the same trace read at the index the error is indexed at. Pairing a
+rule's recurrence with the *other* algorithm's reading is what issue 87 was:
+the intentional branches of RTRRL took ``accumulating`` and ``current``
+together, and ``current`` put the bootstrap state's derivative at the head of
+the trace, where the TD error carries it with the opposite sign.
+
+Neither choice is a rule's to make, which is why both are declared here, once,
+rather than discovered from whichever rule is downstream.
 """
 
 from __future__ import annotations

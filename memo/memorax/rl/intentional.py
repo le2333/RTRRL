@@ -423,7 +423,14 @@ class IntentionalOptimizer:
                 lambda inverse, leaf: inverse * jnp.square(leaf), rho, momentum
             )
         )
-        denominator = jnp.sqrt(sigma_bar * quadratic)
+        # `sqrt(a) * sqrt(b)` rather than `sqrt(a * b)`, which is the same
+        # number for two non-negative factors and is representable over a far
+        # wider range of them. Both are sums of squares over every parameter in
+        # a stream, so in float32 their product leaves the range from either
+        # end well before either factor does: it overflows above 3.4e38 and
+        # flushes to zero below 1e-38, and the second is the dangerous one,
+        # since a zero denominator hands the step the whole of `eta / floor`.
+        denominator = jnp.sqrt(sigma_bar) * jnp.sqrt(quadratic)
         alpha = settings.eta / jnp.maximum(denominator, settings.denominator_floor)
 
         ascent = _stream_scaled(
