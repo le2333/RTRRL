@@ -789,26 +789,33 @@ class JointIntentionalOptimizer:
             denominator = jnp.hypot(denominator, term)
         alpha = 1.0 / denominator
 
-        # One direction: each branch's smoothed trace, signed by its own
-        # signal, read through the one metric, added once.
-        direction = jax.tree.map(
+        # One step: each branch's smoothed trace, read through the one metric
+        # and scaled by `alpha * signal_b`, added once. Written per branch as
+        # `alpha * signal` rather than as one `alpha` over a summed direction,
+        # because per branch each term is the published `alpha * signal * rho *
+        # m` exactly, and on a single branch that is what this has to be.
+        ascent = jax.tree.map(
             lambda *parts: sum(parts),
             *[
                 _stream_scaled(
                     jax.tree.map(
                         lambda inverse, leaf: inverse * leaf, rho, momentum[name]
                     ),
-                    signals[name],
+                    alpha * signals[name],
                 )
                 for name in branches
             ],
         )
-        ascent = _stream_scaled(direction, alpha)
         updates = jax.tree.map(lambda leaf: jnp.mean(leaf, axis=0), ascent)
 
         block = IntentionalReading(
             clipped_delta=clipped,
             rms_scale=_stream_sum(rho) / max(_stream_count(rho), 1),
+            # `sqrt(sum_b (1 / alpha_b)^2)`, which is `1 / alpha`. Not the
+            # quantity a single-objective block files under this name -- there
+            # it is what `eta` is divided by, and here `eta` is already inside
+            # each term. The two are the same number only when one branch is
+            # left, which is the case where this reduces to Eq. 12.
             denominator=denominator,
             step_size=alpha,
             update_norm=jnp.sqrt(_stream_sum(jax.tree.map(jnp.square, ascent))),
@@ -819,6 +826,11 @@ class JointIntentionalOptimizer:
                 signal=signals[name],
                 advantage_scale=None if self.signals[name] == TD else scale,
                 sigma_bar=sigma_bar[name],
+                # `<rho m_b, m_b>` on *this branch's* trace, which is what
+                # Eq. 12 divides by for this branch. Not the quadratic of the
+                # direction the block finally stepped along -- that direction
+                # is the sum of both branches', and no branch's step size was
+                # measured on it.
                 trace_quadratic=trace_quadratic[name],
                 denominator=denominators[name],
                 # What Eq. 12 alone would have taken along this branch. Read
