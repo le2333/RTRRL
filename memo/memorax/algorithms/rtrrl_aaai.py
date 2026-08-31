@@ -84,7 +84,7 @@ from memorax.rl.normalization import (
     DISCOUNTED_NORMALIZATION_FAMILY,
     NORMALIZATION_FAMILY,
 )
-from memorax.rl.traces import CARRIED, CURRENT, Trace
+from memorax.rl.traces import CARRIED, Trace
 from memorax.rl.updates import (
     DRTRRL,
     STEP_FAMILY,
@@ -456,6 +456,97 @@ class TorsoState(struct.PyTreeNode):
     recurrence: Recurrence
 
 
+#: The components of one transition, in the order a value passes through them.
+#: A first non-finite value names one of these, and the order is what makes the
+#: naming worth having: a run whose parameters went non-finite three steps
+#: after its TD error did was not a parameter failure.
+WATCHED: tuple[str, ...] = (
+    "reward",
+    "action",
+    "value",
+    "td_error",
+    "derivative",
+    "trace",
+    "update",
+    "params",
+    "rule",
+)
+
+
+def _all_finite(component) -> Any:
+    """One indicator for a whole component: is every number in it finite.
+
+    A component with nothing in it -- a reading this configuration does not
+    produce, an untraced term an objective routes through the trace -- is
+    finite, having no number that could fail to be.
+    """
+
+    leaves = jax.tree.leaves(component)
+    if not leaves:
+        return jnp.asarray(True)
+    return jnp.all(
+        jnp.stack([jnp.all(jnp.isfinite(jnp.asarray(leaf))) for leaf in leaves])
+    )
+
+
+class FiniteWatch(struct.PyTreeNode):
+    """For each watched component, the update step it first went non-finite on.
+
+    Zero means it never has, which is why the count starts at one: an update
+    step is ``state.update_step + 1``, so no real step collides with the
+    sentinel.
+
+    ``int32`` and not ``float32``. The claim this makes is the *exact* step, and
+    a float32 cannot hold one past ``2**24`` -- a 20M-step run would report a
+    rounded step and say nothing about having done so. An int32 covers every
+    step a run of this kind will reach.
+
+    The quantity is monotone by construction -- a first is a first -- and that
+    is the whole reason it is carried rather than derived from a per-step
+    indicator afterwards: a reading taken every thousand steps still reports the
+    exact step, because the maximum over any window containing it *is* it. An
+    indicator would only say which window.
+
+    One number per component and not one per stream. The streams of a run share
+    one set of parameters and one update, so a component is either finite for
+    the agent or it is not; a per-stream copy would be answering a question
+    about which environment, which is not the question a run that scored
+    ``-1e30`` is asking.
+
+    **The watch holds only what its graph declared.** A component a run did not
+    ask for is absent here rather than present and unread, so nothing computes
+    ``_all_finite`` over its tree -- which is what makes turning one off
+    actually take the reduction back.
+    """
+
+    first: Any
+
+    @classmethod
+    def clean(cls, names: Iterable[str] = WATCHED) -> FiniteWatch:
+        """Nothing has failed yet, which is what a run starts from."""
+
+        return cls(first={name: jnp.zeros((), jnp.int32) for name in names})
+
+    def advance(self, components: Mapping[str, Any], *, step) -> FiniteWatch:
+        """This transition, against what has already been recorded.
+
+        Only the components this watch carries are read. ``components`` may
+        offer more -- the caller names every part of a transition without
+        knowing which of them were declared -- and the ones this watch has no
+        entry for cost nothing, which is the point.
+        """
+
+        marked = jnp.asarray(step, jnp.int32)
+        return FiniteWatch(
+            first={
+                name: jnp.where(
+                    (recorded == 0) & ~_all_finite(components[name]), marked, recorded
+                )
+                for name, recorded in self.first.items()
+            }
+        )
+
+
 class CoreState(struct.PyTreeNode):
     """What the algorithm carries, one field per thing that owns one."""
 
@@ -465,6 +556,10 @@ class CoreState(struct.PyTreeNode):
     rule: Any
     value: Any
     emphasis: Any
+    # A diagnostic and not a term: nothing the update reads, and the same
+    # arithmetic whether it is watched or not. Required rather than defaulted,
+    # because a silently empty watch is a run that reports nothing went wrong.
+    finiteness: FiniteWatch
 
 
 # -------------------------------------------------------------------- readings
@@ -573,6 +668,36 @@ class HeadReports:
 
 
 @dataclass(frozen=True)
+class FinitenessReports:
+    """Which components to watch for the first non-finite value, by name.
+
+    On by default, all of them, which is the point. Every one of these is a
+    tree the transition already builds, so watching it costs one reduction
+    beside work that is at least linear in the same tree; and a diagnostic that
+    has to have been switched on before the run that needed it is a diagnostic
+    nobody has when a study comes back all ``-1e30``.
+
+    A run that wants the reduction back says so one component at a time, and
+    gets it: what is declared here decides what the watch *carries*, and the
+    watch reads only what it carries. Turning a component off removes its
+    ``_all_finite`` from the step rather than only removing its number from the
+    report.
+
+    See :class:`FiniteWatch` for what the numbers are.
+    """
+
+    reward: bool = reading(at="reward")
+    action: bool = reading(at="action")
+    value: bool = reading(at="value")
+    td_error: bool = reading(at="td_error")
+    derivative: bool = reading(at="derivative")
+    trace: bool = reading(at="trace")
+    update: bool = reading(at="update")
+    params: bool = reading(at="params")
+    rule: bool = reading(at="rule")
+
+
+@dataclass(frozen=True)
 class Reports:
     """Which readings to take, in the shape of what produces them.
 
@@ -587,6 +712,9 @@ class Reports:
     torso: TorsoReports = readings(of=TorsoReports, at="update.torso")
     actor: HeadReports = readings(of=HeadReports, at="update.actor")
     critic: HeadReports = readings(of=HeadReports, at="update.critic")
+    finiteness: FinitenessReports = readings(
+        of=FinitenessReports, at="update.finiteness"
+    )
 
 
 def _intentional_reports(*, taken: bool, advantage: bool = False) -> IntentionalReports:
@@ -808,13 +936,15 @@ class TorsoUpdate(BlockUpdate):
 
 
 class UpdateMetrics(struct.PyTreeNode):
-    """Three blocks, and two quantities belonging to none of them."""
+    """Three blocks, and three quantities belonging to none of them."""
 
     td_error: Any = None
     emphasis: Any = None
     torso: TorsoUpdate = TorsoUpdate()
     actor: BlockUpdate = BlockUpdate()
     critic: BlockUpdate = BlockUpdate()
+    # One field per watched component, holding the step it first failed on.
+    finiteness: Any = None
 
 
 class RTRRLState(struct.PyTreeNode):
@@ -976,25 +1106,61 @@ def _block_rule(step, *, cfg: RTRRLConfig, name: str, clip: float):
     return _rate_rule(step, clip=clip)
 
 
+def _folds_entropy(step) -> bool:
+    """Whether this path's entropy direction has to travel inside the trace.
+
+    A property of the *rule*. The intentional update refuses an untraced term,
+    because the objective it is derived against is the log-probability and the
+    entropy together, signed by the TD error; so a path stepping under it folds
+    the entropy into the derivative the trace accumulates. Every other rule adds
+    it on the step it arises, which is where the published RTRRL puts it.
+
+    It used to be read off the trace instead -- ``reads == CURRENT`` -- because
+    the intentional update was the only path reading a trace of its own, and
+    the two questions had one answer. They are two questions, and this is the
+    one being asked.
+    """
+
+    return isinstance(step, IntentionalUpdate)
+
+
 def _trace_for(step, *, decay: float) -> Trace:
     """The eligibility recurrence that goes with what was selected.
 
-    Which recurrence a path runs is not a free setting. An intentional update
-    is derived against ``z_t = gamma*lambda*z_{t-1} + p_t`` read *after* this
-    step's derivative has joined it, and against no emphasis; RTRRL's own rules
-    -- Adam, D-RTRRL and ObGD alike -- are written over the trace as it stood,
-    weighted by the followed-trace emphasis. Pairing them the other way round
-    would leave the step size dividing by a trace the step was not taken along,
-    so the algorithm -- which owns both -- constructs the one that goes with
-    what was selected.
+    The recurrence differs by the emphasis and not by the reading. An
+    intentional update is derived against the accumulating trace
+    ``z_t = gamma*lambda*z_{t-1} + p_t``, with no emphasis in it; RTRRL's own
+    rules -- Adam, D-RTRRL and ObGD alike -- weight the incoming derivative by
+    the followed-trace emphasis ``m_t``. That difference is real and the
+    algorithm, which owns both, constructs the one that goes with what was
+    selected.
+
+    **Both read the carried trace, because in RTRRL that is the accumulating
+    one.** The paper's ordering computes ``V(s)`` and ``V(s')`` in one update,
+    so the derivative that just joined the trace is the one the TD error
+    measures and the step is taken along the trace *after* it joined. RTRRL
+    runs one forward per step and carries the previous value, so its
+    ``delta_t = r + gamma*V(s_t) - V(s_{t-1})`` belongs to the transition that
+    *ended* here, whose derivative joined the trace on the previous step. The
+    trace holding ``p_{t-1}`` as its newest term is therefore ``z_{t-1}``, the
+    carried one -- the same trace the paper reads, reached one step later
+    because the error arrives one step later.
+
+    Reading ``z_t`` here instead put ``p_t`` at the head of the trace: the
+    derivative of the *bootstrap* state, against an error that state appears in
+    with a ``+gamma`` rather than a ``-1``. A value step then raised the error
+    it was sizing itself to remove, at a gain proportional to ``eta``, and
+    masked HalfCheetah diverged to a float32 overflow in about 150 updates
+    (issue 87). Nothing about the optimizer was wrong; it was handed the wrong
+    end of the trace.
 
     The optimizer never sees this choice. It is handed a trace and told nothing
     about where in the transition it was read.
     """
 
-    if isinstance(step, IntentionalUpdate):
-        return Trace(decay=decay, reads=CURRENT, emphasized=False)
-    return Trace(decay=decay, reads=CARRIED, emphasized=True)
+    return Trace(
+        decay=decay, reads=CARRIED, emphasized=not isinstance(step, IntentionalUpdate)
+    )
 
 
 def make_rules(cfg: RTRRLConfig):
@@ -1020,10 +1186,16 @@ def make_rules(cfg: RTRRLConfig):
     } | make_head_rules(cfg)
 
 
+def head_optimizers(cfg: RTRRLConfig):
+    """The step each readout selected, under the name its readings are filed by."""
+
+    return {"actor": cfg.actor_optimizer, "critic": cfg.critic_optimizer}
+
+
 def make_head_rules(cfg: RTRRLConfig):
     """One rule per readout. The torso's are the aggregation's."""
 
-    optimizers = {"actor": cfg.actor_optimizer, "critic": cfg.critic_optimizer}
+    optimizers = head_optimizers(cfg)
     return {
         name: _block_rule(optimizers[name], cfg=cfg, name=name, clip=0.0)
         for name in HEADS
@@ -1033,7 +1205,7 @@ def make_head_rules(cfg: RTRRLConfig):
 def make_head_traces(cfg: RTRRLConfig):
     """One eligibility recurrence per readout, paired with its optimizer."""
 
-    optimizers = {"actor": cfg.actor_optimizer, "critic": cfg.critic_optimizer}
+    optimizers = head_optimizers(cfg)
     return {
         name: _trace_for(optimizers[name], decay=cfg.gamma * BLOCK_DECAYS[name](cfg))
         for name in HEADS
@@ -1157,8 +1329,8 @@ class _ContributionPath:
         self.step = step
         self.trace = _trace_for(step, decay=cfg.gamma * BLOCK_DECAYS[name](cfg))
         self.rule = _block_rule(step, cfg=cfg, name=name, clip=clip)
-        # The same fact as which trace it runs; see `_folded`.
-        self.folds_entropy = self.trace.reads == CURRENT
+        # A property of the rule; see `_folds_entropy` and `_folded`.
+        self.folds_entropy = _folds_entropy(step)
         self.streams = cfg.num_envs
 
     def initial_traces(self, params):
@@ -1857,15 +2029,21 @@ class Core:
         self.reports = reports
         self.td0 = make_td0()
         self.rules = make_head_rules(cfg)
+        optimizers = head_optimizers(cfg)
         traces = make_head_traces(cfg)
         # Which readouts trace the entropy direction instead of adding it on
-        # the step it arises. It is the same fact as which trace they run, and
-        # it is the algorithm's: the intentional policy gradient is the
-        # derivative of the log-probability and the entropy together, signed by
-        # the TD error, and it is that sum the trace accumulates. RTRRL's own
-        # rules take the entropy untraced, as the published implementation
-        # does. A torso path answers the same question for itself.
-        self.folds_entropy = {name: traces[name].reads == CURRENT for name in HEADS}
+        # the step it arises. It is the algorithm's question and it follows from
+        # the rule: the intentional policy gradient is the derivative of the
+        # log-probability and the entropy together, signed by the TD error, and
+        # it is that sum the trace accumulates. RTRRL's own rules take the
+        # entropy untraced, as the published implementation does. A torso path
+        # answers the same question for itself.
+        self.folds_entropy = {name: _folds_entropy(optimizers[name]) for name in HEADS}
+        # What the finite-value watch carries, which is what it costs. Decided
+        # here rather than at every step because it is a property of the graph.
+        self.watching = tuple(
+            name for name in WATCHED if getattr(reports.finiteness, name)
+        )
         self.aggregation = make_torso_aggregation(cfg)
         self.torso = Torso(
             cfg,
@@ -1910,6 +2088,7 @@ class Core:
             },
             value=jnp.zeros((self.cfg.num_envs,), dtype=jnp.float32),
             emphasis=jnp.ones((self.cfg.num_envs,), dtype=jnp.float32),
+            finiteness=FiniteWatch.clean(self.watching),
         )
 
     def reset(self, key, state: CoreState) -> CoreState:
@@ -2115,7 +2294,58 @@ class Core:
             "torso": aggregated.traces,
             **{name: pair[1] for name, pair in stepped_traces.items()},
         }
-        return stepped, taken, aggregated, rule, emphasis, advanced, derivative
+        update = {
+            "torso": aggregated.update,
+            **{name: taken[name].updates[name] for name in params},
+        }
+        return (
+            stepped,
+            taken,
+            aggregated,
+            rule,
+            emphasis,
+            advanced,
+            derivative,
+            update,
+        )
+
+    def _watched(
+        self,
+        *,
+        reward,
+        action,
+        value,
+        delta,
+        derivative,
+        advanced,
+        update,
+        stepped,
+        rule,
+    ):
+        """The transition's components, under the names the watch files them by.
+
+        Every one of them is a tree this step already built. What the watch adds
+        is the order they are named in: a run whose parameters went non-finite
+        several steps after its TD error did was not a parameter failure, and
+        that is a question about which of these came first.
+        """
+
+        return {
+            "reward": reward,
+            "action": action,
+            "value": value,
+            "td_error": delta,
+            "derivative": derivative,
+            "trace": advanced,
+            "update": update,
+            "params": stepped,
+            "rule": rule,
+        }
+
+    def _finiteness_reading(self, watch: FiniteWatch):
+        """The watch, which already holds exactly what this graph declared."""
+
+        return watch.first or None
 
     def _update_reading(self, delta, emphasis, traced, advanced, taken, aggregated):
         """Project update products onto the readings this graph declares."""
@@ -2174,9 +2404,24 @@ class Core:
             emphasis,
             advanced,
             derivative,
+            update,
         ) = self._take_updates(state, traced, direct, delta, step, reset_before)
 
         torso_params = self.torso.constrain(stepped["torso"])
+        finiteness = state.finiteness.advance(
+            self._watched(
+                reward=timestep.reward,
+                action=action,
+                value=value,
+                delta=delta,
+                derivative=derivative,
+                advanced=advanced,
+                update=update,
+                stepped={**stepped, "torso": torso_params},
+                rule=rule,
+            ),
+            step=step,
+        )
         return (
             state.replace(
                 torso=state.torso.replace(
@@ -2197,6 +2442,7 @@ class Core:
                 rule=rule,
                 value=value,
                 emphasis=emphasis,
+                finiteness=finiteness,
             ),
             action,
             ForwardMetrics(
@@ -2205,7 +2451,7 @@ class Core:
             ),
             self._update_reading(
                 delta, emphasis, derivative, advanced, taken, aggregated
-            ),
+            ).replace(finiteness=self._finiteness_reading(finiteness)),
         )
 
 

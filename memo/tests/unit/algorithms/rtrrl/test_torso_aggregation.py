@@ -48,7 +48,7 @@ from memorax.rl.intentional import (
     IntentionalOptimizer,
     IntentionalUpdate,
 )
-from memorax.rl.traces import CARRIED, CURRENT, Trace
+from memorax.rl.traces import CARRIED, Trace
 from memorax.rl.updates import (
     AdaptiveObBoundFixed,
     ObBound,
@@ -205,12 +205,18 @@ def drive(aggregation, sequence, *, direct=None):
 def intentional_reference(settings, *, decay, signal, derivatives):
     """One single-path intentional learner, driven over the same transitions.
 
-    The pair RTRRL builds for an intentional selection: the accumulating trace
-    read after this step's derivative has joined it, and the optimizer that
-    steps along what the trace hands back.
+    The pair RTRRL builds for an intentional selection: the accumulating
+    recurrence -- no emphasis in it -- read at the index RTRRL's TD error is
+    indexed at, and the optimizer that steps along what the trace hands back.
+
+    ``CARRIED`` and not ``CURRENT``. RTRRL runs one forward per transition and
+    carries the previous value, so the derivative the error belongs to joined
+    the trace on the *previous* step and the trace holding it as its newest
+    term is the carried one. See :func:`rtrrl._trace_for`, and issue 87 for
+    what reading the other one did to masked HalfCheetah.
     """
 
-    trace = Trace(decay=GAMMA * decay, reads=CURRENT, emphasized=False)
+    trace = Trace(decay=GAMMA * decay, reads=CARRIED, emphasized=False)
     optimizer = IntentionalOptimizer(settings, decay=GAMMA * decay, signal=signal)
     carried = trace.initial(PARAMS, STREAMS)
     state = optimizer.init(PARAMS, streams=STREAMS)
@@ -591,9 +597,13 @@ def test_the_entropy_direction_reaches_the_actor_branch_and_no_other():
             np.asarray(folded.taken["critic"].updates["critic"]["w"]),
             err_msg=f"the entropy reached the critic branch at step {step}",
         )
+    # The last step and not the first. An accumulating trace read at RTRRL's
+    # index moves nothing on its first transition -- the derivative the entropy
+    # was folded into has joined the trace but is not yet what the step reads --
+    # so the first update is zero with the term and zero without it.
     assert not np.array_equal(
-        np.asarray(without[0].taken["actor"].updates["actor"]["w"]),
-        np.asarray(with_entropy[0].taken["actor"].updates["actor"]["w"]),
+        np.asarray(without[-1].taken["actor"].updates["actor"]["w"]),
+        np.asarray(with_entropy[-1].taken["actor"].updates["actor"]["w"]),
     ), "the entropy direction never reached the actor branch"
 
 
