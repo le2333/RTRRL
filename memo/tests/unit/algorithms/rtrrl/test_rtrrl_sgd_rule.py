@@ -28,7 +28,8 @@ import optax
 import pytest
 
 from memorax.algorithms.rtrrl_aaai import RTRRLConfig, make_rules
-from memorax.rl.updates import Adam, Sgd
+from memorax.rl.intentional import IntentionalUpdate
+from memorax.rl.updates import Adam, ObBound, ObGDStep, Sgd
 
 LR = 0.1
 STREAMS = 3
@@ -345,3 +346,182 @@ def test_adam_still_steps_the_chain_it_stepped_before_sgd_joined_the_family(clip
     params = params_of(traced)
     reference, _ = chain.update(ascent, chain.init(params), params)
     assert_close(taken.updates, reference, f"adam at clip={clip}")
+
+
+# ------------------------------------------------------- the clip, swept
+# `torso.grad_clip` is a number an ensemble may vary between its members, and a
+# member's parameters arrive as tracers because the members share one graph.
+# Everything above builds a rule from a value Python can read; everything below
+# builds one from a value it cannot, which is the same rule and used to be a
+# `TracerBoolConversionError` at construction.
+#
+# R2.2's stage-one SGD study is the shape that found it: one job, four vmapped
+# configurations, `grad_clip` drawn from `[0.0, 0.3, 1.0, 3.0, 10.0]`. Zero is
+# among them on purpose -- it is the value whose meaning is "no clip", and the
+# one a rule assembled behind `if clip:` could not carry.
+SWEPT = (0.0, 0.3, 1.0, 3.0)
+
+
+def swept(clips, *, base: Sgd | Adam = Sgd(lr=LR), traced, delta=DELTA, direct=None):
+    """One rule per member, built inside the map from that member's clip.
+
+    ``EnsembleRuntime`` maps a build, not a built graph, because a value closed
+    into a graph is not an argument vmap can map over. This is that arrangement
+    in miniature: the clip is the mapped axis and the chain is assembled under
+    the trace.
+    """
+
+    def member(clip):
+        return stepped(
+            rules(torso=base, clip=clip)["torso"], traced, delta, direct=direct
+        ).updates
+
+    return jax.vmap(member)(jnp.asarray(clips, dtype=jnp.float32))
+
+
+def member_of(mapped, index):
+    return jax.tree.map(lambda leaf: leaf[index], mapped)
+
+
+def test_a_swept_clip_reaches_an_update_without_being_concretised():
+    """The failure this replaces: four trials, none of which reached a step.
+
+    Nothing about the values is asserted here -- the next test does that. What
+    this one fixes is that the four are *reachable at all*, which is what an
+    ensemble round of R2.2 lost when the chain's length depended on the number.
+    """
+
+    traced = {"torso": block(jax.random.key(12), scale=10.0)}
+
+    taken = swept(SWEPT, traced=traced)
+
+    for leaf in jax.tree.leaves(taken):
+        assert leaf.shape[0] == len(SWEPT), "the member axis did not survive"
+        assert np.all(np.isfinite(leaf)), "a member stepped to a non-finite update"
+
+
+@pytest.mark.parametrize("with_direct", (False, True), ids=["traced", "and-direct"])
+def test_every_swept_member_is_the_configuration_it_stands_for(with_direct):
+    """A member of a sweep is the single run it was drawn to stand for.
+
+    Asserted against the rule built from the same number as a Python float,
+    which is the configuration a one-trial job would have run. If these came
+    apart, an HPO round would be scoring four runs nobody could reproduce.
+    """
+
+    traced = {"torso": block(jax.random.key(13), scale=10.0)}
+    direct = {"torso": block(jax.random.key(14))} if with_direct else None
+
+    mapped = swept(SWEPT, traced=traced, direct=direct)
+
+    for index, clip in enumerate(SWEPT):
+        alone = stepped(
+            rules(torso=Sgd(lr=LR), clip=clip)["torso"], traced, DELTA, direct=direct
+        )
+        assert_close(member_of(mapped, index), alone.updates, f"member at clip={clip}")
+
+
+def test_a_swept_zero_is_still_the_absence_of_a_clip():
+    """The disabled semantics, held against the member beside it that binds.
+
+    Zero is no bound rather than a bound at zero, and under a sweep it is a
+    number carried through the chain rather than a transform left out of it --
+    so it is worth saying that the number still means what its absence meant.
+    """
+
+    traced = {"torso": block(jax.random.key(15), scale=10.0)}
+
+    mapped = swept((0.0, 0.25), traced=traced)
+
+    unbounded = scaled(combined(traced, DELTA), LR)
+    assert_close(member_of(mapped, 0), unbounded, "the swept zero clipped something")
+    assert global_norm(member_of(mapped, 1)) < global_norm(
+        unbounded
+    ), "the bound beside it did not bind, so the zero proves nothing"
+
+
+def test_adam_is_the_same_chain_whether_its_clip_was_read_or_swept():
+    """The other rate that carries this clip, at the same two settings.
+
+    Adam's arithmetic is unchanged by a clip becoming mappable, and the chain
+    it answers to is still the one composed by hand in the test above.
+    """
+
+    base = Adam(lr=LR, b1=0.9, b2=0.999, eps=1e-8)
+    traced = {"torso": block(jax.random.key(16), scale=10.0)}
+
+    mapped = swept(SWEPT, base=base, traced=traced)
+
+    for index, clip in enumerate(SWEPT):
+        chain = optax.chain(
+            *((optax.clip_by_global_norm(clip),) if clip else ()),
+            optax.scale_by_adam(b1=base.b1, b2=base.b2, eps=base.eps),
+            optax.scale(base.lr),
+        )
+        ascent = combined(traced, DELTA)
+        params = params_of(traced)
+        reference, _ = chain.update(ascent, chain.init(params), params)
+        assert_close(member_of(mapped, index), reference, f"adam at clip={clip}")
+
+
+@pytest.mark.parametrize(
+    "torso",
+    (
+        IntentionalUpdate(eta=1.0),
+        ObGDStep(lr=1.0, bound=ObBound(kappa=2.0)),
+    ),
+    ids=["intentional", "obgd"],
+)
+def test_a_rule_that_bounds_its_own_step_refuses_a_swept_clip_as_a_sweep(torso):
+    """Not one member at a time: the whole sweep, named as the mistake it is.
+
+    These two rules require ``grad_clip: 0``, so a sweep over this leaf offers
+    them a domain in which every value but one is already refused. Under a
+    trace there is no value to read and no member to name, and the honest
+    refusal is of the sweep -- said at construction, with the two rules that
+    would have accepted it.
+    """
+
+    def member(clip):
+        return rules(torso=torso, clip=clip)
+
+    with pytest.raises(ValueError, match="group sweeping grad_clip"):
+        jax.vmap(member)(jnp.asarray(SWEPT, dtype=jnp.float32))
+
+    # And a clip it *can* read is still refused by its own message, which is
+    # the one that names the number.
+    with pytest.raises(ValueError, match="second, undeclared bound"):
+        rules(torso=torso, clip=1.0)
+    rules(torso=torso, clip=0.0)
+
+
+@pytest.mark.parametrize("clip", (0.0, 0.25), ids=["off", "binding"])
+def test_a_clip_that_can_be_read_still_decides_the_chain_at_build_time(clip):
+    """A rate under no clip builds no clip, and the state layout says so.
+
+    Carrying the bound is what a *swept* clip needs, and it costs a position in
+    the chain -- which is a position in the rule's carried state, because that
+    state is the chain's tuple. Carrying it unconditionally would therefore
+    move Adam's moments one place along in every run that never asked for a
+    clip, including both readouts, which are built with ``clip=0.0`` written
+    out and can never be handed a tracer at all.
+
+    So the two are pinned here rather than left to be noticed: the state a
+    configuration builds is the state of the chain it declares, and the chain
+    at zero is the one with nothing in front of the preconditioner.
+    """
+
+    base = Adam(lr=LR, b1=0.9, b2=0.999, eps=1e-8)
+    traced = {"torso": block(jax.random.key(17))}
+    params = params_of(traced)
+
+    rule = rules(torso=base, clip=clip)["torso"]
+    reference = optax.chain(
+        *((optax.clip_by_global_norm(clip),) if clip else ()),
+        optax.scale_by_adam(b1=base.b1, b2=base.b2, eps=base.eps),
+        optax.scale(base.lr),
+    )
+
+    assert jax.tree.structure(
+        rule.init(params=params, traces=traced)
+    ) == jax.tree.structure(reference.init(params))

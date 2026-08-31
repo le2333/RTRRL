@@ -98,6 +98,7 @@ from memorax.rl.updates import (
     make_d_rtrrl_rule,
     make_intentional_rule,
     obgd_step,
+    optional_clip_by_global_norm,
 )
 from memorax.runtime import ObservationSchema
 from memorax.utils import Timestep
@@ -955,7 +956,9 @@ def _rate_rule(base: Sgd | Adam, *, clip: float):
     preconditioner left out, so the two share the order the clip is written in.
     ``clip`` bounds the finished ascent direction before either sees it, which
     is where the paper's ``grad_clip`` sits and is therefore where it stays for
-    a rate that does nothing else to the direction.
+    a rate that does nothing else to the direction. Zero is no bound at all,
+    and a zero an ensemble sweeps is one the chain has to carry rather than
+    assemble around; see :func:`optional_clip_by_global_norm`.
 
     The scale is written **positive**, and this is the whole reason the chain
     is spelled out rather than delegated to ``optax.sgd``/``optax.adam``: those
@@ -965,8 +968,9 @@ def _rate_rule(base: Sgd | Adam, *, clip: float):
     """
 
     chain: list[Any] = []
-    if clip:
-        chain.append(optax.clip_by_global_norm(clip))
+    bound = optional_clip_by_global_norm(clip)
+    if bound is not None:
+        chain.append(bound)
     if isinstance(base, Adam):
         chain.append(optax.scale_by_adam(b1=base.b1, b2=base.b2, eps=base.eps))
     chain.append(optax.scale(base.lr))
@@ -1007,9 +1011,30 @@ def _refuse_a_second_bound(step, *, name: str, clip: float) -> None:
     target. Both are bounds a configuration declared and can account for.
     Clipping the finished update afterwards is a second one it did not, so it
     is refused with the reason rather than applied on top.
+
+    A swept ``grad_clip`` has no value to read here -- it arrives as a tracer,
+    one graph standing for every member -- and there is nothing to decide per
+    member anyway: these two rules refuse *every* non-zero bound, so a sweep
+    over this leaf is a sweep in which every value but one is already invalid.
+    That is refused as the sweep it is, before a job spends a device finding
+    out one member at a time.
     """
 
-    if not clip:
+    try:
+        bounded = bool(clip)
+    except TypeError:
+        # `bool` of a tracer raises `TracerBoolConversionError`, which is a
+        # `TypeError`: the same reading `numeric` uses to tell a swept leaf
+        # from a read one, and for the same reason -- no import of jax to
+        # repeat a distinction jax has already drawn.
+        raise ValueError(
+            f"the {name} step's rule sets its own bound, so it requires "
+            "grad_clip: 0, and a group sweeping grad_clip offers it values it "
+            "would refuse. Pin grad_clip to zero for this rule, or sweep it "
+            "in a group whose torso rule takes an outer bound -- adam, sgd "
+            "or d_rtrrl."
+        ) from None
+    if not bounded:
         return
     what = (
         "the intentional update sets its own step size from the statistics it "

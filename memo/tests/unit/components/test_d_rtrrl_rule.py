@@ -426,3 +426,32 @@ def test_the_rate_is_reported_under_the_name_every_rule_reports_it_under():
 
     output = stepped(blocks(jax.random.key(8)), [1.0, -1.0, 0.0])
     np.testing.assert_allclose(output.metrics["step_size"], C)
+
+
+def test_the_outer_clip_may_be_swept_and_every_member_is_its_own_bound():
+    """``grad_clip`` is the same leaf here as under a plain rate, and mappable.
+
+    D-RTRRL is one of the three torso rules that take an outer bound, so an
+    ensemble may vary it between the members of a round -- and a member's
+    parameters arrive as tracers. Zero among them is the case the arithmetic
+    has to carry rather than assemble around: it is the absence of a bound
+    written as a number.
+    """
+
+    traces = blocks(jax.random.key(9))
+    huge = jax.tree.map(lambda leaf: 1e6 * jnp.ones_like(leaf), traces)
+    clips = (0.0, 1.0, 10.0)
+
+    mapped = jax.vmap(
+        lambda clip: stepped(traces, [1.0], direct=huge, clip=clip).updates
+    )(jnp.asarray(clips, dtype=jnp.float32))
+
+    for index, clip in enumerate(clips):
+        member = jax.tree.map(lambda leaf: leaf[index], mapped)
+        alone = stepped(traces, [1.0], direct=huge, clip=clip).updates
+        for name, leaf in leaves(member).items():
+            np.testing.assert_allclose(leaf, leaves(alone)[name], rtol=1e-6)
+        if clip:
+            np.testing.assert_allclose(norm(member), clip, rtol=1e-5)
+        else:
+            assert norm(member) > 1.0, "the unbounded member was bounded anyway"

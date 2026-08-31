@@ -221,6 +221,72 @@ def base_transform(base):
     return optax.sgd(base.lr)
 
 
+def optional_clip_by_global_norm(clip):
+    """The outer bound a clip declares, or ``None`` where it declares none.
+
+    Zero is the absence of a bound rather than a bound at zero, and where the
+    number can be read that absence stays an absence: no transform is built and
+    the chain is the chain it has always been. Which is more than tidiness. A
+    rule's carried state is its chain's, position by position, so a stateless
+    transform added to every chain would move Adam's moments one place along in
+    every run that never asked for a clip.
+
+    A *swept* clip cannot be read. The members of one ensemble share a graph and
+    their parameters arrive as tracers, so ``if clip:`` has no answer and the
+    chain has no length to take -- which is where an ensemble round of RTRRL's
+    SGD arm used to fail, before any of it trained. There the bound is present
+    whatever the value, and the disabled case is carried as a number and decided
+    where every other traced quantity is decided: at update time, by
+    :func:`jnp.where`.
+
+    Both cases are the arithmetic they replace, leaf for leaf. A positive bound
+    is optax's own transform over optax's own numbers, and a swept zero selects
+    the update that arrived, which is what leaving the transform out did.
+    """
+
+    import optax
+
+    try:
+        declared = bool(clip)
+    except TypeError:
+        # `bool` of a tracer raises `TracerBoolConversionError`, which is a
+        # `TypeError`: the same reading `numeric` uses to tell a swept leaf
+        # from a read one, and for the same reason -- no import of jax to
+        # repeat a distinction jax has already drawn.
+        return _clip_decided_at_update_time(clip)
+    return optax.clip_by_global_norm(clip) if declared else None
+
+
+def _clip_decided_at_update_time(clip):
+    """``optax.clip_by_global_norm``, over a bound that may turn out to be off.
+
+    The disabled branch is still *computed* -- ``jnp.where`` selects, it does
+    not branch -- so the transform is handed a placeholder bound of one rather
+    than the zero the member declared. Clipping to zero scales by ``0 / ||g||``,
+    a quotient whose divisor may itself be zero, and a NaN in an unselected
+    branch is a NaN waiting for the next reader who does not know it was
+    discarded.
+    """
+
+    import optax
+
+    enabled = jnp.asarray(clip) > 0
+    bound = optax.clip_by_global_norm(jnp.where(enabled, clip, 1.0))
+
+    def update_fn(updates, state, params=None):
+        bounded, state = bound.update(updates, state, params)
+        return (
+            jax.tree.map(
+                lambda passed, clipped: jnp.where(enabled, clipped, passed),
+                updates,
+                bounded,
+            ),
+            state,
+        )
+
+    return optax.GradientTransformation(bound.init, update_fn)
+
+
 @dataclass(frozen=True)
 class DRTRRL:
     """The two update-scale arms written against the original clip's threshold.
@@ -639,11 +705,7 @@ def make_d_rtrrl_rule(step, *, clip=0.0) -> UpdateRule:
     saturated = step.magnitude == "sign"
     by_block = step.scope == "block"
     shifted = step.denominator == "shifted"
-    bound = None
-    if clip:
-        import optax
-
-        bound = optax.clip_by_global_norm(clip)
+    bound = optional_clip_by_global_norm(clip)
 
     def factor(tree):
         """What one unit's trace is multiplied by on the way out, per stream."""
