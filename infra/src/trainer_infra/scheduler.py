@@ -121,6 +121,36 @@ class TaskStore:
             raise RuntimeError("scheduler capacity is not initialized")
         return int(row["value"])
 
+    def ensure_launch_interval(self, default: float) -> float:
+        if default < 0:
+            raise ValueError("launch interval must not be negative")
+        with self._connect() as connection:
+            connection.execute(
+                "INSERT OR IGNORE INTO settings(key, value) VALUES (?, ?)",
+                ("launch_interval_seconds", str(default)),
+            )
+        return self.launch_interval()
+
+    def set_launch_interval(self, seconds: float) -> None:
+        if seconds < 0:
+            raise ValueError("launch interval must not be negative")
+        with self._connect() as connection:
+            connection.execute(
+                "INSERT INTO settings(key, value) VALUES (?, ?) "
+                "ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+                ("launch_interval_seconds", str(seconds)),
+            )
+
+    def launch_interval(self) -> float:
+        with self._connect() as connection:
+            row = connection.execute(
+                "SELECT value FROM settings WHERE key = ?",
+                ("launch_interval_seconds",),
+            ).fetchone()
+        if row is None:
+            raise RuntimeError("scheduler launch interval is not initialized")
+        return float(row["value"])
+
     def claim(self, limit: int) -> tuple[StudyTask, ...]:
         if limit < 1:
             return ()
@@ -177,13 +207,27 @@ class TaskStore:
 class Scheduler:
     """Keep a bounded set of independent study controllers alive."""
 
-    def __init__(self, store: TaskStore, launch: Callable[[StudyTask], Process], *, max_concurrent: int = 4, poll_seconds: float = 5.0) -> None:
+    def __init__(
+        self,
+        store: TaskStore,
+        launch: Callable[[StudyTask], Process],
+        *,
+        max_concurrent: int = 4,
+        poll_seconds: float = 5.0,
+        launch_interval_seconds: float = 0.0,
+        clock: Callable[[], float] = time.monotonic,
+    ) -> None:
         if max_concurrent < 1:
             raise ValueError("max_concurrent must be positive")
+        if launch_interval_seconds < 0:
+            raise ValueError("launch_interval_seconds must not be negative")
         self.store = store
         self.launch = launch
         self.store.ensure_capacity(max_concurrent)
+        self.store.ensure_launch_interval(launch_interval_seconds)
         self.poll_seconds = poll_seconds
+        self.clock = clock
+        self.last_launch_at: float | None = None
         self.processes: dict[int, Process] = {}
 
     def tick(self) -> None:
@@ -195,7 +239,18 @@ class Scheduler:
             self.store.finish(task_id, exit_code, reason)
             del self.processes[task_id]
         open_slots = self.store.capacity() - len(self.processes)
-        for task in self.store.claim(open_slots):
+        while open_slots > 0:
+            now = self.clock()
+            if (
+                self.last_launch_at is not None
+                and now - self.last_launch_at < self.store.launch_interval()
+            ):
+                break
+            claimed = self.store.claim(1)
+            if not claimed:
+                break
+            task = claimed[0]
+            self.last_launch_at = now
             try:
                 process = self.launch(task)
             except OSError as error:
@@ -203,6 +258,7 @@ class Scheduler:
                 continue
             self.store.record_pid(task.id, process.pid)
             self.processes[task.id] = process
+            open_slots -= 1
 
     def run(self) -> None:
         self.store.interrupt_orphans(lambda task: task.id in self.processes)

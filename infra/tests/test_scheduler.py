@@ -127,3 +127,47 @@ def test_capacity_change_fills_an_extra_slot_without_restarting(tmp_path: Path) 
 
     assert store.capacity() == 4
     assert len(processes.running) == 4
+
+
+def test_launches_are_spaced_even_when_capacity_is_available(tmp_path: Path) -> None:
+    now = [100.0]
+    processes = FakeProcessFactory()
+    scheduler = Scheduler(
+        store_with_tasks(tmp_path, 3),
+        processes.start,
+        max_concurrent=3,
+        launch_interval_seconds=30.0,
+        clock=lambda: now[0],
+    )
+
+    scheduler.tick()
+    assert len(processes.running) == 1
+    now[0] += 29.0
+    scheduler.tick()
+    assert len(processes.running) == 1
+    now[0] += 1.0
+    scheduler.tick()
+    assert len(processes.running) == 2
+
+
+def test_launch_interval_change_applies_without_restarting(tmp_path: Path) -> None:
+    now = [100.0]
+    store = store_with_tasks(tmp_path, 3)
+    processes = FakeProcessFactory()
+    scheduler = Scheduler(
+        store,
+        processes.start,
+        max_concurrent=3,
+        launch_interval_seconds=30.0,
+        clock=lambda: now[0],
+    )
+    scheduler.tick()
+    now[0] += 10.0
+    scheduler.tick()
+    assert len(processes.running) == 1
+
+    store.set_launch_interval(10.0)
+    scheduler.tick()
+
+    assert store.launch_interval() == 10.0
+    assert len(processes.running) == 2

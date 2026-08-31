@@ -71,3 +71,16 @@ def test_capacity_command_updates_list_summary(tmp_path: Path, capsys: Any) -> N
     assert output["running"] == 0
     assert output["queued"] == 0
     assert output["tasks"] == []
+
+
+def test_launch_interval_command_updates_list_summary(
+    tmp_path: Path, capsys: Any
+) -> None:
+    state = tmp_path / "queue.sqlite"
+    assert main(["--state", str(state), "launch-interval", "120"]) == 0
+    capsys.readouterr()
+
+    assert main(["--state", str(state), "list"]) == 0
+
+    output = json.loads(capsys.readouterr().out)
+    assert output["launch_interval_seconds"] == 120.0

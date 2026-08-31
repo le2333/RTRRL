@@ -25,9 +25,12 @@ def _parser() -> argparse.ArgumentParser:
     commands.add_parser("list")
     capacity = commands.add_parser("capacity")
     capacity.add_argument("value", type=int)
+    launch_interval = commands.add_parser("launch-interval")
+    launch_interval.add_argument("seconds", type=float)
     run = commands.add_parser("run")
     run.add_argument("--max-concurrent", type=int, default=4)
     run.add_argument("--poll-seconds", type=float, default=5.0)
+    run.add_argument("--launch-interval-seconds", type=float, default=30.0)
     return parser
 
 
@@ -93,6 +96,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             states = [task.state.value for task in tasks]
             print(json.dumps({
                 "capacity": store.ensure_capacity(4),
+                "launch_interval_seconds": store.ensure_launch_interval(30.0),
                 "running": states.count("running"),
                 "queued": states.count("queued"),
                 "tasks": [_payload(task) for task in tasks],
@@ -102,11 +106,16 @@ def main(argv: Sequence[str] | None = None) -> int:
             store.set_capacity(arguments.value)
             print(json.dumps({"capacity": store.capacity()}))
             return 0
+        if arguments.command == "launch-interval":
+            store.set_launch_interval(arguments.seconds)
+            print(json.dumps({"launch_interval_seconds": store.launch_interval()}))
+            return 0
         Scheduler(
             store,
             _launcher,
             max_concurrent=arguments.max_concurrent,
             poll_seconds=arguments.poll_seconds,
+            launch_interval_seconds=arguments.launch_interval_seconds,
         ).run()
         return 0
     except (OSError, TypeError, ValueError, yaml.YAMLError) as error:
