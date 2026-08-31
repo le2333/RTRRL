@@ -79,6 +79,7 @@ from memorax.rl.intentional import (
     TD,
     IntentionalReading,
     IntentionalUpdate,
+    JointIntentional,
 )
 from memorax.rl.normalization import (
     DISCOUNTED_NORMALIZATION_FAMILY,
@@ -97,6 +98,7 @@ from memorax.rl.updates import (
     make_bounded_rule,
     make_d_rtrrl_rule,
     make_intentional_rule,
+    make_joint_intentional_rule,
     obgd_step,
     optional_clip_by_global_norm,
 )
@@ -136,6 +138,11 @@ HEADS: tuple[str, ...] = ("actor", "critic")
 # of one.
 INPUT = "input"
 OUTPUT = "output"
+# The third position, which is neither: the two credits stay apart through
+# the derivative and the trace, as they do at the output, and meet inside
+# the rule -- in the one step size that has to honour both. See
+# :class:`JointAggregation`.
+INSIDE = "inside"
 # The path an input aggregation traces, which is the whole torso's and is named
 # for the block rather than for either head: what reaches it is neither head's
 # derivative but their sum through the shared recurrence.
@@ -252,6 +259,10 @@ def _construct_torso_step(selection, builder: ComponentBuilder):
     """
 
     settings = selection.parameters
+    if isinstance(settings, JointIntentional):
+        # One rule over two branches, so there is nothing here to pair: the
+        # settings are the step, and the aggregation builds the rule from them.
+        return settings
     if isinstance(settings, OutputIntentional):
         return OutputSteps(actor=settings.actor, critic=settings.critic)
     if isinstance(settings, OutputObGD):
@@ -288,6 +299,7 @@ TORSO_STEP_BRANCHES = {
     "input_obgd": ObGD,
     "output_iu": OutputIntentional,
     "output_obgd": OutputObGD,
+    "joint_iu": JointIntentional,
 }
 
 RTRRL_TORSO_OPTIMIZERS = ComponentFamily(
@@ -640,7 +652,7 @@ class BranchReports:
 class TorsoReports(BlockReports):
     """The shared block's readings, at whichever position it was aggregated.
 
-    The four inherited fields are the *joint* path's: they exist under an input
+    The four inherited fields are the *block's*: they exist under an input
     aggregation, where there is one derivative, one trace and one step size to
     report, and are absent under an output one, where each of those is two
     things and reporting either alone would be a number nothing produced.
@@ -650,6 +662,12 @@ class TorsoReports(BlockReports):
     makes the two paths readable apart: a run that could only see the summed
     update could not tell a branch that stopped moving from one whose
     contribution the other cancelled.
+
+    A joint aggregation is the one position where both levels are on, and each
+    name is at the level that produces it rather than at the level that would
+    be tidy: one metric and one step size at the block, two derivatives, two
+    traces and two ``sigma_bar`` at the branches. See
+    :func:`_joint_branch_reports`.
     """
 
     actor: BranchReports = readings(of=BranchReports, at="actor")
@@ -735,16 +753,91 @@ def _intentional_reports(*, taken: bool, advantage: bool = False) -> Intentional
     )
 
 
+#: What a joint intentional step produces at the block's level, and what it
+#: produces at a branch's. The split is the position: `rho`, the clipped TD
+#: error and the finished update belong to the block, because there is one of
+#: each; `sigma_bar`, the trace quadratic and the signal belong to a branch,
+#: because there are two. `denominator` is on both lists and is two different
+#: numbers -- a branch's is its own Eq. 12 denominator and the block's is the
+#: norm of the two branches' reciprocals, which is the whole content of the
+#: position and is worth being able to read side by side.
+JOINT_BLOCK_READINGS: tuple[str, ...] = (
+    "clipped_delta",
+    "rms_scale",
+    "denominator",
+    "update_norm",
+    "non_finite",
+)
+JOINT_BRANCH_READINGS: tuple[str, ...] = (
+    "signal",
+    "sigma_bar",
+    "trace_quadratic",
+    "denominator",
+)
+
+
+def _joint_intentional_reports(
+    names: tuple[str, ...], *, advantage: bool = False
+) -> IntentionalReports:
+    """The named readings, on, and every other one off.
+
+    ``advantage_scale`` rides along for the branch whose signal is an
+    advantage, for the reason :func:`_intentional_reports` gives.
+    """
+
+    return IntentionalReports(
+        **{
+            item.name: item.name in names
+            or (advantage and item.name == "advantage_scale")
+            for item in fields(IntentionalReports)
+        }
+    )
+
+
+def _joint_branch_reports(*, advantage: bool = False) -> BranchReports:
+    """One joint branch's readings: its own statistics, and no rule of its own.
+
+    ``grad_norm`` and ``trace_norm`` are a branch's because the derivative and
+    the trace are. ``step_size`` is what Eq. 12 alone would have taken along
+    this branch, which the block's step size is bounded by and which is the
+    reading that says which branch is holding it.
+    """
+
+    return BranchReports(
+        grad_norm=True,
+        trace_norm=True,
+        step_size=True,
+        intentional=_joint_intentional_reports(
+            JOINT_BRANCH_READINGS, advantage=advantage
+        ),
+        obgd=_obgd_reports(taken=False),
+    )
+
+
 def _torso_reports(step) -> TorsoReports:
     """Which of the torso's readings exist, given where its credit is combined.
 
-    Exactly one of the two levels is on. Under an input aggregation the joint
-    path is the torso and there are no branches; under an output one there are
-    two branches and no joint anything -- not a derivative, not a trace, not a
-    step size -- so leaving the inherited fields on would advertise four names
-    whose values are permanently absent.
+    Under an input aggregation the joint path is the torso and there are no
+    branches; under an output one there are two branches and no joint anything
+    -- not a derivative, not a trace, not a step size -- so leaving the
+    inherited fields on would advertise four names whose values are
+    permanently absent.
+
+    A joint step is the position where *both* levels are partly on, and each
+    name sits at the level that produces it: one metric, one clipped error and
+    one step at the block, two derivatives, two traces and two ``sigma_bar`` at
+    the branches. See :data:`JOINT_BLOCK_READINGS`.
     """
 
+    if isinstance(step, JointIntentional):
+        return TorsoReports(
+            grad_norm=False,
+            trace_norm=False,
+            step_size=True,
+            intentional=_joint_intentional_reports(JOINT_BLOCK_READINGS),
+            actor=_joint_branch_reports(advantage=True),
+            critic=_joint_branch_reports(),
+        )
     if not isinstance(step, OutputSteps):
         bounded, adaptive = _bounded(step)
         return TorsoReports(
@@ -926,8 +1019,10 @@ class BlockUpdate(struct.PyTreeNode):
 class TorsoUpdate(BlockUpdate):
     """The shared block's, at whichever position its two credits were combined.
 
-    The inherited fields carry the joint path's quantities and the two nested
-    blocks carry the branches'. One level is filled and the other is empty; see
+    The inherited fields carry the block's own quantities and the two nested
+    blocks carry the branches'. Which levels are filled is the position: one
+    each under an input and an output aggregation, and both, partly, under a
+    joint one -- where there is one step size over two ``sigma_bar``. See
     :class:`TorsoReports`.
     """
 
@@ -1064,7 +1159,7 @@ def _refuse_a_second_bound(step, *, name: str, clip: float) -> None:
     what = (
         "the intentional update sets its own step size from the statistics it "
         "carries"
-        if isinstance(step, IntentionalUpdate)
+        if isinstance(step, INTENTIONAL_STEPS)
         else "ObGD bounds its own step so that one update cannot cross the TD " "target"
     )
     raise ValueError(
@@ -1106,6 +1201,14 @@ def _block_rule(step, *, cfg: RTRRLConfig, name: str, clip: float):
     return _rate_rule(step, clip=clip)
 
 
+#: The rules derived against the accumulating trace, whose entropy direction
+#: therefore travels inside the derivative rather than beside the step. Two
+#: types rather than a base class, because the joint step is not a setting of
+#: the published one: it reduces to it, which is a fact about its arithmetic
+#: and not about its declaration.
+INTENTIONAL_STEPS = (IntentionalUpdate, JointIntentional)
+
+
 def _folds_entropy(step) -> bool:
     """Whether this path's entropy direction has to travel inside the trace.
 
@@ -1121,7 +1224,7 @@ def _folds_entropy(step) -> bool:
     one being asked.
     """
 
-    return isinstance(step, IntentionalUpdate)
+    return isinstance(step, INTENTIONAL_STEPS)
 
 
 def _trace_for(step, *, decay: float) -> Trace:
@@ -1159,7 +1262,7 @@ def _trace_for(step, *, decay: float) -> Trace:
     """
 
     return Trace(
-        decay=decay, reads=CARRIED, emphasized=not isinstance(step, IntentionalUpdate)
+        decay=decay, reads=CARRIED, emphasized=not isinstance(step, INTENTIONAL_STEPS)
     )
 
 
@@ -1696,6 +1799,170 @@ class OutputAggregation(TorsoAggregation):
         return TorsoUpdate(actor=branch("actor"), critic=branch("critic"))
 
 
+class JointAggregation(TorsoAggregation):
+    """The two credits kept apart until the step size, which honours both.
+
+    Everything an output aggregation keeps apart is kept apart here: one
+    cotangent pulled back per head, one eligibility trace per head at that
+    head's own ``gamma * lambda``, one signal each, one ``sigma_bar`` each.
+    What is not two is the step. There is one ``rho``, one step size and one
+    update, and the step size is the two branches' own Eq. 12 step sizes
+    combined so that neither branch's intended fraction is exceeded::
+
+        1 / alpha^2 = sum_b 1 / alpha_b^2
+
+    which makes ``alpha <= min_b alpha_b``. See
+    :class:`memorax.rl.intentional.JointIntentionalOptimizer`, where that is
+    derived, and note the three properties the other two positions do not have:
+    it is Eq. 12 exactly when one branch is removed, both ``eta`` keep the
+    meaning the paper gives them, and no statistic is summed across branches
+    before it is squared, so a coordinate the two heads' credit opposes on
+    cannot shrink the denominator.
+
+    Its position is neither of the other two and is named for what it is: the
+    credits meet *inside* the rule. Which is why this is the one aggregation
+    whose recurrences and rules are not keyed alike -- two recurrences, one
+    rule -- and why its readings fill both levels of :class:`TorsoUpdate`
+    rather than one.
+    """
+
+    position = INSIDE
+
+    def __init__(
+        self, cfg: RTRRLConfig, step: JointIntentional, *, clip: float
+    ) -> None:
+        _refuse_a_second_bound(step, name=JOINT, clip=clip)
+        self.streams = cfg.num_envs
+        # A property of the rule, taken from the same two functions every other
+        # path takes it from; see `_trace_for` and `_folds_entropy`.
+        self.folds_entropy = _folds_entropy(step)
+        decays = {name: cfg.gamma * BLOCK_DECAYS[name](cfg) for name in TORSO_BRANCHES}
+        self.traces = {
+            name: _trace_for(step, decay=decays[name]) for name in TORSO_BRANCHES
+        }
+        self.rule = make_joint_intentional_rule(
+            step,
+            block=JOINT,
+            signals={name: BLOCK_SIGNALS[name] for name in TORSO_BRANCHES},
+            decays=decays,
+            streams=cfg.num_envs,
+        )
+
+    @property
+    def recurrences(self) -> Mapping[str, Trace]:
+        return dict(self.traces)
+
+    @property
+    def rules(self) -> Mapping[str, Any]:
+        # One, under the block's own name. The base class pairs these keys with
+        # `recurrences`' and here they do not pair, which is the position: two
+        # traces reaching one rule is what "combined inside the rule" means.
+        return {JOINT: self.rule}
+
+    def cotangents(self, upstream, *, actor, critic):
+        cotangent = {"actor": actor, "critic": critic}
+        # One pullback per branch, over the one forward and the one sensitivity
+        # both branches share -- the same two derivatives an output aggregation
+        # builds, and for the same reason: what the step size has to weigh is
+        # each objective's own gradient.
+        return {name: upstream(cotangent[name])[0] for name in TORSO_BRANCHES}
+
+    def untraced(self, upstream, entropy):
+        return {"actor": upstream(entropy)[0]}
+
+    def initial_traces(self, params):
+        return {
+            name: trace.initial(params, self.streams)
+            for name, trace in self.traces.items()
+        }
+
+    def init(self, params, traces):
+        return self.rule.init(params={JOINT: params}, traces=traces)
+
+    def step(
+        self,
+        *,
+        params,
+        carried,
+        traced,
+        direct,
+        delta,
+        sign,
+        step,
+        state,
+        reset,
+        emphasis,
+    ) -> Aggregated:
+        derivative = {}
+        stepped = {}
+        advanced = {}
+        for name, trace in self.traces.items():
+            folded, untraced = _folded(
+                traced[name],
+                None if direct is None else direct.get(name),
+                sign=sign,
+                folds=self.folds_entropy,
+            )
+            if untraced is not None:
+                raise ValueError(
+                    "a joint intentional step has no untraced term, so the "
+                    f"{name} branch's entropy direction has to have been "
+                    "folded into the derivative its trace accumulates"
+                )
+            derivative[name] = folded
+            stepped[name], advanced[name] = trace.stepped(
+                carried[name], folded, reset=reset, emphasis=emphasis
+            )
+        taken = self.rule.apply(
+            stepped,
+            None,
+            state,
+            delta=delta,
+            derivative=derivative,
+            step=step,
+            params={JOINT: params},
+        )
+        return Aggregated(
+            update=taken.updates[JOINT],
+            traces=advanced,
+            state=taken.state,
+            derivative=derivative,
+            taken=taken,
+        )
+
+    def reading(
+        self, norms, reports: TorsoReports, aggregated: Aggregated
+    ) -> TorsoUpdate:
+        taken = aggregated.taken
+
+        def branch(name: str) -> BlockUpdate:
+            declared = getattr(reports, name)
+            return BlockUpdate(
+                grad_norm=(
+                    norms(aggregated.derivative[name]) if declared.grad_norm else None
+                ),
+                trace_norm=(
+                    norms(aggregated.traces[name]) if declared.trace_norm else None
+                ),
+                step_size=_step_size(taken, name) if declared.step_size else None,
+                intentional=_intentional_reading(taken, name, declared.intentional),
+                obgd=_obgd_reading(taken, declared.obgd),
+            )
+
+        return TorsoUpdate(
+            # The two names an output aggregation leaves empty for the reason
+            # this one does: there are two derivatives and two traces, and a
+            # norm of one of them filed under the block would be a number
+            # nothing produced.
+            grad_norm=None,
+            trace_norm=None,
+            step_size=_step_size(taken, JOINT) if reports.step_size else None,
+            intentional=_intentional_reading(taken, JOINT, reports.intentional),
+            actor=branch("actor"),
+            critic=branch("critic"),
+        )
+
+
 def make_torso_aggregation(cfg: RTRRLConfig) -> TorsoAggregation:
     """The aggregation the torso's optimizer selection names.
 
@@ -1705,6 +1972,8 @@ def make_torso_aggregation(cfg: RTRRLConfig) -> TorsoAggregation:
     """
 
     optimizer = cfg.torso_optimizer
+    if isinstance(optimizer, JointIntentional):
+        return JointAggregation(cfg, optimizer, clip=cfg.torso_grad_clip)
     if isinstance(optimizer, OutputSteps):
         return OutputAggregation(cfg, optimizer, clip=cfg.torso_grad_clip)
     return InputAggregation(cfg, optimizer, clip=cfg.torso_grad_clip)

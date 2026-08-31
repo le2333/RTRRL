@@ -37,7 +37,12 @@ from flax import struct
 from memorax.building import ComponentFamily
 from memorax.parameters import param, structure
 
-from .intentional import IntentionalOptimizer, IntentionalUpdate
+from .intentional import (
+    IntentionalOptimizer,
+    IntentionalUpdate,
+    JointIntentional,
+    JointIntentionalOptimizer,
+)
 
 
 class ObjectiveDirections(struct.PyTreeNode):
@@ -832,6 +837,77 @@ def make_intentional_rule(
                 # Under the one name every rule reports its step scale by. This
                 # rule's is dynamic and per block, which is why the name is a
                 # block's rather than a group's.
+                "step_size": {
+                    name: reading.step_size for name, reading in readings.items()
+                },
+            },
+        )
+
+    return UpdateRule(init=init, apply=apply)
+
+
+def make_joint_intentional_rule(
+    step: JointIntentional,
+    *,
+    block: str,
+    signals: Mapping[str, str],
+    decays: Mapping[str, float],
+    streams: int,
+) -> UpdateRule:
+    """One intentional optimizer over a block two objectives credit.
+
+    The other rules here are one rule per block, applied to each block
+    independently. This one is the opposite shape and has to be: two branches
+    reach the same parameters on the same transition, and what makes it a joint
+    step rather than two steps is that both denominators enter one step size.
+    See :class:`memorax.rl.intentional.JointIntentionalOptimizer`.
+
+    So it reads ``traced`` and ``derivative`` keyed by *branch* and writes
+    ``updates`` keyed by ``block`` -- one update, because there is one. Its
+    readings are filed under both: the block's under ``block``, each branch's
+    under the branch, which is where each is produced.
+
+    ``signals``, ``decays`` and ``streams`` are what
+    :func:`make_intentional_rule` takes them to be, per branch rather than per
+    block.
+    """
+
+    optimizer = JointIntentionalOptimizer(step, decays=decays, signals=signals)
+
+    def init(*, params, traces):
+        del traces
+        return {block: optimizer.init(params[block], streams=streams)}
+
+    def apply(traced, direct, state, *, delta, derivative, step, params, metric=None):
+        # `metric` is what an output aggregation hands its branches so they can
+        # share one `rho`. There is one `rho` here by construction -- a second
+        # moment of the summed derivative, built inside the optimizer -- so
+        # there is nothing for an outer one to decide.
+        if metric is not None:
+            raise ValueError(
+                "a joint intentional step builds its own entry-wise scaling "
+                "from the summed derivative; passing a metric here would be a "
+                "second answer to a question the rule has already answered"
+            )
+        updates, carried, block_reading, branch_readings = optimizer.update(
+            delta=delta,
+            traces=traced,
+            derivatives=derivative,
+            direct=direct,
+            step=step,
+            params=params[block],
+            state=state[block],
+        )
+        readings = {block: block_reading, **branch_readings}
+        return RuleOutput(
+            updates={block: updates},
+            state={block: carried},
+            metrics={
+                "intentional": readings,
+                # The block's dynamic step under the name every rule reports
+                # its step scale by, and beside it each branch's own Eq. 12
+                # step -- what that branch alone would have taken, which is
+                # what says which of the two is holding the block back.
                 "step_size": {
                     name: reading.step_size for name, reading in readings.items()
                 },

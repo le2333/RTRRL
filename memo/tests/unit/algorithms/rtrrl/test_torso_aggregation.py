@@ -1160,11 +1160,18 @@ def test_the_old_iu_branch_name_is_refused_rather_than_translated():
 
 
 def test_the_declared_surface_names_the_position_rather_than_implying_it():
-    """Four branches a run selects by name, and no way to end up at one by default.
+    """Every position a run selects by name, and none it can arrive at by default.
 
     The position is in the branch name, so a configuration cannot arrive at an
     output aggregation by setting a parameter that happens to exist, and cannot
     arrive at an input one by leaving one out.
+
+    ``joint_iu`` is a third position and only the intentional update has one,
+    which is an asymmetry worth reading rather than tidying: it is the only
+    rule here whose step size is derived from a *stated intent per objective*,
+    so it is the only one where "two objectives, one step" is a question with
+    a derived answer. ObGD's bound reads the trace it is handed, and what a
+    joint version of it would bound is not something anything has derived.
     """
 
     branches = set(rtrrl.RTRRL_TORSO_OPTIMIZERS.branches)
@@ -1176,6 +1183,7 @@ def test_the_declared_surface_names_the_position_rather_than_implying_it():
         "input_obgd",
         "output_iu",
         "output_obgd",
+        "joint_iu",
     }
     assert "iu" not in branches
     # Adam stays first, because a configuration that names no optimizer is
