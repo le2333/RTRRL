@@ -128,6 +128,18 @@ def test_batch_target_routes_instance_tier_and_digest() -> None:
     assert target.job_definition == "trainer-c7al-" + "b" * 64
 
 
+def test_batch_job_name_sanitizes_the_display_name() -> None:
+    s3 = FakeS3()
+    batch = FakeBatch(s3)
+    batch_executor = executor(s3, batch)
+    batch_executor.job_name = "Adam-B1-0.999 / HPO"
+    batch_executor.parallel_jobs = 1
+
+    batch_executor((configuration(0),), score())
+
+    assert batch.submitted[0]["jobName"] == "Adam-B1-0-999-HPO-r000-j0"
+
+
 def test_a_metrics_object_is_never_asked_for_whole(tmp_path: Path) -> None:
     s3 = FakeS3()
     config = configuration(0)

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import codecs
 import json
+import re
 import time
 from collections.abc import Iterator, Mapping
 from dataclasses import dataclass
@@ -27,6 +28,7 @@ LAUNCH_CLAIM = "launch.json"
 # code rather than on an exception class because every client here is injected
 # -- this module imports no AWS package, and a test's client is a fake.
 TAKEN = frozenset({"PreconditionFailed", "ConditionalRequestConflict"})
+INVALID_JOB_NAME = re.compile(r"[^A-Za-z0-9_-]+")
 
 _PROFILES = {
     "c7a.medium": ("c7am", "run-cpu-c7am-queue", "dev-cpu-c7am-queue"),
@@ -64,6 +66,13 @@ def split_s3(uri: str) -> tuple[str, str]:
     if parsed.scheme != "s3" or not parsed.netloc:
         raise BatchExecutionError(f"Batch execution requires an S3 URI, got {uri!r}")
     return parsed.netloc, parsed.path.lstrip("/")
+
+
+def _job_name(display_name: str) -> str:
+    safe = INVALID_JOB_NAME.sub("-", display_name).strip("-")[:128]
+    if not safe:
+        raise BatchExecutionError("experiment name has no AWS Batch-safe characters")
+    return safe
 
 
 class BatchRoundExecutor:
@@ -153,7 +162,9 @@ class BatchRoundExecutor:
         for job_index, body in enumerate(bodies):
             manifest_uri = self._publish_manifest(body, round_index, job_index)
             response = self.batch.submit_job(
-                jobName=f"{self.job_name}-r{round_index:03d}-j{job_index}",
+                jobName=_job_name(
+                    f"{self.job_name}-r{round_index:03d}-j{job_index}"
+                ),
                 jobQueue=self.job_queue,
                 jobDefinition=self.job_definition,
                 timeout={"attemptDurationSeconds": self.timeout_seconds},
